@@ -513,16 +513,31 @@ public final class AndroidServices {
     }
 
     public static Bundle callContentProviderExternal(String authority, String method, String arg, Bundle extras) {
+        return callContentProviderExternal(authority, 0, method, arg, extras);
+    }
+
+    public static Bundle callContentProviderExternal(
+            String authority, int userId, String method, String arg, Bundle extras) {
         IBinder tok = new Binder();
         Object am = getServiceInterface("activity", "android.app.IActivityManager$Stub");
-        if (am == null) return null;
+        if (am == null) {
+            System.err.println("OPALDESK_PROVIDER_EXT_WARN: IActivityManager unavailable");
+            return null;
+        }
+        int targetUserId = Math.max(0, userId);
         try {
             Object holder = am.getClass()
                     .getMethod("getContentProviderExternal", String.class, int.class, IBinder.class, String.class)
-                    .invoke(am, authority, 0, tok, "*opaldesk*");
-            if (holder == null) return null;
+                    .invoke(am, authority, targetUserId, tok, "*opaldesk*");
+            if (holder == null) {
+                System.err.println("OPALDESK_PROVIDER_EXT_WARN: holder=null authority=" + authority + " user=" + targetUserId);
+                return null;
+            }
             Object prov = holder.getClass().getField("provider").get(holder);
-            if (prov == null) return null;
+            if (prov == null) {
+                System.err.println("OPALDESK_PROVIDER_EXT_WARN: provider=null authority=" + authority + " user=" + targetUserId);
+                return null;
+            }
 
             Method callAttr5 = null;
             Method callStr5 = null;
@@ -541,10 +556,11 @@ public final class AndroidServices {
             } else if (callStr6 != null) {
                 return (Bundle) callStr6.invoke(prov, SHELL_PACKAGE, null, authority, method, arg, extras);
             }
+            System.err.println("OPALDESK_PROVIDER_EXT_WARN: no matching IContentProvider.call overload");
         } catch (ReflectiveOperationException | RuntimeException e) {
             System.err.println("OPALDESK_PROVIDER_EXT_WARN: " + unwrapMessage(e));
         } finally {
-            removeContentProviderExternalQuietly(am, authority, tok);
+            removeContentProviderExternalQuietly(am, authority, tok, targetUserId);
         }
         return null;
     }
@@ -859,10 +875,11 @@ public final class AndroidServices {
         return asBuilderCls.getMethod("build").invoke(builder);
     }
 
-    private static void removeContentProviderExternalQuietly(Object am, String authority, IBinder tok) {
+    private static void removeContentProviderExternalQuietly(Object am, String authority, IBinder tok, int userId) {
+        int safeUserId = Math.max(0, userId);
         try {
             am.getClass().getMethod("removeContentProviderExternalAsUser", String.class, IBinder.class, int.class)
-                    .invoke(am, authority, tok, 0);
+                    .invoke(am, authority, tok, safeUserId);
             return;
         } catch (ReflectiveOperationException | RuntimeException ignored) {
         }

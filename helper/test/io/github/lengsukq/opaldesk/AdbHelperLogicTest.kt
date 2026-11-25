@@ -153,7 +153,9 @@ class AdbHelperLogicTest {
         assertTrue(script.contains("ERR_FINAL_SHA256"))
         assertTrue(script.contains("'$expectedLowerSha'"))
         assertTrue(script.contains("mv -f \"\$TMP_JAR\" /data/local/tmp/opaldesk.jar"))
-        assertTrue(script.contains("runcon u:r:shell:s0"))
+        // Must enter u:r:shell:s0 via /system/bin/sh (shell_exec entrypoint), never directly on app_process (zygote_exec).
+        assertTrue(script.contains("runcon u:r:shell:s0 /system/bin/sh -c \"exec /system/bin/app_process /data/local/tmp"))
+        assertFalse(script.contains("runcon u:r:shell:s0 /system/bin/app_process"))
         assertTrue(script.contains("LAUNCH_DONE"))
         assertTrue(script.contains("ERR_DAEMON_DIED"))
 

@@ -60,7 +60,9 @@ public final class HelperClientBridge {
     private volatile Runnable onHelperDeath;
     private volatile Runnable onHelperBound;
     private volatile int verifiedHelperUid = -1;
+    private volatile int verifiedHelperUserId = 0;
     private volatile long lastHelperUidVerifyMs = 0L;
+    private volatile long lastPushWarnMs = 0L;
     private volatile boolean preferExternalProviderCall = false;
     private final AtomicLong lastBinderPushAttemptMs = new AtomicLong(0L);
 
@@ -74,13 +76,16 @@ public final class HelperClientBridge {
     }
 
     public static int verifyHelperUid(Context ctx) {
+        return verifyHelperUidForUser(ctx, 0);
+    }
+
+    private static int verifyHelperUidForUser(Context ctx, int userId) {
         if (ctx == null) return -1;
         try {
             PackageManager pm = ctx.getPackageManager();
-            int curUid = pm.getPackageUid(BridgeBuildConfig.HELPER_PACKAGE, 0);
+            int curUid = resolvePackageUid(pm, BridgeBuildConfig.HELPER_PACKAGE, userId);
             if (curUid <= 0) return -1;
-            PackageInfo pi = pm.getPackageInfo(
-                    BridgeBuildConfig.HELPER_PACKAGE, PackageManager.GET_SIGNING_CERTIFICATES);
+            PackageInfo pi = resolveSigningPackageInfo(pm, BridgeBuildConfig.HELPER_PACKAGE, userId);
             SigningInfo si = (pi != null) ? pi.signingInfo : null;
             if (si == null || si.hasMultipleSigners()) return -1;
             Signature[] sigs = si.getApkContentsSigners();
@@ -100,29 +105,113 @@ public final class HelperClientBridge {
         }
     }
 
+    private static int resolvePackageUid(PackageManager pm, String pkg, int userId)
+            throws PackageManager.NameNotFoundException {
+        if (userId <= 0) {
+            return pm.getPackageUid(pkg, 0);
+        }
+        try {
+            java.lang.reflect.Method m = pm.getClass().getMethod("getPackageUidAsUser", String.class, int.class);
+            Object v = m.invoke(pm, pkg, userId);
+            return (v instanceof Integer) ? (Integer) v : -1;
+        } catch (java.lang.reflect.InvocationTargetException ite) {
+            if (ite.getCause() instanceof PackageManager.NameNotFoundException) {
+                throw (PackageManager.NameNotFoundException) ite.getCause();
+            }
+            return -1;
+        } catch (ReflectiveOperationException e) {
+            return -1;
+        }
+    }
+
+    private static PackageInfo resolveSigningPackageInfo(PackageManager pm, String pkg, int userId)
+            throws PackageManager.NameNotFoundException {
+        if (userId <= 0) {
+            return pm.getPackageInfo(pkg, PackageManager.GET_SIGNING_CERTIFICATES);
+        }
+        try {
+            java.lang.reflect.Method m = pm.getClass().getMethod(
+                    "getPackageInfoAsUser", String.class, int.class, int.class);
+            return (PackageInfo) m.invoke(pm, pkg, PackageManager.GET_SIGNING_CERTIFICATES, userId);
+        } catch (java.lang.reflect.InvocationTargetException ite) {
+            if (ite.getCause() instanceof PackageManager.NameNotFoundException) {
+                throw (PackageManager.NameNotFoundException) ite.getCause();
+            }
+            return null;
+        } catch (ReflectiveOperationException e) {
+            return null;
+        }
+    }
+
     public void setControlBinder(IBinder binder) { this.ctlBinder = binder; }
     public void setOnHelperDeath(Runnable callback) { this.onHelperDeath = callback; }
     public void setOnHelperBound(Runnable callback) { this.onHelperBound = callback; }
 
     public int getVerifiedHelperUid() {
         if (services.context == null) return -1;
+        long now = SystemClock.uptimeMillis();
+        int cachedUid = verifiedHelperUid;
+        int cachedUser = verifiedHelperUserId;
         try {
-            int curUid = services.context.getPackageManager().getPackageUid(BridgeBuildConfig.HELPER_PACKAGE, 0);
+            PackageManager pm = services.context.getPackageManager();
+            int curUid = -1;
+            int resolvedUser = cachedUser;
+            try {
+                curUid = resolvePackageUid(pm, BridgeBuildConfig.HELPER_PACKAGE, resolvedUser);
+            } catch (PackageManager.NameNotFoundException ignored) {
+                curUid = -1;
+            }
+            if (curUid <= 0 && resolvedUser != 0) {
+                try {
+                    curUid = resolvePackageUid(pm, BridgeBuildConfig.HELPER_PACKAGE, 0);
+                    if (curUid > 0) resolvedUser = 0;
+                } catch (PackageManager.NameNotFoundException ignored) {
+                    curUid = -1;
+                }
+            }
             if (curUid <= 0) {
+                int[] found = findVerifiedHelperInSecondaryUsers(services.context);
+                if (found != null) {
+                    verifiedHelperUserId = found[0];
+                    verifiedHelperUid = found[1];
+                    lastHelperUidVerifyMs = now;
+                    return verifiedHelperUid;
+                }
                 verifiedHelperUid = -1;
                 return -1;
             }
-            long now = SystemClock.uptimeMillis();
-            if (curUid == verifiedHelperUid && (now - lastHelperUidVerifyMs) < HELPER_UID_CACHE_MS) {
+            if (curUid == cachedUid && (now - lastHelperUidVerifyMs) < HELPER_UID_CACHE_MS) {
                 return curUid;
             }
-            verifiedHelperUid = verifyHelperUid(services.context);
+            int checked = verifyHelperUidForUser(services.context, resolvedUser);
+            verifiedHelperUserId = resolvedUser;
+            verifiedHelperUid = checked;
             lastHelperUidVerifyMs = now;
-            return verifiedHelperUid;
-        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
+            return checked;
+        } catch (RuntimeException e) {
             verifiedHelperUid = -1;
             return -1;
         }
+    }
+
+    private static int[] findVerifiedHelperInSecondaryUsers(Context ctx) {
+        try {
+            Object um = ctx.getSystemService(Context.USER_SERVICE);
+            if (um == null) return null;
+            Object rawUsers = um.getClass().getMethod("getUsers").invoke(um);
+            if (!(rawUsers instanceof List<?>)) return null;
+            for (Object u : (List<?>) rawUsers) {
+                if (u == null) continue;
+                int userId = u.getClass().getField("id").getInt(u);
+                if (userId <= 0) continue;
+                int uid = verifyHelperUidForUser(ctx, userId);
+                if (uid > 0) {
+                    return new int[]{userId, uid};
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     public boolean isTrustedCaller(int callingUid) {
@@ -154,22 +243,31 @@ public final class HelperClientBridge {
     public boolean isVerifiedHelperProviderOwner() {
         int helperUid = getVerifiedHelperUid();
         if (helperUid <= 0 || services.context == null) return false;
+        int userId = verifiedHelperUserId;
         try {
-            ProviderInfo pi = services.context.getPackageManager()
-                    .resolveContentProvider(BridgeProtocol.HELPER_PROVIDER_AUTHORITY, 0);
+            PackageManager pm = services.context.getPackageManager();
+            ProviderInfo pi;
+            if (userId <= 0) {
+                pi = pm.resolveContentProvider(BridgeProtocol.HELPER_PROVIDER_AUTHORITY, 0);
+            } else {
+                pi = (ProviderInfo) pm.getClass()
+                        .getMethod("resolveContentProviderAsUser", String.class, int.class, int.class)
+                        .invoke(pm, BridgeProtocol.HELPER_PROVIDER_AUTHORITY, 0, userId);
+            }
             return pi != null && pi.applicationInfo != null
                     && pi.applicationInfo.uid == helperUid
                     && BridgeBuildConfig.HELPER_PACKAGE.equals(pi.packageName);
-        } catch (RuntimeException e) {
+        } catch (ReflectiveOperationException | RuntimeException e) {
             return false;
         }
     }
 
     public Bundle callHelperProvider(String method, Bundle extras) {
         if (services.context == null || method == null || !isVerifiedHelperProviderOwner()) return null;
-        if (preferExternalProviderCall) {
+        int helperUserId = verifiedHelperUserId;
+        if (preferExternalProviderCall || helperUserId > 0) {
             return AndroidServices.callContentProviderExternal(
-                    BridgeProtocol.HELPER_PROVIDER_AUTHORITY, method, null, extras);
+                    BridgeProtocol.HELPER_PROVIDER_AUTHORITY, helperUserId, method, null, extras);
         }
         Bundle res = null;
         try {
@@ -191,7 +289,7 @@ public final class HelperClientBridge {
         }
         if ((res == null || !res.getBoolean("ok", false)) && isVerifiedHelperProviderOwner()) {
             res = AndroidServices.callContentProviderExternal(
-                    BridgeProtocol.HELPER_PROVIDER_AUTHORITY, method, null, extras);
+                    BridgeProtocol.HELPER_PROVIDER_AUTHORITY, verifiedHelperUserId, method, null, extras);
         }
         return res;
     }
@@ -301,14 +399,30 @@ public final class HelperClientBridge {
         }
     }
 
+    private void logPushBinderFailureRateLimited(String detail) {
+        long now = SystemClock.uptimeMillis();
+        if (now - lastPushWarnMs >= 2500L) {
+            lastPushWarnMs = now;
+            System.err.println("OPALDESK_PUSH_BINDER_FAIL: " + detail);
+        }
+    }
+
     private void pushBinderToHelper() {
         IBinder binder = ctlBinder;
-        if (services.context == null || binder == null || config.shuttingDown || getVerifiedHelperUid() <= 0) return;
+        if (services.context == null || binder == null || config.shuttingDown) return;
+        int helperUid = getVerifiedHelperUid();
+        if (helperUid <= 0) {
+            logPushBinderFailureRateLimited("helperUid=" + helperUid + " pkg=" + BridgeBuildConfig.HELPER_PACKAGE);
+            return;
+        }
         try {
+            if (!isVerifiedHelperProviderOwner()) {
+                logPushBinderFailureRateLimited("providerOwnerMismatch user=" + verifiedHelperUserId + " uid=" + helperUid);
+                return;
+            }
             Bundle b = new Bundle();
             b.putBinder("cb", binder);
-            Bundle res = isVerifiedHelperProviderOwner()
-                    ? callHelperProvider(BridgeProtocol.PROVIDER_METHOD_SET_BINDER, b) : null;
+            Bundle res = callHelperProvider(BridgeProtocol.PROVIDER_METHOD_SET_BINDER, b);
             if (res != null && res.getBoolean("ok", false)) {
                 boolean newProc = (res.getBinder("proc") != null && res.getBinder("proc") != helperProcToken);
                 linkHelperProcessToken(res.getBinder("proc"));
@@ -317,6 +431,9 @@ public final class HelperClientBridge {
                 }
                 Runnable boundCb = onHelperBound;
                 if (boundCb != null) boundCb.run();
+            } else {
+                logPushBinderFailureRateLimited(
+                        "setBinderRejected resNull=" + (res == null) + " user=" + verifiedHelperUserId + " uid=" + helperUid);
             }
         } catch (RuntimeException e) {
             System.err.println("OPALDESK_PUSH_BINDER_WARN: " + e.getMessage());

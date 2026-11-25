@@ -219,7 +219,8 @@ public final class OpalDeskDaemon implements Runnable {
 
         System.out.println("OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=" + android.os.Process.myUid()
                 + " maxVd=" + config.getMaxActiveDisplays()
-                + " rootEnhanced=" + config.isRootEnhanced());
+                + " rootEnhanced=" + config.isRootEnhanced()
+                + " ctx=" + readSeLinuxContextQuietly());
         System.out.flush();
 
         bgExec.execute(helperBridge::grantHelperPrivileges);
@@ -427,6 +428,22 @@ public final class OpalDeskDaemon implements Runnable {
                 }
             }
         } catch (ReflectiveOperationException | RuntimeException ignored) {
+        }
+    }
+
+    private static String readSeLinuxContextQuietly() {
+        try (java.io.FileInputStream in = new java.io.FileInputStream("/proc/self/attr/current")) {
+            byte[] buf = new byte[128];
+            int n = in.read(buf);
+            if (n <= 0) return "unknown";
+            int end = 0;
+            while (end < n && buf[end] != 0 && buf[end] != '\n' && buf[end] != '\r') {
+                end++;
+            }
+            String s = new String(buf, 0, end, StandardCharsets.US_ASCII).trim();
+            return s.isEmpty() ? "unknown" : s;
+        } catch (IOException | RuntimeException e) {
+            return "unknown";
         }
     }
 

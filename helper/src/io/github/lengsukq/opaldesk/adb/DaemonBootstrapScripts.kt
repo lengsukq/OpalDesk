@@ -338,11 +338,11 @@ object DaemonBootstrapScripts {
             "CUR_CTX=\$(id -Z 2>/dev/null || echo ''); " +
             "case \"\$CUR_CTX\" in " +
             "*:shell:*) " +
-            "(CLASSPATH=$DST_JAR setsid /system/bin/app_process /data/local/tmp $daemonArgs </dev/null >>\"\$LOG_DST\" 2>&1 &); sleep 0.5 ;; " +
+            "(CLASSPATH=$DST_JAR setsid /system/bin/app_process /data/local/tmp $daemonArgs </dev/null >>\"\$LOG_DST\" 2>&1 &); sleep 0.6 ;; " +
             "*) " +
-            "(CLASSPATH=$DST_JAR setsid runcon u:r:shell:s0 /system/bin/app_process /data/local/tmp $daemonArgs </dev/null >>\"\$LOG_DST\" 2>&1 &); sleep 0.5; " +
+            "(CLASSPATH=$DST_JAR setsid runcon u:r:shell:s0 /system/bin/sh -c \"exec /system/bin/app_process /data/local/tmp $daemonArgs\" </dev/null >>\"\$LOG_DST\" 2>&1 &); sleep 0.6; " +
             "if ! $aliveExpr; then " +
-            "(CLASSPATH=$DST_JAR setsid /system/bin/app_process /data/local/tmp $daemonArgs </dev/null >>\"\$LOG_DST\" 2>&1 &); sleep 0.5; fi ;; " +
+            "(CLASSPATH=$DST_JAR setsid /system/bin/app_process /data/local/tmp $daemonArgs </dev/null >>\"\$LOG_DST\" 2>&1 &); sleep 0.6; fi ;; " +
             "esac; " +
             "if ! $aliveExpr; then " +
             "(CLASSPATH=$DST_JAR nohup app_process /data/local/tmp $daemonArgs </dev/null >>\"\$LOG_DST\" 2>&1 &); sleep 0.6; fi; " +

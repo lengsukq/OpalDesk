@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Binder
 import android.os.Bundle
 import android.util.Log
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.IpcTrustVerifier
 
@@ -25,10 +26,13 @@ class BridgeProvider : ContentProvider() {
         val callerUid = Binder.getCallingUid()
         if (!IpcTrustVerifier.isTrustedCallerUid(callerUid)) {
             Log.w(TAG, "Rejected BridgeProvider.call($method) from untrusted uid=$callerUid")
+            if (method == BridgeProtocol.PROVIDER_METHOD_SET_BINDER) {
+                OpalLogStore.w("IPC", "BridgeProvider rejected setBinder from untrusted uid=$callerUid")
+            }
             return Bundle().apply { putBoolean("ok", false) }
         }
         return when (method) {
-            BridgeProtocol.PROVIDER_METHOD_SET_BINDER -> handleSetBinder(extras)
+            BridgeProtocol.PROVIDER_METHOD_SET_BINDER -> handleSetBinder(extras, callerUid)
             BridgeProtocol.PROVIDER_METHOD_SYNC_SCENE -> handleSyncScene(extras)
             BridgeProtocol.PROVIDER_METHOD_PAIRING_EVENT -> handlePairingEvent(extras)
             BridgeProtocol.PROVIDER_METHOD_IME_REQUEST -> handleImeRequest(extras)
@@ -37,12 +41,21 @@ class BridgeProvider : ContentProvider() {
         }
     }
 
-    private fun handleSetBinder(extras: Bundle?): Bundle {
-        if (extras == null || BridgeService.sUserStopping) {
+    private fun handleSetBinder(extras: Bundle?, callerUid: Int): Bundle {
+        if (extras == null) {
+            OpalLogStore.w("IPC", "BridgeProvider rejected setBinder: null extras (uid=$callerUid)")
+            return Bundle().apply { putBoolean("ok", false) }
+        }
+        if (BridgeService.sUserStopping) {
+            OpalLogStore.w("IPC", "BridgeProvider ignored setBinder while stopping (uid=$callerUid)")
             return Bundle().apply { putBoolean("ok", false) }
         }
         val cb = extras.getBinder(BridgeProtocol.EXTRA_CALLBACK_BINDER)
         if (!IpcTrustVerifier.isValidDaemonBinder(cb)) {
+            OpalLogStore.w(
+                "IPC",
+                "BridgeProvider rejected invalid/unreachable daemon binder (uid=$callerUid, null=${cb == null}, alive=${cb?.pingBinder() == true})",
+            )
             return Bundle().apply { putBoolean("ok", false) }
         }
         BridgeClient.setBinder(cb)
