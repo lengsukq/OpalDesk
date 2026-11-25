@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default IPC permissions for OpalDesk main and standalone Android app windows",
+  "windows": ["*"],
+  "permissions": [
+    "core:default"
+  ]
+}

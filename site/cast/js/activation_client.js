@@ -53,9 +53,9 @@ export class LanActivationClient {
     this.authenticated = false;
   }
 
-  connect(host, port, sessionCode) {
+  connect(host, port, sessionCode, wsUrlOverride = '') {
     this.disconnect();
-    const url = `wss://${host}:${port}/activate`;
+    const url = wsUrlOverride || `wss://${host}:${port}/activate`;
     this.onStatus('connecting', `正在连接激活服务 ${host}:${port}…`);
 
     const ws = new WebSocket(url);

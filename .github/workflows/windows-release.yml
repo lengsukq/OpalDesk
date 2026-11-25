@@ -1,0 +1,86 @@
+name: Build & Publish Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Target GitHub Release tag to attach Windows installers to (leave empty for current versionName)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish-windows:
+    name: Build & Upload Windows Client to Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build, Test & Package OpalDesk Windows Installers
+        id: package_windows
+        shell: bash
+        run: |
+          VER="$(sed -nE 's/.*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' helper/build.gradle.kts | head -n 1)"
+          VER="${VER:-0.0.1}"
+          TAG="${{ inputs.release_tag }}"
+          TAG="${TAG:-v${VER}}"
+
+          if ! command -v cargo >/dev/null 2>&1; then
+            rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal
+            rustup default stable-x86_64-pc-windows-msvc
+          fi
+          rustc --version
+          cargo --version
+          node --version
+
+          (
+            cd windows
+            npm install --no-audit --no-fund
+            node ./scripts/sync-frontend.mjs
+            npm test
+            cargo test --manifest-path src-tauri/Cargo.toml
+            npx @tauri-apps/cli build
+          )
+
+          NSIS_EXE="$(find windows/src-tauri/target/release/bundle/nsis -maxdepth 1 -name '*-setup.exe' | head -n 1 || true)"
+          MSI_PKG="$(find windows/src-tauri/target/release/bundle/msi -maxdepth 1 -name '*.msi' | head -n 1 || true)"
+
+          if [ -z "$NSIS_EXE" ] || [ ! -f "$NSIS_EXE" ]; then
+            echo "::error::Tauri build did not produce NSIS *-setup.exe installer"
+            exit 1
+          fi
+          if [ -z "$MSI_PKG" ] || [ ! -f "$MSI_PKG" ]; then
+            echo "::error::Tauri build did not produce WiX *.msi installer"
+            exit 1
+          fi
+
+          mkdir -p build/out
+          SETUP_NAME="OpalDesk_${TAG}-windows-x64-setup.exe"
+          MSI_NAME="OpalDesk_${TAG}-windows-x64.msi"
+          cp -f "$NSIS_EXE" "build/out/$SETUP_NAME"
+          cp -f "$MSI_PKG" "build/out/$MSI_NAME"
+
+          echo "TARGET_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "WIN_SETUP_PATH=build/out/$SETUP_NAME" >> "$GITHUB_ENV"
+          echo "WIN_MSI_PATH=build/out/$MSI_NAME" >> "$GITHUB_ENV"
+          ls -lh build/out
+
+      - name: Upload Windows Installers to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          if gh release view "$TARGET_TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TARGET_TAG" "$WIN_SETUP_PATH" "$WIN_MSI_PATH" --clobber --repo "$REPO"
+          else
+            gh release create "$TARGET_TAG" "$WIN_SETUP_PATH" "$WIN_MSI_PATH" \
+              --repo "$REPO" \
+              --title "OpalDesk ${TARGET_TAG}" \
+              --generate-notes
+          fi

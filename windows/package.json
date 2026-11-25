@@ -1,0 +1,17 @@
+{
+  "name": "opaldesk-windows",
+  "version": "1.0.12",
+  "private": true,
+  "type": "module",
+  "description": "OpalDesk Windows Companion Client (Tauri v2 + Edge WebView2)",
+  "scripts": {
+    "sync-frontend": "node ./scripts/sync-frontend.mjs",
+    "test": "node --test ../site/cast/test/*.test.mjs",
+    "tauri": "tauri",
+    "dev": "node ./scripts/sync-frontend.mjs && tauri dev",
+    "build": "node ./scripts/sync-frontend.mjs && tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0"
+  }
+}

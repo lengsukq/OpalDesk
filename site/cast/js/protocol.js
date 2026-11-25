@@ -20,6 +20,8 @@ export const TYPE_FILE_TRANSFER_ACK = 0x13;
 export const TYPE_WIFI_UPGRADE_READY = 0x14;
 export const TYPE_APP_LIST = 0x15;
 export const TYPE_IME_REQUEST = 0x16;
+export const TYPE_MIC_STATE = 0x17;
+export const TYPE_CAMERA_STATE = 0x18;
 export const TYPE_PONG = 0x1f;
 
 // Uplink frame types (Web -> Android)
@@ -34,7 +36,11 @@ export const TYPE_SYSTEM_ACTION = 0x27;
 export const TYPE_FILE_TRANSFER_CHUNK = 0x28;
 export const TYPE_LIST_APPS = 0x2a;
 export const TYPE_WINDOW_ACTION = 0x2b;
+export const TYPE_MIC_CONFIG = 0x2c;
+export const TYPE_MIC_FRAME = 0x2d;
+export const TYPE_CAMERA_CONFIG = 0x2e;
 export const TYPE_PING = 0x2f;
+export const TYPE_CAMERA_FRAME = 0x30;
 
 export const VIDEO_CODEC_H264 = 1;
 export const VIDEO_CODEC_HEVC = 2;
@@ -312,6 +318,26 @@ export function encodeWindowAction(actionObj) {
   return textEncoder.encode(JSON.stringify(actionObj));
 }
 
+export function encodeMicConfig({ enabled, codec = 'pcm16', sampleRate = 16000, channels = 1 }) {
+  return textEncoder.encode(JSON.stringify({
+    enabled: Boolean(enabled),
+    codec: String(codec || 'pcm16'),
+    sampleRate: Math.max(8000, Math.min(48000, Math.round(sampleRate || 16000))),
+    channels: Math.max(1, Math.min(2, Math.round(channels || 1))),
+  }));
+}
+
+export function encodeCameraConfig({ enabled, codec = 'mjpeg', width = 640, height = 480, fps = 15, facing = 'front' }) {
+  return textEncoder.encode(JSON.stringify({
+    enabled: Boolean(enabled),
+    codec: String(codec || 'mjpeg'),
+    width: Math.max(160, Math.min(1920, Math.round(width || 640))),
+    height: Math.max(120, Math.min(1080, Math.round(height || 480))),
+    fps: Math.max(5, Math.min(30, Math.round(fps || 15))),
+    facing: facing === 'back' ? 'back' : 'front',
+  }));
+}
+
 export function encodePingPong(pingId) {
   const buf = new ArrayBuffer(8);
   new DataView(buf).setBigInt64(0, BigInt(pingId), false);
@@ -372,6 +398,31 @@ export function decodeAppList(payload) {
 export function decodeImeRequest(payload) {
   const obj = JSON.parse(textDecoder.decode(payload));
   return { show: Boolean(obj.show), inputType: Number(obj.inputType || 0) };
+}
+
+export function decodeMicState(payload) {
+  const obj = JSON.parse(textDecoder.decode(payload));
+  return {
+    active: Boolean(obj.active),
+    supported: Boolean(obj.supported),
+    sampleRate: Number(obj.sampleRate || 16000),
+    channels: Number(obj.channels || 1),
+    message: String(obj.message || ''),
+  };
+}
+
+export function decodeCameraState(payload) {
+  const obj = JSON.parse(textDecoder.decode(payload));
+  return {
+    active: Boolean(obj.active),
+    supported: Boolean(obj.supported),
+    rootRequired: Boolean(obj.rootRequired),
+    width: Number(obj.width || 640),
+    height: Number(obj.height || 480),
+    fps: Number(obj.fps || 15),
+    backend: String(obj.backend || ''),
+    message: String(obj.message || ''),
+  };
 }
 
 export function decodeClipboardPush(payload, flags) {
