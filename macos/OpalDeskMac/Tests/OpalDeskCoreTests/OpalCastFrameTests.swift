@@ -123,13 +123,13 @@ struct OpalCastFrameTests {
         #expect(cfgFrame.type == .micConfig)
 
         let st = MicStatePayload(active: true, supported: true, sampleRate: 16_000, channels: 1, message: "远端麦克风已启用")
-        let stWire = OpalCastFrame(type: .micState, payload: try st.encode()).encode()
+        let stWire = try OpalCastFrame(type: .micState, payload: try st.encode()).encode()
 
         let pcm = Data(repeating: 0x2A, count: 640)
-        let pcmWire = OpalCastFrame.micFrame(pcm).encode()
+        let pcmWire = try OpalCastFrame.micFrame(pcm).encode()
 
         var decoder = OpalCastStreamDecoder()
-        decoder.append(cfgFrame.encode())
+        decoder.append(try cfgFrame.encode())
         decoder.append(stWire)
         decoder.append(pcmWire)
         let frames = try decoder.decodeAvailableFrames()
@@ -146,13 +146,13 @@ struct OpalCastFrameTests {
         #expect(cfgFrame.type == .cameraConfig)
 
         let st = CameraStatePayload(active: false, supported: false, rootRequired: true, message: "摄像头映射需要 Root 权限")
-        let stWire = OpalCastFrame(type: .cameraState, payload: try st.encode()).encode()
+        let stWire = try OpalCastFrame(type: .cameraState, payload: try st.encode()).encode()
 
         let jpeg = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10])
-        let jpegWire = OpalCastFrame.cameraFrame(jpeg).encode()
+        let jpegWire = try OpalCastFrame.cameraFrame(jpeg).encode()
 
         var decoder = OpalCastStreamDecoder()
-        decoder.append(cfgFrame.encode())
+        decoder.append(try cfgFrame.encode())
         decoder.append(stWire)
         decoder.append(jpegWire)
         let frames = try decoder.decodeAvailableFrames()
