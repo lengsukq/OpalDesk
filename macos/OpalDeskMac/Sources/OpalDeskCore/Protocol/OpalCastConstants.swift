@@ -32,6 +32,7 @@ public enum OpalCastFrameType: UInt8, Sendable, CaseIterable {
     case fileTransferAck = 0x13
     case wifiUpgradeReady = 0x14
     case appList = 0x15
+    case imeRequest = 0x16
     case pong = 0x1F
 
     // Uplink: Mac -> Android

@@ -100,6 +100,22 @@ struct OpalCastFrameTests {
         }
     }
 
+    @Test("IME_REQUEST 0x16 from Android decodes instead of aborting the session")
+    func imeRequestFrameDecodes() throws {
+        let payload = Data(#"{"show":true,"inputType":1}"#.utf8)
+        var wire = Data([0x4F, 0x50, 0x44, 0x31, 0x16, 0x00])
+        var lenBE = UInt32(payload.count).bigEndian
+        withUnsafeBytes(of: &lenBE) { wire.append(contentsOf: $0) }
+        wire.append(Data(repeating: 0, count: 8))
+        wire.append(payload)
+
+        var decoder = OpalCastStreamDecoder()
+        decoder.append(wire)
+        let frames = try decoder.decodeAvailableFrames()
+        #expect(frames.map(\.type) == [.imeRequest])
+        #expect(frames.first?.payload == payload)
+    }
+
     @Test("All downlink and uplink payloads roundtrip cleanly")
     func allPayloadsRoundtrip() throws {
         // 0x01 VIDEO_CONFIG
