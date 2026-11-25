@@ -95,6 +95,8 @@ public final class BridgeBinderService extends Binder {
                     reply.writeInt(mouseRouter != null ? mouseRouter.getBoundDisplayId() : -1);
                     reply.writeInt(services != null && services.isHostScreenOff() ? 1 : 0);
                     reply.writeInt(config.getGlobalCustomDpi());
+                    reply.writeInt(config.isRemoteMicEnabled() ? 1 : 0);
+                    reply.writeInt(config.isRemoteCameraEnabled() ? 1 : 0);
                 }
                 return true;
             }
@@ -462,6 +464,16 @@ public final class BridgeBinderService extends Binder {
             }
             case BridgeProtocol.TX_GET_ADVANCED_CONFIG_STATE: {
                 if (reply != null) reply.writeString(config.toAdvancedStateJson());
+                return true;
+            }
+            case BridgeProtocol.TX_SET_REMOTE_MEDIA_CONFIG: {
+                boolean micEnabled = data.readInt() != 0;
+                boolean cameraEnabled = data.readInt() != 0;
+                config.setRemoteMediaConfig(micEnabled, cameraEnabled);
+                if (remoteBridge != null) {
+                    remoteBridge.applyRemoteMediaPolicy(micEnabled, cameraEnabled);
+                }
+                if (reply != null) reply.writeInt(1);
                 return true;
             }
             case BridgeProtocol.TX_SHUTDOWN: {

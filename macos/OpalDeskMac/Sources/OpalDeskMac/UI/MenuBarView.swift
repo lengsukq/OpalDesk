@@ -69,6 +69,16 @@ public struct MenuBarView: View {
             systemImage: model.isAudioMuted ? "speaker.wave.2" : "speaker.slash"
         ) { model.toggleAudio() }
 
+        Button(
+            model.isMicEnabled ? "关闭麦克风上行" : "开启麦克风上行",
+            systemImage: model.isMicEnabled ? "mic.fill" : "mic.slash"
+        ) { model.toggleMicrophone() }
+
+        Button(
+            model.isCameraEnabled ? "关闭摄像头映射 (Root)" : "开启摄像头映射 (Root)",
+            systemImage: model.isCameraEnabled ? "video.fill" : "video.slash"
+        ) { model.toggleCamera() }
+
         Divider()
         Button("断开连接", systemImage: "xmark.circle", role: .destructive) { model.forceDisconnectAndReturnHome() }
     }

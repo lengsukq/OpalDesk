@@ -18,6 +18,7 @@ import io.github.lengsukq.opaldesk.daemon.BridgeBuildConfig;
 import io.github.lengsukq.opaldesk.daemon.DaemonConfig;
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil;
 import io.github.lengsukq.opaldesk.daemon.audio.AudioStreamCapturer;
+import io.github.lengsukq.opaldesk.daemon.audio.RemoteMicInjector;
 import io.github.lengsukq.opaldesk.daemon.compositor.CompositorEngine;
 import io.github.lengsukq.opaldesk.daemon.compositor.WindowSession;
 import io.github.lengsukq.opaldesk.daemon.input.ExternalMouseRouter;
@@ -32,6 +33,7 @@ import io.github.lengsukq.opaldesk.daemon.security.PairingApprovalCoordinator;
 import io.github.lengsukq.opaldesk.daemon.security.TrustStoreManager;
 import io.github.lengsukq.opaldesk.daemon.sink.DisplaySink;
 import io.github.lengsukq.opaldesk.daemon.sink.RemoteStreamSink;
+import io.github.lengsukq.opaldesk.daemon.video.RootCameraBridge;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -152,6 +154,12 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     private volatile int desktopSessionId = -1;
     private volatile boolean localHostTextFieldFocused = false;
     private volatile AudioStreamCapturer audioCapturer;
+    private final Object micLock = new Object();
+    private RemoteMicInjector micInjector;
+    private volatile int micOwnerSessionId = -1;
+    private final Object cameraLock = new Object();
+    private RootCameraBridge cameraBridge;
+    private volatile int cameraOwnerSessionId = -1;
     private volatile Runnable remoteStateChangeListener;
 
     public OpalCastCompositorBridge(
@@ -219,6 +227,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
 
     public void shutdown() {
         stopAudio();
+        stopRemoteMic(false);
+        stopRemoteCamera(false);
         if (mouseRouter != null) {
             mouseRouter.releaseToLocal();
         }
@@ -420,6 +430,12 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     @Override
     public void onSessionDisconnected(int sessionId, int sinkType, String sessionRole, String reason) {
         ActiveRemoteSession s = sessions.remove(sessionId);
+        if (sessionId == micOwnerSessionId) {
+            stopRemoteMic(false);
+        }
+        if (sessionId == cameraOwnerSessionId) {
+            stopRemoteCamera(false);
+        }
         if (sessionId == desktopSessionId) {
             desktopSessionId = -1;
             localHostTextFieldFocused = false;
@@ -638,6 +654,13 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                     }
                 }
                 break;
+            case OpalCastProtocol.SYS_TOGGLE_BLACKOUT:
+                if (!s.standalone) {
+                    boolean powerOn = (msg.arg == 0);
+                    services.setPrimaryPhysicalDisplayPower(powerOn);
+                    pushDeviceState(s);
+                }
+                break;
             case OpalCastProtocol.SYS_SET_AUDIO_ENABLED:
                 if (!s.standalone) {
                     if (msg.arg != 0) startAudioForDesktop(sessionId); else stopAudio();
@@ -677,6 +700,36 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             }
         } else if ("close_all".equals(act)) {
             compositor.closeAllWindows(true);
+        }
+    }
+
+    @Override
+    public void onMicConfig(int sessionId, OpalCastProtocol.MicConfigMsg msg) {
+        if (msg == null) return;
+        worker.execute(() -> handleMicConfig(sessionId, msg));
+    }
+
+    @Override
+    public void onMicFrame(int sessionId, byte[] pcmData, long timestampUs) {
+        if (sessionId != micOwnerSessionId || pcmData == null || pcmData.length == 0) return;
+        RemoteMicInjector inj = micInjector;
+        if (inj != null) {
+            inj.feedPcm(pcmData);
+        }
+    }
+
+    @Override
+    public void onCameraConfig(int sessionId, OpalCastProtocol.CameraConfigMsg msg) {
+        if (msg == null) return;
+        worker.execute(() -> handleCameraConfig(sessionId, msg));
+    }
+
+    @Override
+    public void onCameraFrame(int sessionId, byte[] jpegData, long timestampUs) {
+        if (sessionId != cameraOwnerSessionId || jpegData == null || jpegData.length == 0) return;
+        RootCameraBridge bridge = cameraBridge;
+        if (bridge != null) {
+            bridge.feedJpeg(jpegData);
         }
     }
 
@@ -964,6 +1017,142 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         }
     }
 
+    public void applyRemoteMediaPolicy(boolean micEnabled, boolean cameraEnabled) {
+        if (!micEnabled) {
+            stopRemoteMic(true);
+        }
+        if (!cameraEnabled) {
+            stopRemoteCamera(true);
+        }
+    }
+
+    private void handleMicConfig(int sessionId, OpalCastProtocol.MicConfigMsg msg) {
+        synchronized (micLock) {
+            if (!msg.enabled) {
+                if (micOwnerSessionId == sessionId) {
+                    stopRemoteMicLocked(false);
+                }
+                server.sendMicState(sessionId, new OpalCastProtocol.MicStateMsg(
+                        false, config.isRemoteMicEnabled(), msg.sampleRate, msg.channels, "远端麦克风已关闭"));
+                return;
+            }
+            if (!config.isRemoteMicEnabled()) {
+                server.sendMicState(sessionId, new OpalCastProtocol.MicStateMsg(
+                        false, false, msg.sampleRate, msg.channels,
+                        "主机端未开启远端麦克风（可在主应用设置或控制中心开启）"));
+                return;
+            }
+            if (!OpalCastProtocol.MIC_CODEC_PCM16.equalsIgnoreCase(msg.codec)) {
+                server.sendMicState(sessionId, new OpalCastProtocol.MicStateMsg(
+                        false, false, msg.sampleRate, msg.channels, "不支持的麦克风音频格式：" + msg.codec));
+                return;
+            }
+            if (micOwnerSessionId > 0 && micOwnerSessionId != sessionId) {
+                int prevSid = micOwnerSessionId;
+                stopRemoteMicLocked(false);
+                server.sendMicState(prevSid, new OpalCastProtocol.MicStateMsg(
+                        false, true, OpalCastProtocol.DEFAULT_MIC_SAMPLE_RATE,
+                        OpalCastProtocol.DEFAULT_MIC_CHANNELS, "远端麦克风已被其他会话接管"));
+            }
+            if (micInjector == null) {
+                micInjector = new RemoteMicInjector(services.context);
+            }
+            RemoteMicInjector.StartResult res = micInjector.start(msg.sampleRate, msg.channels);
+            if (res.active) {
+                micOwnerSessionId = sessionId;
+            } else {
+                micOwnerSessionId = -1;
+            }
+            server.sendMicState(sessionId, new OpalCastProtocol.MicStateMsg(
+                    res.active, res.supported, res.sampleRate, res.channels, res.message));
+        }
+    }
+
+    private void stopRemoteMic(boolean notifyOwner) {
+        synchronized (micLock) {
+            stopRemoteMicLocked(notifyOwner);
+        }
+    }
+
+    private void stopRemoteMicLocked(boolean notifyOwner) {
+        int prevSid = micOwnerSessionId;
+        micOwnerSessionId = -1;
+        if (micInjector != null) {
+            try { micInjector.stop(); } catch (RuntimeException ignored) {}
+        }
+        if (notifyOwner && prevSid > 0) {
+            server.sendMicState(prevSid, new OpalCastProtocol.MicStateMsg(
+                    false, config.isRemoteMicEnabled(), OpalCastProtocol.DEFAULT_MIC_SAMPLE_RATE,
+                    OpalCastProtocol.DEFAULT_MIC_CHANNELS,
+                    config.isRemoteMicEnabled() ? "远端麦克风已关闭" : "主机端已关闭远端麦克风开关"));
+        }
+    }
+
+    private void handleCameraConfig(int sessionId, OpalCastProtocol.CameraConfigMsg msg) {
+        synchronized (cameraLock) {
+            if (!msg.enabled) {
+                if (cameraOwnerSessionId == sessionId) {
+                    stopRemoteCameraLocked(false);
+                }
+                server.sendCameraState(sessionId, new OpalCastProtocol.CameraStateMsg(
+                        false, config.isRemoteCameraEnabled() && config.isRootEnhanced(), !config.isRootEnhanced(),
+                        msg.width, msg.height, msg.fps, "", "远端摄像头映射已关闭"));
+                return;
+            }
+            if (!config.isRemoteCameraEnabled()) {
+                server.sendCameraState(sessionId, new OpalCastProtocol.CameraStateMsg(
+                        false, false, !config.isRootEnhanced(),
+                        msg.width, msg.height, msg.fps, "",
+                        "主机端未开启 Root 摄像头映射（可在主应用设置或控制中心开启）"));
+                return;
+            }
+            if (!OpalCastProtocol.CAMERA_CODEC_MJPEG.equalsIgnoreCase(msg.codec)) {
+                server.sendCameraState(sessionId, new OpalCastProtocol.CameraStateMsg(
+                        false, false, false, msg.width, msg.height, msg.fps, "",
+                        "不支持的摄像头编码格式：" + msg.codec));
+                return;
+            }
+            if (cameraOwnerSessionId > 0 && cameraOwnerSessionId != sessionId) {
+                int prevSid = cameraOwnerSessionId;
+                stopRemoteCameraLocked(false);
+                server.sendCameraState(prevSid, new OpalCastProtocol.CameraStateMsg(
+                        false, true, false,
+                        OpalCastProtocol.DEFAULT_CAMERA_WIDTH, OpalCastProtocol.DEFAULT_CAMERA_HEIGHT,
+                        OpalCastProtocol.DEFAULT_CAMERA_FPS, "", "远端摄像头映射已被其他会话接管"));
+            }
+            if (cameraBridge == null) {
+                cameraBridge = new RootCameraBridge();
+            }
+            RootCameraBridge.StartResult res = cameraBridge.start(
+                    config.isRootEnhanced(), msg.width, msg.height, msg.fps, msg.facing);
+            cameraOwnerSessionId = res.active ? sessionId : -1;
+            server.sendCameraState(sessionId, new OpalCastProtocol.CameraStateMsg(
+                    res.active, res.supported, res.rootRequired,
+                    res.width, res.height, res.fps, res.backend, res.message));
+        }
+    }
+
+    private void stopRemoteCamera(boolean notifyOwner) {
+        synchronized (cameraLock) {
+            stopRemoteCameraLocked(notifyOwner);
+        }
+    }
+
+    private void stopRemoteCameraLocked(boolean notifyOwner) {
+        int prevSid = cameraOwnerSessionId;
+        cameraOwnerSessionId = -1;
+        if (cameraBridge != null) {
+            try { cameraBridge.stop(); } catch (RuntimeException ignored) {}
+        }
+        if (notifyOwner && prevSid > 0) {
+            server.sendCameraState(prevSid, new OpalCastProtocol.CameraStateMsg(
+                    false, config.isRemoteCameraEnabled() && config.isRootEnhanced(), !config.isRootEnhanced(),
+                    OpalCastProtocol.DEFAULT_CAMERA_WIDTH, OpalCastProtocol.DEFAULT_CAMERA_HEIGHT,
+                    OpalCastProtocol.DEFAULT_CAMERA_FPS, "",
+                    config.isRemoteCameraEnabled() ? "远端摄像头映射已关闭" : "主机端已关闭 Root 摄像头映射开关"));
+        }
+    }
+
     private void pushDeviceState(ActiveRemoteSession s) {
         OpalCastProtocol.DeviceState state = new OpalCastProtocol.DeviceState(
                 server.getDeviceName(),
@@ -976,7 +1165,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 0,
                 s.bitrateKbps,
                 100,
-                false,
+                services.isHostScreenOff(),
                 audioCapturer != null,
                 inputRouter.getLastInjectStatus(),
                 false,

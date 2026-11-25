@@ -156,7 +156,14 @@ object BridgeClient {
             val ctx = appContext
             if (ctx != null) {
                 io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.hydrate(ctx)
+                io.github.lengsukq.opaldesk.prefs.AppPrefs.hydrateFlows(ctx)
                 syncProfileToDaemonSync(next, io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.workingConfig)
+                val micOn = io.github.lengsukq.opaldesk.prefs.AppPrefs.isRemoteMicEnabled(ctx)
+                val camOn = io.github.lengsukq.opaldesk.prefs.AppPrefs.isRemoteCameraEnabled(ctx)
+                transact(next, BridgeProtocol.Tx.SET_REMOTE_MEDIA_CONFIG, oneway = false, writeArgs = { d ->
+                    d.writeInt(if (micOn) 1 else 0)
+                    d.writeInt(if (camOn) 1 else 0)
+                }) { it.readInt() }
             }
             if (localDesktopMousePinned) {
                 val mode = BridgeProtocol.MouseTarget.PIN_LOCAL_DISPLAY0
@@ -275,6 +282,8 @@ object BridgeClient {
                 mouseRoutedDisplayId = if (reply.dataAvail() >= 4) reply.readInt() else -1,
                 hostScreenOff = if (reply.dataAvail() >= 4) reply.readInt() != 0 else false,
                 globalCustomDpi = if (reply.dataAvail() >= 4) reply.readInt() else 0,
+                remoteMicEnabled = if (reply.dataAvail() >= 4) reply.readInt() != 0 else false,
+                remoteCameraEnabled = if (reply.dataAvail() >= 4) reply.readInt() != 0 else false,
             )
         }?.also { _statusFlow.value = it } ?: DaemonStatus(connected = false).also { _statusFlow.value = it }
     }
@@ -459,6 +468,22 @@ object BridgeClient {
         }
     }
 
+    fun tryWakeHostScreenFromKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (!_statusFlow.value.hostScreenOff) return false
+        val isWakeKey = when (event.keyCode) {
+            android.view.KeyEvent.KEYCODE_VOLUME_UP,
+            android.view.KeyEvent.KEYCODE_VOLUME_DOWN,
+            android.view.KeyEvent.KEYCODE_POWER,
+            android.view.KeyEvent.KEYCODE_WAKEUP -> true
+            else -> false
+        }
+        if (!isWakeKey) return false
+        if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+            setHostScreenPowerAsync(true)
+        }
+        return true
+    }
+
     fun updateDisplayPrefsAsync(targetFps: Int, windowDpiScalePct: Int) {
         io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.setWorkingTargetFps(targetFps)
         io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.setWorkingWindowDpiScalePct(windowDpiScalePct)
@@ -475,6 +500,37 @@ object BridgeClient {
             ) { it.readInt() }
             refreshStatus()
             refreshSceneSnapshot()
+        }
+    }
+
+    fun setRemoteMediaConfigAsync(
+        ctx: Context?,
+        micEnabled: Boolean,
+        cameraEnabled: Boolean,
+        onDone: ((Boolean) -> Unit)? = null,
+    ) {
+        bindAppContext(ctx)
+        io.github.lengsukq.opaldesk.prefs.AppPrefs.setRemoteMicEnabled(ctx, micEnabled)
+        io.github.lengsukq.opaldesk.prefs.AppPrefs.setRemoteCameraEnabled(ctx, cameraEnabled)
+        ioExec.execute {
+            val svc = getService()
+            val ok = if (svc != null) {
+                transact(
+                    svc,
+                    BridgeProtocol.Tx.SET_REMOTE_MEDIA_CONFIG,
+                    oneway = false,
+                    writeArgs = { d ->
+                        d.writeInt(if (micEnabled) 1 else 0)
+                        d.writeInt(if (cameraEnabled) 1 else 0)
+                    },
+                ) { it.readInt() != 0 } ?: false
+            } else {
+                false
+            }
+            if (svc != null) {
+                refreshStatus()
+            }
+            if (onDone != null) mainHandler.post { onDone(ok) }
         }
     }
 

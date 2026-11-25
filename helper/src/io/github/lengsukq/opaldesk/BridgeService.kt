@@ -7,8 +7,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.hardware.display.DisplayManager
 import android.os.Build
@@ -223,6 +225,18 @@ class BridgeService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var displayManager: DisplayManager? = null
     private var lastProjectedDisplayId = -1
+    private var screenWakeReceiverRegistered = false
+
+    private val screenWakeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action ?: return
+            if (action == Intent.ACTION_SCREEN_ON || action == Intent.ACTION_USER_PRESENT) {
+                if (BridgeClient.statusFlow.value.hostScreenOff) {
+                    BridgeClient.setHostScreenPowerAsync(true)
+                }
+            }
+        }
+    }
 
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = scanExternalDisplays(autoLaunchNew = true)
@@ -238,6 +252,18 @@ class BridgeService : Service() {
         startSessionForeground()
         displayManager = (getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)?.also { dm ->
             dm.registerDisplayListener(displayListener, handler)
+        }
+        runCatching {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_USER_PRESENT)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(screenWakeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(screenWakeReceiver, filter)
+            }
+            screenWakeReceiverRegistered = true
         }
         scanExternalDisplays(autoLaunchNew = true)
     }
@@ -257,6 +283,10 @@ class BridgeService : Service() {
     }
 
     override fun onDestroy() {
+        if (screenWakeReceiverRegistered) {
+            runCatching { unregisterReceiver(screenWakeReceiver) }
+            screenWakeReceiverRegistered = false
+        }
         displayManager?.unregisterDisplayListener(displayListener)
         displayManager = null
         _externalDisplayFlow.value = null

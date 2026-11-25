@@ -116,6 +116,52 @@ struct OpalCastFrameTests {
         #expect(frames.first?.payload == payload)
     }
 
+    @Test("Mic config/state/frame 0x2C/0x17/0x2D roundtrip cleanly")
+    func micFramesRoundtrip() throws {
+        let cfg = MicConfigPayload(enabled: true, codec: "pcm16", sampleRate: 16_000, channels: 1)
+        let cfgFrame = try OpalCastFrame.micConfig(cfg)
+        #expect(cfgFrame.type == .micConfig)
+
+        let st = MicStatePayload(active: true, supported: true, sampleRate: 16_000, channels: 1, message: "远端麦克风已启用")
+        let stWire = OpalCastFrame(type: .micState, payload: try st.encode()).encode()
+
+        let pcm = Data(repeating: 0x2A, count: 640)
+        let pcmWire = OpalCastFrame.micFrame(pcm).encode()
+
+        var decoder = OpalCastStreamDecoder()
+        decoder.append(cfgFrame.encode())
+        decoder.append(stWire)
+        decoder.append(pcmWire)
+        let frames = try decoder.decodeAvailableFrames()
+        #expect(frames.map(\.type) == [.micConfig, .micState, .micFrame])
+        #expect(try MicConfigPayload.decode(from: frames[0].payload) == cfg)
+        #expect(try MicStatePayload.decode(from: frames[1].payload) == st)
+        #expect(frames[2].payload == pcm)
+    }
+
+    @Test("Root camera config/state/frame 0x2E/0x18/0x30 roundtrip cleanly")
+    func cameraFramesRoundtrip() throws {
+        let cfg = CameraConfigPayload(enabled: true, codec: "mjpeg", width: 640, height: 480, fps: 15, facing: "front")
+        let cfgFrame = try OpalCastFrame.cameraConfig(cfg)
+        #expect(cfgFrame.type == .cameraConfig)
+
+        let st = CameraStatePayload(active: false, supported: false, rootRequired: true, message: "摄像头映射需要 Root 权限")
+        let stWire = OpalCastFrame(type: .cameraState, payload: try st.encode()).encode()
+
+        let jpeg = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10])
+        let jpegWire = OpalCastFrame.cameraFrame(jpeg).encode()
+
+        var decoder = OpalCastStreamDecoder()
+        decoder.append(cfgFrame.encode())
+        decoder.append(stWire)
+        decoder.append(jpegWire)
+        let frames = try decoder.decodeAvailableFrames()
+        #expect(frames.map(\.type) == [.cameraConfig, .cameraState, .cameraFrame])
+        #expect(try CameraConfigPayload.decode(from: frames[0].payload) == cfg)
+        #expect(try CameraStatePayload.decode(from: frames[1].payload) == st)
+        #expect(frames[2].payload == jpeg)
+    }
+
     @Test("All downlink and uplink payloads roundtrip cleanly")
     func allPayloadsRoundtrip() throws {
         // 0x01 VIDEO_CONFIG

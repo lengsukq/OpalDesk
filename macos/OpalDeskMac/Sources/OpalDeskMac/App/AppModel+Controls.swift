@@ -113,6 +113,94 @@ extension AppModel {
         streamBridge.sendSystemAction(.setAudioEnabled, arg: isAudioMuted ? 0 : 1, isAuthenticated: isAuthenticated)
     }
 
+    public func toggleMicrophone() {
+        guard isAuthenticated else {
+            showToast("请等待投屏连接完成后再开启麦克风")
+            return
+        }
+        if isMicEnabled {
+            disableMicrophone(notifyServer: true)
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            let granted = await MicrophoneStreamCapturer.requestPermission()
+            guard granted else {
+                self.showToast("请在系统设置 → 隐私与安全性 → 麦克风 中允许 OpalDesk")
+                return
+            }
+            guard self.isAuthenticated else { return }
+            do {
+                let activeSession = self.session
+                try self.micCapturer.start(sampleRate: MicrophoneStreamCapturer.defaultSampleRate) { pcmData in
+                    activeSession.send(.micFrame(pcmData))
+                }
+                self.isMicEnabled = true
+                if let cfgFrame = try? OpalCastFrame.micConfig(MicConfigPayload(enabled: true)) {
+                    self.session.send(cfgFrame)
+                }
+            } catch {
+                self.isMicEnabled = false
+                self.showToast("无法开启麦克风：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    public func disableMicrophone(notifyServer: Bool = true) {
+        micCapturer.stop()
+        let wasEnabled = isMicEnabled
+        isMicEnabled = false
+        if notifyServer && isAuthenticated && wasEnabled {
+            if let cfgFrame = try? OpalCastFrame.micConfig(MicConfigPayload(enabled: false)) {
+                session.send(cfgFrame)
+            }
+        }
+    }
+
+    public func toggleCamera() {
+        guard isAuthenticated else {
+            showToast("请等待投屏连接完成后再开启摄像头映射")
+            return
+        }
+        if isCameraEnabled {
+            disableCamera(notifyServer: true)
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            let granted = await CameraStreamCapturer.requestPermission()
+            guard granted else {
+                self.showToast("请在系统设置 → 隐私与安全性 → 摄像头 中允许 OpalDesk")
+                return
+            }
+            guard self.isAuthenticated else { return }
+            do {
+                let activeSession = self.session
+                try self.cameraCapturer.start(fps: CameraStreamCapturer.defaultFps) { jpegData in
+                    activeSession.send(.cameraFrame(jpegData))
+                }
+                self.isCameraEnabled = true
+                if let cfgFrame = try? OpalCastFrame.cameraConfig(CameraConfigPayload(enabled: true)) {
+                    self.session.send(cfgFrame)
+                }
+            } catch {
+                self.isCameraEnabled = false
+                self.showToast("无法开启摄像头：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    public func disableCamera(notifyServer: Bool = true) {
+        cameraCapturer.stop()
+        let wasEnabled = isCameraEnabled
+        isCameraEnabled = false
+        if notifyServer && isAuthenticated && wasEnabled {
+            if let cfgFrame = try? OpalCastFrame.cameraConfig(CameraConfigPayload(enabled: false)) {
+                session.send(cfgFrame)
+            }
+        }
+    }
+
     public func rotateClockwise() { streamBridge.sendSystemAction(.rotateCW, isAuthenticated: isAuthenticated) }
     public func sendAndroidHome() { streamBridge.sendSystemAction(.home, isAuthenticated: isAuthenticated) }
     public func sendAndroidBack() { streamBridge.sendSystemAction(.back, isAuthenticated: isAuthenticated) }

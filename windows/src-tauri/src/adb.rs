@@ -410,7 +410,7 @@ fi"
 
     let stage_step = if expect_helper_installed {
         format!(
-            "APK_PATHS=$(pm path {HELPER_PACKAGE} 2>/dev/null | sed -n 's/^package://p' | tr -d '\r')
+            r#"APK_PATHS=$(pm path {HELPER_PACKAGE} 2>/dev/null | sed -n 's/^package://p' | tr -d '\r')
 if [ -n "$APK_PATHS" ]; then
   TMP_JAR=$(mktemp /data/local/tmp/opaldesk.XXXXXX 2>/dev/null)
   if [ -z "$TMP_JAR" ] || [ -L "$TMP_JAR" ]; then
@@ -453,21 +453,21 @@ if [ -n "$APK_PATHS" ]; then
   pm grant {HELPER_PACKAGE} android.permission.POST_NOTIFICATIONS 2>/dev/null
   pm grant {HELPER_PACKAGE} android.permission.ACCESS_LOCAL_NETWORK 2>/dev/null
   dumpsys deviceidle whitelist +{HELPER_PACKAGE} >/dev/null 2>&1
-fi"
+fi"#
         )
     } else {
         format!(
-            "if [ -L /data/local/tmp/opaldesk.jar ] || [ ! -s /data/local/tmp/opaldesk.jar ] || [ "$(dd if=/data/local/tmp/opaldesk.jar bs=1 count=2 2>/dev/null)" != "PK" ]; then
+            r#"if [ -L /data/local/tmp/opaldesk.jar ] || [ ! -s /data/local/tmp/opaldesk.jar ] || [ "$(dd if=/data/local/tmp/opaldesk.jar bs=1 count=2 2>/dev/null)" != "PK" ]; then
   echo "ERR_NO_JAR: {HELPER_PACKAGE} not installed and /data/local/tmp/opaldesk.jar missing or invalid" >&2
   exit 23
 fi
 (CLASSPATH=/data/local/tmp/opaldesk.jar /system/bin/app_process /data/local/tmp {DAEMON_CLASS} --stop >/dev/null 2>&1 || true)
-{stop_existing}"
+{stop_existing}"#
         )
     };
 
     format!(
-        "{stage_step}
+        r#"{stage_step}
 LOG_DST=/dev/null
 rm -f /data/local/tmp/opaldesk.log 2>/dev/null
 if (umask 022; set -C; : > /data/local/tmp/opaldesk.log) 2>/dev/null && [ -f /data/local/tmp/opaldesk.log ] && [ ! -L /data/local/tmp/opaldesk.log ]; then
@@ -494,7 +494,7 @@ esac
 if ! {alive_expr}; then
   nohup app_process /data/local/tmp {DAEMON_CLASS} >>"$LOG_DST" 2>&1 </dev/null &
   sleep 0.5
-fi"
+fi"#
     )
 }
 

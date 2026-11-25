@@ -1,6 +1,8 @@
 package io.github.lengsukq.opaldesk.cast
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.pm.PackageManager
 import android.graphics.Color as AndroidColor
 import android.os.Bundle
 import android.view.KeyEvent
@@ -11,6 +13,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -75,6 +79,8 @@ class PeerCastViewerActivity : ComponentActivity() {
     }
 
     private var client: OpalCastPeerClient? = null
+    private var micCapturer: PeerMicCapturer? = null
+    private var cameraCapturer: PeerCameraCapturer? = null
     private var activeSurface: android.view.Surface? = null
     private var targetHost: String = ""
     private var targetPort: Int = 19878
@@ -91,6 +97,8 @@ class PeerCastViewerActivity : ComponentActivity() {
     private var videoH by mutableIntStateOf(1080)
     private var videoFps by mutableIntStateOf(60)
     private var toolbarExpanded by mutableStateOf(true)
+    private var micEnabled by mutableStateOf(false)
+    private var cameraEnabled by mutableStateOf(false)
     private var imeVisible by mutableStateOf(false)
     private var composingText by mutableStateOf("")
     private var remoteImeReqSeq by mutableLongStateOf(0L)
@@ -99,6 +107,26 @@ class PeerCastViewerActivity : ComponentActivity() {
     private var errorText by mutableStateOf("")
     private var showAppPicker by mutableStateOf(false)
     private var remoteApps by mutableStateOf<List<OpalCastPeerClient.RemoteAppEntry>>(emptyList())
+
+    private val micPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            enableRemoteMic()
+        } else {
+            Toast.makeText(this, "需要麦克风权限才能向对方手机回传语音", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            enableRemoteCamera()
+        } else {
+            Toast.makeText(this, "需要摄像头权限才能映射本机画面", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -194,10 +222,14 @@ class PeerCastViewerActivity : ComponentActivity() {
                         videoW = videoW,
                         videoH = videoH,
                         toolbarExpanded = toolbarExpanded,
+                        micEnabled = micEnabled,
+                        cameraEnabled = cameraEnabled,
                         imeVisible = imeVisible,
                         composingText = composingText,
                         imeController = imeController,
                         onToggleToolbar = { toolbarExpanded = !toolbarExpanded },
+                        onToggleMic = { toggleRemoteMic() },
+                        onToggleCamera = { toggleRemoteCamera() },
                         onToggleIme = { imeController.toggleKeyboard(imeVisible) },
                         onImeVisibilityChanged = { vis ->
                             imeVisible = vis
@@ -313,6 +345,39 @@ class PeerCastViewerActivity : ComponentActivity() {
                     }
                 }
 
+                override fun onRemoteMicState(active: Boolean, supported: Boolean, message: String) {
+                    runOnUiThread {
+                        if (!active) {
+                            stopLocalMicCaptureOnly()
+                            micEnabled = false
+                        } else {
+                            micEnabled = true
+                        }
+                        if (message.isNotBlank()) {
+                            Toast.makeText(this@PeerCastViewerActivity, message, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+
+                override fun onRemoteCameraState(
+                    active: Boolean,
+                    supported: Boolean,
+                    rootRequired: Boolean,
+                    message: String,
+                ) {
+                    runOnUiThread {
+                        if (!active) {
+                            stopLocalCameraCaptureOnly()
+                            cameraEnabled = false
+                        } else {
+                            cameraEnabled = true
+                        }
+                        if (message.isNotBlank()) {
+                            Toast.makeText(this@PeerCastViewerActivity, message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+
                 override fun onVideoSizeChanged(width: Int, height: Int, fps: Int) {
                     runOnUiThread {
                         videoW = width.coerceAtLeast(2)
@@ -332,6 +397,10 @@ class PeerCastViewerActivity : ComponentActivity() {
                 override fun onDisconnected(reason: String) {
                     runOnUiThread {
                         connected = false
+                        stopLocalMicCaptureOnly()
+                        micEnabled = false
+                        stopLocalCameraCaptureOnly()
+                        cameraEnabled = false
                         if (errorText.isBlank()) statusText = reason
                     }
                 }
@@ -344,7 +413,109 @@ class PeerCastViewerActivity : ComponentActivity() {
         peerClient.start()
     }
 
+    private fun toggleRemoteMic() {
+        if (!connected) {
+            Toast.makeText(this, "请等待投屏连接完成后再开启麦克风", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (micEnabled) {
+            disableRemoteMic()
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            enableRemoteMic()
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun enableRemoteMic() {
+        val peer = client ?: return
+        stopLocalMicCaptureOnly()
+        val cap = PeerMicCapturer(
+            sampleRate = PeerMicCapturer.DEFAULT_SAMPLE_RATE,
+            onPcmFrame = { pcm -> client?.sendMicFrame(pcm) },
+            onError = { err ->
+                runOnUiThread {
+                    disableRemoteMic()
+                    Toast.makeText(this, err, Toast.LENGTH_SHORT).show()
+                }
+            },
+        )
+        if (!cap.start()) {
+            return
+        }
+        micCapturer = cap
+        micEnabled = true
+        peer.sendMicConfig(true, PeerMicCapturer.DEFAULT_SAMPLE_RATE, PeerMicCapturer.DEFAULT_CHANNELS)
+    }
+
+    private fun disableRemoteMic() {
+        stopLocalMicCaptureOnly()
+        micEnabled = false
+        client?.sendMicConfig(false, PeerMicCapturer.DEFAULT_SAMPLE_RATE, PeerMicCapturer.DEFAULT_CHANNELS)
+    }
+
+    private fun stopLocalMicCaptureOnly() {
+        micCapturer?.stop()
+        micCapturer = null
+    }
+
+    private fun toggleRemoteCamera() {
+        if (!connected) {
+            Toast.makeText(this, "请等待投屏连接完成后再开启摄像头映射", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (cameraEnabled) {
+            disableRemoteCamera()
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            enableRemoteCamera()
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun enableRemoteCamera() {
+        val peer = client ?: return
+        stopLocalCameraCaptureOnly()
+        val cap = PeerCameraCapturer(
+            context = this,
+            onJpegFrame = { jpeg -> client?.sendCameraFrame(jpeg) },
+            onError = { err ->
+                runOnUiThread {
+                    disableRemoteCamera()
+                    Toast.makeText(this, err, Toast.LENGTH_SHORT).show()
+                }
+            },
+        )
+        if (!cap.start()) {
+            return
+        }
+        cameraCapturer = cap
+        cameraEnabled = true
+        peer.sendCameraConfig(true)
+    }
+
+    private fun disableRemoteCamera() {
+        stopLocalCameraCaptureOnly()
+        cameraEnabled = false
+        client?.sendCameraConfig(false)
+    }
+
+    private fun stopLocalCameraCaptureOnly() {
+        cameraCapturer?.stop()
+        cameraCapturer = null
+    }
+
     override fun onDestroy() {
+        stopLocalMicCaptureOnly()
+        stopLocalCameraCaptureOnly()
         client?.stop()
         client = null
         OpalPeerCastMutex.endReceiving(MUTEX_TAG)
@@ -403,10 +574,14 @@ private fun PeerCastViewerContent(
     videoW: Int,
     videoH: Int,
     toolbarExpanded: Boolean,
+    micEnabled: Boolean,
+    cameraEnabled: Boolean,
     imeVisible: Boolean,
     composingText: String,
     imeController: NativeImeHostController,
     onToggleToolbar: () -> Unit,
+    onToggleMic: () -> Unit,
+    onToggleCamera: () -> Unit,
     onToggleIme: () -> Unit,
     onImeVisibilityChanged: (Boolean) -> Unit,
     onComposingChanged: (String) -> Unit,
@@ -566,6 +741,18 @@ private fun PeerCastViewerContent(
                     maxLines = 1,
                 )
                 PillChip(
+                    label = if (micEnabled) "麦已开" else "麦克风",
+                    tint = if (micEnabled) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
+                    active = micEnabled,
+                    onClick = onToggleMic,
+                )
+                PillChip(
+                    label = if (cameraEnabled) "镜头已开" else "摄像头",
+                    tint = if (cameraEnabled) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
+                    active = cameraEnabled,
+                    onClick = onToggleCamera,
+                )
+                PillChip(
                     label = if (imeVisible) "收起输入法" else "输入法",
                     tint = if (imeVisible) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
                     active = imeVisible,
@@ -594,6 +781,22 @@ private fun PeerCastViewerContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
+                if (micEnabled) {
+                    PillChip(
+                        label = "麦已开",
+                        tint = OpalPalette.AccentEmerald,
+                        active = true,
+                        onClick = onToggleMic,
+                    )
+                }
+                if (cameraEnabled) {
+                    PillChip(
+                        label = "镜头已开",
+                        tint = OpalPalette.AccentEmerald,
+                        active = true,
+                        onClick = onToggleCamera,
+                    )
+                }
                 PillChip(
                     label = if (imeVisible) "收起输入法" else "输入法",
                     tint = if (imeVisible) OpalPalette.AccentBlue else OpalPalette.TextPrimary,

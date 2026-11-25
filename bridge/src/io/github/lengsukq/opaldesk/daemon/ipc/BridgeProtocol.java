@@ -72,6 +72,7 @@ public final class BridgeProtocol {
     public static final int TX_SET_APP_CUSTOM_DPI = 40;
     public static final int TX_SYNC_APP_WINDOW_BOUNDS = 41;
     public static final int TX_GET_ADVANCED_CONFIG_STATE = 42;
+    public static final int TX_SET_REMOTE_MEDIA_CONFIG = 43;
     public static final int TX_SHUTDOWN = 99;
 
     // ---- Interactive Pairing Approval Decisions (TX_RESPOND_PAIRING) ----

@@ -43,6 +43,9 @@ public final class RootEnhancer {
             // Standard AOSP global settings allowing stubborn fixed-orientation apps to resize cleanly on secondary displays
             ShellCommand.runOutput("settings", "put", "global", "force_resizable_activities", "1");
             ShellCommand.runOutput("settings", "put", "global", "enable_non_resizable_multi_window", "1");
+            // Prepare shared MJPEG camera feed directory accessible after dropping to uid=2000
+            ShellCommand.runOutput("mkdir", "-p", "/data/local/tmp/opaldesk_cam");
+            ShellCommand.runOutput("chmod", "0777", "/data/local/tmp/opaldesk_cam");
             System.out.println("OPALDESK_OPTIONAL_ROOT_ENHANCEMENTS_APPLIED");
             return new EnhancementReport(true, true);
         } catch (RuntimeException e) {

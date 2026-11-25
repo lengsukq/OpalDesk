@@ -4,7 +4,7 @@
 
 **全品牌安卓通用、免 Root 优先的 Wayland 式「一窗一独立虚拟屏」120fps 液态毛玻璃多窗合成工作站。**
 
-彻底摒弃厂商私有 Freeform 小窗与撕裂悬浮标题栏路线，面向 **Android 11–17** 将 **macOS 液态毛玻璃多窗桌面**、**USB-C / HDMI 2K/4K 高刷外接满屏工作站**、**手机 ↔ 平板无线桌面与单应用悬浮小窗**、**物理键鼠全局跨屏路由**、**原生 Swift 6 macOS 伴侣端** 与 **零安装 GitHub Pages Web 被投屏端 & 局域网免线激活** 集于一体，MIT 免费开源、零无障碍权限、95%+ 免 Root `uid=2000` 纯净运行。
+彻底摒弃厂商私有 Freeform 小窗与撕裂悬浮标题栏路线，面向 **Android 11–17** 将 **macOS 液态毛玻璃多窗桌面**、**USB-C / HDMI 2K/4K 高刷外接满屏工作站**、**手机 ↔ 平板无线桌面与单应用悬浮小窗**、**物理键鼠全局跨屏路由**、**原生 Swift 6 macOS / Tauri v2 Windows 伴侣端** 与 **零安装 GitHub Pages Web 被投屏端 & 局域网免线激活** 集于一体，MIT 免费开源、零无障碍权限、95%+ 免 Root `uid=2000` 纯净运行。
 
 ---
 
@@ -134,6 +134,7 @@ flowchart LR
 
 - **Android 端（Android 11–17）**：下载最新 `OpalDesk_*.apk`（V3 正式签名 · 已内嵌守护进程 `opaldesk.jar`）
 - **macOS 伴侣端（macOS 14+ · Apple Silicon）**：下载最新 `OpalDesk_*-macos.zip`（原生 Swift 6）
+- **Windows 伴侣端（Windows 10/11 x64）**：下载最新 `OpalDesk_*-windows-x64-setup.exe` 或 `.msi`（Tauri v2 + WebView2 · 内置 mDNS 发现、TLS TOFU 免证书警告桥接与 USB 一键引导）
 - **Web 被投屏端（Windows / Linux / macOS / 平板浏览器）**：免安装直接打开 **[https://lengsukq.github.io/OpalDesk/cast/](https://lengsukq.github.io/OpalDesk/cast/)**（推荐使用 Chrome / Edge / Firefox）
 
 ### 激活方式（任选其一，推荐 ① 或 ② 免数据线）
@@ -162,6 +163,7 @@ adb shell "rm -f /data/local/tmp/opd_src.apk /data/local/tmp/opaldesk.jar.new &&
 ├── bridge/                  # Pure Java 11 Shell 守护进程 (:bridge -> assets/opaldesk.jar)
 ├── helper/                  # Kotlin 21 + Compose Foundation 客户端 APK (:helper)
 ├── macos/OpalDeskMac/       # 原生 Swift 6 macOS 伴侣接收端
+├── windows/                 # Tauri v2 (Rust + WebView2) Windows 伴侣接收端（零拷贝复用 site/cast）
 ├── site/                    # 3D (WebGL2) + 2D 液态毛玻璃官方宣传网站 & site/cast/ Web 被投屏端/局域网激活中心
 ├── docs/                    # 使用指南与架构设计文档
 └── scripts/                 # init-signing.sh / dev-deploy.sh / build-macos-app.sh
@@ -182,6 +184,9 @@ adb shell "rm -f /data/local/tmp/opd_src.apk /data/local/tmp/opaldesk.jar.new &&
 
 # 5. 编译测试原生 Swift 6 macOS 伴侣端
 cd macos/OpalDeskMac && swift test && swift build -c release && ../../scripts/build-macos-app.sh --skip-build
+
+# 6. 同步并测试 Tauri v2 Windows 伴侣端（Windows 下执行 npx @tauri-apps/cli build 打包安装包）
+cd windows && npm test && cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 </details>

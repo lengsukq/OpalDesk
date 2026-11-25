@@ -33,6 +33,8 @@ public enum OpalCastFrameType: UInt8, Sendable, CaseIterable {
     case wifiUpgradeReady = 0x14
     case appList = 0x15
     case imeRequest = 0x16
+    case micState = 0x17
+    case cameraState = 0x18
     case pong = 0x1F
 
     // Uplink: Mac -> Android
@@ -48,7 +50,11 @@ public enum OpalCastFrameType: UInt8, Sendable, CaseIterable {
     case requestWifiUpgrade = 0x29
     case listApps = 0x2A
     case windowAction = 0x2B
+    case micConfig = 0x2C
+    case micFrame = 0x2D
+    case cameraConfig = 0x2E
     case ping = 0x2F
+    case cameraFrame = 0x30
 }
 
 public struct OpalCastVideoFrameFlags: OptionSet, Sendable, Hashable {

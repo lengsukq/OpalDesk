@@ -34,6 +34,8 @@ data class DaemonStatus(
     val mouseRoutedDisplayId: Int = -1,
     val hostScreenOff: Boolean = false,
     val globalCustomDpi: Int = 0,
+    val remoteMicEnabled: Boolean = false,
+    val remoteCameraEnabled: Boolean = false,
 ) {
     val injectBackendLabel: String
         get() = when {

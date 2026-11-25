@@ -237,6 +237,8 @@ final class ClientSession {
                             || next.type == OpalCastProtocol.TYPE_WIFI_UPGRADE_READY
                             || next.type == OpalCastProtocol.TYPE_APP_LIST
                             || next.type == OpalCastProtocol.TYPE_IME_REQUEST
+                            || next.type == OpalCastProtocol.TYPE_MIC_STATE
+                            || next.type == OpalCastProtocol.TYPE_CAMERA_STATE
                             || next.type == OpalCastProtocol.TYPE_PONG;
                 }
                 frameWriter.writeFrame(

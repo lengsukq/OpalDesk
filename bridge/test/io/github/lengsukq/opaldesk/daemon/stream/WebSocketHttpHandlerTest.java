@@ -32,10 +32,14 @@ public class WebSocketHttpHandlerTest {
         assertTrue(WebSocketHttpHandler.isAllowedOrigin("http://localhost:8080"));
         assertTrue(WebSocketHttpHandler.isAllowedOrigin("http://127.0.0.1:5173"));
         assertTrue(WebSocketHttpHandler.isAllowedOrigin("https://localhost"));
+        assertTrue(WebSocketHttpHandler.isAllowedOrigin("http://tauri.localhost"));
+        assertTrue(WebSocketHttpHandler.isAllowedOrigin("https://tauri.localhost"));
+        assertTrue(WebSocketHttpHandler.isAllowedOrigin("tauri://localhost"));
 
         assertFalse(WebSocketHttpHandler.isAllowedOrigin("http://lengsukq.github.io"));
         assertFalse(WebSocketHttpHandler.isAllowedOrigin("https://lengsukq.github.io.evil.com"));
         assertFalse(WebSocketHttpHandler.isAllowedOrigin("https://evil.example"));
+        assertFalse(WebSocketHttpHandler.isAllowedOrigin("https://tauri.localhost.evil.com"));
         assertFalse(WebSocketHttpHandler.isAllowedOrigin("null"));
         assertFalse(WebSocketHttpHandler.isAllowedOrigin(""));
     }

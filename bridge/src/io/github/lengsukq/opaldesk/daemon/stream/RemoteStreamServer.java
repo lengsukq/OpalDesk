@@ -81,6 +81,10 @@ public final class RemoteStreamServer {
         void onFileTransferChunk(int sessionId, OpalCastProtocol.FileTransferChunkMsg msg);
         void onListApps(int sessionId);
         void onWindowAction(int sessionId, OpalCastProtocol.WindowActionMsg msg);
+        default void onMicConfig(int sessionId, OpalCastProtocol.MicConfigMsg msg) {}
+        default void onMicFrame(int sessionId, byte[] pcmData, long timestampUs) {}
+        default void onCameraConfig(int sessionId, OpalCastProtocol.CameraConfigMsg msg) {}
+        default void onCameraFrame(int sessionId, byte[] jpegData, long timestampUs) {}
         void onWifiUpgradeEnabled();
         void onVideoCongestion(int sessionId);
         void onVideoQueueHealthy(int sessionId);
@@ -441,6 +445,22 @@ public final class RemoteStreamServer {
         if (s != null && !s.isClosed()) {
             long ts = SystemClock.elapsedRealtimeNanos() / 1000L;
             s.enqueue(OpalCastProtocol.TYPE_IME_REQUEST, 0, ts, OpalCastProtocol.encodeImeRequest(show, inputType));
+        }
+    }
+
+    public void sendMicState(int sessionId, OpalCastProtocol.MicStateMsg state) {
+        ClientSession s = allSessions.get(sessionId);
+        if (s != null && !s.isClosed() && state != null) {
+            long ts = SystemClock.elapsedRealtimeNanos() / 1000L;
+            s.enqueue(OpalCastProtocol.TYPE_MIC_STATE, 0, ts, OpalCastProtocol.encodeMicState(state));
+        }
+    }
+
+    public void sendCameraState(int sessionId, OpalCastProtocol.CameraStateMsg state) {
+        ClientSession s = allSessions.get(sessionId);
+        if (s != null && !s.isClosed() && state != null) {
+            long ts = SystemClock.elapsedRealtimeNanos() / 1000L;
+            s.enqueue(OpalCastProtocol.TYPE_CAMERA_STATE, 0, ts, OpalCastProtocol.encodeCameraState(state));
         }
     }
 
@@ -895,6 +915,30 @@ public final class RemoteStreamServer {
             case OpalCastProtocol.TYPE_WINDOW_ACTION: {
                 OpalCastProtocol.WindowActionMsg msg = OpalCastProtocol.decodeWindowAction(f.payload);
                 if (listener != null) listener.onWindowAction(sid, msg);
+                break;
+            }
+            case OpalCastProtocol.TYPE_MIC_CONFIG: {
+                OpalCastProtocol.MicConfigMsg msg = OpalCastProtocol.decodeMicConfig(f.payload);
+                if (listener != null) listener.onMicConfig(sid, msg);
+                break;
+            }
+            case OpalCastProtocol.TYPE_MIC_FRAME: {
+                if (listener != null && f.payload != null && f.payload.length > 0
+                        && f.payload.length <= OpalCastProtocol.MAX_MIC_FRAME_BYTES) {
+                    listener.onMicFrame(sid, f.payload, f.timestampUs);
+                }
+                break;
+            }
+            case OpalCastProtocol.TYPE_CAMERA_CONFIG: {
+                OpalCastProtocol.CameraConfigMsg msg = OpalCastProtocol.decodeCameraConfig(f.payload);
+                if (listener != null) listener.onCameraConfig(sid, msg);
+                break;
+            }
+            case OpalCastProtocol.TYPE_CAMERA_FRAME: {
+                if (listener != null && f.payload != null && f.payload.length > 0
+                        && f.payload.length <= OpalCastProtocol.MAX_CAMERA_FRAME_BYTES) {
+                    listener.onCameraFrame(sid, f.payload, f.timestampUs);
+                }
                 break;
             }
             default:

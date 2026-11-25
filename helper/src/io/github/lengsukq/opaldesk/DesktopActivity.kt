@@ -263,6 +263,7 @@ class DesktopActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
 
         // Never swallow physical/Bluetooth keyboard IME language-switch shortcuts (Ctrl+Space,

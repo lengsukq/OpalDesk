@@ -166,6 +166,10 @@ ${ICON_KEY_XML}
     <true/>
     <key>NSLocalNetworkUsageDescription</key>
     <string>OpalDesk 需要访问局域网以通过 Bonjour 自动发现并低延迟连接同网络下的 Android 桌面服务。</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>OpalDesk 需要访问麦克风以将 Mac 的语音实时回传至投屏中的 Android 设备。</string>
+    <key>NSCameraUsageDescription</key>
+    <string>OpalDesk 需要访问摄像头以在 Root 模式下将 Mac 摄像头画面映射至投屏中的 Android 设备。</string>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
 </dict>

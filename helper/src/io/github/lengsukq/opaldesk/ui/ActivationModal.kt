@@ -103,7 +103,6 @@ fun ActivationModal(
     var pairPortText by remember { mutableStateOf("") }
     var pairCodeText by remember { mutableStateOf("") }
     var connectPortText by remember { mutableStateOf("") }
-    var autoCloseWifiAdb by remember { mutableStateOf(AppPrefs.isAutoCloseWifiAdbEnabled(ctx)) }
 
     // Shizuku state
     var shizukuSummary by remember { mutableStateOf(ShizukuBootstrap.buildStateSummary(ctx)) }
@@ -233,11 +232,6 @@ fun ActivationModal(
                         onPairCodeChange = { pairCodeText = it.filter(Char::isDigit).take(6) },
                         connectPortText = connectPortText,
                         onConnectPortChange = { connectPortText = it.filter(Char::isDigit) },
-                        autoCloseWifiAdb = autoCloseWifiAdb,
-                        onAutoCloseChange = {
-                            autoCloseWifiAdb = it
-                            AppPrefs.setAutoCloseWifiAdbEnabled(ctx, it)
-                        },
                         onPairAndStart = {
                             val pPort = pairPortText.toIntOrNull() ?: 0
                             val cPort = connectPortText.toIntOrNull() ?: 0
@@ -364,8 +358,6 @@ private fun WirelessAdbActivationPane(
     onPairCodeChange: (String) -> Unit,
     connectPortText: String,
     onConnectPortChange: (String) -> Unit,
-    autoCloseWifiAdb: Boolean,
-    onAutoCloseChange: (Boolean) -> Unit,
     onPairAndStart: () -> Unit,
     onDirectConnect: () -> Unit,
 ) {
@@ -462,12 +454,12 @@ private fun WirelessAdbActivationPane(
         onClick = onPairAndStart,
         modifier = Modifier.fillMaxWidth(),
     )
-    Spacer(Modifier.height(8.dp))
-    OpalSwitchRow(
-        title = "激活成功后自动关闭系统无线调试",
-        subtitle = "守护进程拉起后常驻后台，无需保持无线调试常开",
-        checked = autoCloseWifiAdb,
-        onCheckedChange = onAutoCloseChange,
+    Spacer(Modifier.height(10.dp))
+    OpalText(
+        text = "提示：若未连接电脑 USB 调试，激活成功后请保持系统「无线调试」开启（部分机型关闭无线调试会连带终止后台守护进程）。",
+        fontSize = 11.5.sp,
+        color = OpalPalette.TextMuted,
+        lineHeight = 16.5.sp,
     )
 }
 

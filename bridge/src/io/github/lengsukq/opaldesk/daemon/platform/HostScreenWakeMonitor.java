@@ -70,7 +70,7 @@ public final class HostScreenWakeMonitor {
     private void startMonitorsAsync(int gen, Runnable onWake) {
         List<DeviceSpec> devices = discoverInternalTouchDevices();
         if (devices.isEmpty()) {
-            System.out.println("OPALDESK_WAKE_MONITOR_SKIP no readable internal touch evdev found");
+            System.out.println("OPALDESK_WAKE_MONITOR_SKIP no readable internal touch evdev found (using helper double-tap/key wake fallback)");
             return;
         }
         final AtomicBoolean woken = new AtomicBoolean(false);

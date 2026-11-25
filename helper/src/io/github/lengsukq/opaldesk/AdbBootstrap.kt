@@ -72,8 +72,6 @@ object AdbBootstrap {
     fun buildPcAdbCommand(): String = DaemonBootstrapScripts.buildPcAdbCommand()
     fun isNativeAdbAvailable(ctx: Context): Boolean = AdbProcessRunner.isNativeAdbAvailable(ctx)
     fun hasSuBinaryHint(): Boolean = AdbProcessRunner.hasSuBinaryHint()
-    fun isAutoCloseWifiAdbEnabled(ctx: Context?): Boolean = AppPrefs.isAutoCloseWifiAdbEnabled(ctx)
-    fun setAutoCloseWifiAdbEnabled(ctx: Context?, enabled: Boolean) = AppPrefs.setAutoCloseWifiAdbEnabled(ctx, enabled)
     fun isAutoRootEnabled(ctx: Context?): Boolean = AppPrefs.isAutoRootEnabled(ctx)
     fun setAutoRootEnabled(ctx: Context?, enabled: Boolean) = AppPrefs.setAutoRootEnabled(ctx, enabled)
     fun isAutoShizukuEnabled(ctx: Context?): Boolean = AppPrefs.isAutoShizukuEnabled(ctx)
@@ -321,12 +319,19 @@ object AdbBootstrap {
             catch (_: Throwable) {}
             postResult(listener, false, "远程 Shell 启动失败:\n${shRes.output}"); return
         }
-        OpalLogStore.i("ADB", "Wireless shell returned LAUNCH_DONE (autoCloseWifiAdb=${isAutoCloseWifiAdbEnabled(appCtx)})")
-        if (isAutoCloseWifiAdbEnabled(appCtx)) {
-            try { AdbProcessRunner.runAdb(appCtx, 2500, "-s", target, "shell", "settings put global adb_wifi_enabled 0") }
-            catch (t: Throwable) { Log.w(TAG, "Auto-close wireless ADB failed", t) }
-        }
+        OpalLogStore.i("ADB", "Wireless shell returned LAUNCH_DONE")
         awaitDaemonBinderReady(appCtx, DIAG_WIRELESS, listener, "无线调试激活成功，OpalDesk 服务已就绪！", wirelessTarget = target)
+    }
+
+    internal fun formatBinderTimeoutMessage(tailDiag: String): String {
+        val cleanTail = tailDiag.trim()
+        val offlineHint = if (cleanTail.contains("offline", ignoreCase = true)) {
+            "\n提示：检测到无线调试连接已断开；部分机型关闭「无线调试」会连带终止后台守护进程，激活后请保持「无线调试」开启。"
+        } else {
+            ""
+        }
+        val tailSection = if (cleanTail.isNotEmpty()) "\n日志摘要:\n$cleanTail" else ""
+        return "守护进程命令已下发，但暂未收到 Binder 握手，请稍等几秒或查看 /data/local/tmp/opaldesk.log$offlineHint$tailSection"
     }
 
     private fun awaitDaemonBinderReady(
@@ -346,19 +351,17 @@ object AdbBootstrap {
             }
             try { Thread.sleep(250) } catch (_: InterruptedException) { Thread.currentThread().interrupt(); break }
         }
-        val tailDiag = when (diagSource) {
-            DIAG_ROOT -> AdbProcessRunner.runSu(3000, "tail -n 12 /data/local/tmp/opaldesk.log 2>/dev/null")
-                .output.trim().takeIf { it.isNotEmpty() }?.let { "\n日志摘要:\n$it" }.orEmpty()
-            DIAG_SHIZUKU -> ShizukuBootstrap.execShell(3000, null, "tail -n 12 /data/local/tmp/opaldesk.log 2>/dev/null")
-                .output.trim().takeIf { it.isNotEmpty() }?.let { "\n日志摘要:\n$it" }.orEmpty()
+        val rawTail = when (diagSource) {
+            DIAG_ROOT -> AdbProcessRunner.runSu(3000, "tail -n 12 /data/local/tmp/opaldesk.log 2>/dev/null").output
+            DIAG_SHIZUKU -> ShizukuBootstrap.execShell(3000, null, "tail -n 12 /data/local/tmp/opaldesk.log 2>/dev/null").output
             DIAG_WIRELESS -> if (!wirelessTarget.isNullOrBlank()) {
-                AdbProcessRunner.runAdb(appCtx, 3000, "-s", wirelessTarget, "shell", "tail -n 12 /data/local/tmp/opaldesk.log 2>/dev/null")
-                    .output.trim().takeIf { it.isNotEmpty() }?.let { "\n日志摘要:\n$it" }.orEmpty()
+                AdbProcessRunner.runAdb(appCtx, 3000, "-s", wirelessTarget, "shell", "tail -n 12 /data/local/tmp/opaldesk.log 2>/dev/null").output
             } else ""
             else -> ""
         }
-        OpalLogStore.e("ADB", "Daemon Binder handshake timed out (source=$diagSource)$tailDiag")
-        postResult(listener, false, "守护进程命令已下发，但暂未收到 Binder 握手，请稍等几秒或查看 /data/local/tmp/opaldesk.log$tailDiag")
+        val msg = formatBinderTimeoutMessage(rawTail)
+        OpalLogStore.e("ADB", "Daemon Binder handshake timed out (source=$diagSource)${rawTail.trim().takeIf { it.isNotEmpty() }?.let { " | $it" }.orEmpty()}")
+        postResult(listener, false, msg)
     }
 
     private fun postStep(l: ProgressListener?, msg: String?) {

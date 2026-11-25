@@ -513,6 +513,7 @@ class ExternalDesktopActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
 
         if (WorkstationKeyDispatcher.isImeSwitchShortcut(event.keyCode, event.metaState)) {

@@ -30,7 +30,6 @@ object AppPrefs {
     const val MAX_DOCK_PINNED = 8
 
     private const val PREFS_NAME = "opaldesk_v2_prefs"
-    private const val KEY_AUTO_CLOSE_WIFI_ADB = "auto_close_wifi_adb"
     private const val KEY_AUTO_ROOT = "auto_root"
     private const val KEY_AUTO_SHIZUKU = "auto_shizuku"
     private const val KEY_ROOT_ENHANCE = "root_enhance_optional"
@@ -55,6 +54,8 @@ object AppPrefs {
     private const val KEY_FEEDBACK_REPORT_DATE = "feedback_report_date_v1"
     private const val KEY_FEEDBACK_REPORT_COUNT = "feedback_report_count_v1"
     private const val KEY_FEEDBACK_USERNAME = "feedback_reporter_username_v1"
+    private const val KEY_REMOTE_MIC_ENABLED = "remote_mic_uplink_enabled_v1"
+    private const val KEY_REMOTE_CAMERA_ENABLED = "remote_camera_mapping_enabled_v1"
 
     private val DEFAULT_PINNED = listOf(
         "com.android.chrome",
@@ -107,6 +108,12 @@ object AppPrefs {
     private val _updateDownloadRouteFlow = MutableStateFlow(UPDATE_ROUTE_DIRECT)
     val updateDownloadRouteFlow: StateFlow<Int> = _updateDownloadRouteFlow.asStateFlow()
 
+    private val _remoteMicEnabledFlow = MutableStateFlow(false)
+    val remoteMicEnabledFlow: StateFlow<Boolean> = _remoteMicEnabledFlow.asStateFlow()
+
+    private val _remoteCameraEnabledFlow = MutableStateFlow(false)
+    val remoteCameraEnabledFlow: StateFlow<Boolean> = _remoteCameraEnabledFlow.asStateFlow()
+
     private fun prefs(ctx: Context?) =
         ctx?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -130,6 +137,8 @@ object AppPrefs {
         _autoShowPhoneTrackpadFlow.value = p.getBoolean(KEY_AUTO_SHOW_PHONE_TRACKPAD, true)
         _updateDownloadRouteFlow.value = p.getInt(KEY_UPDATE_DOWNLOAD_ROUTE, UPDATE_ROUTE_DIRECT)
             .coerceIn(UPDATE_ROUTE_DIRECT, UPDATE_ROUTE_PROXY_2)
+        _remoteMicEnabledFlow.value = p.getBoolean(KEY_REMOTE_MIC_ENABLED, false)
+        _remoteCameraEnabledFlow.value = p.getBoolean(KEY_REMOTE_CAMERA_ENABLED, false)
     }
 
     private fun loadPkgList(p: android.content.SharedPreferences, key: String, fallbackKey: String): List<String> {
@@ -137,13 +146,6 @@ object AppPrefs {
         if (raw == null) return DEFAULT_PINNED
         if (raw.isBlank()) return emptyList()
         return raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-    }
-
-    fun isAutoCloseWifiAdbEnabled(ctx: Context?): Boolean =
-        prefs(ctx)?.getBoolean(KEY_AUTO_CLOSE_WIFI_ADB, false) ?: false
-
-    fun setAutoCloseWifiAdbEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_CLOSE_WIFI_ADB, enabled)?.apply()
     }
 
     fun isAutoRootEnabled(ctx: Context?): Boolean =
@@ -182,6 +184,26 @@ object AppPrefs {
     fun setAutoShowPhoneTrackpadEnabled(ctx: Context?, enabled: Boolean) {
         prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_SHOW_PHONE_TRACKPAD, enabled)?.apply()
         _autoShowPhoneTrackpadFlow.value = enabled
+    }
+
+    fun isRemoteMicEnabled(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _remoteMicEnabledFlow.value
+    }
+
+    fun setRemoteMicEnabled(ctx: Context?, enabled: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_REMOTE_MIC_ENABLED, enabled)?.apply()
+        _remoteMicEnabledFlow.value = enabled
+    }
+
+    fun isRemoteCameraEnabled(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _remoteCameraEnabledFlow.value
+    }
+
+    fun setRemoteCameraEnabled(ctx: Context?, enabled: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_REMOTE_CAMERA_ENABLED, enabled)?.apply()
+        _remoteCameraEnabledFlow.value = enabled
     }
 
     fun getDesktopShortcuts(ctx: Context?): List<String> {

@@ -64,6 +64,7 @@ object BridgeProtocol {
         const val SET_APP_CUSTOM_DPI = 40
         const val SYNC_APP_WINDOW_BOUNDS = 41
         const val GET_ADVANCED_CONFIG_STATE = 42
+        const val SET_REMOTE_MEDIA_CONFIG = 43
         const val SHUTDOWN = 99
     }
 

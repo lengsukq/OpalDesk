@@ -210,6 +210,28 @@ class AdbHelperLogicTest {
         val rootEnhanced = DaemonBootstrapScripts.buildRootBootstrapScript("/data/user/0/app/s.jar", validSha, userId = 0, rootEnhance = true)
         assertTrue(rootEnhanced.contains("force_resizable_activities 1"))
         assertTrue(rootEnhanced.contains("--root-enhance"))
+
+        // Bootstrap scripts must never disable system wireless ADB (which can kill adbd's cgroup).
+        assertFalse(wireless.contains("adb_wifi_enabled"))
+        assertFalse(postPush.contains("adb_wifi_enabled"))
+        assertFalse(DaemonBootstrapScripts.buildPcAdbCommand().contains("adb_wifi_enabled"))
+    }
+
+    @Test
+    fun formatBinderTimeoutMessageSurfacesOfflineRecoveryHintAndTailLog() {
+        val plain = AdbBootstrap.formatBinderTimeoutMessage("")
+        assertTrue(plain.contains("守护进程命令已下发"))
+        assertFalse(plain.contains("检测到无线调试连接已断开"))
+        assertFalse(plain.contains("日志摘要:"))
+
+        val withDaemonTail = AdbBootstrap.formatBinderTimeoutMessage("OPALDESK_LOCK_BUSY")
+        assertTrue(withDaemonTail.contains("日志摘要:\nOPALDESK_LOCK_BUSY"))
+        assertFalse(withDaemonTail.contains("检测到无线调试连接已断开"))
+
+        val withOffline = AdbBootstrap.formatBinderTimeoutMessage("libadb.so: device offline")
+        assertTrue(withOffline.contains("检测到无线调试连接已断开"))
+        assertTrue(withOffline.contains("保持「无线调试」开启"))
+        assertTrue(withOffline.contains("日志摘要:\nlibadb.so: device offline"))
     }
 
     private fun findNonLocalPrivateLanAddresses(localIpv4: String): List<InetAddress> {

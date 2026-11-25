@@ -1430,6 +1430,69 @@ fun ConsoleEngineSettingsTab(
             ctx = ctx,
             inputBlocked = status.connected && status.injectStatus == BridgeProtocol.InputBackend.STATUS_BLOCKED,
         )
+        ConsoleSectionTitle("跨端媒体（实验性）")
+        MacGlassSectionCard {
+            val remoteMicEnabled by AppPrefs.remoteMicEnabledFlow.collectAsState()
+            val remoteCameraEnabled by AppPrefs.remoteCameraEnabledFlow.collectAsState()
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                AppPrefs.hydrateFlows(ctx)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    OpalText(text = "远端麦克风与摄像头", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    OpalText(
+                        text = "默认关闭，以免影响主线投屏体验；可随时在此或 DeX 控制中心开关",
+                        fontSize = 12.sp,
+                        color = OpalPalette.TextSecondary,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                val anyEnabled = remoteMicEnabled || remoteCameraEnabled
+                OpalStatusBadge(
+                    label = if (anyEnabled) "已启用" else "默认关闭",
+                    color = if (anyEnabled) OpalPalette.AccentEmerald else OpalPalette.TextMuted,
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            OpalSwitchRow(
+                title = "允许远端麦克风回传",
+                subtitle = "开启后允许投屏端（平板 / Web / Mac）将麦克风实时注入主机（Android 13+ 免 Root）",
+                checked = remoteMicEnabled,
+                onCheckedChange = { enabled ->
+                    BridgeClient.setRemoteMediaConfigAsync(ctx, enabled, remoteCameraEnabled) {
+                        Toast.makeText(
+                            ctx,
+                            if (enabled) "已开启远端麦克风回传" else "已关闭远端麦克风回传",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                },
+            )
+            OpalSwitchRow(
+                title = "允许 Root 摄像头映射",
+                subtitle = if (status.connected && !status.rootEnhanced) {
+                    "当前引擎未启用 Root 增强；开启后需以 Root 模式重新激活引擎才可映射摄像头"
+                } else {
+                    "开启后允许投屏端将摄像头画面通过 Root 桥接传入主机（仅 Root 模式生效）"
+                },
+                checked = remoteCameraEnabled,
+                onCheckedChange = { enabled ->
+                    BridgeClient.setRemoteMediaConfigAsync(ctx, remoteMicEnabled, enabled) {
+                        val msg = when {
+                            !enabled -> "已关闭 Root 摄像头映射"
+                            status.connected && !status.rootEnhanced -> "已开启开关（需以 Root 增强模式重新激活引擎生效）"
+                            else -> "已开启 Root 摄像头映射"
+                        }
+                        Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+                    }
+                },
+            )
+        }
+
         ConsoleSectionTitle("通用与更新")
         MacGlassSectionCard {
             val notifAccessGranted by io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.accessGrantedFlow.collectAsState()
@@ -1912,7 +1975,7 @@ private fun toggleHostScreenPowerWithToast(ctx: Context, screenOn: Boolean) {
         val msg = when {
             !ok -> "当前设备暂不支持物理息屏控制"
             screenOn -> "已点亮本机屏幕"
-            else -> "已物理熄灭本机屏幕（双击手机屏幕可随时亮屏，断开投屏也会自动亮屏）"
+            else -> "已物理熄灭本机屏幕（双击屏幕或按音量键/电源键可随时亮屏，断开投屏也会自动亮屏）"
         }
         Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
     }

@@ -43,9 +43,11 @@ public final class OpalCastProtocol {
     public static final int TYPE_WIFI_UPGRADE_READY = 0x14;
     public static final int TYPE_APP_LIST = 0x15;
     public static final int TYPE_IME_REQUEST = 0x16;
+    public static final int TYPE_MIC_STATE = 0x17;
+    public static final int TYPE_CAMERA_STATE = 0x18;
     public static final int TYPE_PONG = 0x1F;
 
-    // Uplink frame types (Mac -> Android)
+    // Uplink frame types (Mac / Tablet / Web -> Android)
     public static final int TYPE_HELLO = 0x20;
     public static final int TYPE_RESIZE_CONFIG = 0x21;
     public static final int TYPE_REQUEST_IDR = 0x22;
@@ -58,7 +60,24 @@ public final class OpalCastProtocol {
     public static final int TYPE_REQUEST_WIFI_UPGRADE = 0x29;
     public static final int TYPE_LIST_APPS = 0x2A;
     public static final int TYPE_WINDOW_ACTION = 0x2B;
+    public static final int TYPE_MIC_CONFIG = 0x2C;
+    public static final int TYPE_MIC_FRAME = 0x2D;
+    public static final int TYPE_CAMERA_CONFIG = 0x2E;
     public static final int TYPE_PING = 0x2F;
+    public static final int TYPE_CAMERA_FRAME = 0x30;
+
+    // Remote microphone uplink defaults
+    public static final String MIC_CODEC_PCM16 = "pcm16";
+    public static final int DEFAULT_MIC_SAMPLE_RATE = 16_000;
+    public static final int DEFAULT_MIC_CHANNELS = 1;
+    public static final int MAX_MIC_FRAME_BYTES = 65_536;
+
+    // Root-gated remote camera uplink defaults
+    public static final String CAMERA_CODEC_MJPEG = "mjpeg";
+    public static final int DEFAULT_CAMERA_WIDTH = 640;
+    public static final int DEFAULT_CAMERA_HEIGHT = 480;
+    public static final int DEFAULT_CAMERA_FPS = 15;
+    public static final int MAX_CAMERA_FRAME_BYTES = 512 * 1024;
 
     // Video codec IDs
     public static final int VIDEO_CODEC_H264 = 1;
@@ -148,6 +167,13 @@ public final class OpalCastProtocol {
             if (data[i] != PNG_MAGIC[i]) return false;
         }
         return true;
+    }
+
+    public static boolean isValidJpegHeader(byte[] data) {
+        return data != null && data.length >= 3
+                && (data[0] & 0xFF) == 0xFF
+                && (data[1] & 0xFF) == 0xD8
+                && (data[2] & 0xFF) == 0xFF;
     }
 
     public static final class ProtocolException extends IOException {
@@ -685,6 +711,207 @@ public final class OpalCastProtocol {
                 .put("inputType", inputType)
                 .build();
         return json.getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static final class MicStateMsg {
+        public final boolean active;
+        public final boolean supported;
+        public final int sampleRate;
+        public final int channels;
+        public final String message;
+
+        public MicStateMsg(boolean active, boolean supported, int sampleRate, int channels, String message) {
+            this.active = active;
+            this.supported = supported;
+            this.sampleRate = Math.max(8_000, Math.min(48_000, sampleRate > 0 ? sampleRate : DEFAULT_MIC_SAMPLE_RATE));
+            this.channels = Math.max(1, Math.min(2, channels > 0 ? channels : DEFAULT_MIC_CHANNELS));
+            this.message = (message != null) ? message : "";
+        }
+    }
+
+    public static byte[] encodeMicState(MicStateMsg msg) {
+        MicStateMsg m = (msg != null)
+                ? msg : new MicStateMsg(false, false, DEFAULT_MIC_SAMPLE_RATE, DEFAULT_MIC_CHANNELS, "");
+        String json = new SimpleJson.ObjectBuilder()
+                .put("active", m.active)
+                .put("supported", m.supported)
+                .put("sampleRate", m.sampleRate)
+                .put("channels", m.channels)
+                .put("message", m.message)
+                .build();
+        return json.getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static MicStateMsg decodeMicState(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("MIC_STATE payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            return new MicStateMsg(
+                    obj.getBoolean("active", false),
+                    obj.getBoolean("supported", false),
+                    obj.getInt("sampleRate", DEFAULT_MIC_SAMPLE_RATE),
+                    obj.getInt("channels", DEFAULT_MIC_CHANNELS),
+                    obj.getString("message", ""));
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid MIC_STATE JSON: " + t.getMessage(), t);
+        }
+    }
+
+    public static final class MicConfigMsg {
+        public final boolean enabled;
+        public final String codec;
+        public final int sampleRate;
+        public final int channels;
+
+        public MicConfigMsg(boolean enabled, String codec, int sampleRate, int channels) {
+            this.enabled = enabled;
+            String c = (codec != null) ? codec.trim().toLowerCase(java.util.Locale.ROOT) : "";
+            this.codec = c.isEmpty() ? MIC_CODEC_PCM16 : c;
+            this.sampleRate = Math.max(8_000, Math.min(48_000, sampleRate > 0 ? sampleRate : DEFAULT_MIC_SAMPLE_RATE));
+            this.channels = Math.max(1, Math.min(2, channels > 0 ? channels : DEFAULT_MIC_CHANNELS));
+        }
+    }
+
+    public static byte[] encodeMicConfig(MicConfigMsg msg) {
+        MicConfigMsg m = (msg != null)
+                ? msg : new MicConfigMsg(false, MIC_CODEC_PCM16, DEFAULT_MIC_SAMPLE_RATE, DEFAULT_MIC_CHANNELS);
+        String json = new SimpleJson.ObjectBuilder()
+                .put("enabled", m.enabled)
+                .put("codec", m.codec)
+                .put("sampleRate", m.sampleRate)
+                .put("channels", m.channels)
+                .build();
+        return json.getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static MicConfigMsg decodeMicConfig(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("MIC_CONFIG payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            return new MicConfigMsg(
+                    obj.getBoolean("enabled", false),
+                    obj.getString("codec", MIC_CODEC_PCM16),
+                    obj.getInt("sampleRate", DEFAULT_MIC_SAMPLE_RATE),
+                    obj.getInt("channels", DEFAULT_MIC_CHANNELS));
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid MIC_CONFIG JSON: " + t.getMessage(), t);
+        }
+    }
+
+    public static final class CameraStateMsg {
+        public final boolean active;
+        public final boolean supported;
+        public final boolean rootRequired;
+        public final int width;
+        public final int height;
+        public final int fps;
+        public final String backend;
+        public final String message;
+
+        public CameraStateMsg(
+                boolean active, boolean supported, boolean rootRequired,
+                int width, int height, int fps, String backend, String message) {
+            this.active = active;
+            this.supported = supported;
+            this.rootRequired = rootRequired;
+            this.width = Math.max(160, Math.min(1920, width > 0 ? width : DEFAULT_CAMERA_WIDTH));
+            this.height = Math.max(120, Math.min(1080, height > 0 ? height : DEFAULT_CAMERA_HEIGHT));
+            this.fps = Math.max(5, Math.min(30, fps > 0 ? fps : DEFAULT_CAMERA_FPS));
+            this.backend = (backend != null) ? backend : "";
+            this.message = (message != null) ? message : "";
+        }
+    }
+
+    public static byte[] encodeCameraState(CameraStateMsg msg) {
+        CameraStateMsg m = (msg != null)
+                ? msg : new CameraStateMsg(false, false, true, DEFAULT_CAMERA_WIDTH, DEFAULT_CAMERA_HEIGHT, DEFAULT_CAMERA_FPS, "", "");
+        String json = new SimpleJson.ObjectBuilder()
+                .put("active", m.active)
+                .put("supported", m.supported)
+                .put("rootRequired", m.rootRequired)
+                .put("width", m.width)
+                .put("height", m.height)
+                .put("fps", m.fps)
+                .put("backend", m.backend)
+                .put("message", m.message)
+                .build();
+        return json.getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static CameraStateMsg decodeCameraState(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("CAMERA_STATE payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            return new CameraStateMsg(
+                    obj.getBoolean("active", false),
+                    obj.getBoolean("supported", false),
+                    obj.getBoolean("rootRequired", true),
+                    obj.getInt("width", DEFAULT_CAMERA_WIDTH),
+                    obj.getInt("height", DEFAULT_CAMERA_HEIGHT),
+                    obj.getInt("fps", DEFAULT_CAMERA_FPS),
+                    obj.getString("backend", ""),
+                    obj.getString("message", ""));
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid CAMERA_STATE JSON: " + t.getMessage(), t);
+        }
+    }
+
+    public static final class CameraConfigMsg {
+        public final boolean enabled;
+        public final String codec;
+        public final int width;
+        public final int height;
+        public final int fps;
+        public final String facing;
+
+        public CameraConfigMsg(boolean enabled, String codec, int width, int height, int fps, String facing) {
+            this.enabled = enabled;
+            String c = (codec != null) ? codec.trim().toLowerCase(java.util.Locale.ROOT) : "";
+            this.codec = c.isEmpty() ? CAMERA_CODEC_MJPEG : c;
+            this.width = Math.max(160, Math.min(1920, width > 0 ? width : DEFAULT_CAMERA_WIDTH));
+            this.height = Math.max(120, Math.min(1080, height > 0 ? height : DEFAULT_CAMERA_HEIGHT));
+            this.fps = Math.max(5, Math.min(30, fps > 0 ? fps : DEFAULT_CAMERA_FPS));
+            String f = (facing != null) ? facing.trim().toLowerCase(java.util.Locale.ROOT) : "";
+            this.facing = "back".equals(f) ? "back" : "front";
+        }
+    }
+
+    public static byte[] encodeCameraConfig(CameraConfigMsg msg) {
+        CameraConfigMsg m = (msg != null)
+                ? msg : new CameraConfigMsg(false, CAMERA_CODEC_MJPEG, DEFAULT_CAMERA_WIDTH, DEFAULT_CAMERA_HEIGHT, DEFAULT_CAMERA_FPS, "front");
+        String json = new SimpleJson.ObjectBuilder()
+                .put("enabled", m.enabled)
+                .put("codec", m.codec)
+                .put("width", m.width)
+                .put("height", m.height)
+                .put("fps", m.fps)
+                .put("facing", m.facing)
+                .build();
+        return json.getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static CameraConfigMsg decodeCameraConfig(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("CAMERA_CONFIG payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            return new CameraConfigMsg(
+                    obj.getBoolean("enabled", false),
+                    obj.getString("codec", CAMERA_CODEC_MJPEG),
+                    obj.getInt("width", DEFAULT_CAMERA_WIDTH),
+                    obj.getInt("height", DEFAULT_CAMERA_HEIGHT),
+                    obj.getInt("fps", DEFAULT_CAMERA_FPS),
+                    obj.getString("facing", "front"));
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid CAMERA_CONFIG JSON: " + t.getMessage(), t);
+        }
     }
 
     public static byte[] encodePingPong(long pingId) {

@@ -57,7 +57,8 @@ public final class WebSocketHttpHandler {
 
     /**
      * Strict Origin allowlist to prevent Cross-Site WebSocket Hijacking (CSWSH) from arbitrary web origins.
-     * Allows only official GitHub Pages ({@code https://lengsukq.github.io}) and loopback dev origins.
+     * Allows only official GitHub Pages ({@code https://lengsukq.github.io}), Tauri desktop origins
+     * ({@code http(s)://tauri.localhost}, {@code tauri://localhost}), and loopback dev origins.
      */
     public static boolean isAllowedOrigin(String rawOrigin) {
         if (rawOrigin == null) return false;
@@ -70,6 +71,12 @@ public final class WebSocketHttpHandler {
             if (host.isEmpty() || uri.getRawUserInfo() != null) return false;
             if (ALLOWED_GH_HOST.equals(host)) {
                 return "https".equals(scheme) && (uri.getPort() == -1 || uri.getPort() == 443);
+            }
+            if ("tauri.localhost".equals(host)) {
+                return "http".equals(scheme) || "https".equals(scheme);
+            }
+            if ("tauri".equals(scheme) && "localhost".equals(host)) {
+                return true;
             }
             if ("localhost".equals(host) || "127.0.0.1".equals(host) || "[::1]".equals(host)) {
                 return "http".equals(scheme) || "https".equals(scheme);
@@ -177,6 +184,7 @@ public final class WebSocketHttpHandler {
             String allowedCorsOrigin) throws IOException {
         String origin = req.headers.get("origin");
         if (origin != null && !origin.trim().isEmpty() && !isAllowedOrigin(origin)) {
+            System.err.println("OPALDESK_WS_REJECT_ORIGIN origin=" + origin);
             writeSimpleResponse(out, "403 Forbidden", "text/plain; charset=utf-8",
                     "Origin not allowed".getBytes(StandardCharsets.UTF_8), null);
             return null;

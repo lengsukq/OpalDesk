@@ -72,6 +72,8 @@ class OpalCastPeerClient(
         fun onAuthenticated(peerName: String, authToken: String, permanent: Boolean, certFingerprint: String)
         fun onAppListReceived(apps: List<RemoteAppEntry>) {}
         fun onRemoteImeRequest(show: Boolean, inputType: Int) {}
+        fun onRemoteMicState(active: Boolean, supported: Boolean, message: String) {}
+        fun onRemoteCameraState(active: Boolean, supported: Boolean, rootRequired: Boolean, message: String) {}
         fun onVideoSizeChanged(width: Int, height: Int, fps: Int)
         fun onError(message: String)
         fun onDisconnected(reason: String)
@@ -93,6 +95,8 @@ class OpalCastPeerClient(
         private const val TYPE_AUTH_RESULT = 0x12
         private const val TYPE_APP_LIST = 0x15
         private const val TYPE_IME_REQUEST = 0x16
+        private const val TYPE_MIC_STATE = 0x17
+        private const val TYPE_CAMERA_STATE = 0x18
 
         private const val TYPE_HELLO = 0x20
         private const val TYPE_RESIZE_CONFIG = 0x21
@@ -103,7 +107,11 @@ class OpalCastPeerClient(
         private const val TYPE_INPUT_TEXT = 0x26
         private const val TYPE_SYSTEM_ACTION = 0x27
         private const val TYPE_LIST_APPS = 0x2A
+        private const val TYPE_MIC_CONFIG = 0x2C
+        private const val TYPE_MIC_FRAME = 0x2D
+        private const val TYPE_CAMERA_CONFIG = 0x2E
         private const val TYPE_PING = 0x2F
+        private const val TYPE_CAMERA_FRAME = 0x30
 
         private const val CODEC_H264 = 1
         private const val CODEC_HEVC = 2
@@ -206,6 +214,52 @@ class OpalCastPeerClient(
 
     fun requestAppList() {
         enqueue(TYPE_LIST_APPS, 0, ByteArray(0))
+    }
+
+    fun sendMicConfig(
+        enabled: Boolean,
+        sampleRate: Int = PeerMicCapturer.DEFAULT_SAMPLE_RATE,
+        channels: Int = PeerMicCapturer.DEFAULT_CHANNELS,
+    ) {
+        val json = JSONObject().apply {
+            put("enabled", enabled)
+            put("codec", "pcm16")
+            put("sampleRate", sampleRate)
+            put("channels", channels)
+        }.toString().toByteArray(StandardCharsets.UTF_8)
+        enqueue(TYPE_MIC_CONFIG, 0, json)
+    }
+
+    fun sendMicFrame(pcm: ByteArray) {
+        if (closed.get() || pcm.isEmpty()) return
+        // Reserve headroom in outQueue for control/input frames; drop media frames under backpressure.
+        if (outQueue.remainingCapacity() <= 32) return
+        outQueue.offer(OutPacket(TYPE_MIC_FRAME, 0, SystemClock.elapsedRealtimeNanos() / 1000L, pcm))
+    }
+
+    fun sendCameraConfig(
+        enabled: Boolean,
+        width: Int = PeerCameraCapturer.DEFAULT_WIDTH,
+        height: Int = PeerCameraCapturer.DEFAULT_HEIGHT,
+        fps: Int = PeerCameraCapturer.DEFAULT_FPS,
+        facing: String = "front",
+    ) {
+        val json = JSONObject().apply {
+            put("enabled", enabled)
+            put("codec", "mjpeg")
+            put("width", width)
+            put("height", height)
+            put("fps", fps)
+            put("facing", facing)
+        }.toString().toByteArray(StandardCharsets.UTF_8)
+        enqueue(TYPE_CAMERA_CONFIG, 0, json)
+    }
+
+    fun sendCameraFrame(jpeg: ByteArray) {
+        if (closed.get() || jpeg.isEmpty()) return
+        // Reserve headroom in outQueue for control/input frames; drop stale video frames under backpressure.
+        if (outQueue.remainingCapacity() <= 32) return
+        outQueue.offer(OutPacket(TYPE_CAMERA_FRAME, 0, SystemClock.elapsedRealtimeNanos() / 1000L, jpeg))
     }
 
     fun sendResizeConfig(width: Int, height: Int, dpi: Int, fps: Int = reqFps, bitrateKbps: Int = 9_000) {
@@ -505,6 +559,8 @@ class OpalCastPeerClient(
             }
             TYPE_APP_LIST -> handleAppList(frame.payload)
             TYPE_IME_REQUEST -> handleImeRequest(frame.payload)
+            TYPE_MIC_STATE -> handleMicState(frame.payload)
+            TYPE_CAMERA_STATE -> handleCameraState(frame.payload)
             TYPE_VIDEO_CONFIG -> handleVideoConfig(frame.payload)
             TYPE_VIDEO_FRAME -> handleVideoFrame(frame.payload, frame.flags, frame.timestampUs)
             TYPE_AUDIO_CONFIG -> handleAudioConfig(frame.payload)
@@ -549,6 +605,35 @@ class OpalCastPeerClient(
             listener.onRemoteImeRequest(show, inputType)
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to parse IME_REQUEST: ${t.message}")
+        }
+    }
+
+    private fun handleMicState(payload: ByteArray) {
+        if (payload.isEmpty()) return
+        try {
+            val obj = JSONObject(String(payload, StandardCharsets.UTF_8))
+            val active = obj.optBoolean("active", false)
+            val supported = obj.optBoolean("supported", false)
+            val message = obj.optString("message", "")
+            Log.i(TAG, "RX MIC_STATE active=$active supported=$supported msg=$message")
+            listener.onRemoteMicState(active, supported, message)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to parse MIC_STATE: ${t.message}")
+        }
+    }
+
+    private fun handleCameraState(payload: ByteArray) {
+        if (payload.isEmpty()) return
+        try {
+            val obj = JSONObject(String(payload, StandardCharsets.UTF_8))
+            val active = obj.optBoolean("active", false)
+            val supported = obj.optBoolean("supported", false)
+            val rootRequired = obj.optBoolean("rootRequired", true)
+            val message = obj.optString("message", "")
+            Log.i(TAG, "RX CAMERA_STATE active=$active supported=$supported rootReq=$rootRequired msg=$message")
+            listener.onRemoteCameraState(active, supported, rootRequired, message)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to parse CAMERA_STATE: ${t.message}")
         }
     }
 

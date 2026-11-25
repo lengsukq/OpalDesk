@@ -822,6 +822,7 @@ fun MacControlCenterPopover(
     mouseTargetMode: Int,
     isExternalMonitor: Boolean,
     hostScreenOff: Boolean,
+    rootEnhanced: Boolean = false,
     showHostScreenToggle: Boolean,
     showPhoneTrackpadSection: Boolean = false,
     phoneTrackpadVisible: Boolean = false,
@@ -1271,6 +1272,75 @@ fun MacControlCenterPopover(
                                 )
                             }
                         }
+                    }
+
+                    // Experimental Remote Mic & Root Camera Mapping Toggles (default OFF)
+                    val remoteMicEnabled by AppPrefs.remoteMicEnabledFlow.collectAsState()
+                    val remoteCameraEnabled by AppPrefs.remoteCameraEnabledFlow.collectAsState()
+                    LaunchedEffect(Unit) {
+                        AppPrefs.hydrateFlows(ctx)
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(infoCardShape)
+                            .background(OpalPalette.ChipFill)
+                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
+                            .padding(horizontal = 11.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            OpalText(
+                                text = "跨端麦克风与摄像头",
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = OpalPalette.TextPrimary,
+                            )
+                            OpalText(
+                                text = if (remoteMicEnabled || remoteCameraEnabled) "已启用" else "默认关闭",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (remoteMicEnabled || remoteCameraEnabled) OpalPalette.AccentEmerald else OpalPalette.TextMuted,
+                            )
+                        }
+                        OpalSwitchRow(
+                            title = "远端麦克风回传",
+                            subtitle = if (remoteMicEnabled) "已开启 · 允许投屏端注入" else "已关闭 · Android 13+ 免 Root",
+                            checked = remoteMicEnabled,
+                            onCheckedChange = { enabled ->
+                                io.github.lengsukq.opaldesk.BridgeClient.setRemoteMediaConfigAsync(ctx, enabled, remoteCameraEnabled) {
+                                    android.widget.Toast.makeText(
+                                        ctx,
+                                        if (enabled) "已开启远端麦克风回传" else "已关闭远端麦克风回传",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            },
+                        )
+                        Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+                        OpalSwitchRow(
+                            title = "Root 摄像头映射",
+                            subtitle = when {
+                                remoteCameraEnabled && rootEnhanced -> "已开启 · Root 桥接就绪"
+                                remoteCameraEnabled -> "已开启 · 需以 Root 模式启动引擎"
+                                else -> "已关闭 · 仅 Root 模式生效"
+                            },
+                            checked = remoteCameraEnabled,
+                            onCheckedChange = { enabled ->
+                                io.github.lengsukq.opaldesk.BridgeClient.setRemoteMediaConfigAsync(ctx, remoteMicEnabled, enabled) {
+                                    val msg = when {
+                                        !enabled -> "已关闭 Root 摄像头映射"
+                                        !rootEnhanced -> "已开启开关（需以 Root 增强模式启动引擎生效）"
+                                        else -> "已开启 Root 摄像头映射"
+                                    }
+                                    android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                        )
                     }
                 }
 

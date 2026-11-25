@@ -140,6 +140,8 @@ public final class DaemonConfig {
     private int mouseTargetMode = BridgeProtocol.MOUSE_TARGET_EXTERNAL;
     private boolean rootEnhanced = false;
     private boolean secureCaptureEnabled = false;
+    private boolean remoteMicEnabled = false;
+    private boolean remoteCameraEnabled = false;
 
     public DaemonConfig() {
         this(new File(DEFAULT_CONF_PATH), new File(DEFAULT_PROFILE_CONF_PATH), new File(DEFAULT_LAUNCH_COUNTS_PATH));
@@ -374,6 +376,22 @@ public final class DaemonConfig {
         synchronized (lock) { return secureCaptureEnabled; }
     }
 
+    public boolean isRemoteMicEnabled() {
+        synchronized (lock) { return remoteMicEnabled; }
+    }
+
+    public boolean isRemoteCameraEnabled() {
+        synchronized (lock) { return remoteCameraEnabled; }
+    }
+
+    public void setRemoteMediaConfig(boolean micEnabled, boolean cameraEnabled) {
+        synchronized (lock) {
+            this.remoteMicEnabled = micEnabled;
+            this.remoteCameraEnabled = cameraEnabled;
+        }
+        saveMainConf();
+    }
+
     public void markRootEnhanced(boolean enhanced, boolean secureCapture) {
         synchronized (lock) {
             this.rootEnhanced = enhanced;
@@ -485,6 +503,12 @@ public final class DaemonConfig {
                     globalCustomDpi = (gDpi >= DisplayGeometryUtil.MIN_DPI && gDpi <= DisplayGeometryUtil.MAX_DPI)
                             ? gDpi : 0;
                 }
+                if (parts.length >= 10) {
+                    remoteMicEnabled = Integer.parseInt(parts[9].trim()) != 0;
+                }
+                if (parts.length >= 11) {
+                    remoteCameraEnabled = Integer.parseInt(parts[10].trim()) != 0;
+                }
             }
         } catch (IOException | NumberFormatException e) {
             System.err.println("OPALDESK_CONF_LOAD_WARN: " + e.getMessage());
@@ -497,7 +521,9 @@ public final class DaemonConfig {
             content = canvasWidth + "," + canvasHeight + "," + canvasDpi + ","
                     + maxActiveDisplays + "," + inputBackendMode + ","
                     + targetFps + "," + windowDpiScalePct + "," + mouseTargetMode + ","
-                    + globalCustomDpi + "\n";
+                    + globalCustomDpi + ","
+                    + (remoteMicEnabled ? 1 : 0) + ","
+                    + (remoteCameraEnabled ? 1 : 0) + "\n";
         }
         try {
             AtomicFiles.writeAtomicUtf8(confFile, content, AtomicFiles.MODE_OWNER_RW);

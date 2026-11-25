@@ -42,6 +42,8 @@ public final class AppModel {
     public let streamBridge: StreamSessionBridge
     public let videoRenderer: VideoDisplayRenderer
     public let audioPlayer: AudioStreamPlayer
+    public let micCapturer: MicrophoneStreamCapturer
+    public let cameraCapturer: CameraStreamCapturer
     public let clipboardSync: ClipboardSyncManager
     public let fileSender: FileSender
 
@@ -55,6 +57,8 @@ public final class AppModel {
     public var rttMs: Double = 0
     public var isBlackoutActive: Bool = false
     public var isAudioMuted: Bool = false
+    public var isMicEnabled: Bool = false
+    public var isCameraEnabled: Bool = false
     public var displayMode: OpalCastDisplayMode = .dex
     public var selectedPreset: DisplayResolutionPreset = .matchWindow
     public var selectedDPI: Int = DisplayPresets.defaultDPI
@@ -94,6 +98,8 @@ public final class AppModel {
         self.streamBridge = StreamSessionBridge(session: extSession, logger: OpalDeskLog.app)
         self.videoRenderer = VideoDisplayRenderer()
         self.audioPlayer = AudioStreamPlayer()
+        self.micCapturer = MicrophoneStreamCapturer()
+        self.cameraCapturer = CameraStreamCapturer()
         self.clipboardSync = ClipboardSyncManager()
         self.fileSender = FileSender()
         self.deviceState = DeviceStatePayload()
@@ -312,6 +318,10 @@ public final class AppModel {
         toastClearTask?.cancel()
         discovery.stop()
         clipboardSync.stop()
+        micCapturer.stop()
+        isMicEnabled = false
+        cameraCapturer.stop()
+        isCameraEnabled = false
         audioPlayer.stop()
         videoRenderer.reset()
         session.disconnect()

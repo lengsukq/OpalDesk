@@ -11,6 +11,10 @@
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Strictly optional, runtime-requested only when user enables remote microphone/camera uplink -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Strictly optional, user-granted overlay permission used ONLY by receiver-side PeerFloatingAppService -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 

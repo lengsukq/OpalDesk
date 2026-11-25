@@ -662,6 +662,7 @@ fun OpalCompositorWorkspace(
                     mouseTargetMode = mouseTargetMode,
                     isExternalMonitor = isExternalMonitor,
                     hostScreenOff = status.hostScreenOff,
+                    rootEnhanced = status.rootEnhanced,
                     showHostScreenToggle = isExternalMonitor || remote.connected || status.hostScreenOff,
                     showPhoneTrackpadSection = canControlPhoneTrackpad,
                     phoneTrackpadVisible = phoneTrackpadVisible,

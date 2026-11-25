@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -189,6 +191,11 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         OpalPeerDiscovery.stopBrowsing()
         super.onStop()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
+        return super.dispatchKeyEvent(event)
     }
 
     private fun launchPeerCastViewer(host: String, port: Int, label: String) {
@@ -476,6 +483,46 @@ private fun OpalConsoleScreen(
 
         pendingPairing?.let { req ->
             PairingConsentModal(request = req)
+        }
+
+        // Fullscreen client-side double-tap wake guard while physical screen power is off:
+        // guarantees double-tap wake even on Android 15/16 OEMs (e.g. HyperOS) where SELinux blocks
+        // rootless /dev/input/event* evdev reads inside HostScreenWakeMonitor.
+        if (status.hostScreenOff) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                BridgeClient.setHostScreenPowerAsync(true) { ok ->
+                                    if (ok) {
+                                        Toast.makeText(ctx, "已点亮本机屏幕", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                        )
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    OpalText(
+                        text = "本机已物理熄屏省电",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White.copy(alpha = 0.28f),
+                    )
+                    OpalText(
+                        text = "双击屏幕任意处或按音量键随时点亮",
+                        fontSize = 11.sp,
+                        color = Color.White.copy(alpha = 0.20f),
+                    )
+                }
+            }
         }
     }
 }

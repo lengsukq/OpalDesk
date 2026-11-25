@@ -1,7 +1,9 @@
 package io.github.lengsukq.opaldesk.daemon;
 
+import io.github.lengsukq.opaldesk.daemon.audio.RemoteMicInjector;
 import io.github.lengsukq.opaldesk.daemon.sink.DisplaySink;
 import io.github.lengsukq.opaldesk.daemon.stream.OpalCastProtocol;
+import io.github.lengsukq.opaldesk.daemon.video.RootCameraBridge;
 import io.github.lengsukq.opaldesk.daemon.stream.FileTransferPathGuard;
 
 import org.junit.Rule;
@@ -565,5 +567,114 @@ public class OpalCastProtocolTest {
         } catch (OpalCastProtocol.ProtocolException expected) {
             assertTrue(expected.getMessage().contains("8 MiB"));
         }
+    }
+
+    @Test
+    public void testRemoteMicProtocolFramesAndInjectorHelpers() throws Exception {
+        assertEquals(0x17, OpalCastProtocol.TYPE_MIC_STATE);
+        assertEquals(0x2C, OpalCastProtocol.TYPE_MIC_CONFIG);
+        assertEquals(0x2D, OpalCastProtocol.TYPE_MIC_FRAME);
+
+        OpalCastProtocol.MicConfigMsg cfg = new OpalCastProtocol.MicConfigMsg(true, "pcm16", 16_000, 1);
+        OpalCastProtocol.Frame cf = roundTrip(
+                OpalCastProtocol.TYPE_MIC_CONFIG, 0, 500L, OpalCastProtocol.encodeMicConfig(cfg));
+        OpalCastProtocol.MicConfigMsg cfgDec = OpalCastProtocol.decodeMicConfig(cf.payload);
+        assertTrue(cfgDec.enabled);
+        assertEquals("pcm16", cfgDec.codec);
+        assertEquals(16_000, cfgDec.sampleRate);
+        assertEquals(1, cfgDec.channels);
+
+        OpalCastProtocol.MicStateMsg st = new OpalCastProtocol.MicStateMsg(
+                true, true, 16_000, 1, "远端麦克风已启用");
+        OpalCastProtocol.Frame sf = roundTrip(
+                OpalCastProtocol.TYPE_MIC_STATE, 0, 501L, OpalCastProtocol.encodeMicState(st));
+        OpalCastProtocol.MicStateMsg stDec = OpalCastProtocol.decodeMicState(sf.payload);
+        assertTrue(stDec.active);
+        assertTrue(stDec.supported);
+        assertEquals(16_000, stDec.sampleRate);
+        assertEquals(1, stDec.channels);
+        assertEquals("远端麦克风已启用", stDec.message);
+
+        byte[] pcm = new byte[640];
+        pcm[0] = 0x12;
+        pcm[639] = 0x34;
+        OpalCastProtocol.Frame mf = roundTrip(OpalCastProtocol.TYPE_MIC_FRAME, 0, 502L, pcm);
+        assertArrayEquals(pcm, mf.payload);
+
+        assertFalse(RemoteMicInjector.isSupportedSdkInt(32));
+        assertTrue(RemoteMicInjector.isSupportedSdkInt(33));
+        assertEquals(16_000, RemoteMicInjector.clampSampleRate(0));
+        assertEquals(8_000, RemoteMicInjector.clampSampleRate(4_000));
+        assertEquals(48_000, RemoteMicInjector.clampSampleRate(96_000));
+        assertEquals(1, RemoteMicInjector.clampChannels(0));
+        assertEquals(2, RemoteMicInjector.clampChannels(6));
+    }
+
+    @Test
+    public void testRootCameraProtocolFramesAndRootGate() throws Exception {
+        assertEquals(0x18, OpalCastProtocol.TYPE_CAMERA_STATE);
+        assertEquals(0x2E, OpalCastProtocol.TYPE_CAMERA_CONFIG);
+        assertEquals(0x30, OpalCastProtocol.TYPE_CAMERA_FRAME);
+
+        OpalCastProtocol.CameraConfigMsg cfg = new OpalCastProtocol.CameraConfigMsg(
+                true, "mjpeg", 640, 480, 15, "front");
+        OpalCastProtocol.Frame cf = roundTrip(
+                OpalCastProtocol.TYPE_CAMERA_CONFIG, 0, 600L, OpalCastProtocol.encodeCameraConfig(cfg));
+        OpalCastProtocol.CameraConfigMsg cfgDec = OpalCastProtocol.decodeCameraConfig(cf.payload);
+        assertTrue(cfgDec.enabled);
+        assertEquals("mjpeg", cfgDec.codec);
+        assertEquals(640, cfgDec.width);
+        assertEquals(480, cfgDec.height);
+        assertEquals(15, cfgDec.fps);
+        assertEquals("front", cfgDec.facing);
+
+        OpalCastProtocol.CameraStateMsg st = new OpalCastProtocol.CameraStateMsg(
+                false, false, true, 640, 480, 15, "", "摄像头映射需要 Root 权限");
+        OpalCastProtocol.Frame sf = roundTrip(
+                OpalCastProtocol.TYPE_CAMERA_STATE, 0, 601L, OpalCastProtocol.encodeCameraState(st));
+        OpalCastProtocol.CameraStateMsg stDec = OpalCastProtocol.decodeCameraState(sf.payload);
+        assertFalse(stDec.active);
+        assertFalse(stDec.supported);
+        assertTrue(stDec.rootRequired);
+        assertEquals("摄像头映射需要 Root 权限", stDec.message);
+
+        byte[] fakeJpeg = new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0x00, 0x10};
+        assertTrue(OpalCastProtocol.isValidJpegHeader(fakeJpeg));
+        assertFalse(OpalCastProtocol.isValidJpegHeader(new byte[]{1, 2, 3, 4}));
+        OpalCastProtocol.Frame jf = roundTrip(OpalCastProtocol.TYPE_CAMERA_FRAME, 0, 602L, fakeJpeg);
+        assertArrayEquals(fakeJpeg, jf.payload);
+
+        // Verify strict Root gate: non-root start must fail closed with rootRequired=true
+        RootCameraBridge bridge = new RootCameraBridge(tmpDir.newFolder("cam"));
+        RootCameraBridge.StartResult denied = bridge.start(false, 640, 480, 15, "front");
+        assertFalse(denied.active);
+        assertFalse(denied.supported);
+        assertTrue(denied.rootRequired);
+        assertTrue(denied.message.contains("Root"));
+        assertTrue(RootCameraBridge.buildMetaJson(true, 640, 480, 15, "front", 7L).contains("@opaldesk_cam_feed"));
+    }
+
+    @Test
+    public void testDaemonConfigRemoteMediaDefaultsOffAndPersists() throws Exception {
+        File conf = new File(tmpDir.getRoot(), "opaldesk_v2.conf");
+        File prof = new File(tmpDir.getRoot(), "opaldesk_profiles.conf");
+        DaemonConfig fresh = new DaemonConfig(conf, prof);
+        assertFalse(fresh.isRemoteMicEnabled());
+        assertFalse(fresh.isRemoteCameraEnabled());
+
+        fresh.setRemoteMediaConfig(true, false);
+        assertTrue(fresh.isRemoteMicEnabled());
+        assertFalse(fresh.isRemoteCameraEnabled());
+
+        DaemonConfig reloaded = new DaemonConfig(conf, prof);
+        reloaded.loadAll();
+        assertTrue(reloaded.isRemoteMicEnabled());
+        assertFalse(reloaded.isRemoteCameraEnabled());
+
+        reloaded.setRemoteMediaConfig(false, true);
+        DaemonConfig reloaded2 = new DaemonConfig(conf, prof);
+        reloaded2.loadAll();
+        assertFalse(reloaded2.isRemoteMicEnabled());
+        assertTrue(reloaded2.isRemoteCameraEnabled());
     }
 }

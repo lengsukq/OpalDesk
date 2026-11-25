@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OpalDesk",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "identifier": "io.github.lengsukq.opaldesk.desktop",
   "build": {
     "beforeDevCommand": "node ./scripts/sync-frontend.mjs",

@@ -21,6 +21,10 @@ extension AppModel {
                 isConnectingFlow = false
                 isAuthenticated = false
                 clipboardSync.stop()
+                micCapturer.stop()
+                isMicEnabled = false
+                cameraCapturer.stop()
+                isCameraEnabled = false
                 audioPlayer.stop()
                 if let hadConn, !wasExplicit {
                     let msg = "与手机「\(hadConn.deviceName)」的投屏连接已断开"
@@ -37,6 +41,10 @@ extension AppModel {
                 isUserInitiatedDisconnect = false
                 isConnectingFlow = false
                 isAuthenticated = false
+                micCapturer.stop()
+                isMicEnabled = false
+                cameraCapturer.stop()
+                isCameraEnabled = false
                 disconnectReason = message
                 if var ctx = pairingContext {
                     ctx.isSubmitting = false
@@ -48,6 +56,10 @@ extension AppModel {
                 }
             case .reconnecting(let attempt):
                 isAuthenticated = false
+                micCapturer.stop()
+                isMicEnabled = false
+                cameraCapturer.stop()
+                isCameraEnabled = false
                 if disconnectReason == nil { disconnectReason = "网络或手机守护进程无响应" }
                 showToast("连接中断，正在尝试第 \(attempt) 次重连...", durationSeconds: 2.2)
             default:
@@ -139,6 +151,36 @@ extension AppModel {
                 try WifiUpgradeReadyPayload.decode(from: frame.payload)
             }) {
                 handleWifiUpgradeReady(ready)
+            }
+
+        case .micState:
+            if let st = StreamSessionBridge.decodePayload("MIC_STATE", logger: OpalDeskLog.audio, {
+                try MicStatePayload.decode(from: frame.payload)
+            }) {
+                if !st.active {
+                    micCapturer.stop()
+                    isMicEnabled = false
+                } else {
+                    isMicEnabled = true
+                }
+                if !st.message.isEmpty {
+                    showToast(st.message)
+                }
+            }
+
+        case .cameraState:
+            if let st = StreamSessionBridge.decodePayload("CAMERA_STATE", logger: OpalDeskLog.video, {
+                try CameraStatePayload.decode(from: frame.payload)
+            }) {
+                if !st.active {
+                    cameraCapturer.stop()
+                    isCameraEnabled = false
+                } else {
+                    isCameraEnabled = true
+                }
+                if !st.message.isEmpty {
+                    showToast(st.message)
+                }
             }
 
         default:
@@ -293,6 +335,10 @@ extension AppModel {
         }
 
         clipboardSync.stop()
+        micCapturer.stop()
+        isMicEnabled = false
+        cameraCapturer.stop()
+        isCameraEnabled = false
         audioPlayer.stop()
         videoRenderer.reset()
         activeSessionGeneration &+= 1

@@ -132,6 +132,26 @@ public struct DisplayWindowView: View {
                         .controlSize(.small)
 
                         Button {
+                            model.toggleMicrophone()
+                        } label: {
+                            Label(model.isMicEnabled ? "麦已开" : "麦克风", systemImage: model.isMicEnabled ? "mic.fill" : "mic.slash")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(model.isMicEnabled ? .green : nil)
+                        .controlSize(.small)
+
+                        Button {
+                            model.toggleCamera()
+                        } label: {
+                            Label(model.isCameraEnabled ? "镜头已开" : "摄像头", systemImage: model.isCameraEnabled ? "video.fill" : "video.slash")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(model.isCameraEnabled ? .green : nil)
+                        .controlSize(.small)
+
+                        Button {
                             model.forceDisconnectAndReturnHome()
                         } label: {
                             Label("断开连接", systemImage: "rectangle.portrait.and.arrow.right")
