@@ -752,26 +752,26 @@ public class OpalCastProtocolTest {
         File conf = new File(tmpDir.getRoot(), "opaldesk_audio_v2.conf");
         File prof = new File(tmpDir.getRoot(), "opaldesk_audio_profiles.conf");
         DaemonConfig fresh = new DaemonConfig(conf, prof);
-        assertEquals(BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX, fresh.getAudioRouteMode());
-
-        fresh.setAudioRouteMode(BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP);
         assertEquals(BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP, fresh.getAudioRouteMode());
+
+        fresh.setAudioRouteMode(BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX);
+        assertEquals(BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX, fresh.getAudioRouteMode());
 
         DaemonConfig reloaded = new DaemonConfig(conf, prof);
         reloaded.loadAll();
-        assertEquals(BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP, reloaded.getAudioRouteMode());
-
-        // Unknown values normalize safely to ALL_TO_DEX
-        reloaded.setAudioRouteMode(99);
         assertEquals(BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX, reloaded.getAudioRouteMode());
 
-        // Legacy 11-field config file without audioRouteMode defaults to ALL_TO_DEX
+        // Unknown values normalize safely to SPLIT_BY_APP (default)
+        reloaded.setAudioRouteMode(99);
+        assertEquals(BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP, reloaded.getAudioRouteMode());
+
+        // Legacy 11-field config file without audioRouteMode defaults to SPLIT_BY_APP
         File legacyConf = new File(tmpDir.getRoot(), "legacy_11_fields.conf");
         java.nio.file.Files.write(
                 legacyConf.toPath(),
                 "0,6,1920,1200,240,0,100,1,0,0,0\n".getBytes(StandardCharsets.UTF_8));
         DaemonConfig legacy = new DaemonConfig(legacyConf, prof);
         legacy.loadAll();
-        assertEquals(BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX, legacy.getAudioRouteMode());
+        assertEquals(BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP, legacy.getAudioRouteMode());
     }
 }

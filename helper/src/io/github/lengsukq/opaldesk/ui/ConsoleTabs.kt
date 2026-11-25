@@ -1694,9 +1694,9 @@ fun ConsoleEngineSettingsTab(
             Spacer(Modifier.height(3.dp))
             OpalText(
                 text = if (splitAudioOn) {
-                    "已开启应用独立分流：手机主屏应用由手机发声，DeX 窗口内应用由投屏端发声（Android 11+ 免 Root，实时生效）"
+                    "默认应用独立分流：手机主屏应用由手机发声，DeX 窗口内应用由投屏端发声（Android 11+ 免 Root，实时生效）"
                 } else {
-                    "默认整机声音统一传至 DeX 投屏端；切换为「应用独立分流」可实现手机与 DeX 各自发声"
+                    "当前整机声音统一传至 DeX 投屏端；切回「应用独立分流」可恢复手机与 DeX 各自发声"
                 },
                 fontSize = 11.5.sp,
                 color = OpalPalette.TextSecondary,

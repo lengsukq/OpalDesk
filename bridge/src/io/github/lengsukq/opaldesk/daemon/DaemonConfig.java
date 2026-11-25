@@ -142,7 +142,7 @@ public final class DaemonConfig {
     private boolean secureCaptureEnabled = false;
     private boolean remoteMicEnabled = false;
     private boolean remoteCameraEnabled = false;
-    private int audioRouteMode = BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX;
+    private int audioRouteMode = BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP;
 
     public DaemonConfig() {
         this(new File(DEFAULT_CONF_PATH), new File(DEFAULT_PROFILE_CONF_PATH), new File(DEFAULT_LAUNCH_COUNTS_PATH));
@@ -401,9 +401,9 @@ public final class DaemonConfig {
     }
 
     public void setAudioRouteMode(int mode) {
-        int clamped = (mode == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP)
-                ? BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP
-                : BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX;
+        int clamped = (mode == BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX)
+                ? BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX
+                : BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP;
         synchronized (lock) {
             this.audioRouteMode = clamped;
         }
@@ -532,9 +532,9 @@ public final class DaemonConfig {
                 }
                 if (parts.length >= 12) {
                     int arm = Integer.parseInt(parts[11].trim());
-                    audioRouteMode = (arm == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP)
-                            ? BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP
-                            : BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX;
+                    audioRouteMode = (arm == BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX)
+                            ? BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX
+                            : BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP;
                 }
             }
         } catch (IOException | NumberFormatException e) {

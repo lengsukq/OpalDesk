@@ -295,7 +295,7 @@ object BridgeClient {
                 globalCustomDpi = if (reply.dataAvail() >= 4) reply.readInt() else 0,
                 remoteMicEnabled = if (reply.dataAvail() >= 4) reply.readInt() != 0 else false,
                 remoteCameraEnabled = if (reply.dataAvail() >= 4) reply.readInt() != 0 else false,
-                audioRouteMode = if (reply.dataAvail() >= 4) reply.readInt() else BridgeProtocol.AudioRoute.ALL_TO_DEX,
+                audioRouteMode = if (reply.dataAvail() >= 4) reply.readInt() else BridgeProtocol.AudioRoute.SPLIT_BY_APP,
             )
         }?.also { st ->
             _statusFlow.value = st

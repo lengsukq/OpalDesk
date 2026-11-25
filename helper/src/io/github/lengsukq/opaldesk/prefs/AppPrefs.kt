@@ -65,7 +65,7 @@ object AppPrefs {
     private const val KEY_FEEDBACK_USERNAME = "feedback_reporter_username_v1"
     private const val KEY_REMOTE_MIC_ENABLED = "remote_mic_uplink_enabled_v1"
     private const val KEY_REMOTE_CAMERA_ENABLED = "remote_camera_mapping_enabled_v1"
-    private const val KEY_AUDIO_ROUTE_MODE = "audio_route_mode_v1"
+    private const val KEY_AUDIO_ROUTE_MODE = "audio_route_mode_v2"
 
     private val DEFAULT_PINNED = listOf(
         "com.android.chrome",
@@ -131,7 +131,7 @@ object AppPrefs {
     val remoteCameraEnabledFlow: StateFlow<Boolean> = _remoteCameraEnabledFlow.asStateFlow()
 
     private val _audioRouteModeFlow = MutableStateFlow(
-        io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.ALL_TO_DEX,
+        io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.SPLIT_BY_APP,
     )
     val audioRouteModeFlow: StateFlow<Int> = _audioRouteModeFlow.asStateFlow()
 
@@ -166,7 +166,7 @@ object AppPrefs {
         _remoteCameraEnabledFlow.value = p.getBoolean(KEY_REMOTE_CAMERA_ENABLED, false)
         _audioRouteModeFlow.value = p.getInt(
             KEY_AUDIO_ROUTE_MODE,
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.ALL_TO_DEX,
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.SPLIT_BY_APP,
         ).coerceIn(
             io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.ALL_TO_DEX,
             io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.SPLIT_BY_APP,
