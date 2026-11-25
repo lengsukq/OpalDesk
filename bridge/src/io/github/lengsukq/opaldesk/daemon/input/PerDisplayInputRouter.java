@@ -29,7 +29,7 @@ import java.util.Map;
  * when OEM ROMs restrict {@code INJECT_EVENTS}.
  */
 public final class PerDisplayInputRouter {
-    private static final long UHID_SETTLE_MS = 50L;
+    private static final long UHID_SETTLE_MS = 120L;
     private static final long UHID_RETRY_COOLDOWN_MS = 10_000L;
     private static final long INJECT_WARN_COOLDOWN_MS = 3_000L;
     private static final float TAP_SLOP_PX = 36f;

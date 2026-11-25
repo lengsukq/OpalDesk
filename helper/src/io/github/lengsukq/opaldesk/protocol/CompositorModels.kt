@@ -454,13 +454,14 @@ object CompositorGeometry {
                 r = (base.right + dx).coerceIn(l + minW, max(l + minW, canvasW - 4))
             }
             ResizeEdge.W, ResizeEdge.NW, ResizeEdge.SW -> {
-                l = (base.left + dx).coerceIn(4, max(4, r - minW))
+                val minLeft = min(4, base.left)
+                l = (base.left + dx).coerceIn(minLeft, max(minLeft, r - minW))
             }
             else -> Unit
         }
         when (edge) {
             ResizeEdge.S, ResizeEdge.SE, ResizeEdge.SW -> {
-                b = (base.bottom + dy).coerceIn(t + minH, maxBottom)
+                b = (base.bottom + dy).coerceIn(t + minH, max(t + minH, maxBottom))
             }
             ResizeEdge.N, ResizeEdge.NE, ResizeEdge.NW -> {
                 t = (base.top + dy).coerceIn(minTop, max(minTop, b - minH))
@@ -660,8 +661,8 @@ object CompositorGeometry {
             WindowTilingLayout.SPLIT_6_GRID -> if (isPortraitCanvas) splitGrid(cols = 2, rows = 3) else splitGrid(cols = 3, rows = 2)
             WindowTilingLayout.SPLIT_8_GRID -> if (isPortraitCanvas) splitGrid(cols = 2, rows = 4) else splitGrid(cols = 4, rows = 2)
             WindowTilingLayout.CASCADE -> {
-                val winW = ((workW * (if (isPortraitCanvas) 0.90f else 0.62f)).roundToInt() and 1.inv()).coerceIn(280, workW)
-                val winH = ((workH * (if (isPortraitCanvas) 0.56f else 0.74f)).roundToInt() and 1.inv()).coerceIn(260, workH)
+                val winW = ((workW * (if (isPortraitCanvas) 0.90f else 0.62f)).roundToInt() and 1.inv()).coerceIn(280, max(280, workW))
+                val winH = ((workH * (if (isPortraitCanvas) 0.56f else 0.74f)).roundToInt() and 1.inv()).coerceIn(260, max(260, workH))
                 val step = dpToPx(if (isPortraitCanvas) 20f else 32f, density)
                 val baseL = wl + max(0, (workW - winW - (if (isPortraitCanvas) 0 else step * max(0, slots - 1))) / 2)
                 val baseT = wt + max(0, (workH - winH - step * max(0, slots - 1)) / (if (isPortraitCanvas) 3 else 2))

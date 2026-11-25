@@ -251,13 +251,16 @@ public final class BridgeBinderService extends Binder {
                 int canvasW = data.readInt();
                 int canvasH = data.readInt();
                 int canvasDpi = data.readInt();
+                int prevInputMode = config.getInputBackendMode();
                 config.updateRuntimeConfig(inputMode, maxVd, canvasW, canvasH, canvasDpi);
                 if (maxVd >= DaemonConfig.MIN_MAX_VD && maxVd <= DaemonConfig.HARD_MAX_VD) {
                     compositor.setConfiguredMaxDisplays(config.getMaxActiveDisplays());
                 }
+                int nextInputMode = config.getInputBackendMode();
                 int status = (inputMode >= BridgeProtocol.INPUT_BACKEND_AUTO
-                        && inputMode <= BridgeProtocol.INPUT_BACKEND_UHID)
-                        ? inputRouter.onInputBackendConfigChanged(config.getInputBackendMode())
+                        && inputMode <= BridgeProtocol.INPUT_BACKEND_UHID
+                        && (nextInputMode != prevInputMode || nextInputMode == BridgeProtocol.INPUT_BACKEND_UHID))
+                        ? inputRouter.onInputBackendConfigChanged(nextInputMode)
                         : inputRouter.getLastInjectStatus();
                 if (reply != null) reply.writeInt(status);
                 return true;

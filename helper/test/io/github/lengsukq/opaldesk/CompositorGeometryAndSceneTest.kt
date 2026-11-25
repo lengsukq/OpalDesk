@@ -67,6 +67,76 @@ class CompositorGeometryAndSceneTest {
     }
 
     @Test
+    fun computeResizeAndCascadeDoNotCrashWhenWindowNearBottomOrCanvasCompact() {
+        // Reproduces OPALDESK-8: dragged near bottom on compact display so (base.top + minH) > maxBottom
+        val density = 2.75f
+        val canvasW = 1080
+        val canvasH = 714
+        val movedNearBottom = CompositorGeometry.clampMove(
+            WindowRect(left = 100, top = 200, right = 900, bottom = 680),
+            dx = 0,
+            dy = 5000,
+            canvasW = canvasW,
+            canvasH = canvasH,
+            density = density,
+        )
+        for (edge in listOf(ResizeEdge.S, ResizeEdge.SE, ResizeEdge.SW)) {
+            val resized = CompositorGeometry.computeResize(
+                base = movedNearBottom,
+                edge = edge,
+                dx = -40,
+                dy = 120,
+                canvasW = canvasW,
+                canvasH = canvasH,
+                density = density,
+            )
+            assertEquals(0, resized.width % 2)
+            assertEquals(0, resized.height % 2)
+            assertTrue(resized.bottom > resized.top)
+        }
+
+        // Window partially dragged off-screen left keeps its anchor/min width without throwing
+        val offscreenLeft = CompositorGeometry.clampMove(
+            WindowRect(left = 100, top = 160, right = 700, bottom = 600),
+            dx = -500,
+            dy = 0,
+            canvasW = canvasW,
+            canvasH = 1200,
+            density = 2f,
+        )
+        for (edge in listOf(ResizeEdge.W, ResizeEdge.NW, ResizeEdge.SW)) {
+            val resized = CompositorGeometry.computeResize(
+                base = offscreenLeft,
+                edge = edge,
+                dx = -30,
+                dy = 0,
+                canvasW = canvasW,
+                canvasH = 1200,
+                density = 2f,
+            )
+            assertEquals(0, resized.width % 2)
+            assertEquals(0, resized.height % 2)
+            assertTrue(resized.right > resized.left)
+        }
+
+        // Compact canvas must not crash CASCADE coerceIn when workW < 280 or workH < 260
+        val compactCascade = CompositorGeometry.computeTilingFrames(
+            WindowTilingLayout.CASCADE,
+            windowCount = 3,
+            canvasW = 240,
+            canvasH = 300,
+            density = 2f,
+        )
+        assertEquals(3, compactCascade.size)
+        compactCascade.forEach { rect ->
+            assertEquals(0, rect.width % 2)
+            assertEquals(0, rect.height % 2)
+            assertTrue(rect.right > rect.left)
+            assertTrue(rect.bottom > rect.top)
+        }
+    }
+
+    @Test
     fun detectSnapPresentationIdentifiesEdgesCornersAndTopMaximize() {
         val w = 1920
         val h = 1200

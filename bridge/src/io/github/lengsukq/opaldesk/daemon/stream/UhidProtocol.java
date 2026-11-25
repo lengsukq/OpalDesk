@@ -1,5 +1,6 @@
 package io.github.lengsukq.opaldesk.daemon.stream;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -13,7 +14,8 @@ import java.util.Map;
  *
  * Exact Linux 64-bit struct uhid_event layout (include/uapi/linux/uhid.h):
  *   sizeof(struct uhid_event) == 4380 bytes (little-endian):
- *   - offset 0..3:       __u32 type (UHID_DESTROY=1, UHID_CREATE2=11, UHID_INPUT2=12)
+ *   - offset 0..3:       __u32 type (UHID_DESTROY=1, UHID_GET_REPORT=9, UHID_GET_REPORT_REPLY=10,
+ *                        UHID_CREATE2=11, UHID_INPUT2=12, UHID_SET_REPORT=13, UHID_SET_REPORT_REPLY=14)
  *   - offset 4..4375:    union u (largest packed member uhid_create2_req = 4372 bytes)
  *   - offset 4376..4379: 4-byte trailing union alignment padding (from uhid_start_req __u64)
  */
@@ -21,8 +23,21 @@ public final class UhidProtocol {
     public static final int UHID_EVENT_SIZE = 4380;
     public static final int HID_MAX_DESCRIPTOR_SIZE = 4096;
     public static final int UHID_DESTROY = 1;
+    public static final int UHID_START = 2;
+    public static final int UHID_STOP = 3;
+    public static final int UHID_OPEN = 4;
+    public static final int UHID_CLOSE = 5;
+    public static final int UHID_OUTPUT = 6;
+    public static final int UHID_GET_REPORT = 9;
+    public static final int UHID_GET_REPORT_REPLY = 10;
     public static final int UHID_CREATE2 = 11;
     public static final int UHID_INPUT2 = 12;
+    public static final int UHID_SET_REPORT = 13;
+    public static final int UHID_SET_REPORT_REPLY = 14;
+
+    public static final int UHID_FEATURE_REPORT = 0;
+    public static final int UHID_OUTPUT_REPORT = 1;
+    public static final int UHID_INPUT_REPORT = 2;
     public static final int BUS_VIRTUAL = 0x06;
 
     // Exact byte offsets inside 64-bit little-endian struct uhid_event
@@ -41,15 +56,35 @@ public final class UhidProtocol {
     public static final int OFFSET_INPUT2_SIZE = 4;        // uint16 LE
     public static final int OFFSET_INPUT2_DATA = 6;        // up to 4096 bytes
 
+    public static final int OFFSET_GET_REPORT_ID = 4;      // uint32 LE
+    public static final int OFFSET_GET_REPORT_RNUM = 8;    // uint8
+    public static final int OFFSET_GET_REPORT_RTYPE = 9;   // uint8
+
+    public static final int OFFSET_GET_REPORT_REPLY_ID = 4;    // uint32 LE
+    public static final int OFFSET_GET_REPORT_REPLY_ERR = 8;   // uint16 LE
+    public static final int OFFSET_GET_REPORT_REPLY_SIZE = 10; // uint16 LE
+    public static final int OFFSET_GET_REPORT_REPLY_DATA = 12; // up to 4096 bytes
+
+    public static final int OFFSET_SET_REPORT_ID = 4;          // uint32 LE
+    public static final int OFFSET_SET_REPORT_REPLY_ID = 4;    // uint32 LE
+    public static final int OFFSET_SET_REPORT_REPLY_ERR = 8;   // uint16 LE
+
     public static final int REPORT_ID_POINTER = 1;
     public static final int REPORT_ID_KEYBOARD = 2;
+    public static final int REPORT_ID_TOUCH = 1;
+    public static final int REPORT_ID_TOUCH_FEATURE = 3;
     public static final int POINTER_REPORT_SIZE = 8;
     public static final int KEYBOARD_REPORT_SIZE = 9;
+    public static final int MAX_TOUCH_CONTACTS = 10;
+    public static final int TOUCH_CONTACT_BYTES = 6;
+    public static final int TOUCH_REPORT_SIZE = 1 + (MAX_TOUCH_CONTACTS * TOUCH_CONTACT_BYTES) + 1;
     public static final int ABS_MAX = 32767;
+    public static final int REL_MAX = 32767;
 
     public static final int VENDOR_ID = 0x18D1;
     public static final int PRODUCT_ID_POINTER = 0xEB01;
     public static final int PRODUCT_ID_KEYBOARD = 0xEB02;
+    public static final int PRODUCT_ID_TOUCH = 0xEB03;
     public static final int DEVICE_VERSION = 0x0001;
 
     // USB HID Modifier bits (Report ID 2, byte 1)
@@ -138,6 +173,11 @@ public final class UhidProtocol {
     private static final int META_META_LEFT_ON = 131072;
     private static final int META_META_RIGHT_ON = 262144;
 
+    /**
+     * Standard Relative HID Mouse report descriptor (`BTN_LEFT..BTN_EXTRA`, `REL_X`, `REL_Y`,
+     * `REL_WHEEL`, `REL_HWHEEL`) so Android `EventHub` classifies it as {@code InputDeviceClass::CURSOR}.
+     * Touch & primary absolute clicks use {@link #TOUCH_REPORT_DESCRIPTOR} instead.
+     */
     private static final byte[] POINTER_REPORT_DESCRIPTOR = new byte[]{
             0x05, 0x01,               // Usage Page (Generic Desktop)
             0x09, 0x02,               // Usage (Mouse)
@@ -158,15 +198,15 @@ public final class UhidProtocol {
             (byte) 0x95, 0x01,        //     Report Count (1)
             0x75, 0x03,               //     Report Size (3)
             (byte) 0x81, 0x03,        //     Input (Constant, Variable, Absolute)
-            // Absolute X, Y (0..32767)
+            // Relative X, Y (-32767..32767)
             0x05, 0x01,               //     Usage Page (Generic Desktop)
             0x09, 0x30,               //     Usage (X)
             0x09, 0x31,               //     Usage (Y)
-            0x15, 0x00,               //     Logical Minimum (0)
+            0x16, 0x01, (byte) 0x80,  //     Logical Minimum (-32767)
             0x26, (byte) 0xFF, 0x7F,  //     Logical Maximum (32767)
             0x75, 0x10,               //     Report Size (16)
             (byte) 0x95, 0x02,        //     Report Count (2)
-            (byte) 0x81, 0x02,        //     Input (Data, Variable, Absolute)
+            (byte) 0x81, 0x06,        //     Input (Data, Variable, Relative)
             // Vertical wheel (-127..127)
             0x09, 0x38,               //     Usage (Wheel)
             0x15, (byte) 0x81,        //     Logical Minimum (-127)
@@ -185,6 +225,70 @@ public final class UhidProtocol {
             (byte) 0xC0,              //   End Collection (Physical)
             (byte) 0xC0               // End Collection (Application)
     };
+
+    private static final byte[] TOUCH_REPORT_DESCRIPTOR = buildTouchReportDescriptor();
+
+    private static byte[] buildTouchReportDescriptor() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(420);
+        // Usage Page (Digitizers), Usage (Touch Screen), Collection (Application), Report ID (1)
+        writeBytes(out,
+                0x05, 0x0D,
+                0x09, 0x04,
+                0xA1, 0x01,
+                0x85, REPORT_ID_TOUCH);
+        for (int i = 0; i < MAX_TOUCH_CONTACTS; i++) {
+            writeBytes(out,
+                    0x05, 0x0D,               //   Usage Page (Digitizers)
+                    0x09, 0x22,               //   Usage (Finger)
+                    0xA1, 0x02,               //   Collection (Logical)
+                    0x09, 0x42,               //     Usage (Tip Switch)
+                    0x15, 0x00,               //     Logical Minimum (0)
+                    0x25, 0x01,               //     Logical Maximum (1)
+                    0x75, 0x01,               //     Report Size (1)
+                    0x95, 0x01,               //     Report Count (1)
+                    0x81, 0x02,               //     Input (Data, Variable, Absolute)
+                    0x95, 0x07,               //     Report Count (7) padding
+                    0x81, 0x03,               //     Input (Constant, Variable, Absolute)
+                    0x09, 0x51,               //     Usage (Contact Identifier)
+                    0x15, 0x00,               //     Logical Minimum (0)
+                    0x26, 0xFF, 0x00,         //     Logical Maximum (255)
+                    0x75, 0x08,               //     Report Size (8)
+                    0x95, 0x01,               //     Report Count (1)
+                    0x81, 0x02,               //     Input (Data, Variable, Absolute)
+                    0x05, 0x01,               //     Usage Page (Generic Desktop)
+                    0x09, 0x30,               //     Usage (X)
+                    0x09, 0x31,               //     Usage (Y)
+                    0x15, 0x00,               //     Logical Minimum (0)
+                    0x26, 0xFF, 0x7F,         //     Logical Maximum (32767)
+                    0x75, 0x10,               //     Report Size (16)
+                    0x95, 0x02,               //     Report Count (2)
+                    0x81, 0x02,               //     Input (Data, Variable, Absolute)
+                    0xC0);                    //   End Collection (Logical)
+        }
+        writeBytes(out,
+                0x05, 0x0D,                   //   Usage Page (Digitizers)
+                0x09, 0x54,                   //   Usage (Contact Count)
+                0x15, 0x00,                   //   Logical Minimum (0)
+                0x25, MAX_TOUCH_CONTACTS,     //   Logical Maximum (10)
+                0x75, 0x08,                   //   Report Size (8)
+                0x95, 0x01,                   //   Report Count (1)
+                0x81, 0x02,                   //   Input (Data, Variable, Absolute)
+                0x85, REPORT_ID_TOUCH_FEATURE,//   Report ID (3)
+                0x09, 0x55,                   //   Usage (Contact Count Maximum)
+                0x15, 0x00,                   //   Logical Minimum (0)
+                0x25, MAX_TOUCH_CONTACTS,     //   Logical Maximum (10)
+                0x75, 0x08,                   //   Report Size (8)
+                0x95, 0x01,                   //   Report Count (1)
+                0xB1, 0x02,                   //   Feature (Data, Variable, Absolute)
+                0xC0);                        // End Collection (Application)
+        return out.toByteArray();
+    }
+
+    private static void writeBytes(ByteArrayOutputStream out, int... bytes) {
+        for (int b : bytes) {
+            out.write(b & 0xFF);
+        }
+    }
 
     private static final byte[] KEYBOARD_REPORT_DESCRIPTOR = new byte[]{
             0x05, 0x01,               // Usage Page (Generic Desktop)
@@ -282,8 +386,16 @@ public final class UhidProtocol {
         return POINTER_REPORT_DESCRIPTOR.clone();
     }
 
+    public static byte[] getTouchReportDescriptor() {
+        return TOUCH_REPORT_DESCRIPTOR.clone();
+    }
+
     public static byte[] getKeyboardReportDescriptor() {
         return KEYBOARD_REPORT_DESCRIPTOR.clone();
+    }
+
+    public static String touchPhysForDisplay(int displayId) {
+        return "opaldesk-uhid-touch-" + displayId;
     }
 
     public static String pointerPhysForDisplay(int displayId) {
@@ -358,10 +470,62 @@ public final class UhidProtocol {
         return (byte) Math.max(-127, Math.min(127, rounded));
     }
 
+    public static final class GetReportRequest {
+        public final int id;
+        public final int rnum;
+        public final int rtype;
+
+        public GetReportRequest(int id, int rnum, int rtype) {
+            this.id = id;
+            this.rnum = rnum;
+            this.rtype = rtype;
+        }
+    }
+
+    public static GetReportRequest parseGetReportRequest(byte[] buf, int len) {
+        if (buf == null || len < OFFSET_GET_REPORT_RTYPE + 1) return null;
+        ByteBuffer bb = ByteBuffer.wrap(buf, 0, len).order(ByteOrder.LITTLE_ENDIAN);
+        if (bb.getInt(OFFSET_TYPE) != UHID_GET_REPORT) return null;
+        int id = bb.getInt(OFFSET_GET_REPORT_ID);
+        int rnum = buf[OFFSET_GET_REPORT_RNUM] & 0xFF;
+        int rtype = buf[OFFSET_GET_REPORT_RTYPE] & 0xFF;
+        return new GetReportRequest(id, rnum, rtype);
+    }
+
+    public static int parseSetReportRequestId(byte[] buf, int len) {
+        if (buf == null || len < OFFSET_SET_REPORT_ID + 4) return -1;
+        ByteBuffer bb = ByteBuffer.wrap(buf, 0, len).order(ByteOrder.LITTLE_ENDIAN);
+        if (bb.getInt(OFFSET_TYPE) != UHID_SET_REPORT) return -1;
+        return bb.getInt(OFFSET_SET_REPORT_ID);
+    }
+
+    public static byte[] buildGetReportReplyEvent(int id, int err, byte[] data) {
+        int dataLen = (data != null) ? Math.min(HID_MAX_DESCRIPTOR_SIZE, data.length) : 0;
+        byte[] buf = new byte[UHID_EVENT_SIZE];
+        ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN);
+        bb.putInt(OFFSET_TYPE, UHID_GET_REPORT_REPLY);
+        bb.putInt(OFFSET_GET_REPORT_REPLY_ID, id);
+        bb.putShort(OFFSET_GET_REPORT_REPLY_ERR, (short) (err & 0xFFFF));
+        bb.putShort(OFFSET_GET_REPORT_REPLY_SIZE, (short) (dataLen & 0xFFFF));
+        if (dataLen > 0) {
+            System.arraycopy(data, 0, buf, OFFSET_GET_REPORT_REPLY_DATA, dataLen);
+        }
+        return buf;
+    }
+
+    public static byte[] buildSetReportReplyEvent(int id, int err) {
+        byte[] buf = new byte[UHID_EVENT_SIZE];
+        ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN);
+        bb.putInt(OFFSET_TYPE, UHID_SET_REPORT_REPLY);
+        bb.putInt(OFFSET_SET_REPORT_REPLY_ID, id);
+        bb.putShort(OFFSET_SET_REPORT_REPLY_ERR, (short) (err & 0xFFFF));
+        return buf;
+    }
+
     public static byte[] buildPointerReport(
-            int buttonsMask, int absX, int absY, int vWheel, int hWheel) {
-        int clampedX = Math.max(0, Math.min(ABS_MAX, absX));
-        int clampedY = Math.max(0, Math.min(ABS_MAX, absY));
+            int buttonsMask, int relX, int relY, int vWheel, int hWheel) {
+        int clampedX = Math.max(-REL_MAX, Math.min(REL_MAX, relX));
+        int clampedY = Math.max(-REL_MAX, Math.min(REL_MAX, relY));
         byte[] report = new byte[POINTER_REPORT_SIZE];
         report[0] = REPORT_ID_POINTER;
         report[1] = (byte) (buttonsMask & 0x1F);
@@ -371,6 +535,36 @@ public final class UhidProtocol {
         report[5] = (byte) ((clampedY >>> 8) & 0xFF);
         report[6] = (byte) Math.max(-127, Math.min(127, vWheel));
         report[7] = (byte) Math.max(-127, Math.min(127, hWheel));
+        return report;
+    }
+
+    public static byte[] buildTouchReport(
+            int count,
+            int[] contactIds,
+            boolean[] tipDowns,
+            int[] absXs,
+            int[] absYs) {
+        byte[] report = new byte[TOUCH_REPORT_SIZE];
+        report[0] = REPORT_ID_TOUCH;
+        int n = Math.max(0, Math.min(MAX_TOUCH_CONTACTS, count));
+        if (contactIds == null || tipDowns == null || absXs == null || absYs == null) {
+            n = 0;
+        } else {
+            n = Math.min(n, Math.min(contactIds.length,
+                    Math.min(tipDowns.length, Math.min(absXs.length, absYs.length))));
+        }
+        for (int i = 0; i < n; i++) {
+            int off = 1 + (i * TOUCH_CONTACT_BYTES);
+            int x = Math.max(0, Math.min(ABS_MAX, absXs[i]));
+            int y = Math.max(0, Math.min(ABS_MAX, absYs[i]));
+            report[off] = (byte) (tipDowns[i] ? 0x01 : 0x00);
+            report[off + 1] = (byte) (contactIds[i] & 0xFF);
+            report[off + 2] = (byte) (x & 0xFF);
+            report[off + 3] = (byte) ((x >>> 8) & 0xFF);
+            report[off + 4] = (byte) (y & 0xFF);
+            report[off + 5] = (byte) ((y >>> 8) & 0xFF);
+        }
+        report[TOUCH_REPORT_SIZE - 1] = (byte) n;
         return report;
     }
 

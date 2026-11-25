@@ -63,15 +63,20 @@ public class UhidDescriptorTest {
 
     @Test
     public void testUhidInput2AndDestroyStructOffsets() {
-        byte[] ptrReport = UhidProtocol.buildPointerReport(0x05, 16384, 32767, -3, 2);
+        byte[] ptrReport = UhidProtocol.buildPointerReport(0x05, -120, -45, -3, 2);
         assertEquals(UhidProtocol.POINTER_REPORT_SIZE, ptrReport.length);
         assertEquals(UhidProtocol.REPORT_ID_POINTER, ptrReport[0]);
         assertEquals(0x05, ptrReport[1] & 0xFF);
         ByteBuffer repBb = ByteBuffer.wrap(ptrReport).order(ByteOrder.LITTLE_ENDIAN);
-        assertEquals(16384, repBb.getShort(2) & 0xFFFF);
-        assertEquals(32767, repBb.getShort(4) & 0xFFFF);
+        assertEquals(-120, repBb.getShort(2));
+        assertEquals(-45, repBb.getShort(4));
         assertEquals(-3, ptrReport[6]);
         assertEquals(2, ptrReport[7]);
+
+        byte[] clampedPtr = UhidProtocol.buildPointerReport(0x01, 50000, -50000, 0, 0);
+        ByteBuffer clampedBb = ByteBuffer.wrap(clampedPtr).order(ByteOrder.LITTLE_ENDIAN);
+        assertEquals(UhidProtocol.REL_MAX, clampedBb.getShort(2));
+        assertEquals(-UhidProtocol.REL_MAX, clampedBb.getShort(4));
 
         byte[] inputEv = UhidProtocol.buildInput2Event(ptrReport);
         assertEquals(4380, inputEv.length);
@@ -90,20 +95,100 @@ public class UhidDescriptorTest {
     @Test
     public void testHidReportDescriptorsWellFormed() {
         byte[] ptrRd = UhidProtocol.getPointerReportDescriptor();
+        byte[] touchRd = UhidProtocol.getTouchReportDescriptor();
         byte[] kbdRd = UhidProtocol.getKeyboardReportDescriptor();
         assertTrue(ptrRd.length > 30 && ptrRd.length < UhidProtocol.HID_MAX_DESCRIPTOR_SIZE);
+        assertTrue(touchRd.length > 100 && touchRd.length < UhidProtocol.HID_MAX_DESCRIPTOR_SIZE);
         assertTrue(kbdRd.length > 30 && kbdRd.length < UhidProtocol.HID_MAX_DESCRIPTOR_SIZE);
 
         assertBalancedCollections(ptrRd);
+        assertBalancedCollections(touchRd);
         assertBalancedCollections(kbdRd);
 
+        // Relative pointer descriptor: Report ID 1, -32767..32767, Input Relative (0x81 0x06), AC Pan
         assertTrue(containsSequence(ptrRd, new byte[]{(byte) 0x85, 0x01}));
+        assertTrue(containsSequence(ptrRd, new byte[]{0x16, 0x01, (byte) 0x80}));
         assertTrue(containsSequence(ptrRd, new byte[]{0x26, (byte) 0xFF, 0x7F}));
+        assertTrue(containsSequence(ptrRd, new byte[]{(byte) 0x81, 0x06}));
         assertTrue(containsSequence(ptrRd, new byte[]{0x0A, 0x38, 0x02}));
+
+        // Multitouch touchscreen descriptor: Digitizer Touch Screen, Tip Switch, Contact ID, Count, Feature Max=10
+        assertTrue(containsSequence(touchRd, new byte[]{0x05, 0x0D, 0x09, 0x04}));
+        assertTrue(containsSequence(touchRd, new byte[]{0x09, 0x42}));
+        assertTrue(containsSequence(touchRd, new byte[]{0x09, 0x51}));
+        assertTrue(containsSequence(touchRd, new byte[]{0x09, 0x54}));
+        assertTrue(containsSequence(touchRd, new byte[]{(byte) 0x85, 0x03, 0x09, 0x55}));
 
         assertTrue(containsSequence(kbdRd, new byte[]{(byte) 0x85, 0x02}));
         assertTrue(containsSequence(kbdRd, new byte[]{0x19, (byte) 0xE0}));
         assertTrue(containsSequence(kbdRd, new byte[]{0x29, (byte) 0xE7}));
+    }
+
+    @Test
+    public void testTouchReportAndFeatureReplyEncoding() {
+        assertEquals("opaldesk-uhid-touch-7", UhidProtocol.touchPhysForDisplay(7));
+
+        byte[] touchReport = UhidProtocol.buildTouchReport(
+                2,
+                new int[]{3, 7},
+                new boolean[]{true, false},
+                new int[]{12000, 40000},
+                new int[]{24000, -50});
+        assertEquals(UhidProtocol.TOUCH_REPORT_SIZE, touchReport.length);
+        assertEquals(UhidProtocol.REPORT_ID_TOUCH, touchReport[0]);
+        ByteBuffer tb = ByteBuffer.wrap(touchReport).order(ByteOrder.LITTLE_ENDIAN);
+        // Slot 0: tip down, contact id 3, x=12000, y=24000
+        assertEquals(0x01, touchReport[1] & 0xFF);
+        assertEquals(3, touchReport[2] & 0xFF);
+        assertEquals(12000, tb.getShort(3) & 0xFFFF);
+        assertEquals(24000, tb.getShort(5) & 0xFFFF);
+        // Slot 1: tip up (lifted pointer), contact id 7, clamped to [0, ABS_MAX]
+        assertEquals(0x00, touchReport[7] & 0xFF);
+        assertEquals(7, touchReport[8] & 0xFF);
+        assertEquals(UhidProtocol.ABS_MAX, tb.getShort(9) & 0xFFFF);
+        assertEquals(0, tb.getShort(11) & 0xFFFF);
+        // Contact Count
+        assertEquals(2, touchReport[UhidProtocol.TOUCH_REPORT_SIZE - 1] & 0xFF);
+
+        byte[] emptyTouch = UhidProtocol.buildTouchReport(0, null, null, null, null);
+        assertEquals(UhidProtocol.REPORT_ID_TOUCH, emptyTouch[0]);
+        assertEquals(0, emptyTouch[UhidProtocol.TOUCH_REPORT_SIZE - 1] & 0xFF);
+
+        byte[] getReqBuf = new byte[UhidProtocol.UHID_EVENT_SIZE];
+        ByteBuffer gr = ByteBuffer.wrap(getReqBuf).order(ByteOrder.LITTLE_ENDIAN);
+        gr.putInt(UhidProtocol.OFFSET_TYPE, UhidProtocol.UHID_GET_REPORT);
+        gr.putInt(UhidProtocol.OFFSET_GET_REPORT_ID, 0x12345678);
+        getReqBuf[UhidProtocol.OFFSET_GET_REPORT_RNUM] = (byte) UhidProtocol.REPORT_ID_TOUCH_FEATURE;
+        getReqBuf[UhidProtocol.OFFSET_GET_REPORT_RTYPE] = (byte) UhidProtocol.UHID_FEATURE_REPORT;
+
+        UhidProtocol.GetReportRequest parsed = UhidProtocol.parseGetReportRequest(getReqBuf, getReqBuf.length);
+        assertTrue(parsed != null);
+        assertEquals(0x12345678, parsed.id);
+        assertEquals(UhidProtocol.REPORT_ID_TOUCH_FEATURE, parsed.rnum);
+        assertEquals(UhidProtocol.UHID_FEATURE_REPORT, parsed.rtype);
+
+        byte[] getReply = UhidProtocol.buildGetReportReplyEvent(
+                parsed.id, 0, new byte[]{(byte) UhidProtocol.REPORT_ID_TOUCH_FEATURE, (byte) UhidProtocol.MAX_TOUCH_CONTACTS});
+        assertEquals(UhidProtocol.UHID_EVENT_SIZE, getReply.length);
+        ByteBuffer replyBb = ByteBuffer.wrap(getReply).order(ByteOrder.LITTLE_ENDIAN);
+        assertEquals(UhidProtocol.UHID_GET_REPORT_REPLY, replyBb.getInt(UhidProtocol.OFFSET_TYPE));
+        assertEquals(0x12345678, replyBb.getInt(UhidProtocol.OFFSET_GET_REPORT_REPLY_ID));
+        assertEquals(0, replyBb.getShort(UhidProtocol.OFFSET_GET_REPORT_REPLY_ERR) & 0xFFFF);
+        assertEquals(2, replyBb.getShort(UhidProtocol.OFFSET_GET_REPORT_REPLY_SIZE) & 0xFFFF);
+        assertEquals(UhidProtocol.REPORT_ID_TOUCH_FEATURE, getReply[UhidProtocol.OFFSET_GET_REPORT_REPLY_DATA] & 0xFF);
+        assertEquals(UhidProtocol.MAX_TOUCH_CONTACTS, getReply[UhidProtocol.OFFSET_GET_REPORT_REPLY_DATA + 1] & 0xFF);
+
+        byte[] setReqBuf = new byte[UhidProtocol.UHID_EVENT_SIZE];
+        ByteBuffer sr = ByteBuffer.wrap(setReqBuf).order(ByteOrder.LITTLE_ENDIAN);
+        sr.putInt(UhidProtocol.OFFSET_TYPE, UhidProtocol.UHID_SET_REPORT);
+        sr.putInt(UhidProtocol.OFFSET_SET_REPORT_ID, 0x10203040);
+        assertEquals(0x10203040, UhidProtocol.parseSetReportRequestId(setReqBuf, setReqBuf.length));
+
+        byte[] setReply = UhidProtocol.buildSetReportReplyEvent(0x10203040, 0);
+        ByteBuffer sReplyBb = ByteBuffer.wrap(setReply).order(ByteOrder.LITTLE_ENDIAN);
+        assertEquals(UhidProtocol.UHID_SET_REPORT_REPLY, sReplyBb.getInt(UhidProtocol.OFFSET_TYPE));
+        assertEquals(0x10203040, sReplyBb.getInt(UhidProtocol.OFFSET_SET_REPORT_REPLY_ID));
+        assertEquals(0, sReplyBb.getShort(UhidProtocol.OFFSET_SET_REPORT_REPLY_ERR) & 0xFFFF);
     }
 
     @Test
