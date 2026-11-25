@@ -811,10 +811,17 @@ public final class OpalCastProtocol {
         public final int fps;
         public final String backend;
         public final String message;
+        public final String facing;
 
         public CameraStateMsg(
                 boolean active, boolean supported, boolean rootRequired,
                 int width, int height, int fps, String backend, String message) {
+            this(active, supported, rootRequired, width, height, fps, backend, message, "");
+        }
+
+        public CameraStateMsg(
+                boolean active, boolean supported, boolean rootRequired,
+                int width, int height, int fps, String backend, String message, String facing) {
             this.active = active;
             this.supported = supported;
             this.rootRequired = rootRequired;
@@ -823,13 +830,14 @@ public final class OpalCastProtocol {
             this.fps = Math.max(5, Math.min(30, fps > 0 ? fps : DEFAULT_CAMERA_FPS));
             this.backend = (backend != null) ? backend : "";
             this.message = (message != null) ? message : "";
+            this.facing = (facing != null) ? facing : "";
         }
     }
 
     public static byte[] encodeCameraState(CameraStateMsg msg) {
         CameraStateMsg m = (msg != null)
                 ? msg : new CameraStateMsg(false, false, true, DEFAULT_CAMERA_WIDTH, DEFAULT_CAMERA_HEIGHT, DEFAULT_CAMERA_FPS, "", "");
-        String json = new SimpleJson.ObjectBuilder()
+        SimpleJson.ObjectBuilder b = new SimpleJson.ObjectBuilder()
                 .put("active", m.active)
                 .put("supported", m.supported)
                 .put("rootRequired", m.rootRequired)
@@ -837,9 +845,11 @@ public final class OpalCastProtocol {
                 .put("height", m.height)
                 .put("fps", m.fps)
                 .put("backend", m.backend)
-                .put("message", m.message)
-                .build();
-        return json.getBytes(StandardCharsets.UTF_8);
+                .put("message", m.message);
+        if (!m.facing.isEmpty()) {
+            b.put("facing", m.facing);
+        }
+        return b.build().getBytes(StandardCharsets.UTF_8);
     }
 
     public static CameraStateMsg decodeCameraState(byte[] payload) throws ProtocolException {
@@ -856,7 +866,8 @@ public final class OpalCastProtocol {
                     obj.getInt("height", DEFAULT_CAMERA_HEIGHT),
                     obj.getInt("fps", DEFAULT_CAMERA_FPS),
                     obj.getString("backend", ""),
-                    obj.getString("message", ""));
+                    obj.getString("message", ""),
+                    obj.getString("facing", ""));
         } catch (RuntimeException t) {
             throw new ProtocolException("Invalid CAMERA_STATE JSON: " + t.getMessage(), t);
         }

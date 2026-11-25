@@ -36,6 +36,7 @@ data class DaemonStatus(
     val globalCustomDpi: Int = 0,
     val remoteMicEnabled: Boolean = false,
     val remoteCameraEnabled: Boolean = false,
+    val audioRouteMode: Int = BridgeProtocol.AudioRoute.ALL_TO_DEX,
 ) {
     val injectBackendLabel: String
         get() = when {

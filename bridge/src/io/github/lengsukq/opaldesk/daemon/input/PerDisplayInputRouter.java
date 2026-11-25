@@ -13,6 +13,7 @@ import io.github.lengsukq.opaldesk.daemon.compositor.WindowSession;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.platform.AndroidServices;
 import io.github.lengsukq.opaldesk.daemon.stream.UhidInputDevice;
+import io.github.lengsukq.opaldesk.daemon.stream.UhidProtocol;
 
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
@@ -29,6 +30,8 @@ import java.util.Map;
  */
 public final class PerDisplayInputRouter {
     private static final long UHID_SETTLE_MS = 50L;
+    private static final long UHID_RETRY_COOLDOWN_MS = 10_000L;
+    private static final long INJECT_WARN_COOLDOWN_MS = 3_000L;
     private static final float TAP_SLOP_PX = 36f;
 
     /** Callback notified after a clean short tap (ACTION_UP without drag) inside a live window. */
@@ -36,15 +39,23 @@ public final class PerDisplayInputRouter {
         void onWindowTapUp(int windowId, int displayId, long tapDownUptimeMs);
     }
 
+    /** Callback notified whenever effective input injection status changes (SYSTEM / UHID / BLOCKED). */
+    public interface InjectStatusListener {
+        void onInjectStatusChanged(int newStatus);
+    }
+
     private final AndroidServices services;
     private final DaemonConfig config;
     private final Object uhidLock = new Object();
     private final Map<Integer, UhidInputDevice> uhidByDisplay = new HashMap<>();
+    private final Map<Integer, Long> uhidBlockedUntilMs = new HashMap<>();
 
     private volatile boolean uhidAutoActivated = false;
     private volatile boolean localImeActive = false;
     private volatile int lastInjectStatus = BridgeProtocol.INJECT_STATUS_SYSTEM;
+    private volatile long lastInjectWarnMs = 0L;
     private volatile TapUpListener tapUpListener;
+    private volatile InjectStatusListener injectStatusListener;
 
     private int lastDownWinId = -1;
     private float lastDownX = 0f;
@@ -62,6 +73,19 @@ public final class PerDisplayInputRouter {
         this.tapUpListener = listener;
     }
 
+    public void setInjectStatusListener(InjectStatusListener listener) {
+        this.injectStatusListener = listener;
+    }
+
+    private void updateInjectStatus(int nextStatus) {
+        if (lastInjectStatus == nextStatus) return;
+        lastInjectStatus = nextStatus;
+        InjectStatusListener l = injectStatusListener;
+        if (l != null) {
+            try { l.onInjectStatusChanged(nextStatus); } catch (RuntimeException ignored) {}
+        }
+    }
+
     public void setLocalImeActive(boolean active) {
         this.localImeActive = active;
     }
@@ -75,13 +99,16 @@ public final class PerDisplayInputRouter {
     }
 
     public int onInputBackendConfigChanged(int mode) {
+        synchronized (uhidLock) {
+            uhidBlockedUntilMs.clear();
+        }
         if (mode != BridgeProtocol.INPUT_BACKEND_UHID) {
             uhidAutoActivated = false;
             releaseAllDisplays();
-            lastInjectStatus = BridgeProtocol.INJECT_STATUS_SYSTEM;
+            updateInjectStatus(BridgeProtocol.INJECT_STATUS_SYSTEM);
         } else {
             uhidAutoActivated = true;
-            lastInjectStatus = BridgeProtocol.INJECT_STATUS_UHID;
+            updateInjectStatus(BridgeProtocol.INJECT_STATUS_UHID);
         }
         return lastInjectStatus;
     }
@@ -305,6 +332,7 @@ public final class PerDisplayInputRouter {
         UhidInputDevice dev;
         synchronized (uhidLock) {
             dev = uhidByDisplay.remove(displayId);
+            uhidBlockedUntilMs.remove(displayId);
         }
         if (dev != null) {
             dev.close();
@@ -314,6 +342,7 @@ public final class PerDisplayInputRouter {
     public void releaseAllDisplays() {
         ArrayList<UhidInputDevice> all;
         synchronized (uhidLock) {
+            uhidBlockedUntilMs.clear();
             if (uhidByDisplay.isEmpty()) return;
             all = new ArrayList<>(uhidByDisplay.values());
             uhidByDisplay.clear();
@@ -328,11 +357,11 @@ public final class PerDisplayInputRouter {
         if (backend == BridgeProtocol.INPUT_BACKEND_UHID
                 || (backend == BridgeProtocol.INPUT_BACKEND_AUTO && uhidAutoActivated)) {
             if (injectViaUhid(ev, displayId, vdUniqueId, dispW, dispH)) {
-                lastInjectStatus = BridgeProtocol.INJECT_STATUS_UHID;
+                updateInjectStatus(BridgeProtocol.INJECT_STATUS_UHID);
                 return true;
             }
             if (backend == BridgeProtocol.INPUT_BACKEND_UHID) {
-                lastInjectStatus = BridgeProtocol.INJECT_STATUS_BLOCKED;
+                updateInjectStatus(BridgeProtocol.INJECT_STATUS_BLOCKED);
                 return false;
             }
         }
@@ -345,7 +374,7 @@ public final class PerDisplayInputRouter {
                 Object res = services.injectInputEventMethod.invoke(services.iInputManager, ev, 0);
                 boolean ok = !(res instanceof Boolean) || (Boolean) res;
                 if (ok) {
-                    lastInjectStatus = BridgeProtocol.INJECT_STATUS_SYSTEM;
+                    updateInjectStatus(BridgeProtocol.INJECT_STATUS_SYSTEM);
                     return true;
                 }
             } catch (ReflectiveOperationException | RuntimeException e) {
@@ -353,16 +382,29 @@ public final class PerDisplayInputRouter {
                         ? e.getCause() : e;
                 if (root instanceof SecurityException && backend == BridgeProtocol.INPUT_BACKEND_AUTO) {
                     if (injectViaUhid(ev, displayId, vdUniqueId, dispW, dispH)) {
-                        uhidAutoActivated = true;
-                        lastInjectStatus = BridgeProtocol.INJECT_STATUS_UHID;
-                        System.out.println("OPALDESK_UHID_AUTO_FALLBACK_ACTIVE displayId=" + displayId);
+                        boolean firstFallback = false;
+                        synchronized (uhidLock) {
+                            if (!uhidAutoActivated) {
+                                uhidAutoActivated = true;
+                                firstFallback = true;
+                            }
+                        }
+                        updateInjectStatus(BridgeProtocol.INJECT_STATUS_UHID);
+                        if (firstFallback) {
+                            System.out.println("OPALDESK_UHID_AUTO_FALLBACK_ACTIVE displayId=" + displayId);
+                        }
                         return true;
                     }
                 }
-                System.err.println("OPALDESK_INPUT_INJECT_WARN displayId=" + displayId + ": " + root.getMessage());
+                long nowMs = SystemClock.uptimeMillis();
+                if (nowMs - lastInjectWarnMs >= INJECT_WARN_COOLDOWN_MS) {
+                    lastInjectWarnMs = nowMs;
+                    System.err.println("OPALDESK_INPUT_INJECT_WARN displayId=" + displayId + ": "
+                            + UhidProtocol.unwrapThrowableMessage(root));
+                }
             }
         }
-        lastInjectStatus = BridgeProtocol.INJECT_STATUS_BLOCKED;
+        updateInjectStatus(BridgeProtocol.INJECT_STATUS_BLOCKED);
         return false;
     }
 
@@ -384,11 +426,18 @@ public final class PerDisplayInputRouter {
                 dev.close();
                 uhidByDisplay.remove(displayId);
             }
+            Long blockedUntil = uhidBlockedUntilMs.get(displayId);
+            long nowMs = SystemClock.uptimeMillis();
+            if (blockedUntil != null && nowMs < blockedUntil) {
+                return null;
+            }
             try {
                 dev = UhidInputDevice.open(displayId, vdUniqueId, services.inputManager, services.iInputManager);
                 uhidByDisplay.put(displayId, dev);
+                uhidBlockedUntilMs.remove(displayId);
                 newlyOpened = true;
             } catch (Exception e) {
+                uhidBlockedUntilMs.put(displayId, nowMs + UHID_RETRY_COOLDOWN_MS);
                 System.err.println("OPALDESK_UHID_OPEN_WARN displayId=" + displayId + ": " + e.getMessage());
                 return null;
             }

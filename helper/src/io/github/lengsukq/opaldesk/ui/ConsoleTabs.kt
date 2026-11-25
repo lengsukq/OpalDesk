@@ -51,7 +51,9 @@ import io.github.lengsukq.opaldesk.BridgeService
 import io.github.lengsukq.opaldesk.cast.OpalPeerCastMutex
 import io.github.lengsukq.opaldesk.cast.OpalPeerDiscovery
 import io.github.lengsukq.opaldesk.cast.PeerFloatingAppService
+import io.github.lengsukq.opaldesk.external.ExternalDisplayTransport
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
+import io.github.lengsukq.opaldesk.external.WirelessDisplayHelper
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
@@ -102,11 +104,16 @@ fun ConsoleDashboardTab(
     scene: CompositorScene,
     remote: RemoteStreamStatus,
     extDisplay: BridgeService.ExternalDisplayInfo?,
+    detectedExtDisplays: List<BridgeService.ExternalDisplayInfo> = emptyList(),
     needsLocalNetworkPerm: Boolean = false,
     onRequestLocalNetworkPerm: () -> Unit = {},
     onEnterLocalDesktop: () -> Unit,
+    onEnterLandscapeMirrorDesktop: () -> Unit = onEnterLocalDesktop,
     onOpenRemoteTrackpad: () -> Unit,
     onOpenExternalOrTrackpad: (Int) -> Unit,
+    onProjectSpecificDisplay: (Int, ExternalDisplayTransport, Boolean) -> Unit = { id, _, _ ->
+        onOpenExternalOrTrackpad(id)
+    },
     onConnectPeerCast: (String, Int, String) -> Unit,
     onOpenFloatingAppPicker: (String, Int, String) -> Unit,
     onOpenActivation: () -> Unit,
@@ -305,11 +312,17 @@ fun ConsoleDashboardTab(
                                         .clip(CircleShape)
                                         .background(OpalPalette.AccentBlue),
                                 )
-                                OpalText(text = "外接屏工作站运行中", fontSize = 17.5.sp, fontWeight = FontWeight.Bold)
+                                OpalText(
+                                    text = if (extSession.isWirelessDisplay) "无线电视工作站运行中" else "外接屏工作站运行中",
+                                    fontSize = 17.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
                             }
                             Spacer(Modifier.height(4.dp))
                             OpalText(
-                                text = activeExtSummary.ifBlank { "物理外接显示器已连接" },
+                                text = activeExtSummary.ifBlank {
+                                    if (extSession.isWirelessDisplay) "无线电视副屏已连接" else "物理外接显示器已连接"
+                                },
                                 fontSize = 12.5.sp,
                                 color = OpalPalette.AccentCyan,
                             )
@@ -337,6 +350,14 @@ fun ConsoleDashboardTab(
                             filled = false,
                             onClick = onEnterLocalDesktop,
                             modifier = Modifier.weight(1f),
+                        )
+                    }
+                    if (extSession.isWirelessDisplay) {
+                        Spacer(Modifier.height(8.dp))
+                        OpalText(
+                            text = "无线投屏期间建议在触控板顶部使用「暗屏触控」，避免物理息屏导致部分机型断连",
+                            fontSize = 11.sp,
+                            color = OpalPalette.TextMuted,
                         )
                     }
                 }
@@ -414,7 +435,7 @@ fun ConsoleDashboardTab(
                         )
                         if (extDisplay != null) {
                             OpalButton(
-                                label = "外接屏满屏",
+                                label = if (extDisplay.isWirelessDisplay) "投射电视 DeX" else "外接屏满屏",
                                 accent = OpalPalette.AccentEmerald,
                                 onClick = { onOpenExternalOrTrackpad(extDisplay.displayId) },
                                 modifier = Modifier.weight(1f),
@@ -455,14 +476,20 @@ fun ConsoleDashboardTab(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            val isWirelessExt = extSession.isWirelessDisplay || (extDisplay?.isWirelessDisplay == true)
             DashboardBentoTile(
-                title = "外接显示器",
+                title = when {
+                    isWirelessExt -> "无线电视投屏"
+                    hasPhysicalExt -> "外接显示器"
+                    else -> "外接 / 电视投屏"
+                },
                 subtitle = when {
                     physicalExtActive -> "工作站运行中 · 点开触控板"
+                    extDisplay != null && extDisplay.isWirelessDisplay -> "${extDisplay.name} · 点投电视 DeX"
                     extDisplay != null -> "${extDisplay.width}×${extDisplay.height} · 点击满屏"
-                    else -> "接入 USB-C / HDMI 自动识别"
+                    else -> "USB-C 或系统无线投电视"
                 },
-                badgeText = if (hasPhysicalExt) "已连接" else "未接入",
+                badgeText = if (hasPhysicalExt) "已连接" else "去投屏",
                 accent = if (hasPhysicalExt) OpalPalette.AccentEmerald else OpalPalette.AccentBlue,
                 active = hasPhysicalExt,
                 iconKind = 0,
@@ -472,7 +499,7 @@ fun ConsoleDashboardTab(
                     } else if (!status.connected) {
                         onOpenActivation()
                     } else {
-                        Toast.makeText(ctx, "请通过 USB-C / HDMI 接入外接显示器", Toast.LENGTH_SHORT).show()
+                        WirelessDisplayHelper.openSystemWirelessCastSettings(ctx)
                     }
                 },
                 modifier = Modifier.weight(1f),
@@ -569,8 +596,8 @@ fun ConsoleDashboardTab(
 
             Spacer(Modifier.height(12.dp))
             OpalSegmentedRow(
-                options = listOf("连接设备", "共享本机"),
-                selectedIndex = castModeTab,
+                options = listOf("连接设备", "共享本机", "投电视"),
+                selectedIndex = castModeTab.coerceIn(0, 2),
                 onSelect = { castModeTab = it },
             )
 
@@ -736,7 +763,7 @@ fun ConsoleDashboardTab(
                         )
                     }
                 }
-            } else {
+            } else if (castModeTab == 1) {
                 // Mode 1: Share this device to Mac or another Android device
                 OpalSwitchRow(
                     title = "允许局域网设备连接本机",
@@ -888,6 +915,108 @@ fun ConsoleDashboardTab(
                         }
                     }
                 }
+            } else {
+                // Mode 2: System Wireless Display (Miracast / Wi-Fi Display) TV Casting
+                val tvCandidates = detectedExtDisplays.ifEmpty { listOfNotNull(extDisplay) }
+                if (tvCandidates.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        tvCandidates.forEach { disp ->
+                            val transportLbl = WirelessDisplayHelper.formatTransportLabel(disp.transport)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(OpalPalette.ChipFill)
+                                    .border(0.8.dp, OpalPalette.AccentEmerald.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                                    .padding(horizontal = 13.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    OpalText(
+                                        text = "${disp.name} · $transportLbl",
+                                        fontSize = 13.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                    )
+                                    OpalText(
+                                        text = "Display #${disp.displayId} · ${disp.width}×${disp.height} @ ${disp.refreshRateHz}Hz",
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = OpalPalette.AccentEmerald,
+                                        maxLines = 1,
+                                    )
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                OpalButton(
+                                    label = "投射 DeX",
+                                    accent = OpalPalette.AccentEmerald,
+                                    compact = true,
+                                    onClick = {
+                                        if (!status.connected) {
+                                            onOpenActivation()
+                                        } else {
+                                            onProjectSpecificDisplay(
+                                                disp.displayId,
+                                                disp.transport,
+                                                disp.isWirelessDisplay || !disp.isPresentationCapable,
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(OpalPalette.ChipFill)
+                            .padding(horizontal = 14.dp, vertical = 11.dp),
+                    ) {
+                        OpalText(
+                            text = "尚未检测到无线电视副屏。先点下方按钮通过系统「无线投屏（Miracast）」连接电视。",
+                            fontSize = 12.sp,
+                            color = OpalPalette.TextSecondary,
+                            lineHeight = 17.sp,
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OpalButton(
+                        label = "打开系统无线投屏",
+                        accent = OpalPalette.AccentBlue,
+                        compact = true,
+                        onClick = { WirelessDisplayHelper.openSystemWirelessCastSettings(ctx) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    OpalButton(
+                        label = "横屏镜像 DeX",
+                        accent = OpalPalette.AccentCyan,
+                        filled = false,
+                        compact = true,
+                        onClick = {
+                            if (!status.connected) {
+                                onOpenActivation()
+                            } else {
+                                onEnterLandscapeMirrorDesktop()
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+                OpalText(
+                    text = "• 支持 Miracast 独立副屏的机型连上电视后会自动以 Presentation 模式满屏投射 DeX，手机变为触控板。\n" +
+                        "• 仅支持主屏镜像的机型，在系统投屏后点击「横屏镜像 DeX」即可横屏满画幅显示在电视上。",
+                    fontSize = 11.sp,
+                    color = OpalPalette.TextMuted,
+                    lineHeight = 16.sp,
+                )
             }
         }
 
@@ -940,6 +1069,8 @@ fun ConsoleDisplaySettingsTab(
     status: DaemonStatus,
     remote: RemoteStreamStatus,
     extDisplay: BridgeService.ExternalDisplayInfo?,
+    detectedExtDisplays: List<BridgeService.ExternalDisplayInfo> = emptyList(),
+    onProjectSpecificDisplay: (Int, ExternalDisplayTransport, Boolean) -> Unit = { _, _, _ -> },
     onPickCustomWallpaper: () -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -949,6 +1080,8 @@ fun ConsoleDisplaySettingsTab(
     val wallpaperPreset by AppPrefs.wallpaperPresetFlow.collectAsState()
     val customWallpaperPath by AppPrefs.customWallpaperPathFlow.collectAsState()
     val mouseTarget by AppPrefs.mouseTargetFlow.collectAsState()
+    val projectionMode by AppPrefs.externalProjectionModeFlow.collectAsState()
+    val overscanPct by AppPrefs.externalOverscanPctFlow.collectAsState()
     var autoExtDisplay by remember { mutableStateOf(AppPrefs.isAutoExternalDisplayEnabled(ctx)) }
     val autoShowPhoneTrackpad by AppPrefs.autoShowPhoneTrackpadFlow.collectAsState()
     val isDark = OpalPalette.isDark
@@ -1023,11 +1156,11 @@ fun ConsoleDisplaySettingsTab(
             )
         }
 
-        ConsoleSectionTitle("外接显示器行为")
+        ConsoleSectionTitle("外接屏与无线投电视")
         MacGlassSectionCard {
             OpalSwitchRow(
                 title = "接入时自动满屏工作站",
-                subtitle = "消除镜像黑边，按外接屏原生分辨率与高刷输出",
+                subtitle = "消除镜像黑边，按外接屏 / 无线电视原生分辨率输出",
                 checked = autoExtDisplay,
                 onCheckedChange = {
                     autoExtDisplay = it
@@ -1042,6 +1175,96 @@ fun ConsoleDisplaySettingsTab(
                     AppPrefs.setAutoShowPhoneTrackpadEnabled(ctx, enabled)
                 },
             )
+
+            Spacer(Modifier.height(10.dp))
+            OpalText(text = "副屏投射模式", fontSize = 12.sp, color = OpalPalette.TextSecondary)
+            Spacer(Modifier.height(3.dp))
+            OpalText(
+                text = "自动模式下有线屏优先直投、无线电视优先标准 AOSP Presentation（规避黑屏并自动启用手机触控板）",
+                fontSize = 11.sp,
+                color = OpalPalette.TextMuted,
+                lineHeight = 15.5.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            OpalSegmentedRow(
+                options = listOf("自动 (推荐)", "强制 Presentation"),
+                selectedIndex = projectionMode.coerceIn(AppPrefs.PROJECTION_MODE_AUTO, AppPrefs.PROJECTION_MODE_PRESENTATION),
+                onSelect = { mode -> AppPrefs.setExternalProjectionMode(ctx, mode) },
+            )
+
+            Spacer(Modifier.height(12.dp))
+            OpalText(text = "电视防裁边安全边距（Overscan）", fontSize = 12.sp, color = OpalPalette.TextSecondary)
+            Spacer(Modifier.height(3.dp))
+            OpalText(
+                text = "若电视过扫描裁切了顶栏或程序坞，可实时增加纯黑安全留白",
+                fontSize = 11.sp,
+                color = OpalPalette.TextMuted,
+            )
+            Spacer(Modifier.height(6.dp))
+            val overscanOpts = listOf(0f, 2f, 3.5f, 5f)
+            val overscanIdx = overscanOpts.indexOfFirst { abs(it - overscanPct) < 0.25f }.let { if (it >= 0) it else 0 }
+            OpalSegmentedRow(
+                options = listOf("0% 关闭", "2%", "3.5%", "5%"),
+                selectedIndex = overscanIdx,
+                onSelect = { idx -> AppPrefs.setExternalOverscanPct(ctx, overscanOpts[idx]) },
+            )
+
+            Spacer(Modifier.height(12.dp))
+            OpalButton(
+                label = "打开系统无线投屏（Miracast）",
+                filled = false,
+                compact = true,
+                accent = OpalPalette.AccentBlue,
+                onClick = { WirelessDisplayHelper.openSystemWirelessCastSettings(ctx) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            if (detectedExtDisplays.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    detectedExtDisplays.forEach { d ->
+                        val tag = WirelessDisplayHelper.formatTransportLabel(d.transport)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(OpalPalette.ChipFill)
+                                .padding(horizontal = 11.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                OpalText(
+                                    text = "${d.name} ($tag)",
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                )
+                                OpalText(
+                                    text = "#${d.displayId} · ${d.width}×${d.height} @ ${d.refreshRateHz}Hz",
+                                    fontSize = 10.5.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = OpalPalette.TextMuted,
+                                    maxLines = 1,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            OpalButton(
+                                label = "投射",
+                                compact = true,
+                                enabled = status.connected,
+                                onClick = {
+                                    onProjectSpecificDisplay(
+                                        d.displayId,
+                                        d.transport,
+                                        d.isWirelessDisplay || !d.isPresentationCapable,
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         ConsoleSectionTitle("画质与自适应")
@@ -1051,8 +1274,9 @@ fun ConsoleDisplaySettingsTab(
             Spacer(Modifier.height(4.dp))
             when {
                 extDisplay != null -> {
+                    val outPrefix = if (extDisplay.isWirelessDisplay) "当前无线电视输出" else "当前物理外接输出"
                     OpalText(
-                        text = "当前物理外接输出：${extDisplay.name} · ${extDisplay.width}×${extDisplay.height} @ ${extDisplay.refreshRateHz}Hz",
+                        text = "$outPrefix：${extDisplay.name} · ${extDisplay.width}×${extDisplay.height} @ ${extDisplay.refreshRateHz}Hz",
                         fontSize = 12.sp,
                         color = OpalPalette.AccentCyan,
                     )
@@ -1161,12 +1385,12 @@ fun ConsoleDisplaySettingsTab(
             )
 
             Spacer(Modifier.height(14.dp))
-            OpalText(text = "桌面界面缩放", fontSize = 12.sp, color = OpalPalette.TextSecondary)
+            OpalText(text = "桌面界面缩放（175% / 200% 适合客厅电视远看）", fontSize = 12.sp, color = OpalPalette.TextSecondary)
             Spacer(Modifier.height(6.dp))
-            val scaleOpts = listOf(1.0f, 1.25f, 1.5f)
+            val scaleOpts = listOf(1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
             val scaleIdx = scaleOpts.indexOfFirst { abs(it - extUiScale) < 0.08f }.let { if (it >= 0) it else 1 }
             OpalSegmentedRow(
-                options = listOf("100% 精细", "125% 标准", "150% 舒适"),
+                options = listOf("100%", "125%", "150%", "175% TV", "200% TV"),
                 selectedIndex = scaleIdx,
                 onSelect = { idx ->
                     io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.setWorkingExternalUiScale(ctx, scaleOpts[idx])
@@ -1430,10 +1654,14 @@ fun ConsoleEngineSettingsTab(
             ctx = ctx,
             inputBlocked = status.connected && status.injectStatus == BridgeProtocol.InputBackend.STATUS_BLOCKED,
         )
-        ConsoleSectionTitle("跨端媒体（实验性）")
+        ConsoleSectionTitle("跨端音频与媒体")
         MacGlassSectionCard {
             val remoteMicEnabled by AppPrefs.remoteMicEnabledFlow.collectAsState()
             val remoteCameraEnabled by AppPrefs.remoteCameraEnabledFlow.collectAsState()
+            val audioRouteMode by AppPrefs.audioRouteModeFlow.collectAsState()
+            val canUseRootCamera = status.connected && status.rootEnhanced
+            val effectiveCameraEnabled = canUseRootCamera && remoteCameraEnabled
+            val splitAudioOn = audioRouteMode == BridgeProtocol.AudioRoute.SPLIT_BY_APP
             androidx.compose.runtime.LaunchedEffect(Unit) {
                 AppPrefs.hydrateFlows(ctx)
             }
@@ -1443,27 +1671,62 @@ fun ConsoleEngineSettingsTab(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    OpalText(text = "远端麦克风与摄像头", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    OpalText(text = "音频分流与远端媒体", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     OpalText(
-                        text = "默认关闭，以免影响主线投屏体验；可随时在此或 DeX 控制中心开关",
+                        text = "支持手机 / DeX 按应用独立发声，以及远端麦克风与摄像头映射",
                         fontSize = 12.sp,
                         color = OpalPalette.TextSecondary,
                     )
                 }
                 Spacer(Modifier.width(8.dp))
-                val anyEnabled = remoteMicEnabled || remoteCameraEnabled
+                val anyEnabled = splitAudioOn || remoteMicEnabled || effectiveCameraEnabled
                 OpalStatusBadge(
-                    label = if (anyEnabled) "已启用" else "默认关闭",
+                    label = when {
+                        splitAudioOn -> "应用分流中"
+                        anyEnabled -> "已启用"
+                        else -> "默认"
+                    },
                     color = if (anyEnabled) OpalPalette.AccentEmerald else OpalPalette.TextMuted,
                 )
             }
+            Spacer(Modifier.height(10.dp))
+            OpalText(text = "投屏声音分流模式", fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(3.dp))
+            OpalText(
+                text = if (splitAudioOn) {
+                    "已开启应用独立分流：手机主屏应用由手机发声，DeX 窗口内应用由投屏端发声（Android 11+ 免 Root，实时生效）"
+                } else {
+                    "默认整机声音统一传至 DeX 投屏端；切换为「应用独立分流」可实现手机与 DeX 各自发声"
+                },
+                fontSize = 11.5.sp,
+                color = OpalPalette.TextSecondary,
+                lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(7.dp))
+            OpalSegmentedRow(
+                options = listOf("整机传 DeX", "应用独立分流"),
+                selectedIndex = audioRouteMode.coerceIn(
+                    BridgeProtocol.AudioRoute.ALL_TO_DEX,
+                    BridgeProtocol.AudioRoute.SPLIT_BY_APP,
+                ),
+                onSelect = { mode ->
+                    BridgeClient.setAudioRouteModeAsync(ctx, mode) {
+                        val msg = if (mode == BridgeProtocol.AudioRoute.SPLIT_BY_APP) {
+                            "已开启应用独立音频分流：手机与 DeX 各自发声"
+                        } else {
+                            "已切换为整机声音传至 DeX 投屏端"
+                        }
+                        Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+                    }
+                },
+            )
             Spacer(Modifier.height(10.dp))
             OpalSwitchRow(
                 title = "允许远端麦克风回传",
                 subtitle = "开启后允许投屏端（平板 / Web / Mac）将麦克风实时注入主机（Android 13+ 免 Root）",
                 checked = remoteMicEnabled,
                 onCheckedChange = { enabled ->
-                    BridgeClient.setRemoteMediaConfigAsync(ctx, enabled, remoteCameraEnabled) {
+                    BridgeClient.setRemoteMediaConfigAsync(ctx, enabled, effectiveCameraEnabled) {
                         Toast.makeText(
                             ctx,
                             if (enabled) "已开启远端麦克风回传" else "已关闭远端麦克风回传",
@@ -1474,18 +1737,29 @@ fun ConsoleEngineSettingsTab(
             )
             OpalSwitchRow(
                 title = "允许 Root 摄像头映射",
-                subtitle = if (status.connected && !status.rootEnhanced) {
-                    "当前引擎未启用 Root 增强；开启后需以 Root 模式重新激活引擎才可映射摄像头"
+                subtitle = if (!canUseRootCamera) {
+                    "需 Root 权限 · 请先在「激活」中使用 Root 增强模式启动引擎后才可开启"
                 } else {
-                    "开启后允许投屏端将摄像头画面通过 Root 桥接传入主机（仅 Root 模式生效）"
+                    "Root 增强已就绪 · Android 15+ 原生注册系统虚拟摄像头（桌面应用可直接调用）；低版本输出 @opaldesk_cam_feed"
                 },
-                checked = remoteCameraEnabled,
+                checked = effectiveCameraEnabled,
                 onCheckedChange = { enabled ->
-                    BridgeClient.setRemoteMediaConfigAsync(ctx, remoteMicEnabled, enabled) {
+                    if (enabled && !canUseRootCamera) {
+                        if (remoteCameraEnabled) {
+                            AppPrefs.setRemoteCameraEnabled(ctx, false)
+                        }
+                        Toast.makeText(
+                            ctx,
+                            "未获得 Root 增强权限，无法开启摄像头映射（请先使用 Root 模式激活引擎）",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                        return@OpalSwitchRow
+                    }
+                    BridgeClient.setRemoteMediaConfigAsync(ctx, remoteMicEnabled, enabled) { ok ->
                         val msg = when {
                             !enabled -> "已关闭 Root 摄像头映射"
-                            status.connected && !status.rootEnhanced -> "已开启开关（需以 Root 增强模式重新激活引擎生效）"
-                            else -> "已开启 Root 摄像头映射"
+                            ok -> "已开启 Root 摄像头映射"
+                            else -> "未获得 Root 增强权限，无法开启摄像头映射"
                         }
                         Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
                     }
@@ -1954,7 +2228,11 @@ private fun TouchInputTroubleshootingTipCard(
             )
             Spacer(Modifier.height(2.dp))
             OpalText(
-                text = "若桌面无法点击，请在开发者选项开启「USB 调试（安全设置）」，或在「设置」切至 /dev/uhid。",
+                text = if (inputBlocked) {
+                    "当前系统已拦截跨屏触控（含 UHID 虚拟屏绑定），请在手机「开发者选项」开启「USB 调试（安全设置）」后重新连接。"
+                } else {
+                    "若桌面无法点击，请在开发者选项开启「USB 调试（安全设置）」，或在「设置」切至 /dev/uhid。"
+                },
                 fontSize = 11.5.sp,
                 color = OpalPalette.TextSecondary,
                 lineHeight = 16.sp,

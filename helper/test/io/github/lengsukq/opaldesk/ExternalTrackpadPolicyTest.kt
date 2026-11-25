@@ -4,6 +4,7 @@ import io.github.lengsukq.opaldesk.external.DirectExternalTrackpadSink
 import io.github.lengsukq.opaldesk.external.ExternalDesktopMode
 import io.github.lengsukq.opaldesk.external.ExternalDesktopSession
 import io.github.lengsukq.opaldesk.external.ExternalDisplayPolicy
+import io.github.lengsukq.opaldesk.external.ExternalDisplayTransport
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadPolicy
 import io.github.lengsukq.opaldesk.external.TrackpadTargetMode
@@ -208,5 +209,196 @@ class ExternalTrackpadPolicyTest {
         assertEquals(960f to 540f, ExternalTrackpadBridge.directCursorFlow.value)
         ExternalTrackpadBridge.unregisterDirectSink(sink)
         assertNull(ExternalTrackpadBridge.getDirectSink())
+    }
+
+    @Test
+    fun classifyExternalDisplayIdentifiesWiredWirelessTvAndOtherExternal() {
+        val pres = ExternalDisplayPolicy.FLAG_PRESENTATION
+        val privPres = pres or ExternalDisplayPolicy.FLAG_PRIVATE
+
+        // Standard wired USB-C / HDMI monitor
+        assertEquals(
+            ExternalDisplayTransport.WIRED,
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = 2,
+                isValid = true,
+                name = "Dell U2723QE",
+                flags = pres,
+                displayType = ExternalDisplayPolicy.TYPE_EXTERNAL,
+            ),
+        )
+
+        // Standard Miracast / Wi-Fi Display TV (TYPE_WIFI)
+        assertEquals(
+            ExternalDisplayTransport.WIRELESS_TV,
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = 3,
+                isValid = true,
+                name = "Sony BRAVIA",
+                flags = pres,
+                displayType = ExternalDisplayPolicy.TYPE_WIFI,
+            ),
+        )
+
+        // Miracast TYPE_WIFI even if ROM omitted FLAG_PRESENTATION
+        assertEquals(
+            ExternalDisplayTransport.WIRELESS_TV,
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = 3,
+                isValid = true,
+                name = "Wireless Display",
+                flags = 0,
+                displayType = ExternalDisplayPolicy.TYPE_WIFI,
+            ),
+        )
+
+        // OEM Wireless Cast virtual display exposing FLAG_PRESENTATION
+        assertEquals(
+            ExternalDisplayTransport.WIRELESS_TV,
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = 4,
+                isValid = true,
+                name = "MiCast",
+                flags = pres,
+                displayType = ExternalDisplayPolicy.TYPE_VIRTUAL,
+            ),
+        )
+
+        // Public MediaRouter live-video presentation route with unknown Display.getType()
+        assertEquals(
+            ExternalDisplayTransport.WIRELESS_TV,
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = 5,
+                isValid = true,
+                name = "Living Room",
+                flags = 0,
+                displayType = ExternalDisplayPolicy.TYPE_UNKNOWN,
+                isMediaRouterPresentation = true,
+            ),
+        )
+
+        // Keyword fallback when TYPE_UNKNOWN + presentation flag (word-boundary safe for "tv")
+        assertEquals(
+            ExternalDisplayTransport.WIRELESS_TV,
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = 6,
+                isValid = true,
+                name = "客厅电视",
+                flags = pres,
+                displayType = ExternalDisplayPolicy.TYPE_UNKNOWN,
+            ),
+        )
+        assertEquals(
+            ExternalDisplayTransport.WIRED,
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = 7,
+                isValid = true,
+                name = "Creative Monitor",
+                flags = pres,
+                displayType = ExternalDisplayPolicy.TYPE_UNKNOWN,
+            ),
+        )
+
+        // Generic virtual display without FLAG_PRESENTATION (e.g. screen recorder) must be ignored
+        assertNull(
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = 8,
+                isValid = true,
+                name = "ScreenRecorder",
+                flags = 0,
+                displayType = ExternalDisplayPolicy.TYPE_VIRTUAL,
+            ),
+        )
+
+        // Active OpalCast remote desktop display and internal displays must be ignored
+        assertNull(
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = 9,
+                isValid = true,
+                name = "RemoteScreen",
+                flags = pres,
+                displayType = ExternalDisplayPolicy.TYPE_VIRTUAL,
+                activeRemoteDesktopDisplayId = 9,
+            ),
+        )
+        assertNull(
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = 10,
+                isValid = true,
+                name = "OpalWin-1",
+                flags = pres,
+                displayType = ExternalDisplayPolicy.TYPE_VIRTUAL,
+            ),
+        )
+        assertNull(
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = 11,
+                isValid = true,
+                name = "Private TV",
+                flags = privPres,
+                displayType = ExternalDisplayPolicy.TYPE_WIFI,
+            ),
+        )
+
+        // External non-virtual display lacking FLAG_PRESENTATION is surfaced only as manual OTHER_EXTERNAL
+        val manualOnly = ExternalDisplayPolicy.classifyExternalDisplay(
+            displayId = 12,
+            isValid = true,
+            name = "HDMI-2",
+            flags = 0,
+            displayType = ExternalDisplayPolicy.TYPE_EXTERNAL,
+        )
+        assertEquals(ExternalDisplayTransport.OTHER_EXTERNAL, manualOnly)
+        assertFalse(ExternalDisplayPolicy.isAutoProjectable(manualOnly))
+        assertTrue(ExternalDisplayPolicy.isAutoProjectable(ExternalDisplayTransport.WIRED))
+        assertTrue(ExternalDisplayPolicy.isAutoProjectable(ExternalDisplayTransport.WIRELESS_TV))
+    }
+
+    @Test
+    fun presentationPreferenceAndTvModesAndOverscanMathWorkCorrectly() {
+        assertFalse(
+            ExternalDisplayPolicy.shouldPreferPresentationMode(
+                ExternalDisplayTransport.WIRED,
+                ExternalDisplayPolicy.PROJECTION_MODE_AUTO,
+            ),
+        )
+        assertTrue(
+            ExternalDisplayPolicy.shouldPreferPresentationMode(
+                ExternalDisplayTransport.WIRED,
+                ExternalDisplayPolicy.PROJECTION_MODE_PRESENTATION,
+            ),
+        )
+        assertTrue(
+            ExternalDisplayPolicy.shouldPreferPresentationMode(
+                ExternalDisplayTransport.WIRELESS_TV,
+                ExternalDisplayPolicy.PROJECTION_MODE_AUTO,
+            ),
+        )
+
+        // 24/25/30Hz 4K/1080p TVs are supported alongside 60-120Hz monitors
+        assertTrue(ExternalDisplayPolicy.isSupportedExternalMode(3840, 2160, 30f))
+        assertTrue(ExternalDisplayPolicy.isSupportedExternalMode(1920, 1080, 24f))
+        assertTrue(ExternalDisplayPolicy.isSupportedExternalMode(1920, 1080, 60f))
+        assertFalse(ExternalDisplayPolicy.isSupportedExternalMode(800, 600, 60f))
+        assertFalse(ExternalDisplayPolicy.isSupportedExternalMode(1920, 1080, 15f))
+
+        // TV overscan inset clamping
+        assertEquals(0 to 0, ExternalDisplayPolicy.computeOverscanInsetsPx(1920, 1080, 0f))
+        assertEquals(67 to 38, ExternalDisplayPolicy.computeOverscanInsetsPx(1920, 1080, 3.5f))
+        assertEquals(96 to 54, ExternalDisplayPolicy.computeOverscanInsetsPx(1920, 1080, 5f))
+        assertEquals(115 to 65, ExternalDisplayPolicy.computeOverscanInsetsPx(1920, 1080, 20f))
+        assertEquals(0 to 0, ExternalDisplayPolicy.computeOverscanInsetsPx(640, 360, 5f))
+
+        // Wireless session summary uses friendly default and 24Hz floor
+        val tvSession = ExternalDesktopSession(
+            mode = ExternalDesktopMode.PRESENTATION,
+            displayId = 4,
+            displayName = "",
+            widthPx = 1920,
+            heightPx = 1080,
+            refreshRateHz = 24,
+            isWirelessDisplay = true,
+        )
+        assertEquals("无线电视 · 1920×1080 @ 24Hz", tvSession.summary)
     }
 }

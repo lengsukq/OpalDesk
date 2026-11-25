@@ -83,6 +83,7 @@ test('OpalCast Root camera protocol config/state/frame roundtrip', () => {
     fps: 15,
     backend: '',
     message: '摄像头映射需要 Root 权限',
+    facing: 'back',
   }));
   const decStFrame = decodeFrame(encodeFrame(TYPE_CAMERA_STATE, 0, 2001n, stJson));
   assert.deepEqual(decodeCameraState(decStFrame.payload), {
@@ -94,5 +95,6 @@ test('OpalCast Root camera protocol config/state/frame roundtrip', () => {
     fps: 15,
     backend: '',
     message: '摄像头映射需要 Root 权限',
+    facing: 'back',
   });
 });

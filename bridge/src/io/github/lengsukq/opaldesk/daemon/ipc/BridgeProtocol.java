@@ -73,7 +73,14 @@ public final class BridgeProtocol {
     public static final int TX_SYNC_APP_WINDOW_BOUNDS = 41;
     public static final int TX_GET_ADVANCED_CONFIG_STATE = 42;
     public static final int TX_SET_REMOTE_MEDIA_CONFIG = 43;
+    public static final int TX_SET_AUDIO_ROUTE_MODE = 44;
     public static final int TX_SHUTDOWN = 99;
+
+    // ---- Downlink Audio Routing Modes (OpalCast DeX) ----
+    /** Legacy/default: capture all system playback audio (REMOTE_SUBMIX) to DeX receiver. */
+    public static final int AUDIO_ROUTE_ALL_TO_DEX = 0;
+    /** Per-app split: phone Display 0 apps play on phone; DeX apps route exclusively to DeX receiver. */
+    public static final int AUDIO_ROUTE_SPLIT_BY_APP = 1;
 
     // ---- Interactive Pairing Approval Decisions (TX_RESPOND_PAIRING) ----
     public static final int PAIRING_DECISION_REJECT = 0;

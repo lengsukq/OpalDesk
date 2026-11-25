@@ -191,6 +191,7 @@ class OpalCastWebApp {
     this.blackoutActive = false;
     this.remoteCodecId = 1;
     this.injectStatus = 0;
+    this.inputBlockedWarned = false;
 
     this.toastTimer = null;
     this.toastActionFn = null;
@@ -1210,6 +1211,12 @@ class OpalCastWebApp {
           if (typeof st.injectStatus === 'number') {
             this.injectStatus = st.injectStatus;
             this.updateTelemetry();
+            if (st.injectStatus === -1 && !this.inputBlockedWarned) {
+              this.inputBlockedWarned = true;
+              this.showToast('手机端拦截了跨屏操控：小米/HyperOS 请在手机「开发者选项」开启「USB 调试（安全设置）」后重连');
+            } else if (st.injectStatus > 0) {
+              this.inputBlockedWarned = false;
+            }
           }
         } catch {
           // Ignore malformed telemetry
@@ -1252,6 +1259,9 @@ class OpalCastWebApp {
             this.cameraEnabled = false;
           } else {
             this.cameraEnabled = true;
+            if ((st.facing === 'front' || st.facing === 'back') && this.camera.facing !== st.facing) {
+              this.camera.start(st.facing).catch(() => {});
+            }
           }
           this.syncCameraUi();
           if (st.message) this.showToast(st.message);
@@ -1536,6 +1546,7 @@ class OpalCastWebApp {
     this.syncCameraUi();
     this.blackoutActive = false;
     this.injectStatus = 0;
+    this.inputBlockedWarned = false;
     this.syncBlackoutUi();
     this.teardownCastSocket();
     this.input.setEnabled(false);
@@ -1594,6 +1605,7 @@ class OpalCastWebApp {
     if (this.lastRttMs > 0) parts.push(`${this.lastRttMs}ms`);
     parts.push(this.remoteCodecId === VIDEO_CODEC_HEVC ? 'HEVC' : 'H.264');
     if (this.injectStatus === 2) parts.push('UHID');
+    else if (this.injectStatus === -1) parts.push('触控受限');
     $('stageTelemetry').textContent = parts.join(' · ');
   }
 

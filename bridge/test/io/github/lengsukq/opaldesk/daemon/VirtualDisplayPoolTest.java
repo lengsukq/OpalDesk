@@ -25,12 +25,18 @@ public class VirtualDisplayPoolTest {
     private static final class FakeDisplayDriver implements VirtualDisplayPool.DisplayDriver {
         final AtomicInteger nextDisplayId = new AtomicInteger(100);
         final List<Integer> releasedDisplayIds = new ArrayList<>();
+        final List<String> surfaceEvents = new ArrayList<>();
         int hardOemLimit = Integer.MAX_VALUE;
         int activeCreated = 0;
+        boolean failNextCreate = false;
 
         @Override
         public CreatedDisplay createVirtualDisplay(
                 String name, int width, int height, int dpi, float fps, Object surface, boolean allowSecure) {
+            if (failNextCreate) {
+                failNextCreate = false;
+                return null;
+            }
             if (activeCreated >= hardOemLimit) {
                 return null;
             }
@@ -43,7 +49,9 @@ public class VirtualDisplayPoolTest {
         public void resizeVirtualDisplay(Object handle, int width, int height, int dpi) {}
 
         @Override
-        public void setVirtualDisplaySurface(Object handle, Object surface) {}
+        public void setVirtualDisplaySurface(Object handle, Object surface) {
+            surfaceEvents.add(handle + ":" + (surface == null ? "null" : surface.toString()));
+        }
 
         @Override
         public void releaseVirtualDisplay(Object handle, int displayId) {
@@ -137,5 +145,39 @@ public class VirtualDisplayPoolTest {
         assertEquals(2, pool.getEffectiveMaxDisplays());
         assertEquals(2, pool.getActiveCount());
         assertTrue(evictedIds.contains(1));
+    }
+
+    @Test
+    public void testRecreateLeaseReplacesDisplayAndRollsBackCleanlyOnFailure() {
+        FakeDisplayDriver driver = new FakeDisplayDriver();
+        VirtualDisplayPool pool = new VirtualDisplayPool(driver, 4, false);
+
+        WindowSession w1 = makeSession(1, 701, 100L, BridgeProtocol.STATE_LIVE, true);
+        List<WindowSession> all = Arrays.asList(w1);
+
+        VirtualDisplayPool.Lease initial = pool.acquireOrBind(w1, "surf-1", 800, 600, 200, 60f, all, null);
+        assertNotNull(initial);
+        assertEquals(100, initial.displayId);
+
+        // Failure case: detach old surface, fail to create replacement, roll back by reattaching old surface
+        driver.surfaceEvents.clear();
+        driver.failNextCreate = true;
+        assertNull(pool.recreateLease(w1, "surf-1", 800, 600, 200, 60f));
+        assertEquals(100, pool.getLease(1).displayId);
+        assertEquals(Arrays.asList("vd-100:null", "vd-100:surf-1"), driver.surfaceEvents);
+        assertTrue(driver.releasedDisplayIds.isEmpty());
+
+        // Success case: detach old surface, create new display, update active lease, keep old display alive until caller releases
+        driver.surfaceEvents.clear();
+        VirtualDisplayPool.RebindResult rebind = pool.recreateLease(w1, "surf-1", 800, 600, 200, 60f);
+        assertNotNull(rebind);
+        assertEquals(100, rebind.oldLease.displayId);
+        assertEquals(101, rebind.newLease.displayId);
+        assertEquals(101, pool.getLease(1).displayId);
+        assertEquals(Arrays.asList("vd-100:null"), driver.surfaceEvents);
+        assertTrue("Old display should remain alive until task migration finishes", driver.releasedDisplayIds.isEmpty());
+
+        pool.finishReleaseOldLease(rebind.oldLease);
+        assertEquals(Arrays.asList(100), driver.releasedDisplayIds);
     }
 }

@@ -105,6 +105,8 @@ fun DexTrackpadScreen(
     badgePrefix: String = "独立满屏",
     allowSwitchToLocalDesktop: Boolean = true,
     exitButtonLabel: String = "退出投射",
+    showOverscanControl: Boolean = false,
+    isWirelessDisplay: Boolean = false,
     onMoveCursor: (Float, Float) -> Unit,
     onSetPrimaryButton: (Boolean) -> Unit,
     onTapPrimary: () -> Unit,
@@ -119,6 +121,7 @@ fun DexTrackpadScreen(
     val ctx = LocalContext.current
     val status by BridgeClient.statusFlow.collectAsState()
     val uiScale by AppPrefs.externalUiScaleFlow.collectAsState()
+    val overscanPct by AppPrefs.externalOverscanPctFlow.collectAsState()
     val sensitivity by AppPrefs.trackpadSensitivityFlow.collectAsState()
     val wallpaperPreset by AppPrefs.wallpaperPresetFlow.collectAsState()
     val mouseTarget by AppPrefs.mouseTargetFlow.collectAsState()
@@ -140,7 +143,19 @@ fun DexTrackpadScreen(
         }
     }
 
-    val scaleOptions = listOf(1.0f to "100%", 1.25f to "125%", 1.5f to "150%")
+    val scaleOptions = listOf(
+        1.0f to "100%",
+        1.25f to "125%",
+        1.5f to "150%",
+        1.75f to "175%",
+        2.0f to "200%",
+    )
+    val overscanOptions = listOf(
+        0f to "0%",
+        2f to "2%",
+        3.5f to "3.5%",
+        5f to "5%",
+    )
 
     if (oledDimMode) {
         Box(
@@ -256,6 +271,16 @@ fun DexTrackpadScreen(
                         AppPrefs.setExternalUiScale(ctx, next)
                     },
                 )
+                if (showOverscanControl) {
+                    InlineOptionStrip(
+                        title = if (isWirelessDisplay) "电视边距" else "边距",
+                        options = overscanOptions,
+                        selectedValue = overscanPct,
+                        onSelect = { next ->
+                            AppPrefs.setExternalOverscanPct(ctx, next)
+                        },
+                    )
+                }
                 val mouseOnExternal = mouseTarget == AppPrefs.MOUSE_TARGET_EXTERNAL
                 val mousePillShape = RoundedCornerShape(14.dp)
                 Row(

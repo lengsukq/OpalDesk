@@ -1,12 +1,15 @@
 package io.github.lengsukq.opaldesk.external
 
 import android.app.Presentation
+import android.graphics.Color as AndroidColor
 import android.os.Bundle
 import android.view.Display
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.Surface
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -70,6 +73,7 @@ import io.github.lengsukq.opaldesk.ui.rememberNativeImeHostController
 class ExternalMonitorPresentation(
     hostActivity: ComponentActivity,
     private val targetDisplay: Display,
+    private val displayLabelOverride: String? = null,
     private val onPickCustomWallpaper: () -> Unit,
     private val onOpenConsole: () -> Unit,
     private val onExitDesktop: () -> Unit,
@@ -78,8 +82,8 @@ class ExternalMonitorPresentation(
     private val logicalBoundsPx: Pair<Int, Int> = resolveLogicalDisplaySizePx(targetDisplay)
     val displayWidthPx: Int = logicalBoundsPx.first
     val displayHeightPx: Int = logicalBoundsPx.second
-    val refreshRateHz: Int = resolvePeakRefreshRateMode(targetDisplay)?.refreshRate?.toInt()
-        ?: (targetDisplay.mode?.refreshRate ?: 60f).toInt()
+    val refreshRateHz: Int = (resolvePeakRefreshRateMode(targetDisplay)?.refreshRate?.toInt()
+        ?: (targetDisplay.mode?.refreshRate ?: 60f).toInt()).coerceAtLeast(24)
 
     private val ownLifecycle = PresentationLifecycleOwner()
     private var composeView: ComposeView? = null
@@ -96,7 +100,12 @@ class ExternalMonitorPresentation(
     val cursorPosState get() = pointerDispatcher.cursorPosState
 
     val monitorSummary: String
-        get() = "${targetDisplay.name ?: "外接屏"} · ${displayWidthPx}×${displayHeightPx} @ ${refreshRateHz}Hz"
+        get() {
+            val label = displayLabelOverride?.takeIf { it.isNotBlank() }
+                ?: targetDisplay.name?.takeIf { it.isNotBlank() }
+                ?: "外接屏"
+            return "$label · ${displayWidthPx}×${displayHeightPx} @ ${refreshRateHz}Hz"
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -124,19 +133,42 @@ class ExternalMonitorPresentation(
             decor.setViewTreeSavedStateRegistryOwner(ownLifecycle)
         }
 
+        val initialOverscan = AppPrefs.getExternalOverscanPct(context)
+        val (initInsetH, initInsetV) = ExternalDisplayPolicy.computeOverscanInsetsPx(
+            widthPx = displayWidthPx,
+            heightPx = displayHeightPx,
+            overscanPct = initialOverscan,
+        )
         val view = ComposeView(context).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            layoutParams = ViewGroup.LayoutParams(
+            layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
-            )
+                Gravity.CENTER,
+            ).apply {
+                setMargins(initInsetH, initInsetV, initInsetH, initInsetV)
+            }
             setContent {
                 OpalTheme {
                     val uiScale by AppPrefs.externalUiScaleFlow.collectAsState()
+                    val overscanPct by AppPrefs.externalOverscanPctFlow.collectAsState()
                     val scene by BridgeClient.sceneFlow.collectAsState()
                     val imeRequest by BridgeClient.imeBridgeRequestFlow.collectAsState()
                     val controller = rememberNativeImeHostController()
                     imeController = controller
+                    LaunchedEffect(overscanPct, displayWidthPx, displayHeightPx) {
+                        val targetView = composeView ?: return@LaunchedEffect
+                        val lp = targetView.layoutParams as? FrameLayout.LayoutParams ?: return@LaunchedEffect
+                        val (hPx, vPx) = ExternalDisplayPolicy.computeOverscanInsetsPx(
+                            widthPx = displayWidthPx,
+                            heightPx = displayHeightPx,
+                            overscanPct = overscanPct,
+                        )
+                        if (lp.leftMargin != hPx || lp.topMargin != vPx || lp.rightMargin != hPx || lp.bottomMargin != vPx) {
+                            lp.setMargins(hPx, vPx, hPx, vPx)
+                            targetView.layoutParams = lp
+                        }
+                    }
                     var lastHandledImeSeq by remember {
                         mutableLongStateOf(BridgeClient.imeBridgeRequestFlow.value?.seq ?: 0L)
                     }
@@ -228,6 +260,7 @@ class ExternalMonitorPresentation(
         val rootContainer = HardwareMouseDetectingFrameLayout(context) {
             pointerDispatcher.hideCursor()
         }.apply {
+            setBackgroundColor(AndroidColor.BLACK)
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,

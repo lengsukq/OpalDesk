@@ -65,7 +65,13 @@ object BridgeProtocol {
         const val SYNC_APP_WINDOW_BOUNDS = 41
         const val GET_ADVANCED_CONFIG_STATE = 42
         const val SET_REMOTE_MEDIA_CONFIG = 43
+        const val SET_AUDIO_ROUTE_MODE = 44
         const val SHUTDOWN = 99
+    }
+
+    object AudioRoute {
+        const val ALL_TO_DEX = 0
+        const val SPLIT_BY_APP = 1
     }
 
     object PairingDecision {

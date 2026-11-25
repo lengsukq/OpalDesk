@@ -1,9 +1,12 @@
 package io.github.lengsukq.opaldesk.daemon;
 
+import io.github.lengsukq.opaldesk.daemon.audio.AudioRoutingPolicy;
 import io.github.lengsukq.opaldesk.daemon.audio.RemoteMicInjector;
+import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.sink.DisplaySink;
 import io.github.lengsukq.opaldesk.daemon.stream.OpalCastProtocol;
 import io.github.lengsukq.opaldesk.daemon.video.RootCameraBridge;
+import io.github.lengsukq.opaldesk.daemon.video.VirtualCameraPolicy;
 import io.github.lengsukq.opaldesk.daemon.stream.FileTransferPathGuard;
 
 import org.junit.Rule;
@@ -608,6 +611,13 @@ public class OpalCastProtocolTest {
         assertEquals(48_000, RemoteMicInjector.clampSampleRate(96_000));
         assertEquals(1, RemoteMicInjector.clampChannels(0));
         assertEquals(2, RemoteMicInjector.clampChannels(6));
+        assertEquals(4096, RemoteMicInjector.computeTrackBufferBytes(16_000, 1, 1024));
+        assertEquals(8192, RemoteMicInjector.computeTrackBufferBytes(48_000, 2, 4096));
+        assertEquals(7680, RemoteMicInjector.computeTrackBufferBytes(48_000, 2, 0));
+        assertEquals("", RemoteMicInjector.formatMixAddressTag(null));
+        assertEquals("", RemoteMicInjector.formatMixAddressTag("  "));
+        assertEquals("addr=123:ap:1mixr:0", RemoteMicInjector.formatMixAddressTag("123:ap:1mixr:0"));
+        assertEquals("addr=123:ap:1mixr:0", RemoteMicInjector.formatMixAddressTag("addr=123:ap:1mixr:0"));
     }
 
     @Test
@@ -629,7 +639,7 @@ public class OpalCastProtocolTest {
         assertEquals("front", cfgDec.facing);
 
         OpalCastProtocol.CameraStateMsg st = new OpalCastProtocol.CameraStateMsg(
-                false, false, true, 640, 480, 15, "", "摄像头映射需要 Root 权限");
+                false, false, true, 640, 480, 15, "", "摄像头映射需要 Root 权限", "back");
         OpalCastProtocol.Frame sf = roundTrip(
                 OpalCastProtocol.TYPE_CAMERA_STATE, 0, 601L, OpalCastProtocol.encodeCameraState(st));
         OpalCastProtocol.CameraStateMsg stDec = OpalCastProtocol.decodeCameraState(sf.payload);
@@ -637,6 +647,7 @@ public class OpalCastProtocolTest {
         assertFalse(stDec.supported);
         assertTrue(stDec.rootRequired);
         assertEquals("摄像头映射需要 Root 权限", stDec.message);
+        assertEquals("back", stDec.facing);
 
         byte[] fakeJpeg = new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0x00, 0x10};
         assertTrue(OpalCastProtocol.isValidJpegHeader(fakeJpeg));
@@ -652,6 +663,31 @@ public class OpalCastProtocolTest {
         assertTrue(denied.rootRequired);
         assertTrue(denied.message.contains("Root"));
         assertTrue(RootCameraBridge.buildMetaJson(true, 640, 480, 15, "front", 7L).contains("@opaldesk_cam_feed"));
+
+        // Verify AOSP VirtualCamera pure-Java helpers
+        assertFalse(VirtualCameraPolicy.isSupportedSdkInt(34));
+        assertTrue(VirtualCameraPolicy.isSupportedSdkInt(35));
+        String cdmList = "Max ID: 4\nAssociation ID | Package Name | Mac Address\n"
+                + "2 | com.other.app | 11:22:33:44:55:66\n"
+                + "4 | com.android.shell | 02:4f:50:41:4c:01\n";
+        assertEquals(4, VirtualCameraPolicy.parseAssociationId(cdmList, "com.android.shell", "02:4f:50:41:4c:01"));
+        assertEquals(-1, VirtualCameraPolicy.parseAssociationId("", "com.android.shell", "02:4f:50:41:4c:01"));
+        assertArrayEquals(new int[]{0, 0, 640, 480}, VirtualCameraPolicy.computeCenterCropSrcRect(640, 480, 640, 480));
+        assertArrayEquals(new int[]{160, 0, 1120, 720}, VirtualCameraPolicy.computeCenterCropSrcRect(1280, 720, 640, 480));
+        assertArrayEquals(new int[]{0, 60, 640, 420}, VirtualCameraPolicy.computeCenterCropSrcRect(640, 480, 1280, 720));
+        assertEquals(270, VirtualCameraPolicy.computePreRotationCwDegrees(VirtualCameraPolicy.BACK_SENSOR_ORIENTATION));
+        assertEquals(90, VirtualCameraPolicy.computePreRotationCwDegrees(VirtualCameraPolicy.FRONT_SENSOR_ORIENTATION));
+        assertEquals(0, VirtualCameraPolicy.computePreRotationCwDegrees(0));
+        assertArrayEquals(new int[]{140, 0, 500, 480},
+                VirtualCameraPolicy.computeRotatedCenterCropSrcRect(640, 480, 640, 480, 270));
+        assertArrayEquals(new int[]{0, 0, 480, 640},
+                VirtualCameraPolicy.computeRotatedCenterCropSrcRect(480, 640, 640, 480, 90));
+        assertEquals("back", VirtualCameraPolicy.normalizeFacing("environment"));
+        assertEquals("front", VirtualCameraPolicy.normalizeFacing("user"));
+        assertEquals(30, VirtualCameraPolicy.resolveVirtualCameraStreamFps(15));
+        assertEquals(30, VirtualCameraPolicy.resolveVirtualCameraStreamFps(0));
+        assertEquals(30, VirtualCameraPolicy.resolveVirtualCameraStreamFps(30));
+        assertEquals(60, VirtualCameraPolicy.resolveVirtualCameraStreamFps(120));
     }
 
     @Test
@@ -671,10 +707,71 @@ public class OpalCastProtocolTest {
         assertTrue(reloaded.isRemoteMicEnabled());
         assertFalse(reloaded.isRemoteCameraEnabled());
 
-        reloaded.setRemoteMediaConfig(false, true);
-        DaemonConfig reloaded2 = new DaemonConfig(conf, prof);
-        reloaded2.loadAll();
-        assertFalse(reloaded2.isRemoteMicEnabled());
-        assertTrue(reloaded2.isRemoteCameraEnabled());
+        // Non-root daemon must fail closed and reject enabling remote camera mapping
+        assertFalse(reloaded.setRemoteMediaConfig(false, true));
+        assertFalse(reloaded.isRemoteCameraEnabled());
+        DaemonConfig reloadedNonRoot = new DaemonConfig(conf, prof);
+        reloadedNonRoot.loadAll();
+        assertFalse(reloadedNonRoot.isRemoteMicEnabled());
+        assertFalse(reloadedNonRoot.isRemoteCameraEnabled());
+
+        // Once Root-enhanced, remote camera mapping can be enabled and persisted
+        reloaded.markRootEnhanced(true, true);
+        assertTrue(reloaded.setRemoteMediaConfig(false, true));
+        assertTrue(reloaded.isRemoteCameraEnabled());
+
+        DaemonConfig reloadedWithRoot = new DaemonConfig(conf, prof);
+        reloadedWithRoot.loadAll();
+        // Before Root is confirmed on the new instance, camera remains fail-closed
+        assertFalse(reloadedWithRoot.isRemoteCameraEnabled());
+        reloadedWithRoot.markRootEnhanced(true, true);
+        assertTrue(reloadedWithRoot.isRemoteCameraEnabled());
+
+        // Switching back to non-root immediately disables remote camera mapping
+        reloadedWithRoot.markRootEnhanced(false, true);
+        assertFalse(reloadedWithRoot.isRemoteCameraEnabled());
+    }
+
+    @Test
+    public void testAudioRoutingPolicyAndDaemonConfigPersistence() throws Exception {
+        assertEquals(
+                Collections.singletonList(AudioRoutingPolicy.PLACEHOLDER_EMPTY_UID),
+                AudioRoutingPolicy.normalizeTargetUids(null));
+        assertEquals(
+                Collections.singletonList(AudioRoutingPolicy.PLACEHOLDER_EMPTY_UID),
+                AudioRoutingPolicy.normalizeTargetUids(Collections.emptyList()));
+        assertEquals(
+                Collections.singletonList(AudioRoutingPolicy.PLACEHOLDER_EMPTY_UID),
+                AudioRoutingPolicy.normalizeTargetUids(Arrays.asList(0, 1000, 2000, 9999)));
+        assertEquals(
+                Arrays.asList(10200, 10350),
+                AudioRoutingPolicy.normalizeTargetUids(Arrays.asList(10350, 2000, 10200, 10350, -1, null)));
+        assertTrue(AudioRoutingPolicy.uidListsEqual(Arrays.asList(10200, 10350), Arrays.asList(10200, 10350)));
+        assertFalse(AudioRoutingPolicy.uidListsEqual(Arrays.asList(10200), Arrays.asList(10200, 10350)));
+
+        File conf = new File(tmpDir.getRoot(), "opaldesk_audio_v2.conf");
+        File prof = new File(tmpDir.getRoot(), "opaldesk_audio_profiles.conf");
+        DaemonConfig fresh = new DaemonConfig(conf, prof);
+        assertEquals(BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX, fresh.getAudioRouteMode());
+
+        fresh.setAudioRouteMode(BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP);
+        assertEquals(BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP, fresh.getAudioRouteMode());
+
+        DaemonConfig reloaded = new DaemonConfig(conf, prof);
+        reloaded.loadAll();
+        assertEquals(BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP, reloaded.getAudioRouteMode());
+
+        // Unknown values normalize safely to ALL_TO_DEX
+        reloaded.setAudioRouteMode(99);
+        assertEquals(BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX, reloaded.getAudioRouteMode());
+
+        // Legacy 11-field config file without audioRouteMode defaults to ALL_TO_DEX
+        File legacyConf = new File(tmpDir.getRoot(), "legacy_11_fields.conf");
+        java.nio.file.Files.write(
+                legacyConf.toPath(),
+                "0,6,1920,1200,240,0,100,1,0,0,0\n".getBytes(StandardCharsets.UTF_8));
+        DaemonConfig legacy = new DaemonConfig(legacyConf, prof);
+        legacy.loadAll();
+        assertEquals(BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX, legacy.getAudioRouteMode());
     }
 }

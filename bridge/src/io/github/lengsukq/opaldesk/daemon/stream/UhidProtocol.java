@@ -432,6 +432,29 @@ public final class UhidProtocol {
         return mods;
     }
 
+    /**
+     * Secondary VirtualDisplays ({@code displayId > 0} with a non-empty {@code vdUniqueId}) must
+     * successfully bind their UHID physical port to {@code vdUniqueId}; otherwise Android's
+     * {@code InputReader} routes virtual pointer clicks blindly to Display 0 instead of the
+     * target VirtualDisplay.
+     */
+    public static boolean isDisplayAssociationRequired(int displayId, String vdUniqueId) {
+        return displayId > 0 && vdUniqueId != null && !vdUniqueId.isEmpty();
+    }
+
+    public static String unwrapThrowableMessage(Throwable t) {
+        if (t == null) return "unknown";
+        Throwable cur = t;
+        int depth = 0;
+        while (cur instanceof java.lang.reflect.InvocationTargetException && cur.getCause() != null && depth++ < 4) {
+            cur = cur.getCause();
+        }
+        String msg = cur.getMessage();
+        return (msg != null && !msg.isEmpty())
+                ? (cur.getClass().getSimpleName() + ": " + msg)
+                : cur.getClass().getSimpleName();
+    }
+
     private static void writeCString(byte[] dst, int offset, int maxBytes, String text) {
         if (text == null || text.isEmpty() || maxBytes <= 1) return;
         byte[] utf8 = text.getBytes(StandardCharsets.UTF_8);

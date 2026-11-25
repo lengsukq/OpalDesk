@@ -30,11 +30,18 @@ import java.util.Set;
 public final class AndroidDisplayDriver
         implements VirtualDisplayPool.DisplayDriver, CompositorEngine.AppRuntimeBridge {
 
+    /** Optional provider (e.g. AOSP VirtualDeviceManager VirtualCamera host) for VirtualDisplay creation. */
+    public interface VirtualDisplayProvider {
+        VirtualDisplay createVirtualDisplay(
+                String name, int width, int height, int dpi, int flags, float refreshRate, Surface surface);
+    }
+
     private final AndroidServices services;
     private final TaskApiAdapter taskApi;
     private final VirtualDisplayStatusBarInset statusBarInset;
     private volatile PerDisplayInputRouter inputRouter;
     private volatile Runnable allSurfacesDetachedListener;
+    private volatile VirtualDisplayProvider customVirtualDisplayProvider;
 
     public AndroidDisplayDriver(AndroidServices services, TaskApiAdapter taskApi) {
         this.services = services;
@@ -48,6 +55,10 @@ public final class AndroidDisplayDriver
 
     public void setAllSurfacesDetachedListener(Runnable listener) {
         this.allSurfacesDetachedListener = listener;
+    }
+
+    public void setCustomVirtualDisplayProvider(VirtualDisplayProvider provider) {
+        this.customVirtualDisplayProvider = provider;
     }
 
     public void shutdown() {
@@ -99,8 +110,23 @@ public final class AndroidDisplayDriver
 
         float vdRefreshRate = (fps > 60.5f) ? fps : 0f;
         int[] chosenFlags = new int[1];
-        VirtualDisplay vd = VirtualDisplayFactory.createWithFlagFallback(
-                services.displayManager, name, width, height, dpi, candidates, vdRefreshRate, surface, chosenFlags);
+        VirtualDisplay vd = null;
+        VirtualDisplayProvider customProvider = this.customVirtualDisplayProvider;
+        if (customProvider != null) {
+            for (int candFlags : candidates) {
+                VirtualDisplay customVd = customProvider.createVirtualDisplay(
+                        name, width, height, dpi, candFlags, vdRefreshRate, surface);
+                if (customVd != null && customVd.getDisplay() != null) {
+                    vd = customVd;
+                    chosenFlags[0] = candFlags;
+                    break;
+                }
+            }
+        }
+        if (vd == null) {
+            vd = VirtualDisplayFactory.createWithFlagFallback(
+                    services.displayManager, name, width, height, dpi, candidates, vdRefreshRate, surface, chosenFlags);
+        }
         if (vd == null || vd.getDisplay() == null) {
             System.err.println("OPALDESK_VD_CREATE_FAIL name=" + name
                     + " size=" + width + "x" + height + "@" + dpi + "dpi allowSecure=" + allowSecure);

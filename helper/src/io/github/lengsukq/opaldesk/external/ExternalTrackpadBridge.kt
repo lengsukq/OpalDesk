@@ -4,8 +4,10 @@ import io.github.lengsukq.opaldesk.protocol.RemoteStreamStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * Active hosting mode of [io.github.lengsukq.opaldesk.ExternalDesktopActivity].
@@ -14,6 +16,15 @@ enum class ExternalDesktopMode {
     NONE,
     PRESENTATION,
     DIRECT_EXTENDED,
+}
+
+/**
+ * Physical/wireless transport classification of an external display detected by Android DisplayManager.
+ */
+enum class ExternalDisplayTransport {
+    WIRED,
+    WIRELESS_TV,
+    OTHER_EXTERNAL,
 }
 
 /**
@@ -37,6 +48,7 @@ data class ExternalDesktopSession(
     val heightPx: Int = 0,
     val refreshRateHz: Int = 60,
     val isRemoteCastDisplay: Boolean = false,
+    val isWirelessDisplay: Boolean = false,
 ) {
     val isActive: Boolean
         get() = mode != ExternalDesktopMode.NONE && displayId > 0
@@ -56,8 +68,8 @@ data class ExternalDesktopSession(
     val summary: String
         get() {
             if (!isActive || widthPx <= 0 || heightPx <= 0) return ""
-            val label = displayName.ifBlank { "外接屏" }
-            val hz = refreshRateHz.coerceAtLeast(30)
+            val label = displayName.ifBlank { if (isWirelessDisplay) "无线电视" else "外接屏" }
+            val hz = refreshRateHz.coerceAtLeast(24)
             return "$label · ${widthPx}×${heightPx} @ ${hz}Hz"
         }
 }
@@ -74,9 +86,123 @@ object ExternalDisplayPolicy {
     const val FLAG_PRESENTATION = 1 shl 3
     const val STATE_OFF = 1
 
+    // Standard AOSP android.view.Display.TYPE_* integer values
+    const val TYPE_UNKNOWN = 0
+    const val TYPE_INTERNAL = 1
+    const val TYPE_EXTERNAL = 2
+    const val TYPE_WIFI = 3
+    const val TYPE_OVERLAY = 4
+    const val TYPE_VIRTUAL = 5
+
+    // External projection launch strategy
+    const val PROJECTION_MODE_AUTO = 0
+    const val PROJECTION_MODE_PRESENTATION = 1
+
+    // Supports 24/25/30Hz 4K Miracast/HDMI TVs as well as 60-120Hz monitors
+    const val MIN_EXTERNAL_MODE_FPS = 23.5f
+    const val MIN_OVERSCAN_PCT = 0f
+    const val MAX_OVERSCAN_PCT = 6f
+
+    private val WIRELESS_DISPLAY_KEYWORDS = listOf(
+        "wifi", "wi-fi", "wfd", "miracast", "wireless", "smartview", "smart view",
+        "cast", "screen share", "screenshare", "chromecast", "airplay", "dlna", "lebo",
+        "bravia", "webos", "tizen", "tv", "电视", "客厅", "卧室", "投影", "无线",
+    )
+
     fun isInternalOpalDisplayName(name: String?): Boolean {
         val clean = name.orEmpty()
         return clean.startsWith("OpalWin-") || clean.startsWith("OpalDesk-")
+    }
+
+    fun looksLikeWirelessDisplayName(name: String?): Boolean {
+        val clean = name.orEmpty().trim()
+        if (clean.isEmpty()) return false
+        val lower = clean.lowercase(Locale.ROOT)
+        return WIRELESS_DISPLAY_KEYWORDS.any { keyword ->
+            when (keyword) {
+                "tv" -> Regex("(^|[^a-z0-9])tv($|[^a-z0-9])").containsMatchIn(lower)
+                else -> lower.contains(keyword)
+            }
+        }
+    }
+
+    /**
+     * Classifies a DisplayManager entry into [ExternalDisplayTransport.WIRED],
+     * [ExternalDisplayTransport.WIRELESS_TV], [ExternalDisplayTransport.OTHER_EXTERNAL],
+     * or `null` if it must be ignored (Display 0, invalid/off, Opal internal, or private).
+     */
+    fun classifyExternalDisplay(
+        displayId: Int,
+        isValid: Boolean,
+        name: String?,
+        flags: Int,
+        state: Int = 2,
+        displayType: Int = TYPE_UNKNOWN,
+        isPresentationCategory: Boolean = false,
+        isMediaRouterPresentation: Boolean = false,
+        activeRemoteDesktopDisplayId: Int = -1,
+    ): ExternalDisplayTransport? {
+        if (displayId <= DEFAULT_DISPLAY_ID || !isValid) return null
+        if (state == STATE_OFF) return null
+        if (isInternalOpalDisplayName(name)) return null
+        if (activeRemoteDesktopDisplayId > DEFAULT_DISPLAY_ID && displayId == activeRemoteDesktopDisplayId) return null
+        if ((flags and FLAG_PRIVATE) != 0) return null
+        if (displayType == TYPE_INTERNAL || displayType == TYPE_OVERLAY) return null
+
+        val presentationCapable = (flags and FLAG_PRESENTATION) != 0 ||
+            isPresentationCategory ||
+            isMediaRouterPresentation
+
+        val isWireless = displayType == TYPE_WIFI ||
+            (presentationCapable && displayType == TYPE_VIRTUAL) ||
+            (isMediaRouterPresentation && displayType != TYPE_EXTERNAL) ||
+            (presentationCapable && displayType == TYPE_UNKNOWN && looksLikeWirelessDisplayName(name))
+
+        if (isWireless) {
+            return ExternalDisplayTransport.WIRELESS_TV
+        }
+        if (presentationCapable) {
+            return ExternalDisplayTransport.WIRED
+        }
+        // Non-presentation secondary display (only surfaced for manual override if not a generic virtual display)
+        return if (displayType != TYPE_VIRTUAL) ExternalDisplayTransport.OTHER_EXTERNAL else null
+    }
+
+    fun isAutoProjectable(transport: ExternalDisplayTransport?): Boolean =
+        transport == ExternalDisplayTransport.WIRED || transport == ExternalDisplayTransport.WIRELESS_TV
+
+    /**
+     * Determines whether [io.github.lengsukq.opaldesk.ExternalDesktopActivity] should open on
+     * Display 0 and host a full-bleed [android.app.Presentation] on the target display rather
+     * than attempting `ActivityOptions.setLaunchDisplayId(displayId)`.
+     *
+     * Wireless Miracast / Wi-Fi Displays strongly prefer standard AOSP [android.app.Presentation]
+     * because `TYPE_WIFI` displays are designed for Presentation windows and often reject or
+     * misbehave under direct Activity launch.
+     */
+    fun shouldPreferPresentationMode(
+        transport: ExternalDisplayTransport,
+        projectionModePref: Int,
+    ): Boolean {
+        if (projectionModePref == PROJECTION_MODE_PRESENTATION) return true
+        return transport == ExternalDisplayTransport.WIRELESS_TV
+    }
+
+    fun isSupportedExternalMode(width: Int, height: Int, refreshRate: Float): Boolean =
+        width >= 1280 && height >= 720 && refreshRate >= MIN_EXTERNAL_MODE_FPS
+
+    /**
+     * Computes symmetric (horizontalInsetPx, verticalInsetPx) margins for TV overscan compensation,
+     * clamping [overscanPct] to `0%..6%` and guaranteeing a minimum 640×360 inner canvas.
+     */
+    fun computeOverscanInsetsPx(widthPx: Int, heightPx: Int, overscanPct: Float): Pair<Int, Int> {
+        val pct = overscanPct.coerceIn(MIN_OVERSCAN_PCT, MAX_OVERSCAN_PCT)
+        if (pct <= 0.05f || widthPx <= 640 || heightPx <= 360) return 0 to 0
+        val maxH = ((widthPx - 640) / 2).coerceAtLeast(0)
+        val maxV = ((heightPx - 360) / 2).coerceAtLeast(0)
+        val h = ((widthPx * pct) / 100f).roundToInt().coerceIn(0, maxH)
+        val v = ((heightPx * pct) / 100f).roundToInt().coerceIn(0, maxV)
+        return h to v
     }
 
     fun isPhysicalExternalDisplay(
@@ -86,11 +212,14 @@ object ExternalDisplayPolicy {
         flags: Int,
         state: Int = 2,
     ): Boolean {
-        if (displayId <= DEFAULT_DISPLAY_ID || !isValid) return false
-        if (state == STATE_OFF) return false
-        if (isInternalOpalDisplayName(name)) return false
-        if ((flags and FLAG_PRIVATE) != 0) return false
-        return (flags and FLAG_PRESENTATION) != 0
+        val transport = classifyExternalDisplay(
+            displayId = displayId,
+            isValid = isValid,
+            name = name,
+            flags = flags,
+            state = state,
+        )
+        return isAutoProjectable(transport)
     }
 
     fun isRemoteCastDisplay(

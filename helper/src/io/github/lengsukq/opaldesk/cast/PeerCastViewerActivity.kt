@@ -99,6 +99,7 @@ class PeerCastViewerActivity : ComponentActivity() {
     private var toolbarExpanded by mutableStateOf(true)
     private var micEnabled by mutableStateOf(false)
     private var cameraEnabled by mutableStateOf(false)
+    private var cameraFacing by mutableStateOf("front")
     private var imeVisible by mutableStateOf(false)
     private var composingText by mutableStateOf("")
     private var remoteImeReqSeq by mutableLongStateOf(0L)
@@ -224,12 +225,14 @@ class PeerCastViewerActivity : ComponentActivity() {
                         toolbarExpanded = toolbarExpanded,
                         micEnabled = micEnabled,
                         cameraEnabled = cameraEnabled,
+                        cameraFacing = cameraFacing,
                         imeVisible = imeVisible,
                         composingText = composingText,
                         imeController = imeController,
                         onToggleToolbar = { toolbarExpanded = !toolbarExpanded },
                         onToggleMic = { toggleRemoteMic() },
                         onToggleCamera = { toggleRemoteCamera() },
+                        onFlipCamera = { flipRemoteCamera() },
                         onToggleIme = { imeController.toggleKeyboard(imeVisible) },
                         onImeVisibilityChanged = { vis ->
                             imeVisible = vis
@@ -364,6 +367,7 @@ class PeerCastViewerActivity : ComponentActivity() {
                     supported: Boolean,
                     rootRequired: Boolean,
                     message: String,
+                    facing: String,
                 ) {
                     runOnUiThread {
                         if (!active) {
@@ -371,6 +375,13 @@ class PeerCastViewerActivity : ComponentActivity() {
                             cameraEnabled = false
                         } else {
                             cameraEnabled = true
+                            if (facing.isNotBlank()) {
+                                val nextFacing = PeerCameraGeometry.normalizeFacing(facing)
+                                if (nextFacing != cameraFacing) {
+                                    cameraFacing = nextFacing
+                                    cameraCapturer?.switchFacing(nextFacing)
+                                }
+                            }
                         }
                         if (message.isNotBlank()) {
                             Toast.makeText(this@PeerCastViewerActivity, message, Toast.LENGTH_LONG).show()
@@ -484,8 +495,10 @@ class PeerCastViewerActivity : ComponentActivity() {
     private fun enableRemoteCamera() {
         val peer = client ?: return
         stopLocalCameraCaptureOnly()
+        val desiredFacing = cameraFacing
         val cap = PeerCameraCapturer(
             context = this,
+            initialFacing = desiredFacing,
             onJpegFrame = { jpeg -> client?.sendCameraFrame(jpeg) },
             onError = { err ->
                 runOnUiThread {
@@ -499,7 +512,15 @@ class PeerCastViewerActivity : ComponentActivity() {
         }
         cameraCapturer = cap
         cameraEnabled = true
-        peer.sendCameraConfig(true)
+        peer.sendCameraConfig(true, facing = desiredFacing)
+    }
+
+    private fun flipRemoteCamera() {
+        if (!connected || !cameraEnabled) return
+        val next = if (cameraFacing == "back") "front" else "back"
+        cameraFacing = next
+        cameraCapturer?.switchFacing(next)
+        client?.sendCameraConfig(true, facing = next)
     }
 
     private fun disableRemoteCamera() {
@@ -576,12 +597,14 @@ private fun PeerCastViewerContent(
     toolbarExpanded: Boolean,
     micEnabled: Boolean,
     cameraEnabled: Boolean,
+    cameraFacing: String,
     imeVisible: Boolean,
     composingText: String,
     imeController: NativeImeHostController,
     onToggleToolbar: () -> Unit,
     onToggleMic: () -> Unit,
     onToggleCamera: () -> Unit,
+    onFlipCamera: () -> Unit,
     onToggleIme: () -> Unit,
     onImeVisibilityChanged: (Boolean) -> Unit,
     onComposingChanged: (String) -> Unit,
@@ -747,11 +770,18 @@ private fun PeerCastViewerContent(
                     onClick = onToggleMic,
                 )
                 PillChip(
-                    label = if (cameraEnabled) "镜头已开" else "摄像头",
+                    label = if (cameraEnabled) "摄像头已开" else "摄像头",
                     tint = if (cameraEnabled) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
                     active = cameraEnabled,
                     onClick = onToggleCamera,
                 )
+                if (cameraEnabled) {
+                    PillChip(
+                        label = if (cameraFacing == "back") "后摄⇄" else "前摄⇄",
+                        tint = OpalPalette.AccentCyan,
+                        onClick = onFlipCamera,
+                    )
+                }
                 PillChip(
                     label = if (imeVisible) "收起输入法" else "输入法",
                     tint = if (imeVisible) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
@@ -791,10 +821,15 @@ private fun PeerCastViewerContent(
                 }
                 if (cameraEnabled) {
                     PillChip(
-                        label = "镜头已开",
+                        label = "摄像头已开",
                         tint = OpalPalette.AccentEmerald,
                         active = true,
                         onClick = onToggleCamera,
+                    )
+                    PillChip(
+                        label = if (cameraFacing == "back") "后摄⇄" else "前摄⇄",
+                        tint = OpalPalette.AccentCyan,
+                        onClick = onFlipCamera,
                     )
                 }
                 PillChip(

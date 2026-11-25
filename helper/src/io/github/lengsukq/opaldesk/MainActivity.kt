@@ -55,6 +55,7 @@ import io.github.lengsukq.opaldesk.cast.OpalPeerDiscovery
 import io.github.lengsukq.opaldesk.cast.PeerCastViewerActivity
 import io.github.lengsukq.opaldesk.cast.RemoteAppPickerModal
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
+import io.github.lengsukq.opaldesk.external.ExternalDisplayTransport
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadLauncher
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
@@ -147,9 +148,11 @@ class MainActivity : ComponentActivity() {
                             localNetPermLauncher.launch(OpalPeerDiscovery.PERMISSION_ACCESS_LOCAL_NETWORK)
                         }
                     },
-                    onEnterDesktop = ::launchDesktopWorkstation,
+                    onEnterDesktop = { launchDesktopWorkstation(forceLandscape = false) },
+                    onEnterLandscapeMirrorDesktop = { launchDesktopWorkstation(forceLandscape = true) },
                     onOpenRemoteTrackpad = ::launchRemoteTrackpad,
                     onProjectExternalOrTrackpad = ::launchExternalOrTrackpad,
+                    onProjectSpecificDisplay = ::launchSpecificExternalDisplay,
                     onConnectPeerCast = ::launchPeerCastViewer,
                     onPickCustomWallpaper = { wallpaperPicker.launch("image/*") },
                     onStopEngine = {
@@ -219,7 +222,7 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun launchDesktopWorkstation() {
+    private fun launchDesktopWorkstation(forceLandscape: Boolean = false) {
         if (BridgeClient.remoteStatusFlow.value.connected) {
             Toast.makeText(
                 this,
@@ -231,6 +234,7 @@ class MainActivity : ComponentActivity() {
         startActivity(
             Intent(this, DesktopActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(DesktopActivity.EXTRA_FORCE_LANDSCAPE, forceLandscape)
             },
         )
     }
@@ -246,11 +250,28 @@ class MainActivity : ComponentActivity() {
             ExternalTrackpadLauncher.openPhoneTrackpad(this)
             return
         }
-        val intent = Intent(this, ExternalDesktopActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            putExtra("targetDisplayId", displayId)
+        val matched = BridgeService.detectedExternalDisplaysFlow.value.firstOrNull { it.displayId == displayId }
+            ?: BridgeService.externalDisplayFlow.value
+        val transport = matched?.transport ?: ExternalDisplayTransport.WIRED
+        BridgeService.projectToDisplay(this, displayId, transport)
+    }
+
+    private fun launchSpecificExternalDisplay(
+        displayId: Int,
+        transport: ExternalDisplayTransport,
+        forcePresentation: Boolean,
+    ) {
+        val activeSession = ExternalTrackpadBridge.sessionFlow.value
+        if (activeSession.isPhysicalActive && activeSession.displayId == displayId) {
+            ExternalTrackpadLauncher.openPhoneTrackpad(this)
+            return
         }
-        DisplayLaunchHelper.launchOnDisplay(this, intent, displayId)
+        BridgeService.projectToDisplay(
+            ctx = this,
+            displayId = displayId,
+            transport = transport,
+            forcePresentation = forcePresentation,
+        )
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -283,8 +304,10 @@ private fun OpalConsoleScreen(
     needsLocalNetworkPerm: Boolean,
     onRequestLocalNetworkPerm: () -> Unit,
     onEnterDesktop: () -> Unit,
+    onEnterLandscapeMirrorDesktop: () -> Unit,
     onOpenRemoteTrackpad: () -> Unit,
     onProjectExternalOrTrackpad: (Int) -> Unit,
+    onProjectSpecificDisplay: (Int, ExternalDisplayTransport, Boolean) -> Unit,
     onConnectPeerCast: (String, Int, String) -> Unit,
     onPickCustomWallpaper: () -> Unit,
     onStopEngine: () -> Unit,
@@ -296,6 +319,7 @@ private fun OpalConsoleScreen(
     val remote by BridgeClient.remoteStatusFlow.collectAsState()
     val pendingPairing by BridgeClient.pendingPairingFlow.collectAsState()
     val extDisplay by BridgeService.externalDisplayFlow.collectAsState()
+    val detectedExtDisplays by BridgeService.detectedExternalDisplaysFlow.collectAsState()
 
     var selectedTab by remember { mutableIntStateOf(0) }
     var showActivationModal by remember { mutableStateOf(false) }
@@ -356,11 +380,14 @@ private fun OpalConsoleScreen(
                             scene = scene,
                             remote = remote,
                             extDisplay = extDisplay,
+                            detectedExtDisplays = detectedExtDisplays,
                             needsLocalNetworkPerm = needsLocalNetworkPerm,
                             onRequestLocalNetworkPerm = onRequestLocalNetworkPerm,
                             onEnterLocalDesktop = onEnterDesktop,
+                            onEnterLandscapeMirrorDesktop = onEnterLandscapeMirrorDesktop,
                             onOpenRemoteTrackpad = onOpenRemoteTrackpad,
                             onOpenExternalOrTrackpad = onProjectExternalOrTrackpad,
+                            onProjectSpecificDisplay = onProjectSpecificDisplay,
                             onConnectPeerCast = onConnectPeerCast,
                             onOpenFloatingAppPicker = { host, port, label ->
                                 val check = OpalPeerCastMutex.validateStartReceiving(
@@ -382,6 +409,8 @@ private fun OpalConsoleScreen(
                             status = status,
                             remote = remote,
                             extDisplay = extDisplay,
+                            detectedExtDisplays = detectedExtDisplays,
+                            onProjectSpecificDisplay = onProjectSpecificDisplay,
                             onPickCustomWallpaper = onPickCustomWallpaper,
                         )
                         2 -> ConsoleEngineSettingsTab(

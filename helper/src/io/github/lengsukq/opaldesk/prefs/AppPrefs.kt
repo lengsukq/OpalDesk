@@ -29,12 +29,21 @@ object AppPrefs {
     const val DEFAULT_TRACKPAD_SENSITIVITY = 1.45f
     const val MAX_DOCK_PINNED = 8
 
+    const val PROJECTION_MODE_AUTO = 0
+    const val PROJECTION_MODE_PRESENTATION = 1
+
+    const val MIN_OVERSCAN_PCT = 0f
+    const val MAX_OVERSCAN_PCT = 6f
+    const val DEFAULT_OVERSCAN_PCT = 0f
+
     private const val PREFS_NAME = "opaldesk_v2_prefs"
     private const val KEY_AUTO_ROOT = "auto_root"
     private const val KEY_AUTO_SHIZUKU = "auto_shizuku"
     private const val KEY_ROOT_ENHANCE = "root_enhance_optional"
     private const val KEY_AUTO_EXT_DISPLAY = "auto_project_ext_display"
     private const val KEY_AUTO_SHOW_PHONE_TRACKPAD = "auto_show_phone_trackpad_on_external"
+    private const val KEY_EXTERNAL_PROJECTION_MODE = "external_projection_mode_v1"
+    private const val KEY_EXTERNAL_OVERSCAN_PCT = "external_overscan_pct_v1"
     private const val KEY_PINNED_PKGS = "pinned_dock_pkgs"
     private const val KEY_DESKTOP_SHORTCUTS = "desktop_shortcut_pkgs"
     private const val KEY_DOCK_PINNED = "dock_pinned_pkgs_v2"
@@ -56,6 +65,7 @@ object AppPrefs {
     private const val KEY_FEEDBACK_USERNAME = "feedback_reporter_username_v1"
     private const val KEY_REMOTE_MIC_ENABLED = "remote_mic_uplink_enabled_v1"
     private const val KEY_REMOTE_CAMERA_ENABLED = "remote_camera_mapping_enabled_v1"
+    private const val KEY_AUDIO_ROUTE_MODE = "audio_route_mode_v1"
 
     private val DEFAULT_PINNED = listOf(
         "com.android.chrome",
@@ -105,6 +115,12 @@ object AppPrefs {
     private val _autoShowPhoneTrackpadFlow = MutableStateFlow(true)
     val autoShowPhoneTrackpadFlow: StateFlow<Boolean> = _autoShowPhoneTrackpadFlow.asStateFlow()
 
+    private val _externalProjectionModeFlow = MutableStateFlow(PROJECTION_MODE_AUTO)
+    val externalProjectionModeFlow: StateFlow<Int> = _externalProjectionModeFlow.asStateFlow()
+
+    private val _externalOverscanPctFlow = MutableStateFlow(DEFAULT_OVERSCAN_PCT)
+    val externalOverscanPctFlow: StateFlow<Float> = _externalOverscanPctFlow.asStateFlow()
+
     private val _updateDownloadRouteFlow = MutableStateFlow(UPDATE_ROUTE_DIRECT)
     val updateDownloadRouteFlow: StateFlow<Int> = _updateDownloadRouteFlow.asStateFlow()
 
@@ -113,6 +129,11 @@ object AppPrefs {
 
     private val _remoteCameraEnabledFlow = MutableStateFlow(false)
     val remoteCameraEnabledFlow: StateFlow<Boolean> = _remoteCameraEnabledFlow.asStateFlow()
+
+    private val _audioRouteModeFlow = MutableStateFlow(
+        io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.ALL_TO_DEX,
+    )
+    val audioRouteModeFlow: StateFlow<Int> = _audioRouteModeFlow.asStateFlow()
 
     private fun prefs(ctx: Context?) =
         ctx?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -135,10 +156,21 @@ object AppPrefs {
         _appLaunchCountsFlow.value = parseLaunchCounts(p.getString(KEY_APP_LAUNCH_COUNTS, null))
         _autoCheckUpdateFlow.value = p.getBoolean(KEY_AUTO_CHECK_UPDATE, true)
         _autoShowPhoneTrackpadFlow.value = p.getBoolean(KEY_AUTO_SHOW_PHONE_TRACKPAD, true)
+        _externalProjectionModeFlow.value = p.getInt(KEY_EXTERNAL_PROJECTION_MODE, PROJECTION_MODE_AUTO)
+            .coerceIn(PROJECTION_MODE_AUTO, PROJECTION_MODE_PRESENTATION)
+        _externalOverscanPctFlow.value = p.getFloat(KEY_EXTERNAL_OVERSCAN_PCT, DEFAULT_OVERSCAN_PCT)
+            .coerceIn(MIN_OVERSCAN_PCT, MAX_OVERSCAN_PCT)
         _updateDownloadRouteFlow.value = p.getInt(KEY_UPDATE_DOWNLOAD_ROUTE, UPDATE_ROUTE_DIRECT)
             .coerceIn(UPDATE_ROUTE_DIRECT, UPDATE_ROUTE_PROXY_2)
         _remoteMicEnabledFlow.value = p.getBoolean(KEY_REMOTE_MIC_ENABLED, false)
         _remoteCameraEnabledFlow.value = p.getBoolean(KEY_REMOTE_CAMERA_ENABLED, false)
+        _audioRouteModeFlow.value = p.getInt(
+            KEY_AUDIO_ROUTE_MODE,
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.ALL_TO_DEX,
+        ).coerceIn(
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.ALL_TO_DEX,
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.SPLIT_BY_APP,
+        )
     }
 
     private fun loadPkgList(p: android.content.SharedPreferences, key: String, fallbackKey: String): List<String> {
@@ -186,6 +218,30 @@ object AppPrefs {
         _autoShowPhoneTrackpadFlow.value = enabled
     }
 
+    fun getExternalProjectionMode(ctx: Context?): Int {
+        hydrateFlows(ctx)
+        return (prefs(ctx)?.getInt(KEY_EXTERNAL_PROJECTION_MODE, PROJECTION_MODE_AUTO) ?: PROJECTION_MODE_AUTO)
+            .coerceIn(PROJECTION_MODE_AUTO, PROJECTION_MODE_PRESENTATION)
+    }
+
+    fun setExternalProjectionMode(ctx: Context?, mode: Int) {
+        val clamped = mode.coerceIn(PROJECTION_MODE_AUTO, PROJECTION_MODE_PRESENTATION)
+        prefs(ctx)?.edit()?.putInt(KEY_EXTERNAL_PROJECTION_MODE, clamped)?.apply()
+        _externalProjectionModeFlow.value = clamped
+    }
+
+    fun getExternalOverscanPct(ctx: Context?): Float {
+        hydrateFlows(ctx)
+        return (prefs(ctx)?.getFloat(KEY_EXTERNAL_OVERSCAN_PCT, DEFAULT_OVERSCAN_PCT) ?: DEFAULT_OVERSCAN_PCT)
+            .coerceIn(MIN_OVERSCAN_PCT, MAX_OVERSCAN_PCT)
+    }
+
+    fun setExternalOverscanPct(ctx: Context?, pct: Float) {
+        val clamped = pct.coerceIn(MIN_OVERSCAN_PCT, MAX_OVERSCAN_PCT)
+        prefs(ctx)?.edit()?.putFloat(KEY_EXTERNAL_OVERSCAN_PCT, clamped)?.apply()
+        _externalOverscanPctFlow.value = clamped
+    }
+
     fun isRemoteMicEnabled(ctx: Context?): Boolean {
         hydrateFlows(ctx)
         return _remoteMicEnabledFlow.value
@@ -204,6 +260,20 @@ object AppPrefs {
     fun setRemoteCameraEnabled(ctx: Context?, enabled: Boolean) {
         prefs(ctx)?.edit()?.putBoolean(KEY_REMOTE_CAMERA_ENABLED, enabled)?.apply()
         _remoteCameraEnabledFlow.value = enabled
+    }
+
+    fun getAudioRouteMode(ctx: Context?): Int {
+        hydrateFlows(ctx)
+        return _audioRouteModeFlow.value
+    }
+
+    fun setAudioRouteMode(ctx: Context?, mode: Int) {
+        val clamped = mode.coerceIn(
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.ALL_TO_DEX,
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.SPLIT_BY_APP,
+        )
+        prefs(ctx)?.edit()?.putInt(KEY_AUDIO_ROUTE_MODE, clamped)?.apply()
+        _audioRouteModeFlow.value = clamped
     }
 
     fun getDesktopShortcuts(ctx: Context?): List<String> {

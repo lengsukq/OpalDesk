@@ -244,6 +244,9 @@ public final class OpalDeskDaemon implements Runnable {
 
     private void pushSceneSnapshotAsync() {
         helperBridge.pushSceneState(compositor.toSceneJson(), compositor.getStateSeq());
+        if (remoteBridge != null) {
+            bgExec.execute(remoteBridge::onCompositorWindowsChanged);
+        }
     }
 
     private void scheduleImeFallbackProbe(int windowId, int displayId, long tapDownUptimeMs) {

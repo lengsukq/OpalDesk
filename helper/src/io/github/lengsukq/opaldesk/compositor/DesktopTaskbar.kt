@@ -824,6 +824,7 @@ fun MacControlCenterPopover(
     hostScreenOff: Boolean,
     rootEnhanced: Boolean = false,
     showHostScreenToggle: Boolean,
+    showRemoteMediaSection: Boolean = false,
     showPhoneTrackpadSection: Boolean = false,
     phoneTrackpadVisible: Boolean = false,
     showAutoTrackpadSwitch: Boolean = false,
@@ -1274,73 +1275,120 @@ fun MacControlCenterPopover(
                         }
                     }
 
-                    // Experimental Remote Mic & Root Camera Mapping Toggles (default OFF)
-                    val remoteMicEnabled by AppPrefs.remoteMicEnabledFlow.collectAsState()
-                    val remoteCameraEnabled by AppPrefs.remoteCameraEnabledFlow.collectAsState()
-                    LaunchedEffect(Unit) {
-                        AppPrefs.hydrateFlows(ctx)
-                    }
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(infoCardShape)
-                            .background(OpalPalette.ChipFill)
-                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
-                            .padding(horizontal = 11.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                    // Audio Split Mode + Remote Mic & Root Camera Mapping Controls (remote OpalCast sessions only)
+                    if (showRemoteMediaSection) {
+                        val remoteMicEnabled by AppPrefs.remoteMicEnabledFlow.collectAsState()
+                        val remoteCameraEnabled by AppPrefs.remoteCameraEnabledFlow.collectAsState()
+                        val audioRouteMode by AppPrefs.audioRouteModeFlow.collectAsState()
+                        val splitAudioOn = audioRouteMode == BridgeProtocol.AudioRoute.SPLIT_BY_APP
+                        LaunchedEffect(Unit) {
+                            AppPrefs.hydrateFlows(ctx)
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(infoCardShape)
+                                .background(OpalPalette.ChipFill)
+                                .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
+                                .padding(horizontal = 11.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            OpalText(
-                                text = "跨端麦克风与摄像头",
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = OpalPalette.TextPrimary,
+                            val effectiveCameraEnabled = rootEnhanced && remoteCameraEnabled
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                OpalText(
+                                    text = "跨端音频与媒体",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = OpalPalette.TextPrimary,
+                                )
+                                OpalText(
+                                    text = when {
+                                        splitAudioOn -> "独立分流"
+                                        remoteMicEnabled || effectiveCameraEnabled -> "已启用"
+                                        else -> "默认"
+                                    },
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (splitAudioOn || remoteMicEnabled || effectiveCameraEnabled) OpalPalette.AccentEmerald else OpalPalette.TextMuted,
+                                )
+                            }
+                            OpalSegmentedRow(
+                                options = listOf("整机传 DeX", "应用独立分流"),
+                                selectedIndex = audioRouteMode.coerceIn(
+                                    BridgeProtocol.AudioRoute.ALL_TO_DEX,
+                                    BridgeProtocol.AudioRoute.SPLIT_BY_APP,
+                                ),
+                                onSelect = { mode ->
+                                    io.github.lengsukq.opaldesk.BridgeClient.setAudioRouteModeAsync(ctx, mode) {
+                                        val msg = if (mode == BridgeProtocol.AudioRoute.SPLIT_BY_APP) {
+                                            "已开启应用独立音频分流：手机与 DeX 各自发声"
+                                        } else {
+                                            "已切换为整机声音传至 DeX 投屏端"
+                                        }
+                                        android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
                             )
                             OpalText(
-                                text = if (remoteMicEnabled || remoteCameraEnabled) "已启用" else "默认关闭",
+                                text = if (splitAudioOn) {
+                                    "手机主屏应用由手机发声，DeX 窗口应用由投屏端发声"
+                                } else {
+                                    "全部声音传至 DeX 投屏端；切至「应用独立分流」可各自发声"
+                                },
                                 fontSize = 10.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = if (remoteMicEnabled || remoteCameraEnabled) OpalPalette.AccentEmerald else OpalPalette.TextMuted,
+                                color = OpalPalette.TextMuted,
+                            )
+                            Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+                            OpalSwitchRow(
+                                title = "远端麦克风回传",
+                                subtitle = if (remoteMicEnabled) "已开启 · 允许投屏端注入" else "已关闭 · Android 13+ 免 Root",
+                                checked = remoteMicEnabled,
+                                onCheckedChange = { enabled ->
+                                    io.github.lengsukq.opaldesk.BridgeClient.setRemoteMediaConfigAsync(ctx, enabled, effectiveCameraEnabled) {
+                                        android.widget.Toast.makeText(
+                                            ctx,
+                                            if (enabled) "已开启远端麦克风回传" else "已关闭远端麦克风回传",
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                },
+                            )
+                            Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+                            OpalSwitchRow(
+                                title = "Root 摄像头映射",
+                                subtitle = when {
+                                    !rootEnhanced -> "需 Root 权限 · 未启用 Root 增强不可开启"
+                                    effectiveCameraEnabled -> "已开启 · Android 15+ 系统虚拟摄像头就绪"
+                                    else -> "已关闭 · Root 模式可用（Android 15+ 原生注入）"
+                                },
+                                checked = effectiveCameraEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && !rootEnhanced) {
+                                        if (remoteCameraEnabled) {
+                                            AppPrefs.setRemoteCameraEnabled(ctx, false)
+                                        }
+                                        android.widget.Toast.makeText(
+                                            ctx,
+                                            "未获得 Root 增强权限，无法开启摄像头映射（请先用 Root 模式激活引擎）",
+                                            android.widget.Toast.LENGTH_LONG,
+                                        ).show()
+                                        return@OpalSwitchRow
+                                    }
+                                    io.github.lengsukq.opaldesk.BridgeClient.setRemoteMediaConfigAsync(ctx, remoteMicEnabled, enabled) { ok ->
+                                        val msg = when {
+                                            !enabled -> "已关闭 Root 摄像头映射"
+                                            ok -> "已开启 Root 摄像头映射"
+                                            else -> "未获得 Root 增强权限，无法开启摄像头映射"
+                                        }
+                                        android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
                             )
                         }
-                        OpalSwitchRow(
-                            title = "远端麦克风回传",
-                            subtitle = if (remoteMicEnabled) "已开启 · 允许投屏端注入" else "已关闭 · Android 13+ 免 Root",
-                            checked = remoteMicEnabled,
-                            onCheckedChange = { enabled ->
-                                io.github.lengsukq.opaldesk.BridgeClient.setRemoteMediaConfigAsync(ctx, enabled, remoteCameraEnabled) {
-                                    android.widget.Toast.makeText(
-                                        ctx,
-                                        if (enabled) "已开启远端麦克风回传" else "已关闭远端麦克风回传",
-                                        android.widget.Toast.LENGTH_SHORT,
-                                    ).show()
-                                }
-                            },
-                        )
-                        Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
-                        OpalSwitchRow(
-                            title = "Root 摄像头映射",
-                            subtitle = when {
-                                remoteCameraEnabled && rootEnhanced -> "已开启 · Root 桥接就绪"
-                                remoteCameraEnabled -> "已开启 · 需以 Root 模式启动引擎"
-                                else -> "已关闭 · 仅 Root 模式生效"
-                            },
-                            checked = remoteCameraEnabled,
-                            onCheckedChange = { enabled ->
-                                io.github.lengsukq.opaldesk.BridgeClient.setRemoteMediaConfigAsync(ctx, remoteMicEnabled, enabled) {
-                                    val msg = when {
-                                        !enabled -> "已关闭 Root 摄像头映射"
-                                        !rootEnhanced -> "已开启开关（需以 Root 增强模式启动引擎生效）"
-                                        else -> "已开启 Root 摄像头映射"
-                                    }
-                                    android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                        )
                     }
                 }
 
@@ -1486,10 +1534,10 @@ fun MacControlCenterPopover(
                     if (isExternalMonitor) {
                         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                             OpalText(text = "界面缩放", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = OpalPalette.TextSecondary)
-                            val scaleOpts = listOf(1.0f, 1.25f, 1.5f)
+                            val scaleOpts = listOf(1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
                             val scaleIdx = scaleOpts.indexOfFirst { abs(it - externalUiScale) < 0.08f }.let { if (it >= 0) it else 1 }
                             OpalSegmentedRow(
-                                options = listOf("100%", "125%", "150%"),
+                                options = listOf("100%", "125%", "150%", "175%", "200%"),
                                 selectedIndex = scaleIdx,
                                 onSelect = { onSelectUiScale(scaleOpts[it]) },
                             )

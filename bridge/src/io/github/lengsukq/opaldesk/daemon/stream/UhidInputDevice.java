@@ -15,6 +15,7 @@ import io.github.lengsukq.opaldesk.daemon.input.MouseRoutingPolicy;
 import java.io.Closeable;
 import java.io.FileDescriptor;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.LinkedHashSet;
 
@@ -55,6 +56,7 @@ public final class UhidInputDevice implements Closeable {
     private FileDescriptor kbdFd;
     private volatile boolean closed = false;
     private boolean portAssociated = false;
+    private volatile String lastAssocError = "";
 
     private int lastAbsX = -1;
     private int lastAbsY = -1;
@@ -98,11 +100,14 @@ public final class UhidInputDevice implements Closeable {
 
     private void init() throws Exception {
         synchronized (ioLock) {
-            if (vdUniqueId != null && !vdUniqueId.isEmpty()) {
+            boolean needAssoc = UhidProtocol.isDisplayAssociationRequired(displayId, vdUniqueId);
+            boolean ptrBound = false;
+            boolean kbdBound = false;
+            if (needAssoc) {
                 // Pre-register before UHID_CREATE2 so EventHub binds the display during initial HID probe.
-                bindPortAssociation(ptrPhys, vdUniqueId);
-                bindPortAssociation(kbdPhys, vdUniqueId);
-                portAssociated = true;
+                ptrBound = bindPortAssociation(ptrPhys, vdUniqueId);
+                kbdBound = bindPortAssociation(kbdPhys, vdUniqueId);
+                portAssociated = ptrBound || kbdBound;
             }
 
             ptrFd = openUhidFd();
@@ -131,10 +136,16 @@ public final class UhidInputDevice implements Closeable {
                     UhidProtocol.getKeyboardReportDescriptor());
             writeAll(kbdFd, createKbd);
 
-            if (vdUniqueId != null && !vdUniqueId.isEmpty()) {
+            if (needAssoc) {
                 // Re-apply after UHID_CREATE2 for ROMs whose InputReader only attaches associations to live ports.
-                bindPortAssociation(ptrPhys, vdUniqueId);
-                bindPortAssociation(kbdPhys, vdUniqueId);
+                ptrBound |= bindPortAssociation(ptrPhys, vdUniqueId);
+                kbdBound |= bindPortAssociation(kbdPhys, vdUniqueId);
+                portAssociated = ptrBound || kbdBound;
+                if (!ptrBound) {
+                    String err = lastAssocError;
+                    throw new IOException("UHID port-to-display association rejected for display " + displayId
+                            + (err.isEmpty() ? "" : (" (" + err + ")")));
+                }
             }
             System.out.println("OPALDESK_UHID_CREATED displayId=" + displayId
                     + " ptrPhys=" + ptrPhys + " kbdPhys=" + kbdPhys
@@ -398,13 +409,13 @@ public final class UhidInputDevice implements Closeable {
         }
     }
 
-    private void bindPortAssociation(String phys, String uniqueId) {
-        if (phys == null || uniqueId == null || uniqueId.isEmpty()) return;
+    private boolean bindPortAssociation(String phys, String uniqueId) {
+        if (phys == null || uniqueId == null || uniqueId.isEmpty()) return false;
         ensureAssocMethodsCached();
-        if (invokeCached(inputManager, sImAddPort, phys, uniqueId)) return;
-        if (invokeCached(inputManager, sImAddLegacy, phys, uniqueId)) return;
-        if (invokeCached(iInputManager, sIImAddPort, phys, uniqueId)) return;
-        invokeCached(iInputManager, sIImAddLegacy, phys, uniqueId);
+        if (invokeCached(inputManager, sImAddPort, phys, uniqueId)) return true;
+        if (invokeCached(inputManager, sImAddLegacy, phys, uniqueId)) return true;
+        if (invokeCached(iInputManager, sIImAddPort, phys, uniqueId)) return true;
+        return invokeCached(iInputManager, sIImAddLegacy, phys, uniqueId);
     }
 
     private void unbindPortAssociation(String phys) {
@@ -416,13 +427,15 @@ public final class UhidInputDevice implements Closeable {
         invokeCached(iInputManager, sIImRemLegacy, phys);
     }
 
-    private static boolean invokeCached(Object target, Method method, Object... args) {
+    private boolean invokeCached(Object target, Method method, Object... args) {
         if (target == null || method == null) return false;
         try {
             method.invoke(target, args);
             return true;
         } catch (ReflectiveOperationException | RuntimeException e) {
-            System.err.println("OPALDESK_UHID_ASSOC_WARN method=" + method.getName() + ": " + e.getMessage());
+            String detail = UhidProtocol.unwrapThrowableMessage(e);
+            lastAssocError = detail;
+            System.err.println("OPALDESK_UHID_ASSOC_WARN method=" + method.getName() + ": " + detail);
             return false;
         }
     }

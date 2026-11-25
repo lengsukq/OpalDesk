@@ -142,6 +142,7 @@ public final class DaemonConfig {
     private boolean secureCaptureEnabled = false;
     private boolean remoteMicEnabled = false;
     private boolean remoteCameraEnabled = false;
+    private int audioRouteMode = BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX;
 
     public DaemonConfig() {
         this(new File(DEFAULT_CONF_PATH), new File(DEFAULT_PROFILE_CONF_PATH), new File(DEFAULT_LAUNCH_COUNTS_PATH));
@@ -381,13 +382,30 @@ public final class DaemonConfig {
     }
 
     public boolean isRemoteCameraEnabled() {
-        synchronized (lock) { return remoteCameraEnabled; }
+        synchronized (lock) { return rootEnhanced && remoteCameraEnabled; }
     }
 
-    public void setRemoteMediaConfig(boolean micEnabled, boolean cameraEnabled) {
+    public boolean setRemoteMediaConfig(boolean micEnabled, boolean cameraEnabled) {
+        boolean accepted;
         synchronized (lock) {
             this.remoteMicEnabled = micEnabled;
-            this.remoteCameraEnabled = cameraEnabled;
+            accepted = !cameraEnabled || this.rootEnhanced;
+            this.remoteCameraEnabled = this.rootEnhanced && cameraEnabled;
+        }
+        saveMainConf();
+        return accepted;
+    }
+
+    public int getAudioRouteMode() {
+        synchronized (lock) { return audioRouteMode; }
+    }
+
+    public void setAudioRouteMode(int mode) {
+        int clamped = (mode == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP)
+                ? BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP
+                : BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX;
+        synchronized (lock) {
+            this.audioRouteMode = clamped;
         }
         saveMainConf();
     }
@@ -396,6 +414,9 @@ public final class DaemonConfig {
         synchronized (lock) {
             this.rootEnhanced = enhanced;
             this.secureCaptureEnabled = secureCapture;
+            if (!enhanced) {
+                this.remoteCameraEnabled = false;
+            }
             if (enhanced && this.maxActiveDisplays == DEFAULT_ROOTLESS_MAX_VD) {
                 this.maxActiveDisplays = DEFAULT_ROOT_ENHANCED_MAX_VD;
             }
@@ -509,6 +530,12 @@ public final class DaemonConfig {
                 if (parts.length >= 11) {
                     remoteCameraEnabled = Integer.parseInt(parts[10].trim()) != 0;
                 }
+                if (parts.length >= 12) {
+                    int arm = Integer.parseInt(parts[11].trim());
+                    audioRouteMode = (arm == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP)
+                            ? BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP
+                            : BridgeProtocol.AUDIO_ROUTE_ALL_TO_DEX;
+                }
             }
         } catch (IOException | NumberFormatException e) {
             System.err.println("OPALDESK_CONF_LOAD_WARN: " + e.getMessage());
@@ -523,7 +550,8 @@ public final class DaemonConfig {
                     + targetFps + "," + windowDpiScalePct + "," + mouseTargetMode + ","
                     + globalCustomDpi + ","
                     + (remoteMicEnabled ? 1 : 0) + ","
-                    + (remoteCameraEnabled ? 1 : 0) + "\n";
+                    + (remoteCameraEnabled ? 1 : 0) + ","
+                    + audioRouteMode + "\n";
         }
         try {
             AtomicFiles.writeAtomicUtf8(confFile, content, AtomicFiles.MODE_OWNER_RW);

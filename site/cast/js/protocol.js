@@ -422,6 +422,7 @@ export function decodeCameraState(payload) {
     fps: Number(obj.fps || 15),
     backend: String(obj.backend || ''),
     message: String(obj.message || ''),
+    facing: String(obj.facing || ''),
   };
 }
 

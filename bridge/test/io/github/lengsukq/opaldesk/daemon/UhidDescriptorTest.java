@@ -6,11 +6,13 @@ import io.github.lengsukq.opaldesk.daemon.stream.UhidProtocol;
 
 import org.junit.Test;
 
+import java.lang.reflect.InvocationTargetException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class UhidDescriptorTest {
@@ -144,6 +146,21 @@ public class UhidDescriptorTest {
         assertEquals(-1, UhidProtocol.clampWheelDelta(-0.2f));
         assertEquals(127, UhidProtocol.clampWheelDelta(999f));
         assertEquals(-127, UhidProtocol.clampWheelDelta(-999f));
+    }
+
+    @Test
+    public void testUhidAssociationRequirementAndThrowableUnwrapping() {
+        assertFalse(UhidProtocol.isDisplayAssociationRequired(0, "virtual:com.android.shell,2000,OpalWin-1,0"));
+        assertFalse(UhidProtocol.isDisplayAssociationRequired(5, null));
+        assertFalse(UhidProtocol.isDisplayAssociationRequired(5, ""));
+        assertTrue(UhidProtocol.isDisplayAssociationRequired(5, "virtual:com.android.shell,2000,OpalDesk-Remote,0"));
+
+        InvocationTargetException wrapped = new InvocationTargetException(
+                new SecurityException("Requires ASSOCIATE_INPUT_DEVICE_TO_DISPLAY"));
+        String detail = UhidProtocol.unwrapThrowableMessage(wrapped);
+        assertTrue(detail.contains("SecurityException"));
+        assertTrue(detail.contains("ASSOCIATE_INPUT_DEVICE_TO_DISPLAY"));
+        assertEquals("NullPointerException", UhidProtocol.unwrapThrowableMessage(new NullPointerException()));
     }
 
     private static void assertBalancedCollections(byte[] desc) {

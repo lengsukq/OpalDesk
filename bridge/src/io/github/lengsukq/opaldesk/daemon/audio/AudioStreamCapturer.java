@@ -3,6 +3,7 @@ package io.github.lengsukq.opaldesk.daemon.audio;
 import android.content.Context;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
@@ -10,16 +11,31 @@ import android.media.MediaFormat;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.SystemClock;
+import android.util.Pair;
 
 import io.github.lengsukq.opaldesk.daemon.stream.OpalCastProtocol;
 
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 
 /**
- * Best-effort Android system playback audio capturer (uid=2000 REMOTE_SUBMIX) encoding
- * 48 kHz stereo PCM into AAC-LC raw AUs for OpalCast v1 AUDIO_CONFIG + AUDIO_FRAME.
- * Gracefully degrades to audioEnabled=false without throwing if OEM ROM denies capture.
+ * Rootless-first Android playback audio capturer encoding 48 kHz stereo PCM into AAC-LC raw AUs
+ * for OpalCast v1 {@code AUDIO_CONFIG + AUDIO_FRAME}.
+ *
+ * <p>Supports two standard AOSP modes under {@code uid=2000}:
+ * <ul>
+ *   <li>{@code ALL_TO_DEX}: standard {@code REMOTE_SUBMIX} capturing all device playback audio.</li>
+ *   <li>{@code SPLIT_BY_APP}: registers an AOSP {@code AudioPolicy} ({@code ROUTE_FLAG_LOOP_BACK})
+ *       with {@code RULE_MATCH_UID} restricted strictly to apps currently hosted in DeX windows.
+ *       Phone Display 0 apps remain untouched on the phone speaker/Bluetooth, while DeX apps route
+ *       exclusively to the remote DeX receiver (hot-updated via {@code updateMixingRules} on
+ *       Android 14+ without dropping the stream).</li>
+ * </ul>
+ * Gracefully degrades to {@code REMOTE_SUBMIX} (or {@code audioEnabled=false}) if an OEM ROM
+ * rejects {@code AudioPolicy} registration.
  */
 public final class AudioStreamCapturer {
     public static final int SAMPLE_RATE = 48_000;
@@ -28,6 +44,15 @@ public final class AudioStreamCapturer {
     private static final String MIME_AAC = "audio/mp4a-latm";
     // Standard 2-byte AudioSpecificConfig: AAC-LC (2), 48kHz (idx 3), stereo (2) -> 0x11 0x90
     private static final byte[] FALLBACK_AAC_LC_48K_STEREO_ASC = new byte[]{0x11, (byte) 0x90};
+
+    private static final int[] SPLIT_MATCH_USAGES = new int[]{
+            AudioAttributes.USAGE_MEDIA,
+            AudioAttributes.USAGE_GAME,
+            AudioAttributes.USAGE_UNKNOWN,
+            AudioAttributes.USAGE_VOICE_COMMUNICATION,
+            AudioAttributes.USAGE_ASSISTANT,
+            AudioAttributes.USAGE_ASSISTANCE_SONIFICATION
+    };
 
     public interface AudioListener {
         void onAudioConfig(OpalCastProtocol.AudioConfig config, long timestampUs);
@@ -41,6 +66,14 @@ public final class AudioStreamCapturer {
 
     private volatile boolean running = false;
     private volatile boolean active = false;
+    private volatile boolean splitModeRequested = false;
+    private volatile boolean splitPolicyActive = false;
+    private volatile List<Integer> appliedSplitUids =
+            Collections.singletonList(AudioRoutingPolicy.PLACEHOLDER_EMPTY_UID);
+
+    private AudioManager splitAudioManager;
+    private Object registeredSplitPolicy;
+    private Object registeredSplitMix;
     private AudioRecord audioRecord;
     private MediaCodec encoder;
     private Thread captureThread;
@@ -55,76 +88,170 @@ public final class AudioStreamCapturer {
         return running && active;
     }
 
+    public boolean isSplitPolicyActive() {
+        return running && active && splitPolicyActive;
+    }
+
     public boolean start() {
+        return start(false, null);
+    }
+
+    public boolean start(boolean splitByUid, Collection<Integer> initialUids) {
         synchronized (lock) {
-            if (running && active) return true;
-            stopLocked(false);
-
-            AudioRecord rec = null;
-            MediaCodec enc = null;
-            try {
-                rec = createAudioRecord();
-                if (rec == null || rec.getState() != AudioRecord.STATE_INITIALIZED) {
-                    if (rec != null) {
-                        try { rec.release(); } catch (RuntimeException e) {
-                            System.err.println("OPALDESK_AUDIO_REC_RELEASE_WARN: " + e.getMessage());
-                        }
-                    }
-                    System.out.println("OPALDESK_AUDIO_UNAVAILABLE AudioRecord not initialized; degrading gracefully");
-                    notifyState(false);
-                    return false;
+            List<Integer> normUids = AudioRoutingPolicy.normalizeTargetUids(initialUids);
+            if (running && active && splitModeRequested == splitByUid) {
+                if (splitByUid) {
+                    updateTargetUidsLocked(normUids);
                 }
-
-                enc = MediaCodec.createEncoderByType(MIME_AAC);
-                MediaFormat fmt = MediaFormat.createAudioFormat(MIME_AAC, SAMPLE_RATE, CHANNELS);
-                fmt.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
-                fmt.setInteger(MediaFormat.KEY_BIT_RATE, AAC_BITRATE);
-                fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16_384);
-                enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-
-                rec.startRecording();
-                if (rec.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
-                    throw new IllegalStateException("AudioRecord did not enter RECORDSTATE_RECORDING");
-                }
-                enc.start();
-
-                this.audioRecord = rec;
-                this.encoder = enc;
-                this.running = true;
-                this.active = true;
-
-                final AudioRecord finalRec = rec;
-                final MediaCodec finalEnc = enc;
-                this.drainThread = new Thread(() -> drainLoop(finalEnc), "ExtAudioDrain");
-                this.drainThread.setDaemon(true);
-                this.drainThread.start();
-
-                this.captureThread = new Thread(() -> captureLoop(finalRec, finalEnc), "ExtAudioCapture");
-                this.captureThread.setDaemon(true);
-                this.captureThread.start();
-
-                System.out.println("OPALDESK_AUDIO_STARTED 48kHz stereo AAC-LC");
-                notifyState(true);
                 return true;
-            } catch (Throwable t) {
-                System.err.println("OPALDESK_AUDIO_FALLBACK_OFF: " + t.getMessage());
-                if (enc != null) {
-                    try { enc.release(); } catch (RuntimeException e) {
-                        System.err.println("OPALDESK_AUDIO_ENC_CLEANUP_WARN: " + e.getMessage());
-                    }
+            }
+            return startInternalLocked(splitByUid, normUids, true);
+        }
+    }
+
+    /**
+     * Switches live between {@code ALL_TO_DEX} and {@code SPLIT_BY_APP} without tearing down the
+     * parent OpalCast video session.
+     */
+    public boolean setSplitMode(boolean splitByUid, Collection<Integer> currentUids) {
+        synchronized (lock) {
+            List<Integer> normUids = AudioRoutingPolicy.normalizeTargetUids(currentUids);
+            if (!running || !active) {
+                this.splitModeRequested = splitByUid;
+                this.appliedSplitUids = normUids;
+                return false;
+            }
+            if (this.splitModeRequested == splitByUid) {
+                if (splitByUid) {
+                    updateTargetUidsLocked(normUids);
                 }
+                return true;
+            }
+            return startInternalLocked(splitByUid, normUids, false);
+        }
+    }
+
+    /**
+     * Updates the DeX app UID set routed exclusively to the remote DeX receiver when running in
+     * {@code SPLIT_BY_APP} mode. Uses zero-drop {@code AudioPolicy.updateMixingRules} on Android 14+
+     * and seamless policy rebuild on Android 11–13.
+     */
+    public void updateTargetUids(Collection<Integer> uids) {
+        List<Integer> normUids = AudioRoutingPolicy.normalizeTargetUids(uids);
+        synchronized (lock) {
+            if (!running || !active || !splitModeRequested) {
+                this.appliedSplitUids = normUids;
+                return;
+            }
+            updateTargetUidsLocked(normUids);
+        }
+    }
+
+    private void updateTargetUidsLocked(List<Integer> normUids) {
+        if (AudioRoutingPolicy.uidListsEqual(this.appliedSplitUids, normUids)) {
+            return;
+        }
+        if (!splitPolicyActive || registeredSplitPolicy == null || registeredSplitMix == null) {
+            this.appliedSplitUids = normUids;
+            return;
+        }
+        if (tryHotUpdateSplitMixingRules(registeredSplitPolicy, registeredSplitMix, normUids)) {
+            this.appliedSplitUids = normUids;
+            System.out.println("OPALDESK_AUDIO_SPLIT_UIDS_UPDATED mode=hot uids=" + normUids);
+            return;
+        }
+        // Android 11–13 fallback (no updateMixingRules): rebuild policy + AudioRecord cleanly.
+        System.out.println("OPALDESK_AUDIO_SPLIT_UIDS_UPDATED mode=rebuild uids=" + normUids);
+        startInternalLocked(true, normUids, false);
+    }
+
+    private boolean startInternalLocked(boolean splitByUid, List<Integer> normUids, boolean notifyOnStart) {
+        stopLocked(false);
+        this.splitModeRequested = splitByUid;
+        this.appliedSplitUids = normUids;
+
+        AudioRecord rec = null;
+        MediaCodec enc = null;
+        boolean usingSplitPolicy = false;
+        try {
+            if (splitByUid) {
+                rec = tryCreateSplitPolicyAudioRecordLocked(normUids);
+                if (rec != null) {
+                    usingSplitPolicy = true;
+                } else {
+                    System.err.println("OPALDESK_AUDIO_SPLIT_UNAVAILABLE_FALLBACK: falling back to REMOTE_SUBMIX");
+                }
+            }
+            if (rec == null) {
+                rec = createRemoteSubmixAudioRecord();
+            }
+            if (rec == null || rec.getState() != AudioRecord.STATE_INITIALIZED) {
                 if (rec != null) {
                     try { rec.release(); } catch (RuntimeException e) {
-                        System.err.println("OPALDESK_AUDIO_REC_CLEANUP_WARN: " + e.getMessage());
+                        System.err.println("OPALDESK_AUDIO_REC_RELEASE_WARN: " + e.getMessage());
                     }
                 }
-                this.audioRecord = null;
-                this.encoder = null;
-                this.running = false;
-                this.active = false;
+                unregisterSplitPolicyLocked();
+                System.out.println("OPALDESK_AUDIO_UNAVAILABLE AudioRecord not initialized; degrading gracefully");
                 notifyState(false);
                 return false;
             }
+
+            enc = MediaCodec.createEncoderByType(MIME_AAC);
+            MediaFormat fmt = MediaFormat.createAudioFormat(MIME_AAC, SAMPLE_RATE, CHANNELS);
+            fmt.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
+            fmt.setInteger(MediaFormat.KEY_BIT_RATE, AAC_BITRATE);
+            fmt.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16_384);
+            enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+
+            rec.startRecording();
+            if (rec.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                throw new IllegalStateException("AudioRecord did not enter RECORDSTATE_RECORDING");
+            }
+            enc.start();
+
+            this.audioRecord = rec;
+            this.encoder = enc;
+            this.splitPolicyActive = usingSplitPolicy;
+            this.running = true;
+            this.active = true;
+
+            final AudioRecord finalRec = rec;
+            final MediaCodec finalEnc = enc;
+            this.drainThread = new Thread(() -> drainLoop(finalEnc), "ExtAudioDrain");
+            this.drainThread.setDaemon(true);
+            this.drainThread.start();
+
+            this.captureThread = new Thread(() -> captureLoop(finalRec, finalEnc), "ExtAudioCapture");
+            this.captureThread.setDaemon(true);
+            this.captureThread.start();
+
+            System.out.println("OPALDESK_AUDIO_STARTED 48kHz stereo AAC-LC mode="
+                    + (usingSplitPolicy ? ("split_by_uid uids=" + normUids) : "all_to_dex"));
+            if (notifyOnStart) {
+                notifyState(true);
+            }
+            return true;
+        } catch (Throwable t) {
+            System.err.println("OPALDESK_AUDIO_FALLBACK_OFF: " + t.getMessage());
+            if (enc != null) {
+                try { enc.release(); } catch (RuntimeException e) {
+                    System.err.println("OPALDESK_AUDIO_ENC_CLEANUP_WARN: " + e.getMessage());
+                }
+            }
+            if (rec != null) {
+                try { rec.release(); } catch (RuntimeException e) {
+                    System.err.println("OPALDESK_AUDIO_REC_CLEANUP_WARN: " + e.getMessage());
+                }
+            }
+            unregisterSplitPolicyLocked();
+            this.audioRecord = null;
+            this.encoder = null;
+            this.splitPolicyActive = false;
+            this.running = false;
+            this.active = false;
+            notifyState(false);
+            return false;
         }
     }
 
@@ -138,6 +265,7 @@ public final class AudioStreamCapturer {
         boolean wasActive = this.active;
         this.running = false;
         this.active = false;
+        this.splitPolicyActive = false;
 
         AudioRecord rec = this.audioRecord;
         MediaCodec enc = this.encoder;
@@ -150,6 +278,8 @@ public final class AudioStreamCapturer {
                 System.err.println("OPALDESK_AUDIO_REC_RELEASE_WARN: " + e.getMessage());
             }
         }
+        unregisterSplitPolicyLocked();
+
         Thread ct = this.captureThread;
         this.captureThread = null;
         if (ct != null && ct != Thread.currentThread()) {
@@ -171,7 +301,166 @@ public final class AudioStreamCapturer {
         }
     }
 
-    private AudioRecord createAudioRecord() {
+    private AudioRecord tryCreateSplitPolicyAudioRecordLocked(List<Integer> targetUids) {
+        if (ctx == null) return null;
+        AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) return null;
+
+        Object policy = null;
+        try {
+            Class<?> ruleCls = Class.forName("android.media.audiopolicy.AudioMixingRule");
+            Class<?> mixCls = Class.forName("android.media.audiopolicy.AudioMix");
+            Class<?> mixBCls = Class.forName("android.media.audiopolicy.AudioMix$Builder");
+            Class<?> polCls = Class.forName("android.media.audiopolicy.AudioPolicy");
+            Class<?> polBCls = Class.forName("android.media.audiopolicy.AudioPolicy$Builder");
+
+            Object rule = buildSplitMixingRule(targetUids);
+            int routeLoopback = readStaticInt(mixCls, "ROUTE_FLAG_LOOP_BACK", 2);
+            AudioFormat mixFmt = new AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(SAMPLE_RATE)
+                    .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+                    .build();
+
+            Object mixB = mixBCls.getConstructor(ruleCls).newInstance(rule);
+            mixBCls.getMethod("setFormat", AudioFormat.class).invoke(mixB, mixFmt);
+            mixBCls.getMethod("setRouteFlags", int.class).invoke(mixB, routeLoopback);
+            Object mix = mixBCls.getMethod("build").invoke(mixB);
+
+            Object polB = polBCls.getConstructor(Context.class).newInstance(ctx);
+            polBCls.getMethod("addMix", mixCls).invoke(polB, mix);
+            policy = polBCls.getMethod("build").invoke(polB);
+
+            int regRc = (Integer) AudioManager.class.getMethod("registerAudioPolicy", polCls).invoke(am, policy);
+            if (regRc != 0) {
+                System.err.println("OPALDESK_AUDIO_SPLIT_REG_ERR rc=" + regRc);
+                return null;
+            }
+
+            int minBuf = AudioRecord.getMinBufferSize(
+                    SAMPLE_RATE, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
+            int bufSize = Math.max(Math.max(minBuf, 8192) * 2, 16_384);
+            AudioRecord rec = buildSplitSinkRecord(policy, mix, mixFmt, bufSize);
+            if (rec == null || rec.getState() != AudioRecord.STATE_INITIALIZED) {
+                if (rec != null) {
+                    try { rec.release(); } catch (RuntimeException ignored) {}
+                }
+                unregisterPolicyQuietly(am, policy);
+                return null;
+            }
+
+            this.splitAudioManager = am;
+            this.registeredSplitPolicy = policy;
+            this.registeredSplitMix = mix;
+            return rec;
+        } catch (Throwable t) {
+            System.err.println("OPALDESK_AUDIO_SPLIT_INIT_WARN: " + t);
+            if (policy != null) {
+                unregisterPolicyQuietly(am, policy);
+            }
+            return null;
+        }
+    }
+
+    private AudioRecord buildSplitSinkRecord(Object policy, Object mix, AudioFormat recFmt, int bufSize) {
+        // Primary: AudioRecord.Builder + setContext(shellCtx) + addr=<mixRegistration> (required on Android 16)
+        try {
+            String reg = (String) mix.getClass().getMethod("getRegistration").invoke(mix);
+            if (reg != null && !reg.isEmpty()) {
+                AudioAttributes.Builder ab = new AudioAttributes.Builder();
+                AudioAttributes.Builder.class.getMethod("setInternalCapturePreset", int.class)
+                        .invoke(ab, MediaRecorder.AudioSource.REMOTE_SUBMIX);
+                AudioAttributes.Builder.class.getMethod("addTag", String.class)
+                        .invoke(ab, RemoteMicInjector.formatMixAddressTag(reg));
+                AudioRecord.Builder rb = new AudioRecord.Builder()
+                        .setAudioFormat(recFmt)
+                        .setBufferSizeInBytes(bufSize);
+                AudioRecord.Builder.class.getMethod("setAudioAttributes", AudioAttributes.class)
+                        .invoke(rb, ab.build());
+                applyShellContext(rb);
+                AudioRecord r = rb.build();
+                if (r.getState() == AudioRecord.STATE_INITIALIZED) {
+                    return r;
+                }
+                r.release();
+            }
+        } catch (Throwable t) {
+            System.err.println("OPALDESK_AUDIO_SPLIT_SINK_BUILDER_WARN: " + t.getMessage());
+        }
+        // Fallback: AudioPolicy.createAudioRecordSink(mix)
+        try {
+            AudioRecord r = (AudioRecord) policy.getClass()
+                    .getMethod("createAudioRecordSink", mix.getClass()).invoke(policy, mix);
+            if (r != null && r.getState() == AudioRecord.STATE_INITIALIZED) {
+                return r;
+            }
+            if (r != null) r.release();
+        } catch (Throwable t) {
+            System.err.println("OPALDESK_AUDIO_SPLIT_SINK_FALLBACK_WARN: " + t.getMessage());
+        }
+        return null;
+    }
+
+    private static Object buildSplitMixingRule(List<Integer> targetUids) throws ReflectiveOperationException {
+        Class<?> ruleCls = Class.forName("android.media.audiopolicy.AudioMixingRule");
+        Class<?> ruleBCls = Class.forName("android.media.audiopolicy.AudioMixingRule$Builder");
+        int matchUsage = readStaticInt(ruleCls, "RULE_MATCH_ATTRIBUTE_USAGE", 1);
+        int matchUid = readStaticInt(ruleCls, "RULE_MATCH_UID", 4);
+
+        Object rb = ruleBCls.getConstructor().newInstance();
+        Method addRule = ruleBCls.getMethod("addRule", AudioAttributes.class, int.class);
+        for (int usage : SPLIT_MATCH_USAGES) {
+            addRule.invoke(rb, new AudioAttributes.Builder().setUsage(usage).build(), matchUsage);
+        }
+        Method addMixRule = ruleBCls.getMethod("addMixRule", int.class, Object.class);
+        for (Integer uid : targetUids) {
+            addMixRule.invoke(rb, matchUid, uid);
+        }
+        return ruleBCls.getMethod("build").invoke(rb);
+    }
+
+    private static boolean tryHotUpdateSplitMixingRules(Object policy, Object mix, List<Integer> targetUids) {
+        try {
+            Method upd = policy.getClass().getMethod("updateMixingRules", List.class);
+            Object nextRule = buildSplitMixingRule(targetUids);
+            int rc = (Integer) upd.invoke(policy, Collections.singletonList(new Pair<>(mix, nextRule)));
+            return rc == 0;
+        } catch (NoSuchMethodException ignored) {
+            return false; // Android 11–13
+        } catch (Throwable t) {
+            System.err.println("OPALDESK_AUDIO_SPLIT_HOT_UPDATE_WARN: " + t.getMessage());
+            return false;
+        }
+    }
+
+    private void unregisterSplitPolicyLocked() {
+        AudioManager am = this.splitAudioManager;
+        Object pol = this.registeredSplitPolicy;
+        this.splitAudioManager = null;
+        this.registeredSplitPolicy = null;
+        this.registeredSplitMix = null;
+        if (am != null && pol != null) {
+            unregisterPolicyQuietly(am, pol);
+        }
+    }
+
+    private static void unregisterPolicyQuietly(AudioManager am, Object policy) {
+        try {
+            Class<?> polCls = Class.forName("android.media.audiopolicy.AudioPolicy");
+            AudioManager.class.getMethod("unregisterAudioPolicy", polCls).invoke(am, policy);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static int readStaticInt(Class<?> cls, String fieldName, int fallback) {
+        try {
+            return cls.getField(fieldName).getInt(null);
+        } catch (Throwable ignored) {
+            return fallback;
+        }
+    }
+
+    private AudioRecord createRemoteSubmixAudioRecord() {
         int minBuf = AudioRecord.getMinBufferSize(
                 SAMPLE_RATE, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
         if (minBuf <= 0) {

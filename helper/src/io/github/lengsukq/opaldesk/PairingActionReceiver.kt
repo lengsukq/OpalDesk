@@ -25,7 +25,7 @@ class PairingActionReceiver : BroadcastReceiver() {
         val decision = intent.getIntExtra(EXTRA_DECISION, BridgeProtocol.PairingDecision.REJECT)
 
         BridgeService.updatePairingNotification(context, null)
-        if (BridgeClient.getService() != null) {
+        if (BridgeClient.isBinderAliveFast()) {
             BridgeClient.respondToPairingAsync(requestId, decision, ctx = context)
             return
         }
@@ -35,7 +35,7 @@ class PairingActionReceiver : BroadcastReceiver() {
         BridgeClient.requestBinder(context)
         val handler = Handler(Looper.getMainLooper())
         fun attempt(remaining: Int) {
-            if (BridgeClient.getService() != null || remaining <= 0) {
+            if (BridgeClient.isBinderAliveFast() || remaining <= 0) {
                 BridgeClient.respondToPairingAsync(requestId, decision, ctx = context) {
                     pendingResult.finish()
                 }

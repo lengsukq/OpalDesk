@@ -73,7 +73,13 @@ class OpalCastPeerClient(
         fun onAppListReceived(apps: List<RemoteAppEntry>) {}
         fun onRemoteImeRequest(show: Boolean, inputType: Int) {}
         fun onRemoteMicState(active: Boolean, supported: Boolean, message: String) {}
-        fun onRemoteCameraState(active: Boolean, supported: Boolean, rootRequired: Boolean, message: String) {}
+        fun onRemoteCameraState(
+            active: Boolean,
+            supported: Boolean,
+            rootRequired: Boolean,
+            message: String,
+            facing: String = "",
+        ) {}
         fun onVideoSizeChanged(width: Int, height: Int, fps: Int)
         fun onError(message: String)
         fun onDisconnected(reason: String)
@@ -630,8 +636,9 @@ class OpalCastPeerClient(
             val supported = obj.optBoolean("supported", false)
             val rootRequired = obj.optBoolean("rootRequired", true)
             val message = obj.optString("message", "")
-            Log.i(TAG, "RX CAMERA_STATE active=$active supported=$supported rootReq=$rootRequired msg=$message")
-            listener.onRemoteCameraState(active, supported, rootRequired, message)
+            val facing = obj.optString("facing", "")
+            Log.i(TAG, "RX CAMERA_STATE active=$active supported=$supported rootReq=$rootRequired facing=$facing msg=$message")
+            listener.onRemoteCameraState(active, supported, rootRequired, message, facing)
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to parse CAMERA_STATE: ${t.message}")
         }

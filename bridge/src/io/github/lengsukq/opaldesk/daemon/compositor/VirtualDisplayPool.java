@@ -57,6 +57,16 @@ public final class VirtualDisplayPool {
         }
     }
 
+    public static final class RebindResult {
+        public final Lease oldLease;
+        public final Lease newLease;
+
+        RebindResult(Lease oldLease, Lease newLease) {
+            this.oldLease = oldLease;
+            this.newLease = newLease;
+        }
+    }
+
     /** Callback notified right before a background window's VirtualDisplay is reclaimed by LRU eviction. */
     public interface EvictionListener {
         void onWindowHibernated(WindowSession victim, byte[] capturedSnapshot);
@@ -144,6 +154,43 @@ public final class VirtualDisplayPool {
         Lease lease = new Lease(target.windowId, created.handle, created.displayId, created.uniqueId);
         activeLeases.put(target.windowId, lease);
         return lease;
+    }
+
+    /**
+     * Recreates an active window's {@code VirtualDisplay} on the current {@link DisplayDriver}
+     * (e.g. migrating between default {@code DisplayManager} and an AOSP {@code VirtualDevice}
+     * providing a {@code VirtualCamera}). Detaches {@code surface} from the old display first so
+     * {@code BufferQueue} handoff never fails, keeps the old display alive until the caller finishes
+     * moving the app task, and rolls back cleanly if new display creation fails.
+     */
+    public synchronized RebindResult recreateLease(
+            WindowSession target,
+            Object surface,
+            int width,
+            int height,
+            int dpi,
+            float fps) {
+        if (target == null || surface == null) return null;
+        Lease oldLease = activeLeases.get(target.windowId);
+        if (oldLease == null) return null;
+
+        driver.setVirtualDisplaySurface(oldLease.handle, null);
+        String vdName = "OpalWin-" + target.windowId;
+        DisplayDriver.CreatedDisplay created = driver.createVirtualDisplay(
+                vdName, width, height, dpi, fps, surface, allowSecureFlag);
+        if (created == null || created.displayId <= 0) {
+            driver.setVirtualDisplaySurface(oldLease.handle, surface);
+            return null;
+        }
+        Lease newLease = new Lease(target.windowId, created.handle, created.displayId, created.uniqueId);
+        activeLeases.put(target.windowId, newLease);
+        return new RebindResult(oldLease, newLease);
+    }
+
+    public void finishReleaseOldLease(Lease oldLease) {
+        if (oldLease != null) {
+            driver.releaseVirtualDisplay(oldLease.handle, oldLease.displayId);
+        }
     }
 
     public synchronized void resizeIfActive(int windowId, int width, int height, int dpi) {

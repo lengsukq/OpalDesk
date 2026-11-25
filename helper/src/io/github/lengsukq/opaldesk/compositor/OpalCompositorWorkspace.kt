@@ -664,6 +664,7 @@ fun OpalCompositorWorkspace(
                     hostScreenOff = status.hostScreenOff,
                     rootEnhanced = status.rootEnhanced,
                     showHostScreenToggle = isExternalMonitor || remote.connected || status.hostScreenOff,
+                    showRemoteMediaSection = isExternalMonitor && (remote.connected || remote.hasActiveDesktopCast),
                     showPhoneTrackpadSection = canControlPhoneTrackpad,
                     phoneTrackpadVisible = phoneTrackpadVisible,
                     showAutoTrackpadSwitch = canControlPhoneTrackpad && !remote.hasActiveDesktopCast,

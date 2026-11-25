@@ -85,6 +85,21 @@ public final class RemoteMicInjector {
         return Math.max(1, Math.min(2, requested));
     }
 
+    public static int computeTrackBufferBytes(int sampleRate, int channels, int minBufferBytes) {
+        int safeRate = clampSampleRate(sampleRate);
+        int safeCh = clampChannels(channels);
+        int frame40MsBytes = (safeRate / 25) * safeCh * 2;
+        int minDoubled = (minBufferBytes > 0) ? (minBufferBytes * 2) : 0;
+        return Math.max(4096, Math.max(minDoubled, frame40MsBytes));
+    }
+
+    public static String formatMixAddressTag(String registration) {
+        if (registration == null) return "";
+        String trimmed = registration.trim();
+        if (trimmed.isEmpty()) return "";
+        return trimmed.startsWith("addr=") ? trimmed : ("addr=" + trimmed);
+    }
+
     public boolean isActive() {
         return running && audioTrack != null;
     }
@@ -182,6 +197,7 @@ public final class RemoteMicInjector {
                 Method registerMethod = AudioManager.class.getMethod("registerAudioPolicy", policyClass);
                 int status = (Integer) registerMethod.invoke(am, policy);
                 if (status != 0) {
+                    System.err.println("OPALDESK_REMOTE_MIC_START_FAILED: registerAudioPolicy status=" + status);
                     return new StartResult(
                             false,
                             false,
@@ -190,9 +206,13 @@ public final class RemoteMicInjector {
                             "系统拒绝注册虚拟麦克风 AudioPolicy (code=" + status + ")");
                 }
 
-                Method createTrackMethod = policyClass.getMethod("createAudioTrackSource", mixClass);
-                track = (AudioTrack) createTrackMethod.invoke(policy, audioMix);
+                String[] trackModeOut = new String[1];
+                track = createAttributedTrackSource(
+                        policyClass, policy, mixClass, audioMix, format, sampleRate, channels, channelMask, trackModeOut);
                 if (track == null || track.getState() != AudioTrack.STATE_INITIALIZED) {
+                    int badState = (track != null) ? track.getState() : -1;
+                    System.err.println("OPALDESK_REMOTE_MIC_START_FAILED: AudioTrack uninitialized state="
+                            + badState + " mode=" + trackModeOut[0] + " rate=" + sampleRate + " ch=" + channels);
                     unregisterQuietly(am, policy);
                     if (track != null) {
                         try { track.release(); } catch (RuntimeException ignored) {}
@@ -216,7 +236,8 @@ public final class RemoteMicInjector {
                 this.writerThread = t;
                 t.start();
 
-                System.out.println("OPALDESK_REMOTE_MIC_STARTED rate=" + sampleRate + " ch=" + channels);
+                System.out.println("OPALDESK_REMOTE_MIC_STARTED rate=" + sampleRate
+                        + " ch=" + channels + " mode=" + trackModeOut[0]);
                 return new StartResult(true, true, sampleRate, channels, "远端麦克风已启用");
             } catch (Throwable t) {
                 if (track != null) {
@@ -304,6 +325,91 @@ public final class RemoteMicInjector {
                 }
                 break;
             }
+        }
+    }
+
+    /**
+     * Builds the virtual-source {@link AudioTrack} feeding the registered {@code REMOTE_SUBMIX}
+     * recorder mix.
+     *
+     * <p>In {@code app_process} ({@code uid=2000}), AOSP's {@code AudioPolicy.createAudioTrackSource}
+     * constructs {@code new AudioTrack(...)} without binding {@code mContext}, so {@code AudioTrack}
+     * inherits {@code ActivityThread.currentOpPackageName() == "android"} and Android 14-16
+     * {@code AudioFlinger} rejects it with {@code EX_SECURITY} ({@code uid=2000} != {@code "android"}).
+     * Constructing the identical {@code USAGE_VIRTUAL_SOURCE + addr=<registration>} track through
+     * {@link AudioTrack.Builder} with {@code setContext(shellContext)} supplies a valid
+     * {@code com.android.shell} {@code AttributionSource}, falling back to
+     * {@code createAudioTrackSource} if reflection ever differs on an OEM ROM.
+     */
+    private AudioTrack createAttributedTrackSource(
+            Class<?> policyClass,
+            Object policy,
+            Class<?> mixClass,
+            Object audioMix,
+            AudioFormat requestedFormat,
+            int sampleRate,
+            int channels,
+            int channelMask,
+            String[] modeOut) throws Throwable {
+        // Primary: AudioTrack.Builder + setContext(shellContext) matching AudioPolicy's virtual source track
+        try {
+            String reg = (String) mixClass.getMethod("getRegistration").invoke(audioMix);
+            String addrTag = formatMixAddressTag(reg);
+            if (!addrTag.isEmpty()) {
+                AudioFormat mixFmt = requestedFormat;
+                try {
+                    AudioFormat resolved = (AudioFormat) mixClass.getMethod("getFormat").invoke(audioMix);
+                    if (resolved != null) mixFmt = resolved;
+                } catch (Throwable ignored) {
+                }
+
+                int usageVirtualSource = readStaticInt(AudioAttributes.class, "USAGE_VIRTUAL_SOURCE", 15);
+                AudioAttributes.Builder ab = new AudioAttributes.Builder();
+                AudioAttributes.Builder.class.getMethod("setUsage", int.class).invoke(ab, usageVirtualSource);
+                AudioAttributes.Builder.class.getMethod("addTag", String.class).invoke(ab, addrTag);
+                AudioAttributes attrs = ab.build();
+
+                int minBuf = AudioTrack.getMinBufferSize(
+                        mixFmt.getSampleRate(), channelMask, mixFmt.getEncoding());
+                int bufSize = computeTrackBufferBytes(sampleRate, channels, minBuf);
+
+                AudioTrack.Builder tb = new AudioTrack.Builder()
+                        .setAudioAttributes(attrs)
+                        .setAudioFormat(mixFmt)
+                        .setBufferSizeInBytes(bufSize)
+                        .setTransferMode(AudioTrack.MODE_STREAM);
+                applyShellContext(tb);
+
+                AudioTrack built = tb.build();
+                if (built.getState() == AudioTrack.STATE_INITIALIZED) {
+                    modeOut[0] = "builder_ctx";
+                    return built;
+                }
+                System.err.println("OPALDESK_REMOTE_MIC_BUILDER_WARN state=" + built.getState()
+                        + " reg=" + reg + "; falling back to createAudioTrackSource");
+                try { built.release(); } catch (RuntimeException ignored) {}
+            }
+        } catch (Throwable t) {
+            Throwable cause = (t.getCause() != null) ? t.getCause() : t;
+            System.err.println("OPALDESK_REMOTE_MIC_BUILDER_WARN: " + cause.getMessage()
+                    + "; falling back to createAudioTrackSource");
+        }
+
+        // Fallback: stock AudioPolicy.createAudioTrackSource(audioMix)
+        modeOut[0] = "policy_source";
+        Method createTrackMethod = policyClass.getMethod("createAudioTrackSource", mixClass);
+        return (AudioTrack) createTrackMethod.invoke(policy, audioMix);
+    }
+
+    private void applyShellContext(AudioTrack.Builder trackBuilder) {
+        if (context == null || Build.VERSION.SDK_INT < 31) return;
+        try {
+            AudioTrack.Builder.class.getMethod("setContext", Context.class).invoke(trackBuilder, context);
+        } catch (NoSuchMethodException ignored) {
+            // Optional hidden/system API on API 31+.
+        } catch (Throwable t) {
+            Throwable cause = (t.getCause() != null) ? t.getCause() : t;
+            System.err.println("OPALDESK_REMOTE_MIC_SET_CTX_WARN: " + cause.getMessage());
         }
     }
 

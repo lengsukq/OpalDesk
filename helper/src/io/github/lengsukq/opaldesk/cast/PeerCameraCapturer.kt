@@ -12,17 +12,23 @@ import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.media.Image
 import android.media.ImageReader
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
+import android.view.Surface
+import android.view.WindowManager
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Low-overhead Camera2 MJPEG capturer for Android Tablet/Phone receivers (Root-gated camera uplink).
- * Captures YUV_420_888 frames from the front camera (falling back to any available camera),
- * rate-limits to `targetFps`, and encodes compact JPEG frames for `TYPE_CAMERA_FRAME (0x30)`.
+ *
+ * Supports live front/back lens switching (`switchFacing`) synchronized with the remote host's
+ * active AOSP `VirtualCamera`, and dynamically rotates every NV21 frame to upright (`0°`) using
+ * `SENSOR_ORIENTATION`, `LENS_FACING`, and live `display.rotation` before JPEG encoding.
  */
 internal class PeerCameraCapturer(
     private val context: Context,
@@ -30,6 +36,7 @@ internal class PeerCameraCapturer(
     private val height: Int = DEFAULT_HEIGHT,
     private val targetFps: Int = DEFAULT_FPS,
     private val jpegQuality: Int = 72,
+    initialFacing: String = "front",
     private val onJpegFrame: (ByteArray) -> Unit,
     private val onError: (String) -> Unit,
 ) {
@@ -40,49 +47,118 @@ internal class PeerCameraCapturer(
         const val DEFAULT_FPS = 15
     }
 
+    private val lifecycleLock = Any()
     private val running = AtomicBoolean(false)
+    private val openGen = AtomicInteger(0)
+
+    @Volatile
+    private var currentFacing: String = PeerCameraGeometry.normalizeFacing(initialFacing)
+
+    @Volatile
+    private var activeSensorOrientation: Int = 0
+
+    @Volatile
+    private var activeLensIsFront: Boolean = true
+
+    @Volatile
+    private var lastFrameMs: Long = 0L
+
     private var bgThread: HandlerThread? = null
     private var bgHandler: Handler? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
-    @Volatile
-    private var lastFrameMs: Long = 0L
+
+    fun getFacing(): String = currentFacing
 
     @SuppressLint("MissingPermission")
     fun start(): Boolean {
-        if (!running.compareAndSet(false, true)) return true
+        synchronized(lifecycleLock) {
+            if (!running.compareAndSet(false, true)) return true
+            val thread = HandlerThread("OpalPeerCamTx").apply { start() }
+            bgThread = thread
+            bgHandler = Handler(thread.looper)
+            return openCurrentLensLocked()
+        }
+    }
+
+    /**
+     * Seamlessly switches the local capturing lens (`"front"` or `"back"`) while keeping the
+     * OpalCast session alive. No-op if already capturing the requested lens.
+     */
+    @SuppressLint("MissingPermission")
+    fun switchFacing(targetFacing: String): Boolean {
+        val norm = PeerCameraGeometry.normalizeFacing(targetFacing)
+        synchronized(lifecycleLock) {
+            if (!running.get()) {
+                currentFacing = norm
+                return false
+            }
+            if (norm == currentFacing && cameraDevice != null) {
+                return true
+            }
+            currentFacing = norm
+            closeCameraResourcesLocked()
+            return openCurrentLensLocked()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openCurrentLensLocked(): Boolean {
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
         if (manager == null) {
-            running.set(false)
+            stopLocked()
             onError("无法获取系统 CameraManager 服务")
             return false
         }
 
-        val cameraId = selectCameraId(manager)
+        val cameraId = selectCameraId(manager, currentFacing)
         if (cameraId == null) {
-            running.set(false)
+            stopLocked()
             onError("未检测到可用的本机摄像头")
             return false
         }
+        val chars = try {
+            manager.getCameraCharacteristics(cameraId)
+        } catch (_: Throwable) {
+            null
+        }
+        val sensorOrientation = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val lensFacing = chars?.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_FRONT
+        val isFront = lensFacing == CameraCharacteristics.LENS_FACING_FRONT
+        activeSensorOrientation = sensorOrientation
+        activeLensIsFront = isFront
+
         val (captureW, captureH) = selectCaptureSize(manager, cameraId, width, height)
+        val handler = bgHandler
+        if (handler == null) {
+            stopLocked()
+            return false
+        }
+        val gen = openGen.incrementAndGet()
+        Log.i(
+            TAG,
+            "Opening cameraId=$cameraId reqFacing=$currentFacing actualFront=$isFront " +
+                "sensorOrient=$sensorOrientation size=${captureW}x${captureH}",
+        )
 
         return try {
-            val thread = HandlerThread("OpalPeerCamTx").apply { start() }
-            val handler = Handler(thread.looper)
-            bgThread = thread
-            bgHandler = handler
-
             val reader = ImageReader.newInstance(captureW, captureH, ImageFormat.YUV_420_888, 2)
             reader.setOnImageAvailableListener({ r ->
                 val img = try { r.acquireLatestImage() } catch (_: Throwable) { null } ?: return@setOnImageAvailableListener
                 try {
-                    if (!running.get()) return@setOnImageAvailableListener
+                    if (!running.get() || openGen.get() != gen) return@setOnImageAvailableListener
                     val now = SystemClock.uptimeMillis()
                     val minInterval = (1000L / targetFps.coerceIn(5, 30)).coerceAtLeast(33L)
                     if (now - lastFrameMs < minInterval) return@setOnImageAvailableListener
                     lastFrameMs = now
-                    val jpeg = yuv420ToJpeg(img, jpegQuality)
+                    val displayDeg = readCurrentDisplayRotationDegrees()
+                    val cwDeg = PeerCameraGeometry.computeUprightRotationCw(
+                        sensorOrientation = activeSensorOrientation,
+                        isFront = activeLensIsFront,
+                        displayRotationDeg = displayDeg,
+                    )
+                    val jpeg = yuv420ToUprightJpeg(img, cwDeg, jpegQuality)
                     if (jpeg != null && jpeg.isNotEmpty()) {
                         onJpegFrame(jpeg)
                     }
@@ -96,20 +172,32 @@ internal class PeerCameraCapturer(
                 cameraId,
                 object : CameraDevice.StateCallback() {
                     override fun onOpened(camera: CameraDevice) {
-                        if (!running.get()) {
-                            try { camera.close() } catch (_: Throwable) {}
-                            return
+                        synchronized(lifecycleLock) {
+                            if (!running.get() || openGen.get() != gen) {
+                                try { camera.close() } catch (_: Throwable) {}
+                                return
+                            }
+                            cameraDevice = camera
+                            createSessionLocked(camera, reader, handler, gen)
                         }
-                        cameraDevice = camera
-                        createSession(camera, reader, handler)
                     }
 
                     override fun onDisconnected(camera: CameraDevice) {
+                        val stale = openGen.get() != gen
+                        if (stale) {
+                            try { camera.close() } catch (_: Throwable) {}
+                            return
+                        }
                         stop()
                         onError("本机摄像头连接已断开")
                     }
 
                     override fun onError(camera: CameraDevice, error: Int) {
+                        val stale = openGen.get() != gen
+                        if (stale) {
+                            try { camera.close() } catch (_: Throwable) {}
+                            return
+                        }
                         stop()
                         onError("打开本机摄像头失败 (code=$error)")
                     }
@@ -118,14 +206,19 @@ internal class PeerCameraCapturer(
             )
             true
         } catch (t: Throwable) {
-            stop()
+            stopLocked()
             onError("启动本机摄像头失败：${t.message ?: t.javaClass.simpleName}")
             false
         }
     }
 
     @Suppress("DEPRECATION")
-    private fun createSession(camera: CameraDevice, reader: ImageReader, handler: Handler) {
+    private fun createSessionLocked(
+        camera: CameraDevice,
+        reader: ImageReader,
+        handler: Handler,
+        gen: Int,
+    ) {
         try {
             val surf = reader.surface
             val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
@@ -137,21 +230,24 @@ internal class PeerCameraCapturer(
                 listOf(surf),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
-                        if (!running.get()) {
-                            try { session.close() } catch (_: Throwable) {}
-                            return
-                        }
-                        captureSession = session
-                        try {
-                            session.setRepeatingRequest(builder.build(), null, handler)
-                        } catch (t: Throwable) {
-                            Log.w(TAG, "setRepeatingRequest failed: ${t.message}")
-                            stop()
-                            onError("摄像头预览流启动失败")
+                        synchronized(lifecycleLock) {
+                            if (!running.get() || openGen.get() != gen) {
+                                try { session.close() } catch (_: Throwable) {}
+                                return
+                            }
+                            captureSession = session
+                            try {
+                                session.setRepeatingRequest(builder.build(), null, handler)
+                            } catch (t: Throwable) {
+                                Log.w(TAG, "setRepeatingRequest failed: ${t.message}")
+                                stopLocked()
+                                onError("摄像头预览流启动失败")
+                            }
                         }
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
+                        if (openGen.get() != gen) return
                         stop()
                         onError("摄像头会话配置失败")
                     }
@@ -159,35 +255,67 @@ internal class PeerCameraCapturer(
                 handler,
             )
         } catch (t: Throwable) {
-            stop()
+            if (openGen.get() != gen) return
+            stopLocked()
             onError("创建摄像头会话失败：${t.message ?: t.javaClass.simpleName}")
         }
     }
 
     fun stop() {
-        if (!running.compareAndSet(true, false)) return
+        synchronized(lifecycleLock) {
+            stopLocked()
+        }
+    }
+
+    private fun stopLocked() {
+        val wasRunning = running.getAndSet(false)
+        openGen.incrementAndGet()
+        closeCameraResourcesLocked()
+        val t = bgThread
+        bgThread = null
+        bgHandler = null
+        if (t != null && wasRunning) {
+            try { t.quitSafely() } catch (_: Throwable) {}
+        }
+    }
+
+    private fun closeCameraResourcesLocked() {
         try { captureSession?.close() } catch (_: Throwable) {}
         captureSession = null
         try { cameraDevice?.close() } catch (_: Throwable) {}
         cameraDevice = null
         try { imageReader?.close() } catch (_: Throwable) {}
         imageReader = null
-        val t = bgThread
-        bgThread = null
-        bgHandler = null
-        if (t != null) {
-            try { t.quitSafely() } catch (_: Throwable) {}
-        }
     }
 
-    private fun selectCameraId(manager: CameraManager): String? {
+    @Suppress("DEPRECATION")
+    private fun readCurrentDisplayRotationDegrees(): Int {
+        val rot = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                context.display?.rotation
+            } else {
+                null
+            } ?: (context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)?.defaultDisplay?.rotation
+            ?: Surface.ROTATION_0
+        } catch (_: Throwable) {
+            Surface.ROTATION_0
+        }
+        return PeerCameraGeometry.surfaceRotationToDegrees(rot)
+    }
+
+    private fun selectCameraId(manager: CameraManager, facing: String): String? {
+        val desiredFacing = if (facing == "back") {
+            CameraCharacteristics.LENS_FACING_BACK
+        } else {
+            CameraCharacteristics.LENS_FACING_FRONT
+        }
         return try {
             val ids = manager.cameraIdList
             var fallback: String? = null
             for (id in ids) {
                 if (fallback == null) fallback = id
                 val chars = manager.getCameraCharacteristics(id)
-                if (chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT) {
+                if (chars.get(CameraCharacteristics.LENS_FACING) == desiredFacing) {
                     return id
                 }
             }
@@ -212,7 +340,7 @@ internal class PeerCameraCapturer(
         }
     }
 
-    private fun yuv420ToJpeg(image: Image, quality: Int): ByteArray? {
+    private fun yuv420ToUprightJpeg(image: Image, cwDeg: Int, quality: Int): ByteArray? {
         val w = image.width
         val h = image.height
         val planes = image.planes
@@ -257,8 +385,13 @@ internal class PeerCameraCapturer(
             }
         }
 
+        val upright = PeerCameraGeometry.rotateNv21(nv21, w, h, cwDeg)
         val baos = ByteArrayOutputStream(24 * 1024)
-        val yuv = YuvImage(nv21, ImageFormat.NV21, w, h, null)
-        return if (yuv.compressToJpeg(Rect(0, 0, w, h), quality, baos)) baos.toByteArray() else null
+        val yuv = YuvImage(upright.data, ImageFormat.NV21, upright.width, upright.height, null)
+        return if (yuv.compressToJpeg(Rect(0, 0, upright.width, upright.height), quality, baos)) {
+            baos.toByteArray()
+        } else {
+            null
+        }
     }
 }

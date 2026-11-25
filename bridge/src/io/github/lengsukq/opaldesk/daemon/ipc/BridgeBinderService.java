@@ -97,6 +97,7 @@ public final class BridgeBinderService extends Binder {
                     reply.writeInt(config.getGlobalCustomDpi());
                     reply.writeInt(config.isRemoteMicEnabled() ? 1 : 0);
                     reply.writeInt(config.isRemoteCameraEnabled() ? 1 : 0);
+                    reply.writeInt(config.getAudioRouteMode());
                 }
                 return true;
             }
@@ -469,9 +470,19 @@ public final class BridgeBinderService extends Binder {
             case BridgeProtocol.TX_SET_REMOTE_MEDIA_CONFIG: {
                 boolean micEnabled = data.readInt() != 0;
                 boolean cameraEnabled = data.readInt() != 0;
-                config.setRemoteMediaConfig(micEnabled, cameraEnabled);
+                boolean accepted = config.setRemoteMediaConfig(micEnabled, cameraEnabled);
+                boolean effectiveCamera = config.isRemoteCameraEnabled();
                 if (remoteBridge != null) {
-                    remoteBridge.applyRemoteMediaPolicy(micEnabled, cameraEnabled);
+                    remoteBridge.applyRemoteMediaPolicy(micEnabled, effectiveCamera);
+                }
+                if (reply != null) reply.writeInt(accepted ? 1 : 0);
+                return true;
+            }
+            case BridgeProtocol.TX_SET_AUDIO_ROUTE_MODE: {
+                int mode = data.readInt();
+                config.setAudioRouteMode(mode);
+                if (remoteBridge != null) {
+                    remoteBridge.applyAudioRouteMode(config.getAudioRouteMode());
                 }
                 if (reply != null) reply.writeInt(1);
                 return true;

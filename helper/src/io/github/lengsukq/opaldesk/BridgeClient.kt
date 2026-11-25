@@ -122,6 +122,8 @@ object BridgeClient {
         }
     }
 
+    fun isBinderAliveFast(): Boolean = binder?.isBinderAlive == true
+
     fun getService(): IBinder? {
         val b = binder
         return if (b != null && b.pingBinder()) b else null
@@ -129,7 +131,7 @@ object BridgeClient {
 
     fun setOnBinderReady(cb: Runnable) {
         binderReadyListeners.add(cb)
-        if (getService() != null) mainHandler.post(cb)
+        if (isBinderAliveFast()) mainHandler.post(cb)
     }
 
     fun removeOnBinderReady(cb: Runnable) {
@@ -158,11 +160,19 @@ object BridgeClient {
                 io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.hydrate(ctx)
                 io.github.lengsukq.opaldesk.prefs.AppPrefs.hydrateFlows(ctx)
                 syncProfileToDaemonSync(next, io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.workingConfig)
+                val st = refreshStatus()
                 val micOn = io.github.lengsukq.opaldesk.prefs.AppPrefs.isRemoteMicEnabled(ctx)
-                val camOn = io.github.lengsukq.opaldesk.prefs.AppPrefs.isRemoteCameraEnabled(ctx)
+                val camOn = st.rootEnhanced && io.github.lengsukq.opaldesk.prefs.AppPrefs.isRemoteCameraEnabled(ctx)
+                if (!st.rootEnhanced && io.github.lengsukq.opaldesk.prefs.AppPrefs.isRemoteCameraEnabled(ctx)) {
+                    io.github.lengsukq.opaldesk.prefs.AppPrefs.setRemoteCameraEnabled(ctx, false)
+                }
                 transact(next, BridgeProtocol.Tx.SET_REMOTE_MEDIA_CONFIG, oneway = false, writeArgs = { d ->
                     d.writeInt(if (micOn) 1 else 0)
                     d.writeInt(if (camOn) 1 else 0)
+                }) { it.readInt() }
+                val audioMode = io.github.lengsukq.opaldesk.prefs.AppPrefs.getAudioRouteMode(ctx)
+                transact(next, BridgeProtocol.Tx.SET_AUDIO_ROUTE_MODE, oneway = false, writeArgs = { d ->
+                    d.writeInt(audioMode)
                 }) { it.readInt() }
             }
             if (localDesktopMousePinned) {
@@ -225,9 +235,10 @@ object BridgeClient {
     }
 
     fun requestBinder(ctx: Context?) {
-        if (getService() != null) return
+        if (isBinderAliveFast()) return
         val appCtx = ctx?.applicationContext
         ioExec.execute {
+            if (getService() != null) return@execute
             try {
                 LocalSocket().use { sock ->
                     sock.connect(
@@ -284,8 +295,14 @@ object BridgeClient {
                 globalCustomDpi = if (reply.dataAvail() >= 4) reply.readInt() else 0,
                 remoteMicEnabled = if (reply.dataAvail() >= 4) reply.readInt() != 0 else false,
                 remoteCameraEnabled = if (reply.dataAvail() >= 4) reply.readInt() != 0 else false,
+                audioRouteMode = if (reply.dataAvail() >= 4) reply.readInt() else BridgeProtocol.AudioRoute.ALL_TO_DEX,
             )
-        }?.also { _statusFlow.value = it } ?: DaemonStatus(connected = false).also { _statusFlow.value = it }
+        }?.also { st ->
+            _statusFlow.value = st
+            if (st.connected && !st.rootEnhanced && io.github.lengsukq.opaldesk.prefs.AppPrefs.remoteCameraEnabledFlow.value) {
+                io.github.lengsukq.opaldesk.prefs.AppPrefs.setRemoteCameraEnabled(appContext, false)
+            }
+        } ?: DaemonStatus(connected = false).also { _statusFlow.value = it }
     }
 
     fun refreshRemoteStatus(): RemoteStreamStatus {
@@ -510,8 +527,16 @@ object BridgeClient {
         onDone: ((Boolean) -> Unit)? = null,
     ) {
         bindAppContext(ctx)
+        val curStatus = _statusFlow.value
+        val canUseRootCamera = curStatus.connected && curStatus.rootEnhanced
+        if (cameraEnabled && !canUseRootCamera) {
+            io.github.lengsukq.opaldesk.prefs.AppPrefs.setRemoteCameraEnabled(ctx, false)
+            if (onDone != null) mainHandler.post { onDone(false) }
+            return
+        }
+        val effectiveCamera = cameraEnabled && canUseRootCamera
         io.github.lengsukq.opaldesk.prefs.AppPrefs.setRemoteMicEnabled(ctx, micEnabled)
-        io.github.lengsukq.opaldesk.prefs.AppPrefs.setRemoteCameraEnabled(ctx, cameraEnabled)
+        io.github.lengsukq.opaldesk.prefs.AppPrefs.setRemoteCameraEnabled(ctx, effectiveCamera)
         ioExec.execute {
             val svc = getService()
             val ok = if (svc != null) {
@@ -521,8 +546,41 @@ object BridgeClient {
                     oneway = false,
                     writeArgs = { d ->
                         d.writeInt(if (micEnabled) 1 else 0)
-                        d.writeInt(if (cameraEnabled) 1 else 0)
+                        d.writeInt(if (effectiveCamera) 1 else 0)
                     },
+                ) { it.readInt() != 0 } ?: false
+            } else {
+                false
+            }
+            if (svc != null) {
+                val updated = refreshStatus()
+                if (!updated.rootEnhanced && effectiveCamera) {
+                    io.github.lengsukq.opaldesk.prefs.AppPrefs.setRemoteCameraEnabled(ctx, false)
+                }
+            }
+            if (onDone != null) mainHandler.post { onDone(ok) }
+        }
+    }
+
+    fun setAudioRouteModeAsync(
+        ctx: Context?,
+        mode: Int,
+        onDone: ((Boolean) -> Unit)? = null,
+    ) {
+        bindAppContext(ctx)
+        val clamped = mode.coerceIn(
+            BridgeProtocol.AudioRoute.ALL_TO_DEX,
+            BridgeProtocol.AudioRoute.SPLIT_BY_APP,
+        )
+        io.github.lengsukq.opaldesk.prefs.AppPrefs.setAudioRouteMode(ctx, clamped)
+        ioExec.execute {
+            val svc = getService()
+            val ok = if (svc != null) {
+                transact(
+                    svc,
+                    BridgeProtocol.Tx.SET_AUDIO_ROUTE_MODE,
+                    oneway = false,
+                    writeArgs = { d -> d.writeInt(clamped) },
                 ) { it.readInt() != 0 } ?: false
             } else {
                 false

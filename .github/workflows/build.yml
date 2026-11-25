@@ -21,6 +21,16 @@ on:
         options:
           - 'false'
           - 'true'
+      android_only:
+        description: 'Build/release Android APK & opaldesk.jar only (skip macOS & Windows)'
+        required: false
+        default: false
+        type: boolean
+      prerelease:
+        description: 'Mark manually dispatched GitHub Release as pre-release'
+        required: false
+        default: false
+        type: boolean
 
 # Least-privilege default across all jobs (including pull_request)
 permissions:
@@ -193,6 +203,7 @@ jobs:
 
   build-macos:
     name: Build & Test macOS Client (OpalDesk)
+    if: ${{ !(github.event_name == 'workflow_dispatch' && format('{0}', github.event.inputs.android_only) == 'true') }}
     runs-on: macos-latest
     outputs:
       macos_archive_name: ${{ steps.package_macos.outputs.macos_archive_name }}
@@ -238,6 +249,7 @@ jobs:
 
   build-windows:
     name: Build & Test Windows Client (OpalDesk Tauri v2)
+    if: ${{ !(github.event_name == 'workflow_dispatch' && format('{0}', github.event.inputs.android_only) == 'true') }}
     runs-on: windows-latest
     outputs:
       windows_setup_name: ${{ steps.package_windows.outputs.windows_setup_name }}
@@ -311,8 +323,12 @@ jobs:
     name: Publish GitHub Release
     needs: [build-android, build-macos, build-windows]
     if: >-
-      startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' && github.ref == 'refs/heads/main')
+      always() &&
+      needs.build-android.result == 'success' &&
+      (needs.build-macos.result == 'success' || needs.build-macos.result == 'skipped') &&
+      (needs.build-windows.result == 'success' || needs.build-windows.result == 'skipped') &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -345,16 +361,44 @@ jobs:
           path: dist
 
       - name: Download Verified macOS Release Artifacts
+        if: ${{ needs.build-macos.result == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: OpalDesk-macOS_v${{ needs.build-macos.outputs.app_version }}
           path: dist
 
       - name: Download Verified Windows Release Artifacts
+        if: ${{ needs.build-windows.result == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: OpalDesk-Windows_v${{ needs.build-windows.outputs.app_version }}
           path: dist
+
+      - name: Collect Release Asset Manifest
+        id: assets
+        shell: bash
+        env:
+          APK_NAME: ${{ needs.build-android.outputs.apk_name }}
+          MACOS_ARCHIVE: ${{ needs.build-macos.outputs.macos_archive_name }}
+          WIN_SETUP: ${{ needs.build-windows.outputs.windows_setup_name }}
+          WIN_MSI: ${{ needs.build-windows.outputs.windows_msi_name }}
+          HAS_MACOS: ${{ needs.build-macos.result == 'success' && '1' || '0' }}
+          HAS_WINDOWS: ${{ needs.build-windows.result == 'success' && '1' || '0' }}
+        run: |
+          {
+            echo "files<<EOF"
+            echo "dist/${APK_NAME}"
+            echo "dist/opaldesk.jar"
+            if [ "$HAS_MACOS" = "1" ] && [ -n "$MACOS_ARCHIVE" ]; then
+              echo "dist/${MACOS_ARCHIVE}"
+            fi
+            if [ "$HAS_WINDOWS" = "1" ] && [ -n "$WIN_SETUP" ] && [ -n "$WIN_MSI" ]; then
+              echo "dist/${WIN_SETUP}"
+              echo "dist/${WIN_MSI}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          ls -lh dist
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
@@ -362,11 +406,6 @@ jobs:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', needs.build-android.outputs.app_version) }}
           name: OpalDesk v${{ needs.build-android.outputs.app_version }}
           generate_release_notes: true
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && format('{0}', github.event.inputs.prerelease) == 'true' }}
           fail_on_unmatched_files: true
-          files: |
-            dist/${{ needs.build-android.outputs.apk_name }}
-            dist/opaldesk.jar
-            dist/${{ needs.build-macos.outputs.macos_archive_name }}
-            dist/${{ needs.build-windows.outputs.windows_setup_name }}
-            dist/${{ needs.build-windows.outputs.windows_msi_name }}
+          files: ${{ steps.assets.outputs.files }}

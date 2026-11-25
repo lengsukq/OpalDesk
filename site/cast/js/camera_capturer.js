@@ -30,25 +30,44 @@ export class OpalCameraCapturer {
     this.ctx = null;
     this.timer = null;
     this.encoding = false;
+    this.facing = 'front';
   }
 
-  async start() {
-    if (this.running) return true;
+  async start(facing = this.facing) {
+    const normFacing = facing === 'back' ? 'back' : 'front';
+    if (this.running && this.facing === normFacing) return true;
+    if (this.running) {
+      this.stop();
+    }
+    this.facing = normFacing;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       this.onError?.('当前浏览器不支持摄像头采集（需通过 HTTPS 或 localhost 访问）');
       return false;
     }
 
+    const facingMode = normFacing === 'back' ? 'environment' : 'user';
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: this.width },
-          height: { ideal: this.height },
-          frameRate: { ideal: this.fps, max: 30 },
-          facingMode: 'user',
-        },
-        audio: false,
-      });
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: this.width },
+            height: { ideal: this.height },
+            frameRate: { ideal: this.fps, max: 30 },
+            facingMode: { ideal: facingMode },
+          },
+          audio: false,
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: this.width },
+            height: { ideal: this.height },
+            frameRate: { ideal: this.fps, max: 30 },
+          },
+          audio: false,
+        });
+      }
 
       const video = document.createElement('video');
       video.srcObject = stream;

@@ -221,6 +221,19 @@ public final class CompositorEngine {
         }
     }
 
+    /** Returns package names of all currently open windows hosted inside the DeX compositor. */
+    public java.util.Set<String> getOpenWindowPackages() {
+        synchronized (lock) {
+            java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+            for (WindowSession ws : sessionsById.values()) {
+                if (ws != null && ws.pkg != null && !ws.pkg.isEmpty()) {
+                    out.add(ws.pkg);
+                }
+            }
+            return out;
+        }
+    }
+
     public WindowSession getWindowSnapshot(int windowId) {
         synchronized (lock) {
             return sessionsById.get(windowId);
@@ -435,6 +448,71 @@ public final class CompositorEngine {
             }
         }
         return assignedDisplayId;
+    }
+
+    /**
+     * Hot-migrates every currently LIVE window onto a fresh {@code VirtualDisplay} from the
+     * current {@link VirtualDisplayPool.DisplayDriver} (e.g. moving open windows like WeChat onto
+     * or off an AOSP {@code VirtualDevice} when VirtualCamera mapping toggles ON/OFF), preserving
+     * each running task and its live {@code TextureView} surface without closing the app.
+     */
+    public int migrateLiveWindowsToCurrentDisplayDriver() {
+        List<int[]> candidates = new ArrayList<>();
+        synchronized (lock) {
+            for (WindowSession ws : sessionsById.values()) {
+                if (ws != null && ws.isLive() && ws.displayId > 0 && attachedSurfaces.containsKey(ws.windowId)) {
+                    candidates.add(new int[]{ws.windowId, ws.contentWidth, ws.contentHeight, ws.contentDpi});
+                }
+            }
+        }
+        int migrated = 0;
+        int cfgFps = config.getTargetFps();
+        float effFps = DisplayGeometryUtil.clampFps(cfgFps > 0 ? cfgFps : 60f, 60f);
+
+        for (int[] item : candidates) {
+            int winId = item[0];
+            VirtualDisplayPool.RebindResult rebind;
+            String pkg;
+            String cls;
+            int prevTaskId;
+            int newDisplayId;
+            synchronized (lock) {
+                WindowSession ws = sessionsById.get(winId);
+                Object surf = attachedSurfaces.get(winId);
+                if (ws == null || !ws.isLive() || surf == null) continue;
+                rebind = vdPool.recreateLease(ws, surf, ws.contentWidth, ws.contentHeight, ws.contentDpi, effFps);
+                if (rebind == null || rebind.newLease == null) continue;
+                ws.displayId = rebind.newLease.displayId;
+                ws.vdUniqueId = rebind.newLease.uniqueId;
+                ws.lastLaunchAtMs = System.currentTimeMillis();
+                ws.emptyDisplayTicks = 0;
+                ws.emptySinceMs = 0L;
+                pkg = ws.pkg;
+                cls = ws.activityClass;
+                prevTaskId = ws.taskId;
+                newDisplayId = rebind.newLease.displayId;
+                markDirtyAndNotifyLocked();
+            }
+
+            try {
+                int movedTid = runtimeBridge.launchOrMoveFullscreenApp(pkg, cls, newDisplayId, prevTaskId);
+                if (movedTid > 0) {
+                    synchronized (lock) {
+                        WindowSession ws = sessionsById.get(winId);
+                        if (ws != null && ws.displayId == newDisplayId) {
+                            ws.taskId = movedTid;
+                            markDirtyAndNotifyLocked();
+                        }
+                    }
+                }
+            } finally {
+                vdPool.finishReleaseOldLease(rebind.oldLease);
+            }
+            migrated++;
+            System.out.println("OPALDESK_VD_MIGRATED wid=" + winId + " pkg=" + pkg
+                    + " oldDisplay=" + rebind.oldLease.displayId + " newDisplay=" + newDisplayId);
+        }
+        return migrated;
     }
 
     /**

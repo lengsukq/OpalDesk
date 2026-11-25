@@ -5,15 +5,18 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color as AndroidColor
 import android.hardware.display.DisplayManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Display
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -48,12 +51,14 @@ import io.github.lengsukq.opaldesk.external.DirectExternalTrackpadSink
 import io.github.lengsukq.opaldesk.external.ExternalDesktopMode
 import io.github.lengsukq.opaldesk.external.ExternalDesktopSession
 import io.github.lengsukq.opaldesk.external.ExternalDisplayPolicy
+import io.github.lengsukq.opaldesk.external.ExternalDisplayTransport
 import io.github.lengsukq.opaldesk.external.ExternalMonitorPresentation
 import io.github.lengsukq.opaldesk.external.ExternalPointerDispatcher
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadLauncher
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadPolicy
 import io.github.lengsukq.opaldesk.external.HardwareMouseDetectingFrameLayout
+import io.github.lengsukq.opaldesk.external.WirelessDisplayHelper
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
@@ -83,6 +88,9 @@ import kotlin.math.roundToInt
 class ExternalDesktopActivity : ComponentActivity() {
     companion object {
         private const val TAG = "OpalExtDesktop"
+        const val EXTRA_TARGET_DISPLAY_ID = "targetDisplayId"
+        const val EXTRA_PREFER_PRESENTATION = "preferPresentation"
+        const val EXTRA_IS_WIRELESS_DISPLAY = "isWirelessDisplay"
 
         val isPresentationActive: Boolean
             get() = ExternalTrackpadBridge.sessionFlow.value.isPresentation
@@ -114,6 +122,7 @@ class ExternalDesktopActivity : ComponentActivity() {
     private var presentationSummary by mutableStateOf("")
     private var directDisplaySummary by mutableStateOf("")
     private var runningInPresentationMode by mutableStateOf(false)
+    private var activeIsWirelessDisplay by mutableStateOf(false)
     private var directImeVisible by mutableStateOf(false)
     private var directComposingText by mutableStateOf("")
     private var directImeController: NativeImeHostController? = null
@@ -151,17 +160,23 @@ class ExternalDesktopActivity : ComponentActivity() {
         }
 
         val currentDisplayId = display?.displayId ?: Display.DEFAULT_DISPLAY
-        val requestedId = intent?.getIntExtra("targetDisplayId", -1) ?: -1
-        val physicalExternal = findPhysicalExternalDisplay(requestedId)
+        val requestedId = intent?.getIntExtra(EXTRA_TARGET_DISPLAY_ID, -1) ?: -1
+        val requestedWireless = intent?.getBooleanExtra(EXTRA_IS_WIRELESS_DISPLAY, false) == true
+        val inspectedExternal = findExternalDisplay(requestedId)
+        val physicalExternal = inspectedExternal?.display
 
         val usePresentation = (currentDisplayId == Display.DEFAULT_DISPLAY) && (physicalExternal != null)
         runningInPresentationMode = usePresentation
 
-        if (currentDisplayId == Display.DEFAULT_DISPLAY && physicalExternal != null) {
-            targetDisplayId = physicalExternal.displayId
+        if (currentDisplayId == Display.DEFAULT_DISPLAY && inspectedExternal != null) {
+            val targetExternal = inspectedExternal.display
+            targetDisplayId = targetExternal.displayId
+            val isWireless = requestedWireless || inspectedExternal.transport == ExternalDisplayTransport.WIRELESS_TV
+            activeIsWirelessDisplay = isWireless
             val pres = ExternalMonitorPresentation(
                 hostActivity = this,
-                targetDisplay = physicalExternal,
+                targetDisplay = targetExternal,
+                displayLabelOverride = inspectedExternal.displayName,
                 onPickCustomWallpaper = { wallpaperPicker.launch("image/*") },
                 onOpenConsole = ::openConsoleOnPrimaryDisplay,
                 onExitDesktop = { finish() },
@@ -174,15 +189,16 @@ class ExternalDesktopActivity : ComponentActivity() {
                     owner = this,
                     session = ExternalDesktopSession(
                         mode = ExternalDesktopMode.PRESENTATION,
-                        displayId = physicalExternal.displayId,
-                        displayName = physicalExternal.name ?: "外接屏",
+                        displayId = targetExternal.displayId,
+                        displayName = inspectedExternal.displayName,
                         widthPx = pres.displayWidthPx,
                         heightPx = pres.displayHeightPx,
                         refreshRateHz = pres.refreshRateHz,
                         isRemoteCastDisplay = false,
+                        isWirelessDisplay = isWireless,
                     ),
                 )
-                syncExternalMouseRouting(physicalExternal.displayId)
+                syncExternalMouseRouting(targetExternal.displayId)
             } catch (t: Throwable) {
                 Log.w(TAG, "Presentation.show failed, falling back to direct render: ${t.message}")
                 runningInPresentationMode = false
@@ -190,7 +206,8 @@ class ExternalDesktopActivity : ComponentActivity() {
             }
         } else if (currentDisplayId > Display.DEFAULT_DISPLAY) {
             targetDisplayId = currentDisplayId
-            val session = publishDirectSession(currentDisplayId)
+            val session = publishDirectSession(currentDisplayId, requestedWireless)
+            activeIsWirelessDisplay = session.isWirelessDisplay
             syncExternalMouseRouting(currentDisplayId)
             if (ExternalTrackpadPolicy.shouldAutoLaunchPhoneTrackpad(
                     session = session,
@@ -236,6 +253,9 @@ class ExternalDesktopActivity : ComponentActivity() {
                     externalDisplayId = targetDisplayId,
                     cursorX = cursor.x.roundToInt(),
                     cursorY = cursor.y.roundToInt(),
+                    badgePrefix = if (activeIsWirelessDisplay) "无线电视" else "独立满屏",
+                    showOverscanControl = true,
+                    isWirelessDisplay = activeIsWirelessDisplay,
                     onMoveCursor = { dx, dy -> pres.moveCursorBy(dx, dy) },
                     onSetPrimaryButton = { down -> pres.setPrimaryButton(down) },
                     onTapPrimary = { pres.tapPrimary() },
@@ -278,20 +298,39 @@ class ExternalDesktopActivity : ComponentActivity() {
             ExternalTrackpadBridge.registerDirectSink(sink)
         }
 
+        val initialOverscan = if (session.isPhysicalDirectExtended) AppPrefs.getExternalOverscanPct(this) else 0f
+        val (initInsetH, initInsetV) = ExternalDisplayPolicy.computeOverscanInsetsPx(defaultW, defaultH, initialOverscan)
         val view = ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
-            layoutParams = ViewGroup.LayoutParams(
+            layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
-            )
+                Gravity.CENTER,
+            ).apply {
+                setMargins(initInsetH, initInsetV, initInsetH, initInsetV)
+            }
             setContent {
                 OpalTheme {
                     val uiScale by AppPrefs.externalUiScaleFlow.collectAsState()
+                    val overscanPct by AppPrefs.externalOverscanPctFlow.collectAsState()
+                    val curExtSession by ExternalTrackpadBridge.sessionFlow.collectAsState()
                     val remoteCursor by BridgeClient.remoteTrackpadCursorFlow.collectAsState()
                     val scene by BridgeClient.sceneFlow.collectAsState()
                     val imeRequest by BridgeClient.imeBridgeRequestFlow.collectAsState()
                     val imeController = rememberNativeImeHostController()
                     directImeController = imeController
+                    LaunchedEffect(overscanPct, curExtSession.isPhysicalDirectExtended, curExtSession.widthPx, curExtSession.heightPx) {
+                        val targetView = directComposeView ?: return@LaunchedEffect
+                        val lp = targetView.layoutParams as? FrameLayout.LayoutParams ?: return@LaunchedEffect
+                        val effPct = if (curExtSession.isPhysicalDirectExtended) overscanPct else 0f
+                        val baseW = curExtSession.widthPx.takeIf { it > 0 } ?: defaultW
+                        val baseH = curExtSession.heightPx.takeIf { it > 0 } ?: defaultH
+                        val (hPx, vPx) = ExternalDisplayPolicy.computeOverscanInsetsPx(baseW, baseH, effPct)
+                        if (lp.leftMargin != hPx || lp.topMargin != vPx || lp.rightMargin != hPx || lp.bottomMargin != vPx) {
+                            lp.setMargins(hPx, vPx, hPx, vPx)
+                            targetView.layoutParams = lp
+                        }
+                    }
                     var lastHandledImeSeq by remember {
                         mutableLongStateOf(BridgeClient.imeBridgeRequestFlow.value?.seq ?: 0L)
                     }
@@ -387,6 +426,7 @@ class ExternalDesktopActivity : ComponentActivity() {
                 BridgeClient.updateRemoteTrackpadCursor(null)
             }
         }.apply {
+            setBackgroundColor(AndroidColor.BLACK)
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -413,18 +453,30 @@ class ExternalDesktopActivity : ComponentActivity() {
         override fun closeExternalDesktop() = runOnUiThread { finish() }
     }
 
-    private fun publishDirectSession(currentDisplayId: Int): ExternalDesktopSession {
+    private fun publishDirectSession(currentDisplayId: Int, requestedWireless: Boolean = false): ExternalDesktopSession {
         val curDisplay = display ?: displayManager?.getDisplay(currentDisplayId)
         val curMode = curDisplay?.mode
         val widthPx = curMode?.physicalWidth?.coerceAtLeast(640) ?: resources.displayMetrics.widthPixels.coerceAtLeast(640)
         val heightPx = curMode?.physicalHeight?.coerceAtLeast(480) ?: resources.displayMetrics.heightPixels.coerceAtLeast(480)
-        val hz = (curMode?.refreshRate ?: 60f).toInt().coerceAtLeast(30)
+        val hz = (curMode?.refreshRate ?: 60f).toInt().coerceAtLeast(24)
         val dispName = curDisplay?.name ?: "外接屏"
         val isRemoteCast = ExternalDisplayPolicy.isRemoteCastDisplay(
             displayId = currentDisplayId,
             displayName = dispName,
             remote = BridgeClient.remoteStatusFlow.value,
         )
+        val inspectedTransport = curDisplay?.let { d ->
+            ExternalDisplayPolicy.classifyExternalDisplay(
+                displayId = d.displayId,
+                isValid = d.isValid,
+                name = d.name,
+                flags = d.flags,
+                state = d.state,
+                displayType = WirelessDisplayHelper.queryDisplayTypeSafe(d),
+            )
+        }
+        val isWireless = !isRemoteCast &&
+            (requestedWireless || inspectedTransport == ExternalDisplayTransport.WIRELESS_TV)
         val session = ExternalDesktopSession(
             mode = ExternalDesktopMode.DIRECT_EXTENDED,
             displayId = currentDisplayId,
@@ -433,6 +485,7 @@ class ExternalDesktopActivity : ComponentActivity() {
             heightPx = heightPx,
             refreshRateHz = hz,
             isRemoteCastDisplay = isRemoteCast,
+            isWirelessDisplay = isWireless,
         )
         directDisplaySummary = session.summary
         ExternalTrackpadBridge.publishSession(this, session)
@@ -546,22 +599,16 @@ class ExternalDesktopActivity : ComponentActivity() {
         return false
     }
 
-    private fun findPhysicalExternalDisplay(preferredId: Int): Display? {
+    private fun findExternalDisplay(preferredId: Int): WirelessDisplayHelper.InspectedDisplay? {
         val dm = displayManager ?: return null
+        val remoteDesktopId = BridgeClient.remoteStatusFlow.value.desktopDisplayId
+        val candidates = WirelessDisplayHelper.inspectExternalDisplays(this, dm, remoteDesktopId)
         if (preferredId > Display.DEFAULT_DISPLAY) {
-            dm.getDisplay(preferredId)?.takeIf { isPhysicalExternal(it) }?.let { return it }
+            candidates.firstOrNull { it.display.displayId == preferredId }?.let { return it }
         }
-        return dm.displays.firstOrNull { isPhysicalExternal(it) }
+        return candidates.firstOrNull { ExternalDisplayPolicy.isAutoProjectable(it.transport) }
+            ?: candidates.firstOrNull()
     }
-
-    private fun isPhysicalExternal(d: Display): Boolean =
-        ExternalDisplayPolicy.isPhysicalExternalDisplay(
-            displayId = d.displayId,
-            isValid = d.isValid,
-            name = d.name,
-            flags = d.flags,
-            state = d.state,
-        )
 
     private fun sendBackToFocusedWindow() {
         val focused = BridgeClient.sceneFlow.value.focusedWindow

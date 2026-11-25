@@ -1,6 +1,7 @@
 package io.github.lengsukq.opaldesk
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.view.Display
 import android.view.KeyEvent
@@ -52,6 +53,9 @@ import io.github.lengsukq.opaldesk.ui.rememberNativeImeHostController
  * (`Alt+Tab`, `Alt+2/3/4/G` tiling, `Ctrl+W`, `Back`, and typing) into the active `VirtualDisplay` window session.
  */
 class DesktopActivity : ComponentActivity() {
+    companion object {
+        const val EXTRA_FORCE_LANDSCAPE = "force_landscape"
+    }
 
     private var imeVisible by mutableStateOf(false)
     private var activeImeController: io.github.lengsukq.opaldesk.ui.NativeImeHostController? = null
@@ -90,6 +94,7 @@ class DesktopActivity : ComponentActivity() {
             finish()
             return
         }
+        applyOrientationPreference(intent)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
@@ -209,6 +214,21 @@ class DesktopActivity : ComponentActivity() {
             }
         }
         applyImmersiveFullscreen()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        applyOrientationPreference(intent)
+    }
+
+    private fun applyOrientationPreference(srcIntent: Intent?) {
+        val forceLandscape = srcIntent?.getBooleanExtra(EXTRA_FORCE_LANDSCAPE, false) == true
+        requestedOrientation = if (forceLandscape) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
     }
 
     override fun onStart() {
