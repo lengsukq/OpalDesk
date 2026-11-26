@@ -1324,10 +1324,19 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             if (s.vd != null) {
                 int oldId = s.displayId;
                 if (oldId > 0) {
-                    String expectedPkg = s.standalone ? s.appPackage : BridgeBuildConfig.HELPER_PACKAGE;
-                    int topTid = displayDriver.findTopTaskIdOnDisplay(oldId, expectedPkg);
-                    if (topTid > 0) {
-                        displayDriver.removeTask(topTid);
+                    List<Integer> allTids = displayDriver.findAllTaskIdsOnDisplay(oldId);
+                    if (allTids != null && !allTids.isEmpty()) {
+                        for (Integer tid : allTids) {
+                            if (tid != null && tid > 0) {
+                                displayDriver.removeTask(tid);
+                            }
+                        }
+                    } else {
+                        String expectedPkg = s.standalone ? s.appPackage : BridgeBuildConfig.HELPER_PACKAGE;
+                        int topTid = displayDriver.findTopTaskIdOnDisplay(oldId, expectedPkg);
+                        if (topTid > 0) {
+                            displayDriver.removeTask(topTid);
+                        }
                     }
                 }
                 try { s.vd.setSurface(null); } catch (RuntimeException ignored) {}

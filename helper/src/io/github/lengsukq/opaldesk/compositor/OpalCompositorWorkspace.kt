@@ -108,6 +108,7 @@ fun applyWindowTilingLayout(
     canvasW: Int,
     canvasH: Int,
     density: Float,
+    dockInsetDp: Float = CompositorGeometry.DOCK_INSET_DP,
 ) {
     val candidates = scene.visibleWindows.sortedByDescending { it.zOrder }
         .ifEmpty { scene.windows.sortedByDescending { it.zOrder } }
@@ -118,6 +119,7 @@ fun applyWindowTilingLayout(
         canvasW = canvasW,
         canvasH = canvasH,
         density = density,
+        dockInsetDp = dockInsetDp,
     )
     frames.forEachIndexed { idx, rect ->
         val win = candidates[idx]
@@ -196,6 +198,9 @@ fun OpalCompositorWorkspace(
     val themeMode by AppPrefs.themeModeFlow.collectAsState()
     val mouseTargetMode by AppPrefs.mouseTargetFlow.collectAsState()
     val externalUiScale by AppPrefs.externalUiScaleFlow.collectAsState()
+    val dockVisible by AppPrefs.dockVisibleFlow.collectAsState()
+    val dockOpacity by AppPrefs.dockOpacityFlow.collectAsState()
+    val dockScale by AppPrefs.dockScaleFlow.collectAsState()
 
     val profileState by io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.stateFlow.collectAsState()
     var showAppDrawer by remember { mutableStateOf(false) }
@@ -356,7 +361,12 @@ fun OpalCompositorWorkspace(
             val isCompactWidth = maxWidth < 600.dp
             val densityVal = density.density
             val dpiInt = (densityVal * 160f).roundToInt().coerceIn(120, 560)
-            val usableHeightDp = (maxHeight - (CompositorGeometry.TOP_BAR_DP + CompositorGeometry.DOCK_INSET_DP + 24f).dp)
+            val effectiveDockInsetDp = DockAppearancePolicy.computeEffectiveDockInsetDp(
+                visible = dockVisible,
+                scale = dockScale,
+                isCompactWidth = isCompactWidth,
+            )
+            val usableHeightDp = (maxHeight - (CompositorGeometry.TOP_BAR_DP + effectiveDockInsetDp + 24f).dp)
                 .coerceAtLeast(180.dp)
             val shortcutRowsPerCol = (usableHeightDp.value / 88f).toInt().coerceIn(3, 8)
             val fullscreenWin = scene.visibleWindows.firstOrNull { it.isFullscreen }
@@ -407,13 +417,60 @@ fun OpalCompositorWorkspace(
 
             fun applyTiling(layout: WindowTilingLayout) {
                 dismissAllPopovers()
-                applyWindowTilingLayout(layout, scene, canvasW, canvasH, densityVal)
+                applyWindowTilingLayout(layout, scene, canvasW, canvasH, densityVal, effectiveDockInsetDp)
             }
 
             fun minimizeAllWindows() {
                 scene.visibleWindows.forEach { win ->
                     LiveWindowPreviewRegistry.captureLivePreview(win.windowId)
                     BridgeClient.sendWindowActionAsync(win.windowId, BridgeProtocol.WinAction.MINIMIZE)
+                }
+            }
+
+            fun openSystemSettingsInDex(action: String) {
+                dismissAllPopovers()
+                fun openFallbackDirect() {
+                    try {
+                        ctx.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    } catch (_: Throwable) {
+                        try {
+                            ctx.startActivity(
+                                Intent(android.provider.Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+                if (!status.connected) {
+                    openFallbackDirect()
+                    return
+                }
+                val pm = ctx.packageManager
+                val resolved = listOf(action, android.provider.Settings.ACTION_SETTINGS)
+                    .firstNotNullOfOrNull { candidateAction ->
+                        runCatching {
+                            val ri = pm.resolveActivity(
+                                Intent(candidateAction),
+                                android.content.pm.PackageManager.MATCH_DEFAULT_ONLY,
+                            )
+                            val ai = ri?.activityInfo
+                            if (ai != null && !ai.packageName.isNullOrBlank() && !ai.name.isNullOrBlank()) {
+                                ai.packageName to ai.name
+                            } else {
+                                null
+                            }
+                        }.getOrNull()
+                    }
+                if (resolved == null) {
+                    openFallbackDirect()
+                    return
+                }
+                val (pkg, cls) = resolved
+                scope.launch(Dispatchers.IO) {
+                    val winId = BridgeClient.openWindow(pkg, cls, BridgeProtocol.Profile.AUTO)
+                    if (winId <= 0) {
+                        withContext(Dispatchers.Main) { openFallbackDirect() }
+                    }
                 }
             }
 
@@ -455,7 +512,7 @@ fun OpalCompositorWorkspace(
                         .padding(
                             top = (CompositorGeometry.TOP_BAR_DP + 14f).dp,
                             start = if (isCompactWidth) 10.dp else 16.dp,
-                            bottom = (CompositorGeometry.DOCK_INSET_DP + 14f).dp,
+                            bottom = (effectiveDockInsetDp + 14f).dp,
                         ),
                 )
             }
@@ -487,6 +544,7 @@ fun OpalCompositorWorkspace(
                         window = win,
                         canvasW = canvasW,
                         canvasH = canvasH,
+                        dockInsetDp = effectiveDockInsetDp,
                         onSnapPreviewChanged = { snapPreviewRect = it },
                         modifier = Modifier.zIndex(CompositorGeometry.effectiveZOrder(win, pinnedWindowIds).toFloat()),
                     )
@@ -508,6 +566,19 @@ fun OpalCompositorWorkspace(
                     doNotDisturb = doNotDisturb,
                     showPhoneTrackpadButton = canControlPhoneTrackpad,
                     phoneTrackpadVisible = phoneTrackpadVisible,
+                    showDockFallbackActions = !dockVisible,
+                    showAppDrawer = showAppDrawer,
+                    showExpose = showExposeOverview,
+                    onToggleAppDrawer = {
+                        val next = !showAppDrawer
+                        dismissAllPopovers()
+                        showAppDrawer = next
+                    },
+                    onToggleExpose = {
+                        val next = !showExposeOverview
+                        dismissAllPopovers()
+                        showExposeOverview = next
+                    },
                     onTogglePhoneTrackpad = {
                         dismissAllPopovers()
                         togglePhoneTrackpadFromExternal()
@@ -580,8 +651,8 @@ fun OpalCompositorWorkspace(
                 )
             }
 
-            // Bottom Centered Floating Liquid Frosted Glass Dock (hidden during true app fullscreen)
-            if (fullscreenWin == null) {
+            // Bottom Centered Floating Liquid Frosted Glass Dock (hidden during true app fullscreen or when disabled)
+            if (fullscreenWin == null && dockVisible) {
                 DexMacTaskbar(
                     allApps = allApps,
                     dockPinnedPkgs = dockPinnedPkgs,
@@ -589,6 +660,8 @@ fun OpalCompositorWorkspace(
                     showAppDrawer = showAppDrawer,
                     showExpose = showExposeOverview,
                     isCompactWidth = isCompactWidth,
+                    dockOpacity = dockOpacity,
+                    dockScale = dockScale,
                     imeActive = imeActive,
                     onToggleSoftKeyboard = onToggleSoftKeyboard,
                     onToggleAppDrawer = {
@@ -653,7 +726,9 @@ fun OpalCompositorWorkspace(
 
             // Floating Rounded Glass App Launcher Popover above macOS Dock
             if (showAppDrawer) {
-                val drawerMaxH = (maxHeight - (CompositorGeometry.TOP_BAR_DP + 104f).dp).coerceIn(220.dp, 480.dp)
+                val drawerBottomPadDp = if (dockVisible) effectiveDockInsetDp + 8f else 16f
+                val drawerMaxH = (maxHeight - (CompositorGeometry.TOP_BAR_DP + drawerBottomPadDp + 28f).dp)
+                    .coerceIn(220.dp, 480.dp)
                 DexAppDrawerPopover(
                     apps = allApps,
                     desktopPkgs = desktopPkgs,
@@ -672,7 +747,7 @@ fun OpalCompositorWorkspace(
                     },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(start = 12.dp, end = 12.dp, bottom = 76.dp)
+                        .padding(start = 12.dp, end = 12.dp, bottom = drawerBottomPadDp.dp)
                         .zIndex(10_020f),
                 )
             }
@@ -746,8 +821,25 @@ fun OpalCompositorWorkspace(
                     phoneTrackpadVisible = phoneTrackpadVisible,
                     showAutoTrackpadSwitch = canControlPhoneTrackpad && !remote.hasActiveDesktopCast,
                     autoShowPhoneTrackpad = autoShowPhoneTrackpad,
+                    dockVisible = dockVisible,
+                    dockOpacity = dockOpacity,
+                    dockScale = dockScale,
                     maxHeight = ccMaxH,
                     initialTab = controlCenterInitialTab,
+                    onToggleDockVisible = { enabled ->
+                        AppPrefs.setDockVisible(ctx, enabled)
+                    },
+                    onChangeDockOpacity = { opacity ->
+                        AppPrefs.setDockOpacity(ctx, opacity)
+                    },
+                    onChangeDockScale = { scale ->
+                        AppPrefs.setDockScale(ctx, scale)
+                    },
+                    onResetDockStyle = {
+                        AppPrefs.resetDockAppearance(ctx)
+                        Toast.makeText(ctx, "已恢复默认 Dock 栏外观", Toast.LENGTH_SHORT).show()
+                    },
+                    onOpenSystemSettings = ::openSystemSettingsInDex,
                     onTogglePhoneTrackpad = {
                         showControlCenter = false
                         togglePhoneTrackpadFromExternal()
@@ -849,7 +941,7 @@ fun OpalCompositorWorkspace(
             wallpaperMenuPos?.let { pos ->
                 val isCurrentlyDark = OpalPalette.isDark
                 val menuW = with(density) { 252.dp.toPx() }.roundToInt()
-                val baseMenuDp = (if (customWallpaperPath.isNotBlank()) 320f else 284f) +
+                val baseMenuDp = (if (customWallpaperPath.isNotBlank()) 358f else 322f) +
                     (if (canControlPhoneTrackpad) 38f else 0f)
                 val menuH = with(density) { baseMenuDp.dp.toPx() }.roundToInt()
                 val (xPx, yPx) = CompositorGeometry.computeAnchoredMenuPosition(
@@ -878,6 +970,10 @@ fun OpalCompositorWorkspace(
                     },
                     onOpenTilingMenu = {
                         controlCenterInitialTab = 1
+                        showControlCenter = true
+                    },
+                    onOpenDockSettings = {
+                        controlCenterInitialTab = 2
                         showControlCenter = true
                     },
                     onOpenAppDrawer = { showAppDrawer = true },
@@ -928,7 +1024,7 @@ fun OpalCompositorWorkspace(
                     onSnapLeft = {
                         if (win != null) {
                             val r = CompositorGeometry.computeSnapPreviewRect(
-                                BridgeProtocol.Presentation.SNAP_LEFT, canvasW, canvasH, densityVal,
+                                BridgeProtocol.Presentation.SNAP_LEFT, canvasW, canvasH, densityVal, effectiveDockInsetDp,
                             )
                             BridgeClient.updateWindowFrameAsync(
                                 win.windowId, r.left, r.top, r.right, r.bottom,
@@ -939,7 +1035,7 @@ fun OpalCompositorWorkspace(
                     onSnapRight = {
                         if (win != null) {
                             val r = CompositorGeometry.computeSnapPreviewRect(
-                                BridgeProtocol.Presentation.SNAP_RIGHT, canvasW, canvasH, densityVal,
+                                BridgeProtocol.Presentation.SNAP_RIGHT, canvasW, canvasH, densityVal, effectiveDockInsetDp,
                             )
                             BridgeClient.updateWindowFrameAsync(
                                 win.windowId, r.left, r.top, r.right, r.bottom,

@@ -106,3 +106,45 @@ object ManualReportSubmitGuard {
         return true
     }
 }
+
+enum class ReportVersionDecision {
+    /** Update check is currently in flight; briefly wait before proceeding or prompting. */
+    WAIT_FOR_CHECK,
+    /** A newer client version exists and the user has not yet chosen to upload anyway. */
+    PROMPT_UPDATE_OPTIONAL,
+    /** Already latest, check failed/timed out, or user explicitly confirmed uploading anyway. */
+    PROCEED_UPLOAD,
+}
+
+/**
+ * Pure JVM-testable policy deciding when to run a pre-upload version check and whether to
+ * surface a non-blocking update suggestion before sending a manual diagnostic report.
+ */
+object ReportVersionCheckPolicy {
+    const val PRE_CHECK_FRESH_MS = 5L * 60L * 1000L
+    const val SUBMIT_WAIT_TIMEOUT_MS = 3_500L
+
+    fun shouldTriggerPreCheck(
+        hasKnownUpdate: Boolean,
+        isChecking: Boolean,
+        upToDateCheckedAtMs: Long?,
+        nowMs: Long,
+    ): Boolean {
+        if (hasKnownUpdate || isChecking) return false
+        if (upToDateCheckedAtMs != null) {
+            val ageMs = nowMs - upToDateCheckedAtMs
+            if (ageMs in 0L until PRE_CHECK_FRESH_MS) return false
+        }
+        return true
+    }
+
+    fun decideOnSubmit(
+        hasKnownUpdate: Boolean,
+        isChecking: Boolean,
+        confirmedOutdatedUpload: Boolean,
+    ): ReportVersionDecision = when {
+        hasKnownUpdate && !confirmedOutdatedUpload -> ReportVersionDecision.PROMPT_UPDATE_OPTIONAL
+        isChecking && !confirmedOutdatedUpload -> ReportVersionDecision.WAIT_FOR_CHECK
+        else -> ReportVersionDecision.PROCEED_UPLOAD
+    }
+}

@@ -17,6 +17,7 @@ import android.view.InputEvent;
 import android.view.MotionEvent;
 
 import io.github.lengsukq.opaldesk.daemon.input.ImmsDumpInspector;
+import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.util.ShellCommand;
 
 import java.io.BufferedReader;
@@ -236,11 +237,30 @@ public final class AndroidServices {
         }
         if (setRemoveContentModeMethod != null) {
             try {
-                // WindowManager.REMOVE_CONTENT_MODE_DESTROY = 1: never bounce tasks to Phone Display 0.
-                setRemoveContentModeMethod.invoke(iWindowManager, displayId, 1);
+                // WindowManager.REMOVE_CONTENT_MODE_DESTROY = 2 (1 is MOVE_TO_PRIMARY!):
+                // never bounce tasks or splash windows onto Phone Display 0 on teardown.
+                setRemoveContentModeMethod.invoke(iWindowManager, displayId, resolveRemoveContentModeDestroy());
             } catch (ReflectiveOperationException | RuntimeException ignored) {
             }
         }
+    }
+
+    private static volatile int sRemoveContentModeDestroy = -1;
+
+    static int resolveRemoveContentModeDestroy() {
+        int cached = sRemoveContentModeDestroy;
+        if (cached > 0) return cached;
+        int resolved = BridgeProtocol.REMOVE_CONTENT_MODE_DESTROY;
+        try {
+            Field f = android.view.WindowManager.class.getField("REMOVE_CONTENT_MODE_DESTROY");
+            int val = f.getInt(null);
+            if (val > 0) {
+                resolved = val;
+            }
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+        }
+        sRemoveContentModeDestroy = resolved;
+        return resolved;
     }
 
     public boolean isHostScreenOff() {

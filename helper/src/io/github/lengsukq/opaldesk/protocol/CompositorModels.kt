@@ -498,9 +498,15 @@ object CompositorGeometry {
         }
     }
 
-    fun computeSnapPreviewRect(presentation: String, canvasW: Int, canvasH: Int, density: Float): WindowRect {
+    fun computeSnapPreviewRect(
+        presentation: String,
+        canvasW: Int,
+        canvasH: Int,
+        density: Float,
+        dockInsetDp: Float = DOCK_INSET_DP,
+    ): WindowRect {
         val topInset = dpToPx(TOP_BAR_DP + 4f, density)
-        val botInset = dpToPx(DOCK_INSET_DP, density)
+        val botInset = dpToPx(dockInsetDp.coerceAtLeast(4f), density)
         val pad = dpToPx(6f, density)
         val wl = pad
         val wr = max(wl + 200, canvasW - pad)
@@ -531,11 +537,12 @@ object CompositorGeometry {
         canvasW: Int,
         canvasH: Int,
         density: Float,
+        dockInsetDp: Float = DOCK_INSET_DP,
     ): List<WindowRect> {
         if (windowCount <= 0 || canvasW <= 0 || canvasH <= 0) return emptyList()
         val slots = min(windowCount, layout.maxSlots)
         val topInset = dpToPx(TOP_BAR_DP + 4f, density)
-        val botInset = dpToPx(DOCK_INSET_DP, density)
+        val botInset = dpToPx(dockInsetDp.coerceAtLeast(4f), density)
         val pad = dpToPx(6f, density)
         val gap = dpToPx(8f, density)
         val wl = pad

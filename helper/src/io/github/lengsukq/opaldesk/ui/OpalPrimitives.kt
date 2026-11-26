@@ -308,6 +308,35 @@ object OpalPalette {
             return Brush.verticalGradient(listOf(c.glassDockTop, c.glassDockBottom))
         }
 
+    @Composable
+    fun dockGlassFill(opacity: Float): Brush {
+        val c = LocalOpalColors.current
+        val topAlpha = io.github.lengsukq.opaldesk.compositor.DockAppearancePolicy
+            .scaleGlassAlpha(c.glassDockTop.alpha, opacity)
+        val bottomAlpha = io.github.lengsukq.opaldesk.compositor.DockAppearancePolicy
+            .scaleGlassAlpha(c.glassDockBottom.alpha, opacity)
+        return Brush.verticalGradient(
+            listOf(
+                c.glassDockTop.copy(alpha = topAlpha),
+                c.glassDockBottom.copy(alpha = bottomAlpha),
+            ),
+        )
+    }
+
+    @Composable
+    fun dockGlassRim(opacity: Float): Brush {
+        val c = LocalOpalColors.current
+        val scale = io.github.lengsukq.opaldesk.compositor.DockAppearancePolicy
+            .rimAndEffectScale(opacity)
+        return Brush.verticalGradient(
+            listOf(
+                c.glassRimTop.copy(alpha = (c.glassRimTop.alpha * scale).coerceIn(0f, 1f)),
+                c.glassRimMid.copy(alpha = (c.glassRimMid.alpha * scale).coerceIn(0f, 1f)),
+                c.glassRimBottom.copy(alpha = (c.glassRimBottom.alpha * scale).coerceIn(0f, 1f)),
+            ),
+        )
+    }
+
     val LiquidGlassRim: Brush
         @Composable get() {
             val c = LocalOpalColors.current
@@ -318,6 +347,27 @@ object OpalPalette {
         @Composable get() {
             val c = LocalOpalColors.current
             return Brush.verticalGradient(listOf(c.glassPopoverTop, c.glassPopoverBottom))
+        }
+
+    /** 100% opaque elevated surface for high-legibility panels (e.g. DeX Control Center over busy app windows). */
+    val SolidPopoverFill: Brush
+        @Composable get() {
+            val c = LocalOpalColors.current
+            return if (c.isDark) {
+                Brush.verticalGradient(listOf(Color(0xFF202533), Color(0xFF171B26)))
+            } else {
+                Brush.verticalGradient(listOf(Color(0xFFFCFDFE), Color(0xFFF3F6FB)))
+            }
+        }
+
+    val SolidPopoverRim: Brush
+        @Composable get() {
+            val c = LocalOpalColors.current
+            return if (c.isDark) {
+                Brush.verticalGradient(listOf(Color(0xFF3E475E), Color(0xFF2B3144)))
+            } else {
+                Brush.verticalGradient(listOf(Color(0xFFFFFFFF), Color(0xFFD5DEEC)))
+            }
         }
 
     val MenuBarFill: Brush
@@ -339,13 +389,15 @@ fun Modifier.liquidGlassSurface(
     rim: Brush = OpalPalette.LiquidGlassRim,
     elevation: Dp = 18.dp,
     borderWidth: Dp = 1.dp,
+    effectAlphaScale: Float = 1f,
 ): Modifier {
     val c = LocalOpalColors.current
-    val specularTop = c.glassSpecularTop
+    val effScale = effectAlphaScale.coerceIn(0f, 1f)
+    val specularTop = c.glassSpecularTop.copy(alpha = (c.glassSpecularTop.alpha * effScale).coerceIn(0f, 1f))
     val shadowCol = c.glassShadowColor
-    return this
+    val base = this
         .drawBehind {
-            if (elevation > 0.dp) {
+            if (elevation > 0.dp && effScale > 0.001f) {
                 val outline = shape.createOutline(size, layoutDirection, this)
                 val innerPath = Path().apply { addOutline(outline) }
                 val elevPx = elevation.toPx().coerceAtMost(26.dp.toPx())
@@ -355,7 +407,7 @@ fun Modifier.liquidGlassSurface(
                         val t = i.toFloat() / layers.toFloat()
                         val spread = elevPx * 0.24f * t
                         val yOff = elevPx * 0.26f * t
-                        val alpha = shadowCol.alpha * (0.44f * (1f - t * 0.72f))
+                        val alpha = shadowCol.alpha * effScale * (0.44f * (1f - t * 0.72f))
                         val outerOutline = shape.createOutline(
                             Size(size.width + spread * 2f, size.height + spread * 2f),
                             layoutDirection,
@@ -375,19 +427,25 @@ fun Modifier.liquidGlassSurface(
         .background(fill)
         .drawWithContent {
             // Subtle liquid glass optical sheen across the upper convex arc
-            drawRect(
-                brush = Brush.verticalGradient(
-                    colorStops = arrayOf(
-                        0.0f to specularTop,
-                        0.38f to specularTop.copy(alpha = specularTop.alpha * 0.22f),
-                        0.65f to Color.Transparent,
-                        1.0f to Color.Transparent,
+            if (effScale > 0.001f) {
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0.0f to specularTop,
+                            0.38f to specularTop.copy(alpha = specularTop.alpha * 0.22f),
+                            0.65f to Color.Transparent,
+                            1.0f to Color.Transparent,
+                        ),
                     ),
-                ),
-            )
+                )
+            }
             drawContent()
         }
-        .border(borderWidth, rim, shape)
+    return if (borderWidth > 0.dp && effScale > 0.001f) {
+        base.border(borderWidth, rim, shape)
+    } else {
+        base
+    }
 }
 
 /**

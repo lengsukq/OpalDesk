@@ -99,6 +99,15 @@ public final class DaemonConfig {
                 "com.android.server.telecom"
         );
 
+        /**
+         * Standard AOSP system utility packages that do not play background media and should not be
+         * killed via {@code am force-stop} on window close (avoids disrupting system services or
+         * unrelated host Display 0 tasks).
+         */
+        private static final Set<String> NO_FORCE_STOP_ON_CLOSE_PKGS = Set.of(
+                "com.android.settings"
+        );
+
         private PackagePolicy() {}
 
         public static boolean isValidPackageName(String pkg) {
@@ -114,6 +123,10 @@ public final class DaemonConfig {
             return pkg.contains("permissioncontroller")
                     || pkg.contains("packageinstaller")
                     || pkg.contains("keyguard");
+        }
+
+        public static boolean shouldSkipForceStopOnClose(String pkg) {
+            return pkg != null && NO_FORCE_STOP_ON_CLOSE_PKGS.contains(pkg);
         }
     }
 

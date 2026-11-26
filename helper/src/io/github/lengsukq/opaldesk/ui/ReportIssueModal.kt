@@ -25,6 +25,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,10 +49,14 @@ import io.github.lengsukq.opaldesk.diagnostics.ManualReportOutcome
 import io.github.lengsukq.opaldesk.diagnostics.ManualReportSubmitGuard
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogEntry
 import io.github.lengsukq.opaldesk.diagnostics.OpalSentry
+import io.github.lengsukq.opaldesk.diagnostics.ReportVersionCheckPolicy
+import io.github.lengsukq.opaldesk.diagnostics.ReportVersionDecision
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.CompositorScene
 import io.github.lengsukq.opaldesk.protocol.DaemonStatus
 import io.github.lengsukq.opaldesk.protocol.RemoteStreamStatus
+import io.github.lengsukq.opaldesk.update.AppUpdateManager
+import kotlinx.coroutines.delay
 
 /**
  * Liquid Glass manual log & issue reporting modal.
@@ -67,19 +73,50 @@ fun ReportIssueModal(
     daemonLogText: String,
     quota: FeedbackQuotaSnapshot,
     onQuotaChanged: (FeedbackQuotaSnapshot) -> Unit,
+    onOpenUpdateModal: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val ctx = LocalContext.current
     var reporterName by remember { mutableStateOf(AppPrefs.getFeedbackUsername(ctx)) }
     var problemDescription by remember { mutableStateOf("") }
     var submitting by remember { mutableStateOf(false) }
+    var awaitingVersionCheck by remember { mutableStateOf(false) }
+    var showOutdatedConfirm by remember { mutableStateOf(false) }
     var validationError by remember { mutableStateOf("") }
     var lastOutcome by remember { mutableStateOf<ManualReportOutcome?>(null) }
     var lastSubmittedDescription by remember { mutableStateOf<String?>(null) }
     val sentryConfigured = remember { OpalSentry.isConfigured() }
+    val updateState by AppUpdateManager.stateFlow.collectAsState()
+
+    val availableRelease = when (val st = updateState) {
+        is AppUpdateManager.UpdateState.UpdateAvailable -> st.release
+        is AppUpdateManager.UpdateState.Downloading -> st.release
+        is AppUpdateManager.UpdateState.ReadyToInstall -> st.release
+        else -> null
+    }
+    val isCheckingVersion = updateState is AppUpdateManager.UpdateState.Checking
+    val isBusy = submitting || awaitingVersionCheck
+
+    // Silently check for latest release when the report modal opens (bypassing ignored-version tag).
+    LaunchedEffect(Unit) {
+        val st = AppUpdateManager.stateFlow.value
+        val hasKnownUpdate = st is AppUpdateManager.UpdateState.UpdateAvailable ||
+            st is AppUpdateManager.UpdateState.Downloading ||
+            st is AppUpdateManager.UpdateState.ReadyToInstall
+        val checkedAtMs = (st as? AppUpdateManager.UpdateState.UpToDate)?.checkedAtMs
+        if (ReportVersionCheckPolicy.shouldTriggerPreCheck(
+                hasKnownUpdate = hasKnownUpdate,
+                isChecking = st is AppUpdateManager.UpdateState.Checking,
+                upToDateCheckedAtMs = checkedAtMs,
+                nowMs = System.currentTimeMillis(),
+            )
+        ) {
+            AppUpdateManager.checkForUpdates(ctx, userInitiated = false, bypassIgnoredTag = true)
+        }
+    }
 
     val submitAllowed = ManualReportSubmitGuard.isSubmitAllowed(
-        submitting = submitting,
+        submitting = isBusy,
         quotaExhausted = quota.isExhausted,
         sentryConfigured = sentryConfigured,
         lastUploadSucceeded = lastOutcome?.success == true,
@@ -96,18 +133,11 @@ fun ReportIssueModal(
             .coerceAtMost(DiagnosticSanitizer.DEFAULT_MAX_DAEMON_LINES)
     }
 
-    fun submitReport() {
-        if (!submitAllowed) return
-        if (reporterName.trim().isEmpty()) {
-            validationError = "请先填写你的用户名或称呼，便于后续定位回复"
-            return
-        }
+    fun performUploadNow() {
         val trimmedDesc = problemDescription.trim()
-        if (trimmedDesc.isEmpty()) {
-            validationError = "请简单描述遇到的问题或复现步骤"
-            return
-        }
+        if (reporterName.trim().isEmpty() || trimmedDesc.isEmpty()) return
         validationError = ""
+        showOutdatedConfirm = false
         submitting = true
         lastOutcome = null
         OpalSentry.submitManualReportAsync(
@@ -130,12 +160,68 @@ fun ReportIssueModal(
         }
     }
 
+    // If user clicked Upload while pre-check was still running, settle quickly (or fail open after 3.5s).
+    LaunchedEffect(awaitingVersionCheck, updateState) {
+        if (!awaitingVersionCheck) return@LaunchedEffect
+        when (updateState) {
+            is AppUpdateManager.UpdateState.Checking -> {
+                delay(ReportVersionCheckPolicy.SUBMIT_WAIT_TIMEOUT_MS)
+                if (awaitingVersionCheck) {
+                    awaitingVersionCheck = false
+                    performUploadNow()
+                }
+            }
+            is AppUpdateManager.UpdateState.UpdateAvailable,
+            is AppUpdateManager.UpdateState.Downloading,
+            is AppUpdateManager.UpdateState.ReadyToInstall,
+            -> {
+                awaitingVersionCheck = false
+                showOutdatedConfirm = true
+            }
+            else -> {
+                awaitingVersionCheck = false
+                performUploadNow()
+            }
+        }
+    }
+
+    fun submitReport(forceOutdated: Boolean = false) {
+        if (!submitAllowed) return
+        if (reporterName.trim().isEmpty()) {
+            validationError = "请先填写你的用户名或称呼，便于后续定位回复"
+            return
+        }
+        val trimmedDesc = problemDescription.trim()
+        if (trimmedDesc.isEmpty()) {
+            validationError = "请简单描述遇到的问题或复现步骤"
+            return
+        }
+        validationError = ""
+        when (
+            ReportVersionCheckPolicy.decideOnSubmit(
+                hasKnownUpdate = availableRelease != null,
+                isChecking = isCheckingVersion,
+                confirmedOutdatedUpload = forceOutdated,
+            )
+        ) {
+            ReportVersionDecision.PROMPT_UPDATE_OPTIONAL -> {
+                showOutdatedConfirm = true
+            }
+            ReportVersionDecision.WAIT_FOR_CHECK -> {
+                awaitingVersionCheck = true
+            }
+            ReportVersionDecision.PROCEED_UPLOAD -> {
+                performUploadNow()
+            }
+        }
+    }
+
     Dialog(
-        onDismissRequest = { if (!submitting) onDismiss() },
+        onDismissRequest = { if (!isBusy) onDismiss() },
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
-            dismissOnBackPress = !submitting,
-            dismissOnClickOutside = !submitting,
+            dismissOnBackPress = !isBusy,
+            dismissOnClickOutside = !isBusy,
         ),
     ) {
         Box(
@@ -145,7 +231,7 @@ fun ReportIssueModal(
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() },
-                    onClick = { if (!submitting) onDismiss() },
+                    onClick = { if (!isBusy) onDismiss() },
                 )
                 .padding(20.dp),
             contentAlignment = Alignment.Center,
@@ -266,6 +352,74 @@ fun ReportIssueModal(
                     )
                 }
 
+                if (availableRelease != null && lastOutcome?.success != true) {
+                    val isDark = OpalPalette.isDark
+                    val isReady = updateState is AppUpdateManager.UpdateState.ReadyToInstall
+                    val isDownloading = updateState is AppUpdateManager.UpdateState.Downloading
+                    val accent = if (showOutdatedConfirm) OpalPalette.AccentAmber else OpalPalette.AccentBlue
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(accent.copy(alpha = if (isDark) 0.16f else 0.10f))
+                            .border(
+                                width = if (showOutdatedConfirm) 1.1.dp else 0.85.dp,
+                                color = accent.copy(alpha = if (showOutdatedConfirm) 0.65f else 0.42f),
+                                shape = RoundedCornerShape(14.dp),
+                            )
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OpalText(
+                            text = "检测到新版本 ${availableRelease.tagName}（当前 v$appVersion）",
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = accent,
+                        )
+                        OpalText(
+                            text = "最新版本可能已修复你遇到的问题，建议先更新体验；如果不方便更新，也可以直接上传当前版本日志。",
+                            fontSize = 11.5.sp,
+                            color = OpalPalette.TextPrimary,
+                            lineHeight = 16.5.sp,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OpalButton(
+                                label = when {
+                                    isReady -> "立即安装 ${availableRelease.tagName}"
+                                    isDownloading -> "查看下载进度"
+                                    else -> "更新到 ${availableRelease.tagName}"
+                                },
+                                compact = true,
+                                filled = true,
+                                accent = if (isReady) OpalPalette.AccentEmerald else OpalPalette.AccentBlue,
+                                enabled = !isBusy,
+                                onClick = onOpenUpdateModal,
+                                modifier = Modifier.weight(1.2f),
+                            )
+                            if (showOutdatedConfirm) {
+                                OpalButton(
+                                    label = "仍要上传日志",
+                                    compact = true,
+                                    filled = false,
+                                    accent = OpalPalette.AccentAmber,
+                                    enabled = submitAllowed,
+                                    onClick = { submitReport(forceOutdated = true) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                } else if (isCheckingVersion && lastOutcome?.success != true) {
+                    OpalText(
+                        text = "正在自动检查客户端是否为最新版本…",
+                        fontSize = 11.sp,
+                        color = OpalPalette.TextSecondary,
+                    )
+                }
+
                 if (validationError.isNotEmpty()) {
                     StatusNoticeBox(
                         text = validationError,
@@ -337,20 +491,22 @@ fun ReportIssueModal(
                         label = if (lastOutcome?.success == true) "完成" else "取消",
                         filled = alreadySubmittedSameReport,
                         accent = if (alreadySubmittedSameReport) OpalPalette.AccentEmerald else OpalPalette.AccentBlue,
-                        enabled = !submitting,
+                        enabled = !isBusy,
                         onClick = onDismiss,
                         modifier = Modifier.weight(1f),
                     )
                     OpalButton(
                         label = when {
+                            awaitingVersionCheck -> "检查版本中…"
                             submitting -> "上传中…"
                             alreadySubmittedSameReport -> "已上传"
                             quota.isExhausted -> "今日已达上限"
+                            showOutdatedConfirm && availableRelease != null -> "仍要上传"
                             else -> "确认上传"
                         },
                         enabled = submitAllowed,
-                        accent = OpalPalette.AccentBlue,
-                        onClick = ::submitReport,
+                        accent = if (showOutdatedConfirm && availableRelease != null) OpalPalette.AccentAmber else OpalPalette.AccentBlue,
+                        onClick = { submitReport(forceOutdated = showOutdatedConfirm) },
                         modifier = Modifier.weight(1.3f),
                     )
                 }

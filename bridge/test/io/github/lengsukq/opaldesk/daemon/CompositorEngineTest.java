@@ -79,8 +79,10 @@ public class CompositorEngineTest {
         final Set<Integer> aliveTasks = new HashSet<>();
         final Set<Integer> runningBgTasks = new HashSet<>();
         final Map<Integer, Integer> topTaskByDisplay = new HashMap<>();
+        final Map<Integer, List<Integer>> allTasksByDisplay = new HashMap<>();
         final Map<Integer, Integer> visibleTaskByDisplay = new HashMap<>();
         final Set<Integer> removedTasks = new HashSet<>();
+        final List<String> forceStoppedPackages = new ArrayList<>();
         final List<String> events;
         int launchCount = 0;
         int focusDisplayCount = 0;
@@ -112,8 +114,29 @@ public class CompositorEngineTest {
         }
 
         @Override
+        public int launchExplicitActivityOnDisplay(String pkg, String cls, int displayId) {
+            launchCount++;
+            int tid = topTaskByDisplay.getOrDefault(displayId, nextTaskId.getAndIncrement());
+            aliveTasks.add(tid);
+            runningBgTasks.add(tid);
+            topTaskByDisplay.put(displayId, tid);
+            visibleTaskByDisplay.put(displayId, tid);
+            events.add("explicit:" + cls + "@d" + displayId);
+            return tid;
+        }
+
+        @Override
         public int findTopTaskIdOnDisplay(int displayId, String expectedPkg) {
             return topTaskByDisplay.getOrDefault(displayId, -1);
+        }
+
+        @Override
+        public List<Integer> findAllTaskIdsOnDisplay(int displayId) {
+            List<Integer> extra = allTasksByDisplay.get(displayId);
+            if (extra != null) return new ArrayList<>(extra);
+            Integer top = topTaskByDisplay.get(displayId);
+            if (top != null && top > 0) return java.util.Collections.singletonList(top);
+            return java.util.Collections.emptyList();
         }
 
         @Override
@@ -145,7 +168,10 @@ public class CompositorEngineTest {
         }
 
         @Override
-        public void forceStopPackage(String pkg) {}
+        public void forceStopPackage(String pkg) {
+            forceStoppedPackages.add(pkg);
+            events.add("forceStop:" + pkg);
+        }
 
         @Override
         public void focusDisplay(int displayId) {
@@ -527,5 +553,87 @@ public class CompositorEngineTest {
         assertEquals(120, restored.top);
         assertEquals(800, restored.width());
         assertEquals(600, restored.height());
+    }
+
+    @Test
+    public void testOpenOrFocusWindowSwitchesSettingsSubActivityInPlace() throws Exception {
+        File confF = new File(tmpDir.getRoot(), "settings_main.conf");
+        File profF = new File(tmpDir.getRoot(), "settings_prof.conf");
+        DaemonConfig cfg = new DaemonConfig(confF, profF);
+        cfg.updateRuntimeConfig(BridgeProtocol.INPUT_BACKEND_AUTO, 4, 1920, 1200, 240);
+
+        List<String> events = new ArrayList<>();
+        RecordingDriver driver = new RecordingDriver();
+        VirtualDisplayPool pool = new VirtualDisplayPool(driver, 4, false);
+        FakeRuntime runtime = new FakeRuntime(events);
+        CompositorEngine engine = new CompositorEngine(cfg, pool, runtime, null);
+
+        String wifiCls = "com.android.settings.Settings$WifiSettingsActivity";
+        String btCls = "com.android.settings.Settings$BluetoothSettingsActivity";
+        int w1 = engine.openOrFocusWindow("com.android.settings", wifiCls, BridgeProtocol.PROFILE_AUTO, 0, 0, 0, 0);
+        int dispId = engine.attachWindowSurface(w1, new Object(), 900, 700, 240, 60f);
+        assertTrue(dispId > 0);
+        assertEquals(wifiCls, engine.getWindowSnapshot(w1).activityClass);
+
+        // Switching an already-live Settings window to Bluetooth should dispatch explicit activity launch on same display.
+        int w2 = engine.openOrFocusWindow("com.android.settings", btCls, BridgeProtocol.PROFILE_AUTO, 0, 0, 0, 0);
+        assertEquals(w1, w2);
+        assertEquals(btCls, engine.getWindowSnapshot(w1).activityClass);
+        assertTrue(events.contains("explicit:" + btCls + "@d" + dispId));
+
+        // Minimize, then open Wi-Fi again: re-attaching surface must launch the updated Wi-Fi activity.
+        assertTrue(engine.performWindowAction(w1, BridgeProtocol.WIN_ACTION_MINIMIZE, null));
+        int w3 = engine.openOrFocusWindow("com.android.settings", wifiCls, BridgeProtocol.PROFILE_AUTO, 0, 0, 0, 0);
+        assertEquals(w1, w3);
+        int dispId2 = engine.attachWindowSurface(w1, new Object(), 900, 700, 240, 60f);
+        assertEquals(dispId, dispId2);
+        assertTrue(events.contains("explicit:" + wifiCls + "@d" + dispId));
+    }
+
+    @Test
+    public void testCloseRemovesAllTasksOnDisplayBeforeReleaseAndSkipsForceStopForSettings() throws Exception {
+        // Guard against AOSP constant mismatch (1 = REMOVE_CONTENT_MODE_MOVE_TO_PRIMARY, 2 = DESTROY)
+        assertEquals(2, BridgeProtocol.REMOVE_CONTENT_MODE_DESTROY);
+
+        File confF = new File(tmpDir.getRoot(), "close_all_tasks_main.conf");
+        File profF = new File(tmpDir.getRoot(), "close_all_tasks_prof.conf");
+        DaemonConfig cfg = new DaemonConfig(confF, profF);
+        cfg.updateRuntimeConfig(BridgeProtocol.INPUT_BACKEND_AUTO, 4, 1920, 1200, 240);
+
+        RecordingDriver driver = new RecordingDriver();
+        VirtualDisplayPool pool = new VirtualDisplayPool(driver, 4, false);
+        FakeRuntime runtime = new FakeRuntime(driver.events);
+        CompositorEngine engine = new CompositorEngine(cfg, pool, runtime, null);
+
+        // 1. Settings window with TWO tasks hosted on the same VirtualDisplay (e.g. SubSettings + WifiSettings)
+        int wSettings = engine.openOrFocusWindow(
+                "com.android.settings",
+                "com.android.settings.Settings$WifiSettingsActivity",
+                BridgeProtocol.PROFILE_AUTO, 0, 0, 0, 0);
+        int dSettings = engine.attachWindowSurface(wSettings, new Object(), 900, 700, 240, 60f);
+        int primaryTid = engine.getWindowSnapshot(wSettings).taskId;
+        int secondaryTid = 8966;
+        runtime.aliveTasks.add(secondaryTid);
+        runtime.allTasksByDisplay.put(dSettings, java.util.Arrays.asList(primaryTid, secondaryTid));
+
+        driver.events.clear();
+        assertTrue(engine.performWindowAction(wSettings, BridgeProtocol.WIN_ACTION_CLOSE, null));
+        assertNull(engine.getWindowSnapshot(wSettings));
+
+        int rmPrimary = driver.events.indexOf("removeTask:" + primaryTid);
+        int rmSecondary = driver.events.indexOf("removeTask:" + secondaryTid);
+        int relSettings = driver.events.indexOf("releaseVd:" + dSettings);
+        assertTrue("Primary task must be removed before VirtualDisplay release", rmPrimary >= 0 && rmPrimary < relSettings);
+        assertTrue("Secondary task on same VirtualDisplay must ALSO be removed before release",
+                rmSecondary >= 0 && rmSecondary < relSettings);
+        assertFalse("Closing com.android.settings must NOT call am force-stop",
+                runtime.forceStoppedPackages.contains("com.android.settings"));
+
+        // 2. Normal third-party media app MUST still be force-stopped on explicit close
+        int wMedia = engine.openOrFocusWindow("tv.danmaku.bili", "", BridgeProtocol.PROFILE_DESKTOP, 0, 0, 0, 0);
+        engine.attachWindowSurface(wMedia, new Object(), 1200, 800, 240, 60f);
+        assertTrue(engine.performWindowAction(wMedia, BridgeProtocol.WIN_ACTION_CLOSE, null));
+        assertTrue("Closing third-party media app should still force-stop background playback",
+                runtime.forceStoppedPackages.contains("tv.danmaku.bili"));
     }
 }

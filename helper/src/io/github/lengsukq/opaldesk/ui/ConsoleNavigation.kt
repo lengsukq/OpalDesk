@@ -45,9 +45,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private const val OPALDESK_QQ_GROUP_NUMBER = "1042317917"
+internal const val OPALDESK_QQ_GROUP_NUMBER = "1042317917"
 
-private fun joinOpalDeskQqGroup(ctx: Context) {
+internal fun joinOpalDeskQqGroup(ctx: Context) {
     runCatching {
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         cm?.setPrimaryClip(ClipData.newPlainText("OpalDesk QQ Group", OPALDESK_QQ_GROUP_NUMBER))

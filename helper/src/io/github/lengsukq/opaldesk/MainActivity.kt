@@ -424,6 +424,7 @@ private fun OpalConsoleScreen(
                             status = status,
                             scene = scene,
                             remote = remote,
+                            onOpenUpdateModal = { showUpdateModal = true },
                         )
                     }
                 }

@@ -97,12 +97,16 @@ object AppUpdateManager {
         checkForUpdates(appCtx, userInitiated = false)
     }
 
-    fun checkForUpdates(ctx: Context, userInitiated: Boolean) {
+    fun checkForUpdates(
+        ctx: Context,
+        userInitiated: Boolean,
+        bypassIgnoredTag: Boolean = false,
+    ) {
         val appCtx = ctx.applicationContext
         if (downloadInFlight.get()) return
         if (!checkInFlight.compareAndSet(false, true)) return
         val prevState = _stateFlow.value
-        if (userInitiated || prevState is UpdateState.Idle || prevState is UpdateState.Error) {
+        if (userInitiated || bypassIgnoredTag || prevState is UpdateState.Idle || prevState is UpdateState.Error) {
             _stateFlow.value = UpdateState.Checking
         }
 
@@ -125,7 +129,7 @@ object AppUpdateManager {
 
                 if (AppUpdateLogic.isNewerVersion(currentVersion, latest.versionName)) {
                     val ignoredTag = AppPrefs.getIgnoredUpdateTag(appCtx)
-                    if (!userInitiated && ignoredTag.equals(latest.tagName, ignoreCase = true)) {
+                    if (!userInitiated && !bypassIgnoredTag && ignoredTag.equals(latest.tagName, ignoreCase = true)) {
                         _stateFlow.value = UpdateState.Idle
                         return@Thread
                     }

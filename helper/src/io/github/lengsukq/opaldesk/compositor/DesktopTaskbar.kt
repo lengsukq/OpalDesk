@@ -191,6 +191,11 @@ fun MacDesktopMenuBar(
     doNotDisturb: Boolean = false,
     showPhoneTrackpadButton: Boolean = false,
     phoneTrackpadVisible: Boolean = false,
+    showDockFallbackActions: Boolean = false,
+    showAppDrawer: Boolean = false,
+    showExpose: Boolean = false,
+    onToggleAppDrawer: () -> Unit = {},
+    onToggleExpose: () -> Unit = {},
     onTogglePhoneTrackpad: () -> Unit = {},
     onToggleDpiPopover: () -> Unit = {},
     onToggleNotificationCenter: () -> Unit = {},
@@ -231,6 +236,63 @@ fun MacDesktopMenuBar(
         }
 
         Spacer(Modifier.width(if (isCompactWidth) 6.dp else 12.dp))
+
+        if (showDockFallbackActions) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (showAppDrawer) OpalPalette.AccentBlue.copy(alpha = 0.22f) else OpalPalette.ChipFill)
+                        .clickable(onClick = onToggleAppDrawer)
+                        .padding(horizontal = if (isCompactWidth) 6.dp else 7.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    OpalGlyphIcon(
+                        glyph = ChromeGlyph.APPS_GRID,
+                        tint = if (showAppDrawer) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
+                        size = 11.dp,
+                    )
+                    if (!isCompactWidth) {
+                        OpalText(
+                            text = "应用",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (showAppDrawer) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
+                            maxLines = 1,
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (showExpose) OpalPalette.AccentBlue.copy(alpha = 0.22f) else OpalPalette.ChipFill)
+                        .clickable(onClick = onToggleExpose)
+                        .padding(horizontal = if (isCompactWidth) 6.dp else 7.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    OpalGlyphIcon(
+                        glyph = ChromeGlyph.EXPOSE,
+                        tint = if (showExpose) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
+                        size = 11.dp,
+                    )
+                    if (!isCompactWidth) {
+                        OpalText(
+                            text = "多任务",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (showExpose) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(if (isCompactWidth) 6.dp else 10.dp))
+        }
 
         Row(
             modifier = Modifier.weight(1f),
@@ -448,6 +510,8 @@ fun DexMacTaskbar(
     showAppDrawer: Boolean,
     showExpose: Boolean,
     isCompactWidth: Boolean = false,
+    dockOpacity: Float = DockAppearancePolicy.DEFAULT_OPACITY,
+    dockScale: Float = DockAppearancePolicy.DEFAULT_SCALE,
     imeActive: Boolean = false,
     onToggleSoftKeyboard: (() -> Unit)? = null,
     onToggleAppDrawer: () -> Unit,
@@ -477,11 +541,19 @@ fun DexMacTaskbar(
         }
     }
 
-    val dockShape = RoundedCornerShape(if (isCompactWidth) 19.dp else 22.dp)
-    val leadBtnSize = if (isCompactWidth) 34.dp else 40.dp
-    val navBtnSize = if (isCompactWidth) 30.dp else 34.dp
-    val appTileSize = if (isCompactWidth) 40.dp else 46.dp
-    val appIconSize = if (isCompactWidth) 28.dp else 32.dp
+    val clampedScale = DockAppearancePolicy.clampScale(dockScale)
+    val metrics = remember(clampedScale, isCompactWidth) {
+        DockAppearancePolicy.computeMetrics(clampedScale, isCompactWidth)
+    }
+    val effectScale = DockAppearancePolicy.rimAndEffectScale(dockOpacity)
+    val dockShape = RoundedCornerShape(metrics.cornerRadiusDp.dp)
+    val tileCorner = ((if (isCompactWidth) 11f else 14f) * clampedScale).coerceIn(8f, 18f).dp
+    val iconCorner = ((if (isCompactWidth) 8f else 9f) * clampedScale).coerceIn(6f, 13f).dp
+    val leadBtnSize = metrics.leadBtnDp.dp
+    val searchBtnSize = metrics.searchBtnDp.dp
+    val navBtnSize = metrics.navBtnDp.dp
+    val appTileSize = metrics.appTileDp.dp
+    val appIconSize = metrics.appIconDp.dp
 
     Box(
         modifier = modifier
@@ -489,26 +561,28 @@ fun DexMacTaskbar(
             .padding(
                 start = if (isCompactWidth) 8.dp else 14.dp,
                 end = if (isCompactWidth) 8.dp else 14.dp,
-                bottom = if (isCompactWidth) 8.dp else 10.dp,
+                bottom = metrics.bottomMarginDp.dp,
             ),
     ) {
         // Center Iconic Floating macOS Liquid Frosted Glass Dock
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .widthIn(max = 780.dp)
+                .widthIn(max = metrics.maxWidthDp.dp)
                 .liquidGlassSurface(
                     shape = dockShape,
-                    fill = OpalPalette.LiquidDockFill,
-                    rim = OpalPalette.LiquidGlassRim,
-                    elevation = 22.dp,
+                    fill = OpalPalette.dockGlassFill(dockOpacity),
+                    rim = OpalPalette.dockGlassRim(dockOpacity),
+                    elevation = (22f * effectScale).dp,
+                    borderWidth = if (effectScale > 0.01f) 1.dp else 0.dp,
+                    effectAlphaScale = effectScale,
                 )
                 .padding(
-                    horizontal = if (isCompactWidth) 7.dp else 10.dp,
-                    vertical = if (isCompactWidth) 5.dp else 6.dp,
+                    horizontal = metrics.horizontalPaddingDp.dp,
+                    vertical = metrics.verticalPaddingDp.dp,
                 ),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(if (isCompactWidth) 3.5.dp else 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(metrics.itemSpacingDp.dp),
         ) {
             // Left: Launchpad / App Drawer (+ Spotlight Search on wide screens)
             GlassDockButton(
@@ -521,12 +595,12 @@ fun DexMacTaskbar(
                 GlassDockButton(
                     glyph = ChromeGlyph.SEARCH,
                     active = false,
-                    size = 38.dp,
+                    size = searchBtnSize,
                     onClick = onOpenSearch,
                 )
             }
 
-            GlassDockDivider()
+            GlassDockDivider(height = metrics.dividerHeightDp.dp)
 
             // Center: Pinned + Running Apps Strip (DeX click-to-toggle + long-press menu + macOS running dot)
             Row(
@@ -534,7 +608,7 @@ fun DexMacTaskbar(
                     .weight(1f, fill = false)
                     .horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(if (isCompactWidth) 3.5.dp else 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(metrics.itemSpacingDp.dp),
             ) {
                 taskbarEntries.forEach { (pkg, cls, label) ->
                     val icon = remember(pkg) { AppCatalogRepository.getAppIcon(ctx, pkg) }
@@ -546,7 +620,7 @@ fun DexMacTaskbar(
                         verticalArrangement = Arrangement.Center,
                         modifier = Modifier
                             .size(width = appTileSize, height = appTileSize)
-                            .clip(RoundedCornerShape(if (isCompactWidth) 11.dp else 14.dp))
+                            .clip(RoundedCornerShape(tileCorner))
                             .background(
                                 when {
                                     isFocused -> OpalPalette.ChipActiveFill
@@ -557,7 +631,7 @@ fun DexMacTaskbar(
                             .border(
                                 width = if (isFocused) 0.85.dp else 0.dp,
                                 color = if (isFocused) OpalPalette.BorderFocused else Color.Transparent,
-                                shape = RoundedCornerShape(if (isCompactWidth) 11.dp else 14.dp),
+                                shape = RoundedCornerShape(tileCorner),
                             )
                             .onTapOrContextAction(
                                 pkg, runningWin?.windowId, runningWin?.state, runningWin?.focused,
@@ -576,24 +650,31 @@ fun DexMacTaskbar(
                                     alpha = if (runningWin?.isMinimized == true) 0.56f else 1f,
                                     modifier = Modifier
                                         .size(appIconSize)
-                                        .clip(RoundedCornerShape(if (isCompactWidth) 8.dp else 9.dp)),
+                                        .clip(RoundedCornerShape(iconCorner)),
                                 )
                             } else {
                                 Box(
                                     modifier = Modifier
                                         .size(appIconSize)
-                                        .clip(RoundedCornerShape(if (isCompactWidth) 8.dp else 9.dp))
+                                        .clip(RoundedCornerShape(iconCorner))
                                         .background(OpalPalette.BgElevated),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    OpalText(text = label.take(1), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    OpalText(
+                                        text = label.take(1),
+                                        fontSize = (12f * clampedScale).coerceIn(10f, 16f).sp,
+                                        fontWeight = FontWeight.Bold,
+                                    )
                                 }
                             }
                         }
-                        Spacer(Modifier.height(2.dp))
+                        Spacer(Modifier.height((2f * clampedScale).coerceIn(1.5f, 3f).dp))
                         Box(
                             modifier = Modifier
-                                .size(width = if (isFocused) 11.dp else 4.dp, height = 2.8.dp)
+                                .size(
+                                    width = ((if (isFocused) 11f else 4f) * clampedScale).dp,
+                                    height = (2.8f * clampedScale).coerceIn(2.2f, 3.8f).dp,
+                                )
                                 .clip(CircleShape)
                                 .background(
                                     when {
@@ -609,7 +690,7 @@ fun DexMacTaskbar(
                 }
             }
 
-            GlassDockDivider()
+            GlassDockDivider(height = metrics.dividerHeightDp.dp)
 
             // Right of Dock: Optional Native IME button + Compact DeX Navigation (Back / Desktop / Mission Control)
             if (onToggleSoftKeyboard != null) {
@@ -649,7 +730,7 @@ private fun GlassDockButton(
     size: Dp = 38.dp,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(13.dp)
+    val shape = RoundedCornerShape((size * 0.34f).coerceIn(9.dp, 16.dp))
     Box(
         modifier = Modifier
             .size(size)
@@ -672,12 +753,12 @@ private fun GlassDockButton(
 }
 
 @Composable
-private fun GlassDockDivider() {
+private fun GlassDockDivider(height: Dp = 26.dp) {
     Box(
         modifier = Modifier
             .padding(horizontal = 3.dp)
             .width(1.dp)
-            .height(26.dp)
+            .height(height)
             .background(OpalPalette.DividerColor),
     )
 }
@@ -879,8 +960,16 @@ fun MacControlCenterPopover(
     phoneTrackpadVisible: Boolean = false,
     showAutoTrackpadSwitch: Boolean = false,
     autoShowPhoneTrackpad: Boolean = true,
+    dockVisible: Boolean = true,
+    dockOpacity: Float = DockAppearancePolicy.DEFAULT_OPACITY,
+    dockScale: Float = DockAppearancePolicy.DEFAULT_SCALE,
     maxHeight: Dp = 640.dp,
     initialTab: Int = 0,
+    onToggleDockVisible: (Boolean) -> Unit = {},
+    onChangeDockOpacity: (Float) -> Unit = {},
+    onChangeDockScale: (Float) -> Unit = {},
+    onResetDockStyle: () -> Unit = {},
+    onOpenSystemSettings: ((String) -> Unit)? = null,
     onTogglePhoneTrackpad: () -> Unit = {},
     onToggleAutoPhoneTrackpad: (Boolean) -> Unit = {},
     onSelectTargetFps: (Int) -> Unit,
@@ -954,8 +1043,8 @@ fun MacControlCenterPopover(
             .heightIn(max = maxHeight)
             .liquidGlassSurface(
                 shape = shape,
-                fill = OpalPalette.LiquidPopoverFill,
-                rim = OpalPalette.LiquidGlassRim,
+                fill = OpalPalette.SolidPopoverFill,
+                rim = OpalPalette.SolidPopoverRim,
                 elevation = 28.dp,
             )
             .pointerInput(Unit) { detectTapGestures {} }
@@ -1036,6 +1125,11 @@ fun MacControlCenterPopover(
                         }
                     }
                     fun openSystemSettings(action: String) {
+                        val inDexHandler = onOpenSystemSettings
+                        if (inDexHandler != null) {
+                            inDexHandler(action)
+                            return
+                        }
                         try {
                             ctx.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         } catch (_: Throwable) {
@@ -1276,6 +1370,49 @@ fun MacControlCenterPopover(
                             },
                             modifier = Modifier.weight(1f),
                         )
+                    }
+
+                    // Quick Dock Bar Toggle + Jump to Full Dock Customization
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(infoCardShape)
+                            .background(OpalPalette.ChipFill)
+                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
+                            .padding(horizontal = 11.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            OpalText(text = "底部 Dock 栏", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
+                            OpalText(
+                                text = if (dockVisible) {
+                                    "大小 ${DockAppearancePolicy.formatScaleLabel(dockScale)} · 不透明度 ${DockAppearancePolicy.formatOpacityLabel(dockOpacity)}"
+                                } else {
+                                    "已隐藏 · 顶栏可打开应用与多任务"
+                                },
+                                fontSize = 10.sp,
+                                color = OpalPalette.TextSecondary,
+                                maxLines = 1,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OpalButton(
+                                label = if (dockVisible) "隐藏" else "开启",
+                                compact = true,
+                                filled = !dockVisible,
+                                accent = if (dockVisible) OpalPalette.AccentAmber else OpalPalette.AccentBlue,
+                                onClick = { onToggleDockVisible(!dockVisible) },
+                            )
+                            OpalButton(
+                                label = "自定义",
+                                compact = true,
+                                filled = false,
+                                accent = OpalPalette.AccentBlue,
+                                onClick = { selectedTab = 2 },
+                            )
+                        }
                     }
 
                     // Phone Trackpad On-Screen Control (External Display only)
@@ -1545,7 +1682,85 @@ fun MacControlCenterPopover(
                 }
 
                 else -> {
-                    // Tab 2: Display, FPS, DPI, External Scaling & Appearance
+                    // Tab 2: Dock Customization, Display, FPS, DPI, External Scaling & Appearance
+                    // Dedicated Dock Bar Customization Card (live preview at bottom of screen)
+                    val isDefaultDock = dockVisible &&
+                        DockAppearancePolicy.isDefaultOpacity(dockOpacity) &&
+                        DockAppearancePolicy.isDefaultScale(dockScale)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(infoCardShape)
+                            .background(OpalPalette.ChipFill)
+                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
+                            .padding(horizontal = 11.dp, vertical = 9.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            OpalText(
+                                text = "Dock 栏自定义",
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = OpalPalette.TextPrimary,
+                            )
+                            if (!isDefaultDock) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .background(OpalPalette.ChipActiveFill)
+                                        .clickable(onClick = onResetDockStyle)
+                                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                                ) {
+                                    OpalText(
+                                        text = "恢复默认",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = OpalPalette.AccentBlue,
+                                    )
+                                }
+                            }
+                        }
+
+                        OpalSwitchRow(
+                            title = "显示底部 Dock 栏",
+                            subtitle = if (dockVisible) "实时预览下方程序坞外观" else "已关闭 · 顶栏提供应用与多任务入口",
+                            checked = dockVisible,
+                            onCheckedChange = onToggleDockVisible,
+                        )
+
+                        if (dockVisible) {
+                            Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+                            ControlCompactSliderRow(
+                                label = "背景不透明度",
+                                valueText = DockAppearancePolicy.formatOpacityLabel(dockOpacity),
+                                actionLabel = if (DockAppearancePolicy.isDefaultOpacity(dockOpacity)) "默认 ✓" else "默认",
+                                actionActive = DockAppearancePolicy.isDefaultOpacity(dockOpacity),
+                                actionAccent = OpalPalette.AccentBlue,
+                                onActionClick = { onChangeDockOpacity(DockAppearancePolicy.DEFAULT_OPACITY) },
+                                value = dockOpacity,
+                                valueRange = DockAppearancePolicy.MIN_OPACITY..DockAppearancePolicy.MAX_OPACITY,
+                                onValueChange = onChangeDockOpacity,
+                            )
+
+                            Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+                            ControlCompactSliderRow(
+                                label = "Dock 大小",
+                                valueText = DockAppearancePolicy.formatScaleLabel(dockScale),
+                                actionLabel = if (DockAppearancePolicy.isDefaultScale(dockScale)) "默认 ✓" else "默认",
+                                actionActive = DockAppearancePolicy.isDefaultScale(dockScale),
+                                actionAccent = OpalPalette.AccentBlue,
+                                onActionClick = { onChangeDockScale(DockAppearancePolicy.DEFAULT_SCALE) },
+                                value = dockScale,
+                                valueRange = DockAppearancePolicy.MIN_SCALE..DockAppearancePolicy.MAX_SCALE,
+                                onValueChange = onChangeDockScale,
+                            )
+                        }
+                    }
+
                     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         OpalText(text = "刷新率", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = OpalPalette.TextSecondary)
                         val fpsOpts = listOf(0, 60, 90, 120)
@@ -1930,6 +2145,7 @@ fun DesktopWallpaperContextMenu(
     onPickCustomWallpaper: () -> Unit,
     onClearCustomWallpaper: () -> Unit,
     onOpenTilingMenu: () -> Unit,
+    onOpenDockSettings: () -> Unit = {},
     onOpenAppDrawer: () -> Unit,
     onToggleLightDark: () -> Unit,
     onOpenConsole: () -> Unit,
@@ -2018,6 +2234,10 @@ fun DesktopWallpaperContextMenu(
         ContextMenuRow("快速分屏布局（二 / 三 / 四列…）") {
             onDismiss()
             onOpenTilingMenu()
+        }
+        ContextMenuRow("自定义底部 Dock 栏…") {
+            onDismiss()
+            onOpenDockSettings()
         }
         ContextMenuRow("打开应用抽屉") {
             onDismiss()

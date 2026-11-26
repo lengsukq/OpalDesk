@@ -18,6 +18,7 @@ import io.github.lengsukq.opaldesk.daemon.input.PerDisplayInputRouter;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.util.ShellCommand;
 
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -236,18 +237,23 @@ public final class AndroidDisplayDriver
             }
         }
 
+        ResolvedLaunchIntent resolvedLaunch = resolveLaunchIntentInfo(pkg, cls);
+        if (resolvedLaunch == null) {
+            System.err.println("OPALDESK_LAUNCH_NO_INTENT pkg=" + pkg + " cls=" + cls + " displayId=" + displayId);
+            return existingOnTarget;
+        }
+        Intent launchIntent = resolvedLaunch.intent;
+
+        // When launching an explicit non-launcher sub-activity (e.g. Wi-Fi / Bluetooth settings),
+        // avoid pulling an unrelated background task for the same package (which often has a
+        // different taskAffinity, e.g. com.android.settings.root) onto this VirtualDisplay.
         int candidateTid = (existingTaskId > 0)
                 ? existingTaskId
-                : taskApi.findRunningOrRecentTaskForPackage(pkg);
+                : (resolvedLaunch.isExplicitSubActivity ? -1 : taskApi.findRunningOrRecentTaskForPackage(pkg));
         if (candidateTid > 0 && candidateTid != existingOnTarget) {
             taskApi.moveRootTaskToDisplay(candidateTid, displayId);
         }
 
-        Intent launchIntent = resolveSafeLaunchIntent(pkg, cls);
-        if (launchIntent == null) {
-            System.err.println("OPALDESK_LAUNCH_NO_INTENT pkg=" + pkg + " cls=" + cls + " displayId=" + displayId);
-            return existingOnTarget;
-        }
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
         if (!startActivityWithAmFallback(launchIntent, launchOpts, displayId, false)) {
             System.err.println("OPALDESK_LAUNCH_START_FAIL pkg=" + pkg + " displayId=" + displayId);
@@ -300,6 +306,32 @@ public final class AndroidDisplayDriver
         return resolvedTid;
     }
 
+    @Override
+    public int launchExplicitActivityOnDisplay(String pkg, String cls, int displayId) {
+        if (displayId <= 0 || PackagePolicy.isBlockedWindowPkg(pkg)) return -1;
+        Bundle launchOpts = TaskApiAdapter.makeFullscreenLaunchOptions(displayId).toBundle();
+        Intent launchIntent = resolveSafeLaunchIntent(pkg, cls);
+        if (launchIntent == null) {
+            System.err.println("OPALDESK_LAUNCH_EXPLICIT_NO_INTENT pkg=" + pkg + " cls=" + cls + " displayId=" + displayId);
+            return taskApi.findTopTaskIdOnDisplay(displayId, pkg);
+        }
+        launchIntent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        if (!startActivityWithAmFallback(launchIntent, launchOpts, displayId, false)) {
+            System.err.println("OPALDESK_LAUNCH_EXPLICIT_FAIL pkg=" + pkg + " cls=" + cls + " displayId=" + displayId);
+            return taskApi.findTopTaskIdOnDisplay(displayId, pkg);
+        }
+        services.focusDisplay(displayId);
+        SystemClock.sleep(60L);
+        int topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg);
+        int resolvedTid = (topTid > 0) ? topTid : taskApi.findRunningOrRecentTaskForPackage(pkg);
+        System.out.println("OPALDESK_LAUNCH_EXPLICIT_OK pkg=" + pkg
+                + " cls=" + cls + " displayId=" + displayId + " tid=" + resolvedTid);
+        return resolvedTid;
+    }
+
     /**
      * Launches an Activity via {@code IActivityTaskManager.startActivity} and falls back to
      * {@code am start --display <id> --windowingMode 1} if a future Android/OEM AIDL signature
@@ -333,6 +365,11 @@ public final class AndroidDisplayDriver
     @Override
     public int findTopTaskIdOnDisplay(int displayId, String expectedPkg) {
         return taskApi.findTopTaskIdOnDisplay(displayId, expectedPkg);
+    }
+
+    @Override
+    public List<Integer> findAllTaskIdsOnDisplay(int displayId) {
+        return taskApi.findAllTaskIdsOnDisplay(displayId);
     }
 
     @Override
@@ -401,17 +438,38 @@ public final class AndroidDisplayDriver
         return (metrics != null && metrics.length >= 3 && metrics[2] > 0) ? metrics[2] : 0;
     }
 
+    private static final class ResolvedLaunchIntent {
+        final Intent intent;
+        final boolean isExplicitSubActivity;
+
+        ResolvedLaunchIntent(Intent intent, boolean isExplicitSubActivity) {
+            this.intent = intent;
+            this.isExplicitSubActivity = isExplicitSubActivity;
+        }
+    }
+
     private Intent resolveSafeLaunchIntent(String pkg, String cls) {
+        ResolvedLaunchIntent info = resolveLaunchIntentInfo(pkg, cls);
+        return (info != null) ? info.intent : null;
+    }
+
+    private ResolvedLaunchIntent resolveLaunchIntentInfo(String pkg, String cls) {
         if (services.context == null || !PackagePolicy.isValidPackageName(pkg)) return null;
         PackageManager pm = services.context.getPackageManager();
+        Intent launcher = pm.getLaunchIntentForPackage(pkg);
         if (cls != null && PackagePolicy.isValidClassName(cls)) {
-            Intent explicit = new Intent(Intent.ACTION_MAIN)
-                    .addCategory(Intent.CATEGORY_LAUNCHER)
-                    .setComponent(new ComponentName(pkg, cls));
+            ComponentName launcherComp = (launcher != null) ? launcher.getComponent() : null;
+            boolean isMainLauncher = launcherComp != null && cls.equals(launcherComp.getClassName());
+            Intent explicit = isMainLauncher
+                    ? new Intent(Intent.ACTION_MAIN)
+                            .addCategory(Intent.CATEGORY_LAUNCHER)
+                            .setComponent(new ComponentName(pkg, cls))
+                    : new Intent(Intent.ACTION_MAIN)
+                            .setComponent(new ComponentName(pkg, cls));
             if (pm.resolveActivity(explicit, 0) != null) {
-                return explicit;
+                return new ResolvedLaunchIntent(explicit, !isMainLauncher);
             }
         }
-        return pm.getLaunchIntentForPackage(pkg);
+        return (launcher != null) ? new ResolvedLaunchIntent(launcher, false) : null;
     }
 }

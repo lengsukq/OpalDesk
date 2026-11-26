@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -64,6 +65,7 @@ fun ConsoleLogsTab(
     status: DaemonStatus,
     scene: CompositorScene,
     remote: RemoteStreamStatus,
+    onOpenUpdateModal: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val helperEntries by OpalLogStore.entriesFlow.collectAsState()
@@ -226,7 +228,78 @@ fun ConsoleLogsTab(
                     color = OpalPalette.AccentDanger,
                 )
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
+            // Compact, eye-catching QQ community entry strip
+            val qqShape = RoundedCornerShape(14.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(qqShape)
+                    .background(
+                        Brush.horizontalGradient(
+                            if (isDark) {
+                                listOf(
+                                    OpalPalette.AccentBlue.copy(alpha = 0.22f),
+                                    OpalPalette.AccentCyan.copy(alpha = 0.16f),
+                                )
+                            } else {
+                                listOf(
+                                    OpalPalette.AccentBlue.copy(alpha = 0.12f),
+                                    OpalPalette.AccentCyan.copy(alpha = 0.10f),
+                                )
+                            },
+                        ),
+                    )
+                    .border(0.95.dp, OpalPalette.AccentBlue.copy(alpha = 0.45f), qqShape)
+                    .clickable { joinOpalDeskQqGroup(ctx) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.5.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(OpalPalette.AccentBlue),
+                        )
+                        OpalText(
+                            text = "交流反馈 QQ 群 · $OPALDESK_QQ_GROUP_NUMBER",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = OpalPalette.TextPrimary,
+                            maxLines = 1,
+                        )
+                    }
+                    OpalText(
+                        text = "问题解答、最新版本与需求改动都会在群内第一时间同步",
+                        fontSize = 10.5.sp,
+                        color = OpalPalette.TextSecondary,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(OpalPalette.AccentBlue)
+                        .padding(horizontal = 11.dp, vertical = 5.5.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    OpalText(
+                        text = "加入QQ群",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 1,
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OpalButton(
                     label = if (refreshing) "刷新中…" else "刷新日志",
@@ -407,6 +480,10 @@ fun ConsoleLogsTab(
             daemonLogText = daemonLogText,
             quota = feedbackQuota,
             onQuotaChanged = { updated -> feedbackQuota = updated },
+            onOpenUpdateModal = {
+                showReportModal = false
+                onOpenUpdateModal()
+            },
             onDismiss = { showReportModal = false },
         )
     }

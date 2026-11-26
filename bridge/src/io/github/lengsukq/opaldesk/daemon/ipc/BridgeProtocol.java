@@ -117,6 +117,12 @@ public final class BridgeProtocol {
     public static final int VD_FLAG_SECURE = 0x0004;
     /** DisplayManager.VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL (1<<8): never dump tasks onto Display 0. */
     public static final int VD_FLAG_DESTROY_CONTENT_ON_REMOVAL = 1 << 8;
+    /**
+     * AOSP {@code WindowManager.REMOVE_CONTENT_MODE_DESTROY = 2}
+     * ({@code UNDEFINED = 0}, {@code MOVE_TO_PRIMARY = 1}, {@code DESTROY = 2}):
+     * destroys residual tasks on VirtualDisplay removal instead of migrating them onto Display 0.
+     */
+    public static final int REMOVE_CONTENT_MODE_DESTROY = 2;
 
     // ---- Window Profiles (Per-Window Independent Resolution & DPI) ----
     public static final int PROFILE_AUTO = 0;

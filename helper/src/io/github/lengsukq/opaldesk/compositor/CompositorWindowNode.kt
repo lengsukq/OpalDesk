@@ -77,6 +77,7 @@ fun CompositorWindowFrameNode(
     window: CompositorWindow,
     canvasW: Int,
     canvasH: Int,
+    dockInsetDp: Float = CompositorGeometry.DOCK_INSET_DP,
     onSnapPreviewChanged: (WindowRect?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -84,6 +85,7 @@ fun CompositorWindowFrameNode(
     val density = LocalDensity.current
     val densityVal = density.density
     val currentWin by rememberUpdatedState(window)
+    val currentDockInsetDp by rememberUpdatedState(dockInsetDp)
 
     var isInteracting by remember(window.windowId) { mutableStateOf(false) }
     var liveFrame by remember(window.windowId) { mutableStateOf(window.frame) }
@@ -266,7 +268,7 @@ fun CompositorWindowFrameNode(
                                             onSnapPreviewChanged(
                                                 snap?.let {
                                                     CompositorGeometry.computeSnapPreviewRect(
-                                                        it, canvasW, canvasH, densityVal,
+                                                        it, canvasW, canvasH, densityVal, currentDockInsetDp,
                                                     )
                                                 },
                                             )
@@ -275,7 +277,7 @@ fun CompositorWindowFrameNode(
                                             val snap = activeSnap
                                             val finalFrame = if (snap != null) {
                                                 CompositorGeometry.computeSnapPreviewRect(
-                                                    snap, canvasW, canvasH, densityVal,
+                                                    snap, canvasW, canvasH, densityVal, currentDockInsetDp,
                                                 )
                                             } else {
                                                 lastLive
@@ -391,7 +393,7 @@ fun CompositorWindowFrameNode(
                     if (showSnapTools) {
                         HeaderSubtleIconButton(glyph = ChromeGlyph.TILE_LEFT, focused = window.focused) {
                             val rect = CompositorGeometry.computeSnapPreviewRect(
-                                BridgeProtocol.Presentation.SNAP_LEFT, canvasW, canvasH, densityVal,
+                                BridgeProtocol.Presentation.SNAP_LEFT, canvasW, canvasH, densityVal, currentDockInsetDp,
                             )
                             BridgeClient.updateWindowFrameAsync(
                                 window.windowId, rect.left, rect.top, rect.right, rect.bottom,
@@ -400,7 +402,7 @@ fun CompositorWindowFrameNode(
                         }
                         HeaderSubtleIconButton(glyph = ChromeGlyph.TILE_RIGHT, focused = window.focused) {
                             val rect = CompositorGeometry.computeSnapPreviewRect(
-                                BridgeProtocol.Presentation.SNAP_RIGHT, canvasW, canvasH, densityVal,
+                                BridgeProtocol.Presentation.SNAP_RIGHT, canvasW, canvasH, densityVal, currentDockInsetDp,
                             )
                             BridgeClient.updateWindowFrameAsync(
                                 window.windowId, rect.left, rect.top, rect.right, rect.bottom,

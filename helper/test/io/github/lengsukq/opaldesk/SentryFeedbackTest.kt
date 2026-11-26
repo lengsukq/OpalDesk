@@ -7,6 +7,8 @@ import io.github.lengsukq.opaldesk.diagnostics.ManualReportPayload
 import io.github.lengsukq.opaldesk.diagnostics.ManualReportSubmitGuard
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogEntry
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogLevel
+import io.github.lengsukq.opaldesk.diagnostics.ReportVersionCheckPolicy
+import io.github.lengsukq.opaldesk.diagnostics.ReportVersionDecision
 import io.github.lengsukq.opaldesk.diagnostics.SentryEnvelopeTransport
 import io.github.lengsukq.opaldesk.protocol.CompositorScene
 import io.github.lengsukq.opaldesk.protocol.DaemonStatus
@@ -212,5 +214,75 @@ class SentryFeedbackTest {
         assertEquals(50, selected.size)
         assertTrue(selected.first().contains("[STARTUP] OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED"))
         assertTrue(selected.last().contains("runtime-event-260"))
+    }
+
+    @Test
+    fun reportVersionCheckPolicyPromptsOptionalUpdateAndAllowsProceedingAnyway() {
+        val now = 1_700_000_000_000L
+        assertTrue(
+            ReportVersionCheckPolicy.shouldTriggerPreCheck(
+                hasKnownUpdate = false,
+                isChecking = false,
+                upToDateCheckedAtMs = null,
+                nowMs = now,
+            ),
+        )
+        assertFalse(
+            ReportVersionCheckPolicy.shouldTriggerPreCheck(
+                hasKnownUpdate = false,
+                isChecking = false,
+                upToDateCheckedAtMs = now - 60_000L,
+                nowMs = now,
+            ),
+        )
+        assertTrue(
+            ReportVersionCheckPolicy.shouldTriggerPreCheck(
+                hasKnownUpdate = false,
+                isChecking = false,
+                upToDateCheckedAtMs = now - ReportVersionCheckPolicy.PRE_CHECK_FRESH_MS - 1L,
+                nowMs = now,
+            ),
+        )
+        assertFalse(
+            ReportVersionCheckPolicy.shouldTriggerPreCheck(
+                hasKnownUpdate = true,
+                isChecking = false,
+                upToDateCheckedAtMs = null,
+                nowMs = now,
+            ),
+        )
+
+        assertEquals(
+            ReportVersionDecision.WAIT_FOR_CHECK,
+            ReportVersionCheckPolicy.decideOnSubmit(
+                hasKnownUpdate = false,
+                isChecking = true,
+                confirmedOutdatedUpload = false,
+            ),
+        )
+        assertEquals(
+            ReportVersionDecision.PROMPT_UPDATE_OPTIONAL,
+            ReportVersionCheckPolicy.decideOnSubmit(
+                hasKnownUpdate = true,
+                isChecking = false,
+                confirmedOutdatedUpload = false,
+            ),
+        )
+        assertEquals(
+            ReportVersionDecision.PROCEED_UPLOAD,
+            ReportVersionCheckPolicy.decideOnSubmit(
+                hasKnownUpdate = true,
+                isChecking = false,
+                confirmedOutdatedUpload = true,
+            ),
+        )
+        assertEquals(
+            ReportVersionDecision.PROCEED_UPLOAD,
+            ReportVersionCheckPolicy.decideOnSubmit(
+                hasKnownUpdate = false,
+                isChecking = false,
+                confirmedOutdatedUpload = false,
+            ),
+        )
     }
 }

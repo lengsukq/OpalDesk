@@ -1,6 +1,7 @@
 package io.github.lengsukq.opaldesk.prefs
 
 import android.content.Context
+import io.github.lengsukq.opaldesk.compositor.DockAppearancePolicy
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackQuotaStorage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -66,6 +67,9 @@ object AppPrefs {
     private const val KEY_REMOTE_MIC_ENABLED = "remote_mic_uplink_enabled_v1"
     private const val KEY_REMOTE_CAMERA_ENABLED = "remote_camera_mapping_enabled_v1"
     private const val KEY_AUDIO_ROUTE_MODE = "audio_route_mode_v2"
+    private const val KEY_DOCK_VISIBLE = "dock_visible_v1"
+    private const val KEY_DOCK_OPACITY = "dock_opacity_v1"
+    private const val KEY_DOCK_SCALE = "dock_scale_v1"
 
     private val DEFAULT_PINNED = listOf(
         "com.android.chrome",
@@ -135,6 +139,15 @@ object AppPrefs {
     )
     val audioRouteModeFlow: StateFlow<Int> = _audioRouteModeFlow.asStateFlow()
 
+    private val _dockVisibleFlow = MutableStateFlow(true)
+    val dockVisibleFlow: StateFlow<Boolean> = _dockVisibleFlow.asStateFlow()
+
+    private val _dockOpacityFlow = MutableStateFlow(DockAppearancePolicy.DEFAULT_OPACITY)
+    val dockOpacityFlow: StateFlow<Float> = _dockOpacityFlow.asStateFlow()
+
+    private val _dockScaleFlow = MutableStateFlow(DockAppearancePolicy.DEFAULT_SCALE)
+    val dockScaleFlow: StateFlow<Float> = _dockScaleFlow.asStateFlow()
+
     private fun prefs(ctx: Context?) =
         ctx?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -170,6 +183,13 @@ object AppPrefs {
         ).coerceIn(
             io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.ALL_TO_DEX,
             io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.SPLIT_BY_APP,
+        )
+        _dockVisibleFlow.value = p.getBoolean(KEY_DOCK_VISIBLE, true)
+        _dockOpacityFlow.value = DockAppearancePolicy.clampOpacity(
+            p.getFloat(KEY_DOCK_OPACITY, DockAppearancePolicy.DEFAULT_OPACITY),
+        )
+        _dockScaleFlow.value = DockAppearancePolicy.clampScale(
+            p.getFloat(KEY_DOCK_SCALE, DockAppearancePolicy.DEFAULT_SCALE),
         )
     }
 
@@ -300,6 +320,49 @@ object AppPrefs {
     fun getDockPinnedPackages(ctx: Context?): List<String> {
         hydrateFlows(ctx)
         return _dockPinnedFlow.value
+    }
+
+    fun isDockVisible(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _dockVisibleFlow.value
+    }
+
+    fun setDockVisible(ctx: Context?, visible: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_DOCK_VISIBLE, visible)?.apply()
+        _dockVisibleFlow.value = visible
+    }
+
+    fun getDockOpacity(ctx: Context?): Float {
+        hydrateFlows(ctx)
+        return _dockOpacityFlow.value
+    }
+
+    fun setDockOpacity(ctx: Context?, opacity: Float) {
+        val clamped = DockAppearancePolicy.clampOpacity(opacity)
+        prefs(ctx)?.edit()?.putFloat(KEY_DOCK_OPACITY, clamped)?.apply()
+        _dockOpacityFlow.value = clamped
+    }
+
+    fun getDockScale(ctx: Context?): Float {
+        hydrateFlows(ctx)
+        return _dockScaleFlow.value
+    }
+
+    fun setDockScale(ctx: Context?, scale: Float) {
+        val clamped = DockAppearancePolicy.clampScale(scale)
+        prefs(ctx)?.edit()?.putFloat(KEY_DOCK_SCALE, clamped)?.apply()
+        _dockScaleFlow.value = clamped
+    }
+
+    fun resetDockAppearance(ctx: Context?) {
+        prefs(ctx)?.edit()
+            ?.putBoolean(KEY_DOCK_VISIBLE, true)
+            ?.putFloat(KEY_DOCK_OPACITY, DockAppearancePolicy.DEFAULT_OPACITY)
+            ?.putFloat(KEY_DOCK_SCALE, DockAppearancePolicy.DEFAULT_SCALE)
+            ?.apply()
+        _dockVisibleFlow.value = true
+        _dockOpacityFlow.value = DockAppearancePolicy.DEFAULT_OPACITY
+        _dockScaleFlow.value = DockAppearancePolicy.DEFAULT_SCALE
     }
 
     enum class DockPinResult { ADDED, REMOVED, LIMIT_REACHED }

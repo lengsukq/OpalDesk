@@ -11,7 +11,8 @@ import io.github.lengsukq.opaldesk.daemon.stream.SimpleJson;
 public final class WindowSession {
     public final int windowId;
     public final String pkg;
-    public final String activityClass;
+    public String activityClass;
+    public boolean pendingActivitySwitch = false;
 
     public String title;
     public WindowProfile profile;

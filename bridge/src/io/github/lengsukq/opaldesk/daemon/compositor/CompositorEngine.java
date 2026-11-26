@@ -49,6 +49,11 @@ public final class CompositorEngine {
         /** Queries the active user taskId currently running on {@code displayId} (or {@code -1}). */
         int findTopTaskIdOnDisplay(int displayId, String expectedPkg);
 
+        /** Queries every running Android taskId currently hosted on {@code displayId}. */
+        default List<Integer> findAllTaskIdsOnDisplay(int displayId) {
+            return Collections.emptyList();
+        }
+
         /**
          * Queries the currently visible & active taskId on {@code displayId} (returns {@code -1}
          * when the app finished or moved itself to back on root Back press).
@@ -77,6 +82,11 @@ public final class CompositorEngine {
 
         /** Moves Android display focus onto {@code displayId} when resuming an existing lease. */
         default void focusDisplay(int displayId) {}
+
+        /** Launches a specific sub-activity (e.g. Wi-Fi / Bluetooth settings) inside an already-live VirtualDisplay. */
+        default int launchExplicitActivityOnDisplay(String pkg, String cls, int displayId) {
+            return launchOrMoveFullscreenApp(pkg, cls, displayId, -1);
+        }
 
         /** Invoked when all client TextureView surfaces have detached so Display 0 top focus can be restored. */
         default void onAllClientSurfacesDetached() {}
@@ -271,22 +281,49 @@ public final class CompositorEngine {
         String safeCls = PackagePolicy.isValidClassName(activityClass) ? activityClass : "";
         long now = System.currentTimeMillis();
 
+        int existingWinId = -1;
+        int liveSwitchDisplayId = -1;
         synchronized (lock) {
             WindowSession existing = findByPackageLocked(pkg);
             if (existing != null) {
+                boolean wasHidden = existing.isMinimized() || existing.isHibernated();
+                boolean clsChanged = !safeCls.isEmpty() && !safeCls.equals(existing.activityClass);
+                if (clsChanged) {
+                    existing.activityClass = safeCls;
+                    existing.pendingActivitySwitch = true;
+                }
                 if (requestedProfileCode != BridgeProtocol.PROFILE_AUTO) {
                     WindowProfile nextProf = WindowProfile.fromCode(requestedProfileCode, existing.profile);
                     if (nextProf != existing.profile) {
                         applyProfileChangeLocked(existing, nextProf);
                     }
                 }
-                if (existing.isMinimized() || existing.isHibernated()) {
+                if (wasHidden) {
                     existing.state = BridgeProtocol.STATE_LIVE;
+                } else if (clsChanged && existing.isLive() && existing.displayId > 0) {
+                    liveSwitchDisplayId = existing.displayId;
+                    existing.pendingActivitySwitch = false;
+                    existing.lastLaunchAtMs = now;
                 }
                 focusWindowLocked(existing, now);
                 markDirtyAndNotifyLocked();
-                return existing.windowId;
+                existingWinId = existing.windowId;
             }
+        }
+        if (existingWinId > 0) {
+            if (liveSwitchDisplayId > 0) {
+                int tid = runtimeBridge.launchExplicitActivityOnDisplay(pkg, safeCls, liveSwitchDisplayId);
+                synchronized (lock) {
+                    WindowSession cur = sessionsById.get(existingWinId);
+                    if (cur != null && tid > 0) {
+                        cur.taskId = tid;
+                    }
+                }
+            }
+            return existingWinId;
+        }
+
+        synchronized (lock) {
 
             int canvasW = config.getCanvasWidth();
             int canvasH = config.getCanvasHeight();
@@ -363,6 +400,7 @@ public final class CompositorEngine {
         int prevTaskId;
         int assignedDisplayId;
         boolean reusedExistingLease;
+        boolean forceExplicitLaunch;
 
         synchronized (lock) {
             WindowSession ws = sessionsById.get(windowId);
@@ -422,16 +460,21 @@ public final class CompositorEngine {
             clsToLaunch = ws.activityClass;
             prevTaskId = ws.taskId;
             assignedDisplayId = lease.displayId;
+            forceExplicitLaunch = ws.pendingActivitySwitch;
+            ws.pendingActivitySwitch = false;
             markDirtyAndNotifyLocked();
         }
 
         // If re-attaching a TextureView to an already-active VirtualDisplay whose app is still visible on top,
-        // skip relaunching to prevent activity flicker; if the app previously moved to back, relaunch/bring forward!
-        int existingTopTid = reusedExistingLease
+        // skip relaunching to prevent activity flicker unless an explicit sub-activity switch was requested.
+        int existingTopTid = (reusedExistingLease && !forceExplicitLaunch)
                 ? runtimeBridge.findTopVisibleTaskIdOnDisplay(assignedDisplayId, pkgToLaunch)
                 : -1;
         int launchedTid;
-        if (existingTopTid > 0) {
+        if (forceExplicitLaunch && !clsToLaunch.isEmpty()) {
+            launchedTid = runtimeBridge.launchExplicitActivityOnDisplay(
+                    pkgToLaunch, clsToLaunch, assignedDisplayId);
+        } else if (existingTopTid > 0) {
             runtimeBridge.focusDisplay(assignedDisplayId);
             launchedTid = existingTopTid;
         } else {
@@ -789,7 +832,10 @@ public final class CompositorEngine {
                         displayToRelease = ws.displayId;
                         pkgToClose = ws.pkg;
                     }
-                    if (forceStopOnClose && ws.pkg != null && !ws.pkg.isEmpty()) {
+                    if (forceStopOnClose
+                            && ws.pkg != null
+                            && !ws.pkg.isEmpty()
+                            && !PackagePolicy.shouldSkipForceStopOnClose(ws.pkg)) {
                         boolean hasOtherWindowSamePkg = false;
                         for (WindowSession other : sessionsById.values()) {
                             if (ws.pkg.equals(other.pkg)) {
@@ -841,13 +887,26 @@ public final class CompositorEngine {
             }
         }
 
-        // Remove the Android task BEFORE releasing its VirtualDisplay so WindowManager never bounces
-        // the closing task onto the host phone's Display 0 even on ROMs without DESTROY_CONTENT_ON_REMOVAL.
-        if (taskToRemove <= 0 && displayToRelease > 0 && pkgToClose != null) {
-            taskToRemove = runtimeBridge.findTopTaskIdOnDisplay(displayToRelease, pkgToClose);
-        }
+        // Remove ALL Android tasks hosted on this VirtualDisplay BEFORE releasing the display so
+        // WindowManager never leaves residual/secondary tasks to migrate onto Phone Display 0.
+        java.util.LinkedHashSet<Integer> tasksToRemoveOnClose = new java.util.LinkedHashSet<>();
         if (taskToRemove > 0) {
-            runtimeBridge.removeTask(taskToRemove);
+            tasksToRemoveOnClose.add(taskToRemove);
+        }
+        if (displayToRelease > 0) {
+            List<Integer> displayTasks = runtimeBridge.findAllTaskIdsOnDisplay(displayToRelease);
+            if (displayTasks != null) {
+                for (Integer tid : displayTasks) {
+                    if (tid != null && tid > 0) tasksToRemoveOnClose.add(tid);
+                }
+            }
+            if (tasksToRemoveOnClose.isEmpty() && pkgToClose != null) {
+                int fallbackTid = runtimeBridge.findTopTaskIdOnDisplay(displayToRelease, pkgToClose);
+                if (fallbackTid > 0) tasksToRemoveOnClose.add(fallbackTid);
+            }
+        }
+        for (int tid : tasksToRemoveOnClose) {
+            runtimeBridge.removeTask(tid);
         }
         if (displayToRelease > 0) {
             vdPool.releaseLease(windowId);
@@ -1158,7 +1217,18 @@ public final class CompositorEngine {
         }
 
         for (Object s : surfacesToRelease) runtimeBridge.releaseSurfaceHandle(s);
-        for (int t : tasksToRemove) runtimeBridge.removeTask(t);
+        if (removeUnderlyingTasks) {
+            java.util.LinkedHashSet<Integer> allTasksToRemove = new java.util.LinkedHashSet<>(tasksToRemove);
+            for (int d : displaysToClean) {
+                List<Integer> displayTasks = runtimeBridge.findAllTaskIdsOnDisplay(d);
+                if (displayTasks != null) {
+                    for (Integer tid : displayTasks) {
+                        if (tid != null && tid > 0) allTasksToRemove.add(tid);
+                    }
+                }
+            }
+            for (int t : allTasksToRemove) runtimeBridge.removeTask(t);
+        }
         vdPool.releaseAll();
         for (int d : displaysToClean) runtimeBridge.onDisplayReleased(d);
         runtimeBridge.onAllClientSurfacesDetached();
