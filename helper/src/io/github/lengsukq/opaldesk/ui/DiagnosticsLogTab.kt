@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.diagnostics.DaemonPostmortemCollector
+import io.github.lengsukq.opaldesk.diagnostics.FeedbackKind
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackRateLimiter
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogFilter
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogLevel
@@ -79,7 +80,7 @@ fun ConsoleLogsTab(
     var searchQuery by remember { mutableStateOf("") }
     var showAllLines by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
-    var showReportModal by remember { mutableStateOf(false) }
+    var activeFeedbackModalKind by remember { mutableStateOf<FeedbackKind?>(null) }
     var feedbackQuota by remember(ctx) { mutableStateOf(OpalSentry.currentQuota(ctx)) }
 
     fun refreshDaemonLogs() {
@@ -181,7 +182,7 @@ fun ConsoleLogsTab(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    OpalText(text = "问题反馈与诊断", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    OpalText(text = "反馈、需求与诊断", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(3.dp))
                     OpalText(
                         text = "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · v$appVersion",
@@ -222,20 +223,39 @@ fun ConsoleLogsTab(
                 }
             }
             Spacer(Modifier.height(12.dp))
-            OpalButton(
-                label = if (feedbackQuota.isExhausted) "今日上报已达上限" else "一键上报日志 / 反馈问题",
-                compact = false,
-                filled = true,
-                enabled = !feedbackQuota.isExhausted,
-                accent = OpalPalette.AccentBlue,
-                onClick = {
-                    feedbackQuota = OpalSentry.currentQuota(ctx)
-                    if (!feedbackQuota.isExhausted) {
-                        showReportModal = true
-                    }
-                },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-            )
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OpalButton(
+                    label = if (feedbackQuota.isExhausted) "今日上报已达上限" else "上报问题与日志",
+                    compact = false,
+                    filled = true,
+                    enabled = !feedbackQuota.isExhausted,
+                    accent = OpalPalette.AccentBlue,
+                    onClick = {
+                        feedbackQuota = OpalSentry.currentQuota(ctx)
+                        if (!feedbackQuota.isExhausted) {
+                            activeFeedbackModalKind = FeedbackKind.BUG
+                        }
+                    },
+                    modifier = Modifier.weight(1.25f),
+                )
+                OpalButton(
+                    label = "提功能需求",
+                    compact = false,
+                    filled = false,
+                    enabled = !feedbackQuota.isExhausted,
+                    accent = OpalPalette.AccentCyan,
+                    onClick = {
+                        feedbackQuota = OpalSentry.currentQuota(ctx)
+                        if (!feedbackQuota.isExhausted) {
+                            activeFeedbackModalKind = FeedbackKind.FEATURE
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
             if (feedbackQuota.isExhausted) {
                 Spacer(Modifier.height(6.dp))
                 OpalText(
@@ -494,7 +514,7 @@ fun ConsoleLogsTab(
         }
     }
 
-    if (showReportModal) {
+    activeFeedbackModalKind?.let { initialKind ->
         ReportIssueModal(
             appVersion = appVersion,
             status = status,
@@ -503,12 +523,13 @@ fun ConsoleLogsTab(
             helperEntries = helperEntries,
             daemonLogText = daemonLogText,
             quota = feedbackQuota,
+            initialKind = initialKind,
             onQuotaChanged = { updated -> feedbackQuota = updated },
             onOpenUpdateModal = {
-                showReportModal = false
+                activeFeedbackModalKind = null
                 onOpenUpdateModal()
             },
-            onDismiss = { showReportModal = false },
+            onDismiss = { activeFeedbackModalKind = null },
         )
     }
 }

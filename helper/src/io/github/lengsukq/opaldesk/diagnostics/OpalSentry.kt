@@ -178,6 +178,8 @@ object OpalSentry {
         remote: RemoteStreamStatus,
         helperEntries: List<OpalLogEntry>,
         daemonLogText: String,
+        kind: FeedbackKind = FeedbackKind.BUG,
+        includeLogs: Boolean = (kind == FeedbackKind.BUG),
         onComplete: (ManualReportOutcome) -> Unit,
     ) {
         val appCtx = ctx.applicationContext
@@ -202,30 +204,39 @@ object OpalSentry {
                 return@execute
             }
 
-            val deviceSummary = "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
             val now = Date()
-            val generatedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(now)
             val fileStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(now)
-
-            val env = OpalLogStore.captureEnvironmentSnapshot(appCtx)
-            val sanitizedReport = DiagnosticSanitizer.buildSanitizedReportText(
-                appVersion = appVersion,
-                deviceSummary = deviceSummary,
-                reporterName = cleanUser,
-                problemDescription = cleanDesc,
-                status = status,
-                scene = scene,
-                remote = remote,
-                helperEntries = helperEntries,
-                daemonLogText = daemonLogText,
-                generatedAtText = generatedAt,
-                env = env,
-            )
-            val gzipBytes = DiagnosticSanitizer.gzipCompress(sanitizedReport)
+            val gzipBytes: ByteArray
+            val helperLogCount: Int
+            val daemonLineCount: Int
+            if (includeLogs) {
+                val deviceSummary = "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+                val generatedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(now)
+                val env = OpalLogStore.captureEnvironmentSnapshot(appCtx)
+                val sanitizedReport = DiagnosticSanitizer.buildSanitizedReportText(
+                    appVersion = appVersion,
+                    deviceSummary = deviceSummary,
+                    reporterName = cleanUser,
+                    problemDescription = cleanDesc,
+                    status = status,
+                    scene = scene,
+                    remote = remote,
+                    helperEntries = helperEntries,
+                    daemonLogText = daemonLogText,
+                    generatedAtText = generatedAt,
+                    env = env,
+                )
+                gzipBytes = DiagnosticSanitizer.gzipCompress(sanitizedReport)
+                helperLogCount = helperEntries.size.coerceAtMost(DiagnosticSanitizer.DEFAULT_MAX_HELPER_ENTRIES)
+                daemonLineCount = daemonLogText.lineSequence()
+                    .count { it.isNotBlank() }
+                    .coerceAtMost(DiagnosticSanitizer.DEFAULT_MAX_DAEMON_LINES)
+            } else {
+                gzipBytes = ByteArray(0)
+                helperLogCount = 0
+                daemonLineCount = 0
+            }
             val installationId = limiter.installationId()
-            val daemonLineCount = daemonLogText.lineSequence()
-                .count { it.isNotBlank() }
-                .coerceAtMost(DiagnosticSanitizer.DEFAULT_MAX_DAEMON_LINES)
 
             val payload = ManualReportPayload(
                 installationId = installationId,
@@ -239,10 +250,12 @@ object OpalSentry {
                 androidVersion = Build.VERSION.RELEASE.orEmpty(),
                 androidApiLevel = Build.VERSION.SDK_INT,
                 daemonConnected = status.connected,
-                helperLogCount = helperEntries.size.coerceAtMost(DiagnosticSanitizer.DEFAULT_MAX_HELPER_ENTRIES),
+                helperLogCount = helperLogCount,
                 daemonLogCount = daemonLineCount,
-                attachmentFilename = "opaldesk_diag_$fileStamp.log.gz",
+                attachmentFilename = if (includeLogs) "opaldesk_diag_$fileStamp.log.gz" else "",
                 compressedLogBytes = gzipBytes,
+                kind = kind,
+                includeLogs = includeLogs,
             )
 
             val uploadResult = SentryEnvelopeTransport.sendEnvelope(
@@ -260,11 +273,14 @@ object OpalSentry {
                         shortCode = uploadResult.shortCode,
                         problemDescription = cleanDesc,
                         reportedVersion = appVersion,
+                        kind = kind,
                     )
-                    OpalLogStore.clearAfterConfirmedUpload(daemonLogText)
+                    if (includeLogs) {
+                        OpalLogStore.clearAfterConfirmedUpload(daemonLogText)
+                    }
                     OpalLogStore.i(
                         "Sentry",
-                        "Manual diagnostic report confirmed: eventId=${uploadResult.eventId} (${afterQuota.usedToday}/${afterQuota.maxDaily})",
+                        "Manual ${kind.wireValue} feedback confirmed: eventId=${uploadResult.eventId} logs=$includeLogs (${afterQuota.usedToday}/${afterQuota.maxDaily})",
                     )
                     ManualReportOutcome(
                         success = true,
@@ -274,7 +290,7 @@ object OpalSentry {
                     )
                 }
                 is ManualUploadResult.Failure -> {
-                    OpalLogStore.w("Sentry", "Manual diagnostic report failed: ${uploadResult.reason}")
+                    OpalLogStore.w("Sentry", "Manual ${kind.wireValue} feedback failed: ${uploadResult.reason}")
                     ManualReportOutcome(
                         success = false,
                         errorMessage = uploadResult.reason,

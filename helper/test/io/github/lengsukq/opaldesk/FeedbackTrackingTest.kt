@@ -3,6 +3,7 @@ package io.github.lengsukq.opaldesk
 import com.sun.net.httpserver.HttpServer
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackBatchSyncResult
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackHistoryLogic
+import io.github.lengsukq.opaldesk.diagnostics.FeedbackKind
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackLookupSyncResult
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackRecord
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackRemoteItem
@@ -270,5 +271,84 @@ class FeedbackTrackingTest {
         } finally {
             server.stop(0)
         }
+    }
+
+    @Test
+    fun featureKindSerializesBackwardsCompatiblyAndSurvivesRemoteSync() {
+        val legacyJson = """
+            {
+              "version": 1,
+              "records": [
+                {
+                  "eventId": "a1b2c3d4e5f64789a0b1c2d3e4f56789",
+                  "shortCode": "A1B2C3D4",
+                  "summary": "旧版故障上报",
+                  "reportedVersion": "1.0.18",
+                  "createdAtMs": 1700000000000,
+                  "status": "open"
+                }
+              ]
+            }
+        """.trimIndent()
+        val legacyParsed = FeedbackStatusParser.parseRecordsJson(legacyJson)
+        assertEquals(1, legacyParsed.size)
+        assertEquals(FeedbackKind.BUG, legacyParsed[0].kind)
+
+        val submitted = FeedbackHistoryLogic.recordSubmitted(
+            existing = legacyParsed,
+            eventId = "f1e2d3c4b5a64789a0b1c2d3e4f56789",
+            shortCode = "F1E2D3C4",
+            problemDescription = "希望增加 Dock 自动隐藏",
+            reportedVersion = "1.0.18",
+            createdAtMs = 1700000010000L,
+            kind = FeedbackKind.FEATURE,
+        )
+        val roundTripped = FeedbackStatusParser.parseRecordsJson(FeedbackStatusParser.serializeRecordsJson(submitted))
+        assertEquals(2, roundTripped.size)
+        assertEquals(FeedbackKind.FEATURE, roundTripped[0].kind)
+
+        // Merging a remote payload that omits `kind` must NOT downgrade a local FEATURE record.
+        val mergedWithoutKind = FeedbackHistoryLogic.mergeRemoteStatuses(
+            existing = roundTripped,
+            remoteItems = mapOf(
+                "f1e2d3c4b5a64789a0b1c2d3e4f56789" to FeedbackRemoteItem(
+                    eventId = "f1e2d3c4b5a64789a0b1c2d3e4f56789",
+                    shortCode = "F1E2D3C4",
+                    status = FeedbackResolutionStatus.FIXED_IN_VERSION,
+                    fixedVersion = "1.0.19",
+                    replyNote = "已在 1.0.19 上线",
+                ),
+            ),
+            checkedAtMs = 1700000020000L,
+        )
+        assertEquals(FeedbackKind.FEATURE, mergedWithoutKind[0].kind)
+        assertEquals("1.0.19", mergedWithoutKind[0].fixedVersion)
+
+        // Lookup JSON containing `"kind":"feature"` hydrates synthetic record as FEATURE.
+        val lookupPayload = FeedbackStatusParser.parseLookupJson(
+            """
+            {
+              "schema": 1,
+              "found": true,
+              "item": {
+                "eventId": "99998888777766665555444433332222",
+                "shortCode": "99998888",
+                "kind": "feature",
+                "status": "fixed_pending_release",
+                "summary": "支持双指缩放窗口",
+                "reportedVersion": "1.0.18"
+              }
+            }
+            """.trimIndent(),
+        )
+        val item = lookupPayload?.item
+        assertNotNull(item)
+        assertEquals(FeedbackKind.FEATURE, item!!.kind)
+        val lookedUp = FeedbackHistoryLogic.upsertLookedUpRecord(
+            existing = mergedWithoutKind,
+            remoteItem = item,
+            checkedAtMs = 1700000030000L,
+        )
+        assertEquals(FeedbackKind.FEATURE, lookedUp.first().kind)
     }
 }

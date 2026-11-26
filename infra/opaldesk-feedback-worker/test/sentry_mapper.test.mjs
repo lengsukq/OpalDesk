@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  FeedbackKind,
   FeedbackStatus,
+  extractFeedbackKind,
   extractSemverFromSentryRelease,
   isManualReportOwnedByInstallation,
   mapSentryIssueToStatus,
@@ -263,4 +265,81 @@ test("worker routes verify ownership, lookup fallback, and envelope proxy", asyn
   );
   assert.equal(envResp.status, 200);
   assert.equal((await envResp.json()).id, ownedEvent);
+});
+
+test("feature requests map kind=feature, strip [Feature Request] prefix, and propagate in worker routes", async () => {
+  const featureIssue = {
+    id: "9001",
+    status: "resolved",
+    title: "[Feature Request] 支持 Dock 自动隐藏",
+    statusDetails: { inNextRelease: true },
+    tags: [{ key: "feedback_kind", value: "feature" }],
+  };
+  assert.equal(extractFeedbackKind(featureIssue), FeedbackKind.FEATURE);
+  const mapped = mapSentryIssueToStatus(featureIssue, [{ dateCreated: "2026-11-26T17:00:00Z", text: "[reply] 已排期下版上线" }]);
+  assert.equal(mapped.kind, FeedbackKind.FEATURE);
+  assert.equal(mapped.status, FeedbackStatus.FIXED_PENDING_RELEASE);
+  assert.equal(mapped.summary, "支持 Dock 自动隐藏");
+  assert.equal(mapped.replyNote, "已排期下版上线");
+
+  const anonFeature = mapSentryIssueToStatus({
+    status: "unresolved",
+    title: "[Feature Request] Feature suggestion from alice",
+    statusDetails: {},
+  });
+  assert.equal(anonFeature.kind, FeedbackKind.FEATURE);
+  assert.equal(anonFeature.summary, "功能建议");
+
+  const env = {
+    SENTRY_AUTH_TOKEN: "test-token",
+    SENTRY_API_BASE: "https://us.sentry.io/api/0",
+    SENTRY_ORG: "example-org",
+    SENTRY_PROJECT: "example-app",
+    SENTRY_PROJECT_ID: "42",
+    SENTRY_INGEST_HOST: "o123456.ingest.example.invalid",
+  };
+  const featEvent = "22222222333333334444444455555555";
+  const mockFetch = async (url) => {
+    const u = String(url);
+    if (u.endsWith(`/events/${featEvent}/`)) {
+      return new Response(JSON.stringify({
+        eventID: featEvent,
+        groupID: "9001",
+        tags: [
+          { key: "report_source", value: "manual_user_report" },
+          { key: "installation_id", value: "inst-feat-1" },
+          { key: "feedback_kind", value: "feature" },
+        ],
+      }), { status: 200 });
+    }
+    if (u.endsWith("/issues/9001/")) {
+      return new Response(JSON.stringify(featureIssue), { status: 200 });
+    }
+    if (u.endsWith("/issues/9001/comments/")) {
+      return new Response(JSON.stringify([{ dateCreated: "2026-11-26T17:00:00Z", text: "[reply] 已排期下版上线" }]), { status: 200 });
+    }
+    if (u.includes("/issues/?query=feedback_code%3A22222222")) {
+      return new Response(JSON.stringify([featureIssue]), { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+  const worker = createWorkerHandler({ fetchImpl: mockFetch, bypassTtlCache: true });
+
+  const batchResp = await worker.fetch(
+    new Request(`https://feedback.example.invalid/v1/feedback/status?installation_id=inst-feat-1&event_ids=${featEvent}`),
+    env,
+  );
+  assert.equal(batchResp.status, 200);
+  const batchJson = await batchResp.json();
+  assert.equal(batchJson.items[featEvent].kind, FeedbackKind.FEATURE);
+  assert.equal(batchJson.items[featEvent].summary, "支持 Dock 自动隐藏");
+
+  const lookupResp = await worker.fetch(
+    new Request("https://feedback.example.invalid/v1/feedback/lookup?code=22222222"),
+    env,
+  );
+  assert.equal(lookupResp.status, 200);
+  const lookupJson = await lookupResp.json();
+  assert.equal(lookupJson.item.kind, FeedbackKind.FEATURE);
+  assert.equal(lookupJson.item.status, FeedbackStatus.FIXED_PENDING_RELEASE);
 });

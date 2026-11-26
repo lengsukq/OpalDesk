@@ -36,6 +36,8 @@ data class ManualReportPayload(
     val attachmentFilename: String,
     val compressedLogBytes: ByteArray,
     val sentAtIso: String = DateTimeFormatter.ISO_INSTANT.format(Instant.now()),
+    val kind: FeedbackKind = FeedbackKind.BUG,
+    val includeLogs: Boolean = true,
 )
 
 sealed class ManualUploadResult {
@@ -102,12 +104,21 @@ object SentryEnvelopeTransport {
             .take(64)
         val cleanDescription = DiagnosticSanitizer.sanitizeText(payload.problemDescription.trim())
             .take(2000)
-        val headline = if (cleanDescription.isNotEmpty()) {
-            val firstLine = cleanDescription.lineSequence().firstOrNull().orEmpty().take(90)
-            "[User Report] $firstLine"
-        } else {
-            "[User Report] Manual diagnostic log from $cleanReporter"
+        val isFeature = payload.kind == FeedbackKind.FEATURE
+        val hasLogAttachment = payload.includeLogs && payload.compressedLogBytes.isNotEmpty()
+        val headline = when {
+            isFeature && cleanDescription.isNotEmpty() -> {
+                val firstLine = cleanDescription.lineSequence().firstOrNull().orEmpty().take(90)
+                "[Feature Request] $firstLine"
+            }
+            isFeature -> "[Feature Request] Feature suggestion from $cleanReporter"
+            cleanDescription.isNotEmpty() -> {
+                val firstLine = cleanDescription.lineSequence().firstOrNull().orEmpty().take(90)
+                "[User Report] $firstLine"
+            }
+            else -> "[User Report] Manual diagnostic log from $cleanReporter"
         }
+        val eventLevel = if (isFeature) "info" else "error"
 
         val envelopeHeader = buildString {
             append('{')
@@ -123,11 +134,16 @@ object SentryEnvelopeTransport {
             append('{')
             append("\"event_id\":").append(jsonString(cleanEventId)).append(',')
             append("\"timestamp\":").append(jsonString(payload.sentAtIso)).append(',')
-            append("\"level\":\"error\",")
+            append("\"level\":").append(jsonString(eventLevel)).append(',')
             append("\"platform\":\"java\",")
             append("\"logger\":\"opaldesk.manual_report\",")
             append("\"release\":").append(jsonString("io.github.lengsukq.opaldesk@${payload.appVersion}+${payload.appVersionCode}")).append(',')
             append("\"environment\":").append(jsonString(payload.environment)).append(',')
+            if (isFeature) {
+                // Keep each feature suggestion isolated in its own Sentry issue so maintainer replies
+                // and implementation versions stay scoped per user request.
+                append("\"fingerprint\":[\"opaldesk-feature\",").append(jsonString(cleanEventId)).append("],")
+            }
             append("\"message\":{\"formatted\":").append(jsonString(headline)).append("},")
             append("\"user\":{")
             append("\"id\":").append(jsonString(payload.installationId)).append(',')
@@ -137,6 +153,7 @@ object SentryEnvelopeTransport {
             append("\"installation_id\":").append(jsonString(payload.installationId)).append(',')
             append("\"feedback_code\":").append(jsonString(formatShortCode(cleanEventId))).append(',')
             append("\"report_source\":\"manual_user_report\",")
+            append("\"feedback_kind\":").append(jsonString(payload.kind.wireValue)).append(',')
             append("\"app_version\":").append(jsonString(payload.appVersion)).append(',')
             append("\"android_api\":").append(jsonString(payload.androidApiLevel.toString())).append(',')
             append("\"device_model\":").append(jsonString(payload.deviceModel)).append(',')
@@ -159,11 +176,13 @@ object SentryEnvelopeTransport {
             append("}")
             append("},")
             append("\"extra\":{")
+            append("\"feedback_kind\":").append(jsonString(payload.kind.wireValue)).append(',')
             append("\"reporter_name\":").append(jsonString(cleanReporter)).append(',')
             append("\"user_description\":").append(jsonString(cleanDescription.ifEmpty { "(未填写)" })).append(',')
-            append("\"helper_log_count\":").append(payload.helperLogCount).append(',')
-            append("\"daemon_log_count\":").append(payload.daemonLogCount).append(',')
-            append("\"log_gzip_bytes\":").append(payload.compressedLogBytes.size).append(',')
+            append("\"logs_attached\":").append(hasLogAttachment).append(',')
+            append("\"helper_log_count\":").append(if (hasLogAttachment) payload.helperLogCount else 0).append(',')
+            append("\"daemon_log_count\":").append(if (hasLogAttachment) payload.daemonLogCount else 0).append(',')
+            append("\"log_gzip_bytes\":").append(if (hasLogAttachment) payload.compressedLogBytes.size else 0).append(',')
             append("\"screenshot_attached\":false")
             append('}')
             append('}')
@@ -171,25 +190,27 @@ object SentryEnvelopeTransport {
 
         val eventBytes = eventJson.toByteArray(StandardCharsets.UTF_8)
         val eventItemHeader = "{\"type\":\"event\",\"content_type\":\"application/json\",\"length\":${eventBytes.size}}"
-        val attachmentHeader = buildString {
-            append("{\"type\":\"attachment\",")
-            append("\"filename\":").append(jsonString(payload.attachmentFilename)).append(',')
-            append("\"content_type\":\"application/gzip\",")
-            append("\"length\":").append(payload.compressedLogBytes.size)
-            append('}')
-        }
 
-        val out = ByteArrayOutputStream(eventBytes.size + payload.compressedLogBytes.size + 512)
+        val out = ByteArrayOutputStream(eventBytes.size + (if (hasLogAttachment) payload.compressedLogBytes.size else 0) + 512)
         out.write(envelopeHeader.toByteArray(StandardCharsets.UTF_8))
         out.write('\n'.code)
         out.write(eventItemHeader.toByteArray(StandardCharsets.UTF_8))
         out.write('\n'.code)
         out.write(eventBytes)
         out.write('\n'.code)
-        out.write(attachmentHeader.toByteArray(StandardCharsets.UTF_8))
-        out.write('\n'.code)
-        out.write(payload.compressedLogBytes)
-        out.write('\n'.code)
+        if (hasLogAttachment) {
+            val attachmentHeader = buildString {
+                append("{\"type\":\"attachment\",")
+                append("\"filename\":").append(jsonString(payload.attachmentFilename)).append(',')
+                append("\"content_type\":\"application/gzip\",")
+                append("\"length\":").append(payload.compressedLogBytes.size)
+                append('}')
+            }
+            out.write(attachmentHeader.toByteArray(StandardCharsets.UTF_8))
+            out.write('\n'.code)
+            out.write(payload.compressedLogBytes)
+            out.write('\n'.code)
+        }
         return out.toByteArray()
     }
 

@@ -53,6 +53,7 @@ object FeedbackHistoryStore {
         problemDescription: String,
         reportedVersion: String,
         createdAtMs: Long = System.currentTimeMillis(),
+        kind: FeedbackKind = FeedbackKind.BUG,
     ): List<FeedbackRecord> {
         init(ctx)
         return mutateAndPersist { current ->
@@ -63,6 +64,7 @@ object FeedbackHistoryStore {
                 problemDescription = problemDescription,
                 reportedVersion = reportedVersion,
                 createdAtMs = createdAtMs,
+                kind = kind,
             )
         }
     }

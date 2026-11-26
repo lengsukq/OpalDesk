@@ -4,6 +4,19 @@ import io.github.lengsukq.opaldesk.update.AppUpdateLogic
 import java.net.URI
 import java.util.Locale
 
+enum class FeedbackKind(val wireValue: String, val label: String) {
+    BUG("bug", "问题反馈"),
+    FEATURE("feature", "功能建议"),
+    ;
+
+    companion object {
+        fun fromWireValue(raw: String?): FeedbackKind {
+            val clean = raw?.trim()?.lowercase(Locale.ROOT).orEmpty()
+            return entries.firstOrNull { it.wireValue == clean } ?: BUG
+        }
+    }
+}
+
 enum class FeedbackResolutionStatus(val wireValue: String, val label: String) {
     OPEN("open", "排查中"),
     FIXED_PENDING_RELEASE("fixed_pending_release", "已修复 · 待下版发布"),
@@ -42,6 +55,7 @@ data class FeedbackRecord(
     val lastCheckedAtMs: Long = 0L,
     val remoteUpdatedAt: String = "",
     val fromCodeLookup: Boolean = false,
+    val kind: FeedbackKind = FeedbackKind.BUG,
 )
 
 data class FeedbackRemoteItem(
@@ -53,6 +67,7 @@ data class FeedbackRemoteItem(
     val summary: String = "",
     val reportedVersion: String = "",
     val updatedAt: String = "",
+    val kind: FeedbackKind = FeedbackKind.BUG,
 )
 
 data class FeedbackBatchStatusPayload(
@@ -148,7 +163,8 @@ object FeedbackStatusParser {
             append("\"replyNote\":").append(SentryEnvelopeTransport.jsonString(rec.replyNote)).append(',')
             append("\"lastCheckedAtMs\":").append(rec.lastCheckedAtMs).append(',')
             append("\"remoteUpdatedAt\":").append(SentryEnvelopeTransport.jsonString(rec.remoteUpdatedAt)).append(',')
-            append("\"fromCodeLookup\":").append(rec.fromCodeLookup)
+            append("\"fromCodeLookup\":").append(rec.fromCodeLookup).append(',')
+            append("\"kind\":").append(SentryEnvelopeTransport.jsonString(rec.kind.wireValue))
             append('}')
         }
         append("]}")
@@ -179,6 +195,7 @@ object FeedbackStatusParser {
                     lastCheckedAtMs = (obj["lastCheckedAtMs"] as? Number)?.toLong() ?: 0L,
                     remoteUpdatedAt = (obj["remoteUpdatedAt"] as? String).orEmpty(),
                     fromCodeLookup = obj["fromCodeLookup"] == true,
+                    kind = FeedbackKind.fromWireValue(obj["kind"] as? String),
                 ),
             )
         }
@@ -203,6 +220,7 @@ object FeedbackStatusParser {
             summary = (obj["summary"] as? String).orEmpty().trim().take(120),
             reportedVersion = extractSemverFromSentryRelease(obj["reportedVersion"] as? String),
             updatedAt = (obj["updatedAt"] as? String).orEmpty().trim(),
+            kind = FeedbackKind.fromWireValue(obj["kind"] as? String),
         )
     }
 }
@@ -227,13 +245,17 @@ object FeedbackHistoryLogic {
         return if (HEX_SHORT_CODE_REGEX.matches(cleaned)) cleaned else ""
     }
 
-    fun summarizeProblemDescription(rawDescription: String): String {
+    fun summarizeProblemDescription(
+        rawDescription: String,
+        kind: FeedbackKind = FeedbackKind.BUG,
+    ): String {
         val clean = DiagnosticSanitizer.sanitizeText(rawDescription)
             .lineSequence()
             .map { it.trim() }
             .firstOrNull { it.isNotEmpty() }
             .orEmpty()
-        return if (clean.length > 120) clean.take(119).trimEnd() + "…" else clean.ifEmpty { "手动诊断日志上报" }
+        val fallback = if (kind == FeedbackKind.FEATURE) "功能建议" else "手动诊断日志上报"
+        return if (clean.length > 120) clean.take(119).trimEnd() + "…" else clean.ifEmpty { fallback }
     }
 
     fun recordSubmitted(
@@ -243,6 +265,7 @@ object FeedbackHistoryLogic {
         problemDescription: String,
         reportedVersion: String,
         createdAtMs: Long,
+        kind: FeedbackKind = FeedbackKind.BUG,
     ): List<FeedbackRecord> {
         val normId = normalizeEventId(eventId)
         val normCode = normalizeShortCode(shortCode)
@@ -252,10 +275,11 @@ object FeedbackHistoryLogic {
         val newRecord = FeedbackRecord(
             eventId = key,
             shortCode = normCode,
-            summary = summarizeProblemDescription(problemDescription),
+            summary = summarizeProblemDescription(problemDescription, kind),
             reportedVersion = AppUpdateLogic.normalizeVersion(reportedVersion),
             createdAtMs = createdAtMs,
             status = FeedbackResolutionStatus.OPEN,
+            kind = kind,
         )
         val filtered = existing.filterNot {
             it.eventId == key || (normCode.isNotEmpty() && it.shortCode.equals(normCode, ignoreCase = true))
@@ -278,6 +302,8 @@ object FeedbackHistoryLogic {
             current.summary
         }
         val nextReportedVersion = current.reportedVersion.ifBlank { remote.reportedVersion }
+        // Preserve locally recorded FEATURE kind even if an older Worker omits `kind` (defaulting to BUG).
+        val nextKind = if (remote.kind != FeedbackKind.BUG) remote.kind else current.kind
         return current.copy(
             summary = nextSummary,
             reportedVersion = nextReportedVersion,
@@ -287,6 +313,7 @@ object FeedbackHistoryLogic {
             lastCheckedAtMs = checkedAtMs,
             remoteUpdatedAt = remote.updatedAt,
             fromCodeLookup = markAsCodeLookup,
+            kind = nextKind,
         )
     }
 
@@ -345,6 +372,7 @@ object FeedbackHistoryLogic {
             lastCheckedAtMs = checkedAtMs,
             remoteUpdatedAt = remoteItem.updatedAt,
             fromCodeLookup = true,
+            kind = remoteItem.kind,
         )
         return normalizeList(listOf(synthetic) + existing)
     }

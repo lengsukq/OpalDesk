@@ -1,6 +1,7 @@
 package io.github.lengsukq.opaldesk
 
 import io.github.lengsukq.opaldesk.diagnostics.DiagnosticSanitizer
+import io.github.lengsukq.opaldesk.diagnostics.FeedbackKind
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackQuotaStorage
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackRateLimiter
 import io.github.lengsukq.opaldesk.diagnostics.ManualReportPayload
@@ -63,7 +64,7 @@ class SentryFeedbackTest {
         assertEquals(0, fifth.remaining)
         assertTrue(fifth.isExhausted)
         assertFalse(limiter.canUpload())
-        assertEquals("今日日志上传次数已达上限（5/5），请明天再试", limiter.limitReachedMessage())
+        assertEquals("今日反馈与日志上传次数已达上限（5/5），请明天再试", limiter.limitReachedMessage())
 
         currentDay = "2026-11-25"
         val nextDay = limiter.currentQuota()
@@ -201,6 +202,55 @@ class SentryFeedbackTest {
                 lastSubmittedDescription = "触控异常",
             ),
         )
+        assertTrue(
+            ManualReportSubmitGuard.isSubmitAllowed(
+                submitting = false,
+                quotaExhausted = false,
+                sentryConfigured = true,
+                lastUploadSucceeded = true,
+                currentDescription = "触控异常",
+                lastSubmittedDescription = "触控异常",
+                currentKind = FeedbackKind.FEATURE,
+                lastSubmittedKind = FeedbackKind.BUG,
+            ),
+        )
+    }
+
+    @Test
+    fun featureRequestEnvelopeUsesInfoLevelIsolatedFingerprintAndOmitsAttachmentWhenLogsExcluded() {
+        val dsn = "https://examplekey@example.invalid/42"
+        val payload = ManualReportPayload(
+            eventId = "f1e2d3c4b5a64789a0b1c2d3e4f56789",
+            installationId = "inst-feature-01",
+            reporterName = "leo",
+            problemDescription = "希望增加 Dock 自动隐藏选项",
+            appVersion = "1.0.18",
+            appVersionCode = 10018,
+            environment = "production",
+            deviceManufacturer = "Xiaomi",
+            deviceModel = "24129PN74C",
+            androidVersion = "17",
+            androidApiLevel = 37,
+            daemonConnected = false,
+            helperLogCount = 12,
+            daemonLogCount = 34,
+            attachmentFilename = "",
+            compressedLogBytes = ByteArray(0),
+            kind = FeedbackKind.FEATURE,
+            includeLogs = false,
+        )
+        val envelopeStr = String(
+            SentryEnvelopeTransport.buildEnvelopeBytes(dsn, payload),
+            StandardCharsets.UTF_8,
+        )
+        assertTrue(envelopeStr.contains("\"level\":\"info\""))
+        assertTrue(envelopeStr.contains("\"feedback_kind\":\"feature\""))
+        assertTrue(envelopeStr.contains("\"report_source\":\"manual_user_report\""))
+        assertTrue(envelopeStr.contains("\"fingerprint\":[\"opaldesk-feature\",\"f1e2d3c4b5a64789a0b1c2d3e4f56789\"]"))
+        assertTrue(envelopeStr.contains("[Feature Request] 希望增加 Dock 自动隐藏选项"))
+        assertTrue(envelopeStr.contains("\"logs_attached\":false"))
+        assertTrue(envelopeStr.contains("\"helper_log_count\":0"))
+        assertFalse(envelopeStr.contains("\"type\":\"attachment\""))
     }
 
     @Test

@@ -44,6 +44,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.github.lengsukq.opaldesk.diagnostics.DaemonPostmortemCollector
 import io.github.lengsukq.opaldesk.diagnostics.DiagnosticSanitizer
+import io.github.lengsukq.opaldesk.diagnostics.FeedbackKind
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackQuotaSnapshot
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackRateLimiter
 import io.github.lengsukq.opaldesk.diagnostics.ManualReportOutcome
@@ -61,9 +62,9 @@ import io.github.lengsukq.opaldesk.update.AppUpdateManager
 import kotlinx.coroutines.delay
 
 /**
- * Liquid Glass manual log & issue reporting modal.
- * Collects reporter username, issue description, device/OS/app metadata, and recent
- * sanitized+gzipped logs (never screenshots), enforcing 5 confirmed uploads per local day.
+ * Liquid Glass manual issue, diagnostic log & feature request modal.
+ * Collects reporter username, issue/feature description, optional sanitized+gzipped logs
+ * (disabled by default for feature requests; never screenshots), enforcing 5 confirmed uploads per local day.
  */
 @Composable
 fun ReportIssueModal(
@@ -74,11 +75,14 @@ fun ReportIssueModal(
     helperEntries: List<OpalLogEntry>,
     daemonLogText: String,
     quota: FeedbackQuotaSnapshot,
+    initialKind: FeedbackKind = FeedbackKind.BUG,
     onQuotaChanged: (FeedbackQuotaSnapshot) -> Unit,
     onOpenUpdateModal: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val ctx = LocalContext.current
+    var selectedKind by remember(initialKind) { mutableStateOf(initialKind) }
+    var includeLogs by remember(initialKind) { mutableStateOf(initialKind == FeedbackKind.BUG) }
     var reporterName by remember { mutableStateOf(AppPrefs.getFeedbackUsername(ctx)) }
     var problemDescription by remember { mutableStateOf("") }
     var submitting by remember { mutableStateOf(false) }
@@ -87,6 +91,7 @@ fun ReportIssueModal(
     var validationError by remember { mutableStateOf("") }
     var lastOutcome by remember { mutableStateOf<ManualReportOutcome?>(null) }
     var lastSubmittedDescription by remember { mutableStateOf<String?>(null) }
+    var lastSubmittedKind by remember { mutableStateOf<FeedbackKind?>(null) }
     val sentryConfigured = remember { OpalSentry.isConfigured() }
     val updateState by AppUpdateManager.stateFlow.collectAsState()
 
@@ -98,15 +103,10 @@ fun ReportIssueModal(
     }
     val isCheckingVersion = updateState is AppUpdateManager.UpdateState.Checking
     val isBusy = submitting || awaitingVersionCheck
+    val isFeature = selectedKind == FeedbackKind.FEATURE
 
-    // Silently trigger post-mortem daemon log harvest when disconnected & check for latest release.
+    // Silently check for latest release when the report modal opens (bypassing ignored-version tag).
     LaunchedEffect(Unit) {
-        if (!status.connected && !daemonLogText.contains(PostmortemLogParser.POSTMORTEM_PREFIX)) {
-            DaemonPostmortemCollector.collectIfDisconnectedAsync(
-                ctx = ctx,
-                triggerReason = "report_modal",
-            )
-        }
         val st = AppUpdateManager.stateFlow.value
         val hasKnownUpdate = st is AppUpdateManager.UpdateState.UpdateAvailable ||
             st is AppUpdateManager.UpdateState.Downloading ||
@@ -123,6 +123,16 @@ fun ReportIssueModal(
         }
     }
 
+    // Only harvest post-mortem daemon logs when disconnected and logs are actually requested.
+    LaunchedEffect(includeLogs, status.connected) {
+        if (includeLogs && !status.connected && !daemonLogText.contains(PostmortemLogParser.POSTMORTEM_PREFIX)) {
+            DaemonPostmortemCollector.collectIfDisconnectedAsync(
+                ctx = ctx,
+                triggerReason = "report_modal",
+            )
+        }
+    }
+
     val submitAllowed = ManualReportSubmitGuard.isSubmitAllowed(
         submitting = isBusy,
         quotaExhausted = quota.isExhausted,
@@ -130,10 +140,13 @@ fun ReportIssueModal(
         lastUploadSucceeded = lastOutcome?.success == true,
         currentDescription = problemDescription,
         lastSubmittedDescription = lastSubmittedDescription,
+        currentKind = selectedKind,
+        lastSubmittedKind = lastSubmittedKind,
     )
     val alreadySubmittedSameReport = lastOutcome?.success == true &&
         lastSubmittedDescription != null &&
-        problemDescription.trim() == lastSubmittedDescription
+        problemDescription.trim() == lastSubmittedDescription &&
+        lastSubmittedKind == selectedKind
 
     val helperCount = helperEntries.size.coerceAtMost(DiagnosticSanitizer.DEFAULT_MAX_HELPER_ENTRIES)
     val daemonCount = remember(daemonLogText) {
@@ -144,6 +157,8 @@ fun ReportIssueModal(
     fun performUploadNow() {
         val trimmedDesc = problemDescription.trim()
         if (reporterName.trim().isEmpty() || trimmedDesc.isEmpty()) return
+        val submitKind = selectedKind
+        val submitWithLogs = includeLogs
         validationError = ""
         showOutdatedConfirm = false
         submitting = true
@@ -158,11 +173,14 @@ fun ReportIssueModal(
             remote = remote,
             helperEntries = helperEntries,
             daemonLogText = daemonLogText,
+            kind = submitKind,
+            includeLogs = submitWithLogs,
         ) { outcome ->
             submitting = false
             lastOutcome = outcome
             if (outcome.success) {
                 lastSubmittedDescription = trimmedDesc
+                lastSubmittedKind = submitKind
             }
             onQuotaChanged(outcome.quota)
         }
@@ -184,7 +202,11 @@ fun ReportIssueModal(
             is AppUpdateManager.UpdateState.ReadyToInstall,
             -> {
                 awaitingVersionCheck = false
-                showOutdatedConfirm = true
+                if (selectedKind == FeedbackKind.BUG) {
+                    showOutdatedConfirm = true
+                } else {
+                    performUploadNow()
+                }
             }
             else -> {
                 awaitingVersionCheck = false
@@ -201,10 +223,18 @@ fun ReportIssueModal(
         }
         val trimmedDesc = problemDescription.trim()
         if (trimmedDesc.isEmpty()) {
-            validationError = "请简单描述遇到的问题或复现步骤"
+            validationError = if (isFeature) {
+                "请简单描述希望新增的功能或使用场景"
+            } else {
+                "请简单描述遇到的问题或复现步骤"
+            }
             return
         }
         validationError = ""
+        if (isFeature) {
+            performUploadNow()
+            return
+        }
         when (
             ReportVersionCheckPolicy.decideOnSubmit(
                 hasKnownUpdate = availableRelease != null,
@@ -269,7 +299,7 @@ fun ReportIssueModal(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     OpalText(
-                        text = "上报日志与问题",
+                        text = if (isFeature) "提交功能建议" else "上报日志与问题",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                     )
@@ -278,6 +308,20 @@ fun ReportIssueModal(
                         color = if (quota.isExhausted) OpalPalette.AccentDanger else OpalPalette.AccentCyan,
                     )
                 }
+
+                OpalSegmentedRow(
+                    options = listOf("问题反馈", "功能建议"),
+                    selectedIndex = if (isFeature) 1 else 0,
+                    onSelect = { idx ->
+                        val nextKind = if (idx == 1) FeedbackKind.FEATURE else FeedbackKind.BUG
+                        if (nextKind != selectedKind) {
+                            selectedKind = nextKind
+                            includeLogs = (nextKind == FeedbackKind.BUG)
+                            showOutdatedConfirm = false
+                            validationError = ""
+                        }
+                    },
+                )
 
                 if (quota.isExhausted) {
                     StatusNoticeBox(
@@ -312,7 +356,7 @@ fun ReportIssueModal(
 
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     OpalText(
-                        text = "问题描述",
+                        text = if (isFeature) "需求描述" else "问题描述",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = OpalPalette.TextSecondary,
@@ -323,13 +367,28 @@ fun ReportIssueModal(
                             problemDescription = it.take(2000)
                             if (validationError.isNotEmpty()) validationError = ""
                         },
-                        placeholder = "请描述遇到的问题、触发操作或报错现象…",
+                        placeholder = if (isFeature) {
+                            "请描述希望新增的功能、适用场景或交互建议…"
+                        } else {
+                            "请描述遇到的问题、触发操作或报错现象…"
+                        },
                         singleLine = false,
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 96.dp),
                     )
                 }
+
+                OpalSwitchRow(
+                    title = "附带设备运行日志",
+                    subtitle = if (includeLogs) {
+                        "包含已脱敏的客户端与守护进程日志（不含截图）"
+                    } else {
+                        "仅附带版本号与机型信息，不上传运行日志"
+                    },
+                    checked = includeLogs,
+                    onCheckedChange = { includeLogs = it },
+                )
 
                 // Attached diagnostic metadata summary (explicitly no screenshots)
                 Column(
@@ -342,7 +401,11 @@ fun ReportIssueModal(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     OpalText(
-                        text = "本次随附诊断信息（不含屏幕截图）",
+                        text = if (includeLogs) {
+                            "本次随附诊断信息（不含屏幕截图）"
+                        } else {
+                            "本次随附基础信息（不含运行日志与截图）"
+                        },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = OpalPalette.TextPrimary,
@@ -353,14 +416,18 @@ fun ReportIssueModal(
                         color = OpalPalette.TextSecondary,
                     )
                     OpalText(
-                        text = "版本：v$appVersion · 日志：客户端 $helperCount 条 + 守护进程 $daemonCount 行（已自动脱敏路径/Token 并 GZIP 压缩）",
+                        text = if (includeLogs) {
+                            "版本：v$appVersion · 日志：客户端 $helperCount 条 + 守护进程 $daemonCount 行（已自动脱敏路径/Token 并 GZIP 压缩）"
+                        } else {
+                            "版本：v$appVersion · 类型：功能建议（不会清空当前本地日志）"
+                        },
                         fontSize = 11.5.sp,
                         color = OpalPalette.TextSecondary,
                         lineHeight = 16.sp,
                     )
                 }
 
-                if (availableRelease != null && lastOutcome?.success != true) {
+                if (!isFeature && availableRelease != null && lastOutcome?.success != true) {
                     val isDark = OpalPalette.isDark
                     val isReady = updateState is AppUpdateManager.UpdateState.ReadyToInstall
                     val isDownloading = updateState is AppUpdateManager.UpdateState.Downloading
@@ -420,7 +487,7 @@ fun ReportIssueModal(
                             }
                         }
                     }
-                } else if (isCheckingVersion && lastOutcome?.success != true) {
+                } else if (!isFeature && isCheckingVersion && lastOutcome?.success != true) {
                     OpalText(
                         text = "正在自动检查客户端是否为最新版本…",
                         fontSize = 11.sp,
@@ -448,7 +515,11 @@ fun ReportIssueModal(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             OpalText(
-                                text = "上传成功！已自动保存至「日志 → 我的反馈追踪」，后续可在 APP 内查看是否修复及对应版本：",
+                                text = if (lastSubmittedKind == FeedbackKind.FEATURE) {
+                                    "提交成功！已自动保存至「日志 → 我的反馈追踪」，后续可在 APP 内查看评估进度、回复与上线版本："
+                                } else {
+                                    "上传成功！已自动保存至「日志 → 我的反馈追踪」，后续可在 APP 内查看是否修复及对应版本："
+                                },
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = OpalPalette.AccentEmerald,
@@ -507,15 +578,22 @@ fun ReportIssueModal(
                     OpalButton(
                         label = when {
                             awaitingVersionCheck -> "检查版本中…"
-                            submitting -> "上传中…"
-                            alreadySubmittedSameReport -> "已上传"
+                            submitting -> "提交中…"
+                            alreadySubmittedSameReport -> "已提交"
                             quota.isExhausted -> "今日已达上限"
-                            showOutdatedConfirm && availableRelease != null -> "仍要上传"
+                            !isFeature && showOutdatedConfirm && availableRelease != null -> "仍要上传"
+                            isFeature -> "确认提交需求"
                             else -> "确认上传"
                         },
                         enabled = submitAllowed,
-                        accent = if (showOutdatedConfirm && availableRelease != null) OpalPalette.AccentAmber else OpalPalette.AccentBlue,
-                        onClick = { submitReport(forceOutdated = showOutdatedConfirm) },
+                        accent = if (!isFeature && showOutdatedConfirm && availableRelease != null) {
+                            OpalPalette.AccentAmber
+                        } else if (isFeature) {
+                            OpalPalette.AccentCyan
+                        } else {
+                            OpalPalette.AccentBlue
+                        },
+                        onClick = { submitReport(forceOutdated = !isFeature && showOutdatedConfirm) },
                         modifier = Modifier.weight(1.3f),
                     )
                 }

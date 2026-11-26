@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackHistoryLogic
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackHistoryStore
+import io.github.lengsukq.opaldesk.diagnostics.FeedbackKind
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackRecord
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackResolutionStatus
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackStatusParser
@@ -122,8 +123,12 @@ fun FeedbackTrackingSection(
                     val item = outcome.item
                     val detail = when {
                         item.status == FeedbackResolutionStatus.FIXED_IN_VERSION && item.fixedVersion.isNotEmpty() ->
-                            "已查到 #$normalized：已在 v${item.fixedVersion} 修复"
-                        else -> "已查到 #$normalized：${item.status.label}"
+                            if (item.kind == FeedbackKind.FEATURE) {
+                                "已查到 #$normalized：已在 v${item.fixedVersion} 实现"
+                            } else {
+                                "已查到 #$normalized：已在 v${item.fixedVersion} 修复"
+                            }
+                        else -> "已查到 #$normalized：${statusLabelFor(item.kind, item.status)}"
                     }
                     syncNotice = detail to false
                 }
@@ -259,7 +264,7 @@ fun FeedbackTrackingSection(
                     .padding(12.dp),
             ) {
                 OpalText(
-                    text = "暂无本地反馈记录。提交问题与日志后，会自动在这里追踪是否修复与对应版本；重装或换机可用「查反馈码」找回。",
+                    text = "暂无本地反馈记录。提交问题或功能建议后，会自动在这里追踪处理进度与对应版本；重装或换机可用「查反馈码」找回。",
                     fontSize = 12.sp,
                     color = OpalPalette.TextMuted,
                     lineHeight = 17.5.sp,
@@ -351,6 +356,23 @@ private fun FeedbackRecordCard(
                         maxLines = 1,
                     )
                 }
+                val isFeature = record.kind == FeedbackKind.FEATURE
+                val kindColor = if (isFeature) OpalPalette.AccentCyan else OpalPalette.AccentBlue
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(kindColor.copy(alpha = if (OpalPalette.isDark) 0.18f else 0.10f))
+                        .border(0.6.dp, kindColor.copy(alpha = 0.35f), RoundedCornerShape(7.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) {
+                    OpalText(
+                        text = if (isFeature) "需求" else "问题",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = kindColor,
+                        maxLines = 1,
+                    )
+                }
                 val meta = buildString {
                     if (record.reportedVersion.isNotBlank()) {
                         append("v")
@@ -413,7 +435,11 @@ private fun FeedbackRecordCard(
             } else {
                 val hint = when {
                     relation == FeedbackVersionRelation.FIXED_IN_CURRENT_OR_OLDER && record.fixedVersion.isNotBlank() ->
-                        "当前运行版本已包含 v${record.fixedVersion} 的修复"
+                        if (record.kind == FeedbackKind.FEATURE) {
+                            "当前运行版本已包含 v${record.fixedVersion} 的功能更新"
+                        } else {
+                            "当前运行版本已包含 v${record.fixedVersion} 的修复"
+                        }
                     record.lastCheckedAtMs > 0L ->
                         "核验于 ${formatFeedbackTime(record.lastCheckedAtMs)}"
                     else -> "点击右上角「刷新状态」获取最新进度"
@@ -441,26 +467,48 @@ private fun FeedbackRecordCard(
     }
 }
 
+private fun statusLabelFor(
+    kind: FeedbackKind,
+    status: FeedbackResolutionStatus,
+): String = if (kind == FeedbackKind.FEATURE) {
+    when (status) {
+        FeedbackResolutionStatus.OPEN -> "评估中"
+        FeedbackResolutionStatus.FIXED_PENDING_RELEASE -> "已规划 · 待下版"
+        FeedbackResolutionStatus.FIXED_IN_VERSION -> "已实现"
+        FeedbackResolutionStatus.RESOLVED_OTHER -> "已采纳"
+        FeedbackResolutionStatus.IGNORED -> "暂不考虑"
+    }
+} else {
+    status.label
+}
+
 @Composable
 private fun resolveStatusBadge(
     record: FeedbackRecord,
     relation: FeedbackVersionRelation,
-): Pair<String, Color> = when (record.status) {
-    FeedbackResolutionStatus.OPEN -> "排查中" to OpalPalette.AccentAmber
-    FeedbackResolutionStatus.FIXED_PENDING_RELEASE -> "已修复 · 待下版" to OpalPalette.AccentCyan
-    FeedbackResolutionStatus.IGNORED -> "已归档" to OpalPalette.TextMuted
-    FeedbackResolutionStatus.RESOLVED_OTHER -> "已处理" to OpalPalette.AccentEmerald
-    FeedbackResolutionStatus.FIXED_IN_VERSION -> when (relation) {
-        FeedbackVersionRelation.FIXED_IN_CURRENT_OR_OLDER ->
-            "当前版已修复 (v${record.fixedVersion})" to OpalPalette.AccentEmerald
-        FeedbackVersionRelation.FIXED_IN_NEWER_VERSION ->
-            "v${record.fixedVersion} 已修复 · 可更新" to OpalPalette.AccentBlue
-        else ->
-            if (record.fixedVersion.isNotBlank()) {
-                "已在 v${record.fixedVersion} 修复" to OpalPalette.AccentEmerald
-            } else {
-                "已修复" to OpalPalette.AccentEmerald
-            }
+): Pair<String, Color> {
+    val isFeature = record.kind == FeedbackKind.FEATURE
+    return when (record.status) {
+        FeedbackResolutionStatus.OPEN ->
+            (if (isFeature) "评估中" else "排查中") to OpalPalette.AccentAmber
+        FeedbackResolutionStatus.FIXED_PENDING_RELEASE ->
+            (if (isFeature) "已规划 · 待下版" else "已修复 · 待下版") to OpalPalette.AccentCyan
+        FeedbackResolutionStatus.IGNORED ->
+            (if (isFeature) "暂不考虑" else "已归档") to OpalPalette.TextMuted
+        FeedbackResolutionStatus.RESOLVED_OTHER ->
+            (if (isFeature) "已采纳" else "已处理") to OpalPalette.AccentEmerald
+        FeedbackResolutionStatus.FIXED_IN_VERSION -> when (relation) {
+            FeedbackVersionRelation.FIXED_IN_CURRENT_OR_OLDER ->
+                (if (isFeature) "当前版已上线 (v${record.fixedVersion})" else "当前版已修复 (v${record.fixedVersion})") to OpalPalette.AccentEmerald
+            FeedbackVersionRelation.FIXED_IN_NEWER_VERSION ->
+                (if (isFeature) "v${record.fixedVersion} 已实现 · 可更新" else "v${record.fixedVersion} 已修复 · 可更新") to OpalPalette.AccentBlue
+            else ->
+                if (record.fixedVersion.isNotBlank()) {
+                    (if (isFeature) "已在 v${record.fixedVersion} 实现" else "已在 v${record.fixedVersion} 修复") to OpalPalette.AccentEmerald
+                } else {
+                    (if (isFeature) "已实现" else "已修复") to OpalPalette.AccentEmerald
+                }
+        }
     }
 }
 

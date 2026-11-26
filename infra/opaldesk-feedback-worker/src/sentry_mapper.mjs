@@ -3,6 +3,11 @@ export const MAX_BATCH_EVENT_IDS = 20;
 export const MAX_REPLY_NOTE_CHARS = 240;
 export const MAX_SUMMARY_CHARS = 120;
 
+export const FeedbackKind = Object.freeze({
+  BUG: "bug",
+  FEATURE: "feature",
+});
+
 export const FeedbackStatus = Object.freeze({
   OPEN: "open",
   FIXED_PENDING_RELEASE: "fixed_pending_release",
@@ -17,8 +22,9 @@ const INSTALLATION_ID_REGEX = /^[A-Za-z0-9._-]{8,80}$/;
 const SEMVER_REGEX = /^\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?$/;
 const FIXED_DIRECTIVE_REGEX = /\[fixed\s*:\s*v?([0-9]+\.[0-9]+(?:\.[0-9]+)?(?:-[0-9A-Za-z.-]+)?)\]/i;
 const REPLY_DIRECTIVE_REGEX = /^\[(?:reply|public)\]\s*(.+)$/i;
-const USER_REPORT_PREFIX_REGEX = /^\[user\s*report\]\s*/i;
-const ANONYMOUS_MANUAL_LOG_REGEX = /^manual diagnostic log from\b/i;
+const FEATURE_TITLE_PREFIX_REGEX = /^\[feature\s*request\]\s*/i;
+const USER_REPORT_PREFIX_REGEX = /^\[(?:user\s*report|feature\s*request)\]\s*/i;
+const ANONYMOUS_MANUAL_LOG_REGEX = /^(?:manual diagnostic log|feature suggestion) from\b/i;
 
 export function validateInstallationId(raw) {
   if (typeof raw !== "string") return null;
@@ -189,7 +195,22 @@ export function extractReportedVersion(eventObj) {
   );
 }
 
-export function extractPublicIssueSummary(issue) {
+export function extractFeedbackKind(obj) {
+  if (!obj || typeof obj !== "object") return FeedbackKind.BUG;
+  const tags = extractTagMap(obj);
+  const tagKind = String(tags.feedback_kind || "").trim().toLowerCase();
+  if (tagKind === FeedbackKind.FEATURE) return FeedbackKind.FEATURE;
+  if (tagKind === FeedbackKind.BUG) return FeedbackKind.BUG;
+  const rawTitle = typeof obj.title === "string"
+    ? obj.title
+    : (typeof obj.metadata?.title === "string" ? obj.metadata.title : "");
+  if (FEATURE_TITLE_PREFIX_REGEX.test(rawTitle.trim())) {
+    return FeedbackKind.FEATURE;
+  }
+  return FeedbackKind.BUG;
+}
+
+export function extractPublicIssueSummary(issue, kind = extractFeedbackKind(issue)) {
   const rawTitle = typeof issue?.title === "string"
     ? issue.title
     : (typeof issue?.metadata?.title === "string" ? issue.metadata.title : "");
@@ -199,7 +220,7 @@ export function extractPublicIssueSummary(issue) {
     .replace(/\s+/g, " ")
     .trim();
   if (!stripped || ANONYMOUS_MANUAL_LOG_REGEX.test(stripped)) {
-    return "手动诊断日志上报";
+    return kind === FeedbackKind.FEATURE ? "功能建议" : "手动诊断日志上报";
   }
   return stripped.length > MAX_SUMMARY_CHARS
     ? `${stripped.slice(0, MAX_SUMMARY_CHARS - 1).trimEnd()}…`
@@ -213,10 +234,12 @@ export function mapSentryIssueToStatus(issue, comments = [], projectReleases = [
     : {};
   const commentMeta = parseMaintainerComments(comments);
   const updatedAt = String(issue?.lastSeen || statusDetails?.resolvedAt || "");
-  const summary = extractPublicIssueSummary(issue);
+  const kind = extractFeedbackKind(issue);
+  const summary = extractPublicIssueSummary(issue, kind);
 
   if (issueStatus === "ignored") {
     return {
+      kind,
       status: FeedbackStatus.IGNORED,
       fixedVersion: "",
       replyNote: commentMeta.replyNote,
@@ -230,6 +253,7 @@ export function mapSentryIssueToStatus(issue, comments = [], projectReleases = [
       extractSemverFromSentryRelease(statusDetails?.inRelease || "");
     if (releaseVersion) {
       return {
+        kind,
         status: FeedbackStatus.FIXED_IN_VERSION,
         fixedVersion: releaseVersion,
         replyNote: commentMeta.replyNote,
@@ -240,6 +264,7 @@ export function mapSentryIssueToStatus(issue, comments = [], projectReleases = [
     const commitResolution = resolveVersionFromInCommit(statusDetails?.inCommit, projectReleases);
     if (commitResolution) {
       return {
+        kind,
         status: commitResolution.status,
         fixedVersion: commitResolution.fixedVersion,
         replyNote: commentMeta.replyNote,
@@ -249,6 +274,7 @@ export function mapSentryIssueToStatus(issue, comments = [], projectReleases = [
     }
     if (statusDetails?.inNextRelease === true) {
       return {
+        kind,
         status: FeedbackStatus.FIXED_PENDING_RELEASE,
         fixedVersion: "",
         replyNote: commentMeta.replyNote,
@@ -257,6 +283,7 @@ export function mapSentryIssueToStatus(issue, comments = [], projectReleases = [
       };
     }
     return {
+      kind,
       status: FeedbackStatus.RESOLVED_OTHER,
       fixedVersion: "",
       replyNote: commentMeta.replyNote,
@@ -266,6 +293,7 @@ export function mapSentryIssueToStatus(issue, comments = [], projectReleases = [
   }
 
   return {
+    kind,
     status: FeedbackStatus.OPEN,
     fixedVersion: "",
     replyNote: commentMeta.replyNote,

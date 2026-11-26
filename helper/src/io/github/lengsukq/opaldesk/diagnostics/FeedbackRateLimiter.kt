@@ -36,7 +36,7 @@ class FeedbackRateLimiter(
 ) {
     companion object {
         const val MAX_DAILY_REPORTS = 5
-        const val LIMIT_REACHED_MESSAGE = "今日日志上传次数已达上限（5/5），请明天再试"
+        const val LIMIT_REACHED_MESSAGE = "今日反馈与日志上传次数已达上限（5/5），请明天再试"
     }
 
     fun installationId(): String = storage.getOrCreateInstallationId()
@@ -79,7 +79,7 @@ class FeedbackRateLimiter(
         if (maxDailyReports == MAX_DAILY_REPORTS) {
             LIMIT_REACHED_MESSAGE
         } else {
-            "今日日志上传次数已达上限（$maxDailyReports/$maxDailyReports），请明天再试"
+            "今日反馈与日志上传次数已达上限（$maxDailyReports/$maxDailyReports），请明天再试"
         }
 }
 
@@ -95,11 +95,14 @@ object ManualReportSubmitGuard {
         lastUploadSucceeded: Boolean,
         currentDescription: String,
         lastSubmittedDescription: String?,
+        currentKind: FeedbackKind = FeedbackKind.BUG,
+        lastSubmittedKind: FeedbackKind? = null,
     ): Boolean {
         if (submitting || quotaExhausted || !sentryConfigured) return false
         if (lastUploadSucceeded &&
             lastSubmittedDescription != null &&
-            currentDescription.trim() == lastSubmittedDescription
+            currentDescription.trim() == lastSubmittedDescription &&
+            (lastSubmittedKind == null || currentKind == lastSubmittedKind)
         ) {
             return false
         }

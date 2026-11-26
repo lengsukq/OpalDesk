@@ -1,5 +1,7 @@
 import {
   FEEDBACK_SCHEMA_VERSION,
+  FeedbackKind,
+  extractFeedbackKind,
   extractReportedVersion,
   extractTagMap,
   formatShortCode,
@@ -212,9 +214,12 @@ async function handleBatchStatus(requestUrl, env, fetchImpl, bypassTtlCache = fa
     const mapped = await fetchIssueWithStatus(cfg, groupId, issueCache, fetchImpl, bypassTtlCache);
     if (!mapped) return;
     const reportedVersion = extractTagMap(evRes.data).app_version || "";
+    const evKind = extractFeedbackKind(evRes.data);
+    const kind = evKind !== FeedbackKind.BUG ? evKind : mapped.kind;
 
     items[eventId] = {
       shortCode: formatShortCode(eventId),
+      kind,
       status: mapped.status,
       fixedVersion: mapped.fixedVersion,
       replyNote: mapped.replyNote,
@@ -249,6 +254,7 @@ async function resolveEventOrIssueByShortCode(cfg, code, fetchImpl, bypassTtlCac
     return {
       eventId: "",
       reportedVersion: "",
+      kind: mapped.kind,
       mapped,
     };
   }
@@ -271,9 +277,11 @@ async function resolveEventOrIssueByShortCode(cfg, code, fetchImpl, bypassTtlCac
 
   const mapped = await fetchIssueWithStatus(cfg, String(matched.groupID), new Map(), fetchImpl, bypassTtlCache);
   if (!mapped) return null;
+  const evKind = extractFeedbackKind(matched);
   return {
     eventId: String(matched.eventID || "").toLowerCase(),
     reportedVersion: extractTagMap(matched).app_version || "",
+    kind: evKind !== FeedbackKind.BUG ? evKind : mapped.kind,
     mapped,
   };
 }
@@ -305,6 +313,7 @@ async function handleLookupByCode(requestUrl, env, fetchImpl, bypassTtlCache = f
       item: {
         eventId: resolved.eventId,
         shortCode: code,
+        kind: resolved.kind || resolved.mapped.kind || FeedbackKind.BUG,
         status: resolved.mapped.status,
         fixedVersion: resolved.mapped.fixedVersion,
         replyNote: resolved.mapped.replyNote,
