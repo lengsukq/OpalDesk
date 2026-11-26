@@ -1,6 +1,15 @@
 package io.github.lengsukq.opaldesk.compositor
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
+import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -29,6 +38,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -243,15 +253,82 @@ fun OpalCompositorWorkspace(
         }
     }
 
+    val timeFmt = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val dateFmt = remember { SimpleDateFormat("M/d E", Locale.getDefault()) }
+    fun refreshTrayStatusNow() {
+        val now = Date()
+        trayInfo = querySystemTrayStatus(ctx, timeFmt.format(now), dateFmt.format(now))
+    }
+
     LaunchedEffect(Unit) {
         allApps = AppCatalogRepository.loadLaunchableApps(ctx)
         scope.launch(Dispatchers.IO) { AppCatalogRepository.prewarmIcons(ctx, allApps) }
-        val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
-        val dateFmt = SimpleDateFormat("M/d E", Locale.getDefault())
+    }
+
+    // Refresh clock/battery/Wi-Fi immediately without waiting for app catalog loading.
+    LaunchedEffect(ctx) {
         while (true) {
-            val now = Date()
-            trayInfo = querySystemTrayStatus(ctx, timeFmt.format(now), dateFmt.format(now))
+            refreshTrayStatusNow()
             delay(15_000L)
+        }
+    }
+
+    // React instantaneously to Wi-Fi radio toggle, network loss/rebind, and battery updates.
+    DisposableEffect(ctx) {
+        val appCtx = ctx.applicationContext
+        val cm = appCtx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val netCallback = object : ConnectivityManager.NetworkCallback() {
+            private fun scheduleRefresh(recheckDelayMs: Long = 0L) {
+                scope.launch {
+                    refreshTrayStatusNow()
+                    if (recheckDelayMs > 0L) {
+                        delay(recheckDelayMs)
+                        refreshTrayStatusNow()
+                    }
+                }
+            }
+
+            override fun onAvailable(network: Network) = scheduleRefresh()
+            override fun onLost(network: Network) = scheduleRefresh(recheckDelayMs = 250L)
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) =
+                scheduleRefresh()
+        }
+        val netRegistered = runCatching {
+            cm?.registerDefaultNetworkCallback(netCallback)
+            cm != null
+        }.getOrDefault(false)
+
+        val trayReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                scope.launch {
+                    refreshTrayStatusNow()
+                    if (intent?.action == WifiManager.WIFI_STATE_CHANGED_ACTION) {
+                        delay(250L)
+                        refreshTrayStatusNow()
+                    }
+                }
+            }
+        }
+        val trayFilter = IntentFilter().apply {
+            addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
+            addAction(Intent.ACTION_BATTERY_CHANGED)
+        }
+        val rxRegistered = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                appCtx.registerReceiver(trayReceiver, trayFilter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                appCtx.registerReceiver(trayReceiver, trayFilter)
+            }
+            true
+        }.getOrDefault(false)
+
+        onDispose {
+            if (netRegistered) {
+                runCatching { cm?.unregisterNetworkCallback(netCallback) }
+            }
+            if (rxRegistered) {
+                runCatching { appCtx.unregisterReceiver(trayReceiver) }
+            }
         }
     }
 

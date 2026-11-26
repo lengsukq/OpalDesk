@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.provider.Settings
 import android.view.KeyEvent
@@ -81,12 +82,43 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+data class TrayNetworkState(
+    val wifiEnabled: Boolean = false,
+    val wifiConnected: Boolean = false,
+    val ethernetConnected: Boolean = false,
+)
+
+/**
+ * Pure JVM-testable resolution of Wi-Fi vs Ethernet status bar visibility.
+ * When Wi-Fi radio is explicitly OFF (`wifiRadioEnabled == false`), [wifiConnected] is ALWAYS
+ * `false` so the menu bar never displays a stale or Ethernet-borrowed Wi-Fi icon.
+ */
+fun resolveTrayNetworkState(
+    wifiRadioEnabled: Boolean?,
+    hasWifiTransport: Boolean,
+    hasEthernetTransport: Boolean,
+): TrayNetworkState {
+    val wifiOn = when (wifiRadioEnabled) {
+        true -> true
+        false -> false
+        null -> hasWifiTransport
+    }
+    val wifiConn = wifiOn && hasWifiTransport
+    return TrayNetworkState(
+        wifiEnabled = wifiOn,
+        wifiConnected = wifiConn,
+        ethernetConnected = hasEthernetTransport,
+    )
+}
+
 data class SystemTrayInfo(
     val clockText: String = "",
     val dateText: String = "",
     val batteryPct: Int = 100,
     val charging: Boolean = false,
-    val wifiConnected: Boolean = true,
+    val wifiEnabled: Boolean = false,
+    val wifiConnected: Boolean = false,
+    val ethernetConnected: Boolean = false,
 )
 
 fun querySystemTrayStatus(ctx: Context, clockText: String, dateText: String): SystemTrayInfo {
@@ -105,21 +137,37 @@ fun querySystemTrayStatus(ctx: Context, clockText: String, dateText: String): Sy
     } catch (_: Throwable) {
     }
 
-    var wifi = false
+    val wifiRadioEnabled: Boolean? = try {
+        val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        wm?.isWifiEnabled
+    } catch (_: Throwable) {
+        null
+    }
+
+    var hasWifiTransport = false
+    var hasEthernetTransport = false
     try {
-        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val cm = ctx.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val caps = cm?.getNetworkCapabilities(cm.activeNetwork)
-        wifi = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
-            caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
+        hasWifiTransport = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        hasEthernetTransport = caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
     } catch (_: Throwable) {
     }
+
+    val net = resolveTrayNetworkState(
+        wifiRadioEnabled = wifiRadioEnabled,
+        hasWifiTransport = hasWifiTransport,
+        hasEthernetTransport = hasEthernetTransport,
+    )
 
     return SystemTrayInfo(
         clockText = clockText,
         dateText = dateText,
         batteryPct = pct,
         charging = charging,
-        wifiConnected = wifi,
+        wifiEnabled = net.wifiEnabled,
+        wifiConnected = net.wifiConnected,
+        ethernetConnected = net.ethernetConnected,
     )
 }
 
@@ -347,11 +395,13 @@ fun MacDesktopMenuBar(
                     )
                 }
             }
-            OpalGlyphIcon(
-                glyph = ChromeGlyph.WIFI,
-                tint = if (tray.wifiConnected) OpalPalette.TextPrimary else OpalPalette.TextMuted,
-                size = 13.dp,
-            )
+            if (tray.wifiConnected) {
+                OpalGlyphIcon(
+                    glyph = ChromeGlyph.WIFI,
+                    tint = OpalPalette.TextPrimary,
+                    size = 13.dp,
+                )
+            }
             OpalText(
                 text = if (tray.charging) "⚡${tray.batteryPct}%" else "${tray.batteryPct}%",
                 fontSize = 11.sp,
@@ -1006,12 +1056,16 @@ fun MacControlCenterPopover(
                     ) {
                         ControlBentoTile(
                             title = "Wi-Fi",
-                            subtitle = if (tray.wifiConnected) "已连接" else "未连接",
+                            subtitle = when {
+                                tray.wifiConnected -> "已连接"
+                                tray.wifiEnabled -> "未连接"
+                                else -> "已关闭"
+                            },
                             active = tray.wifiConnected,
                             accent = OpalPalette.AccentBlue,
                             iconContent = { tint ->
                                 OpalGlyphIcon(
-                                    glyph = ChromeGlyph.WIFI,
+                                    glyph = if (tray.wifiEnabled || tray.wifiConnected) ChromeGlyph.WIFI else ChromeGlyph.WIFI_OFF,
                                     tint = tint,
                                     size = 14.dp,
                                 )

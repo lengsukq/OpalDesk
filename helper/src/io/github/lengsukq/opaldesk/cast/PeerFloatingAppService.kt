@@ -52,7 +52,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
@@ -175,11 +174,6 @@ class PeerFloatingAppService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "请先授予 OpalDesk 悬浮窗权限", Toast.LENGTH_SHORT).show()
-            stopSelf()
-            return START_NOT_STICKY
-        }
 
         val nextHost = intent?.getStringExtra(EXTRA_HOST).orEmpty().trim()
         val nextPort = (intent?.getIntExtra(EXTRA_PORT, 19878) ?: 19878).coerceIn(1, 65535)
@@ -189,8 +183,17 @@ class PeerFloatingAppService : Service() {
         val nextPeerLabel = intent?.getStringExtra(EXTRA_PEER_LABEL).orEmpty().ifBlank { nextHost }
         val nextHandover = intent?.getStringExtra(EXTRA_HANDOVER_TOKEN).orEmpty().trim()
 
+        // Always satisfy startForegroundService() contract before any early validation stopSelf().
+        startForegroundNotification(nextAppLabel.ifBlank { "远程应用" }, nextPeerLabel.ifBlank { "远端设备" })
+
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "请先授予 OpalDesk 悬浮窗权限", Toast.LENGTH_SHORT).show()
+            stopForegroundAndSelf()
+            return START_NOT_STICKY
+        }
+
         if (nextHost.isEmpty() || nextPkg.isEmpty()) {
-            stopSelf()
+            stopForegroundAndSelf()
             return START_NOT_STICKY
         }
 
@@ -204,7 +207,7 @@ class PeerFloatingAppService : Service() {
         )
         if (!check.allowed || !OpalPeerCastMutex.beginReceiving(nextHost, nextPort, nextPeerLabel, MUTEX_TAG)) {
             Toast.makeText(this, check.reason.ifBlank { "当前不可启动远程悬浮窗" }, Toast.LENGTH_LONG).show()
-            stopSelf()
+            stopForegroundAndSelf()
             return START_NOT_STICKY
         }
 
@@ -221,7 +224,6 @@ class PeerFloatingAppService : Service() {
         appLabel = nextAppLabel
         handoverToken = nextHandover
 
-        startForegroundNotification(nextAppLabel, nextPeerLabel)
         _activeFlow.value = ActiveFloatingInfo(host, port, peerLabel, appPackage, appLabel)
         AppPrefs.recordAppLaunch(this, nextPkg)
 
@@ -347,18 +349,25 @@ class PeerFloatingAppService : Service() {
         }
         val windowManager = wm ?: return
         val dm = resources.displayMetrics
-        val minScreen = min(dm.widthPixels, dm.heightPixels)
-        val minScreenDp = minScreen / dm.density
-        if (minScreenDp >= 580f) {
-            // Tablet receiver: size floating window to a crisp, comfortable phone width (~390dp)
-            expandedW = dp(390).coerceAtMost((dm.widthPixels * 0.44f).roundToInt())
-            expandedH = (expandedW * 1.72f).roundToInt().coerceIn(dp(440), (dm.heightPixels * 0.82f).roundToInt())
-        } else {
-            expandedW = (minScreen * 0.56f).roundToInt().coerceIn(dp(230), dp(330))
-            expandedH = (expandedW * 1.70f).roundToInt().coerceIn(dp(340), (dm.heightPixels * 0.74f).roundToInt())
-        }
-        savedX = dp(18)
-        savedY = dp(90)
+        val initialSize = FloatingOverlayGeometry.computeWindowSize(
+            screenW = dm.widthPixels,
+            screenH = dm.heightPixels,
+            density = dm.density,
+            isLandscape = isLandscape,
+        )
+        expandedW = initialSize.width
+        expandedH = initialSize.height
+        val initialPos = FloatingOverlayGeometry.clampVisiblePosition(
+            x = dp(18),
+            y = dp(90),
+            windowW = expandedW,
+            windowH = expandedH,
+            screenW = dm.widthPixels,
+            screenH = dm.heightPixels,
+            density = dm.density,
+        )
+        savedX = initialPos.x
+        savedY = initialPos.y
 
         AppPrefs.hydrateFlows(this)
         val isDark = resolveFloatingDarkTheme()
@@ -723,8 +732,16 @@ class PeerFloatingAppService : Service() {
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dm = resources.displayMetrics
-                    lp.x = (startX + (ev.rawX - downRawX).roundToInt()).coerceIn(-lp.width / 2, dm.widthPixels - dp(48))
-                    lp.y = (startY + (ev.rawY - downRawY).roundToInt()).coerceIn(dp(16), dm.heightPixels - dp(56))
+                    val clamped = FloatingOverlayGeometry.clampDragPosition(
+                        targetX = startX + (ev.rawX - downRawX).roundToInt(),
+                        targetY = startY + (ev.rawY - downRawY).roundToInt(),
+                        windowW = lp.width,
+                        screenW = dm.widthPixels,
+                        screenH = dm.heightPixels,
+                        density = dm.density,
+                    )
+                    lp.x = clamped.x
+                    lp.y = clamped.y
                     savedX = lp.x
                     savedY = lp.y
                     safeUpdateViewLayout(rv, lp)
@@ -754,12 +771,15 @@ class PeerFloatingAppService : Service() {
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dm = resources.displayMetrics
-                    val minW = dp(210)
-                    val maxW = (dm.widthPixels * 0.92f).roundToInt()
-                    val minH = dp(260)
-                    val maxH = (dm.heightPixels * 0.86f).roundToInt()
-                    lp.width = (startW + (ev.rawX - downRawX).roundToInt()).coerceIn(minW, maxW)
-                    lp.height = (startH + (ev.rawY - downRawY).roundToInt()).coerceIn(minH, maxH)
+                    val clamped = FloatingOverlayGeometry.clampResizeSize(
+                        targetW = startW + (ev.rawX - downRawX).roundToInt(),
+                        targetH = startH + (ev.rawY - downRawY).roundToInt(),
+                        screenW = dm.widthPixels,
+                        screenH = dm.heightPixels,
+                        density = dm.density,
+                    )
+                    lp.width = clamped.width
+                    lp.height = clamped.height
                     expandedW = lp.width
                     expandedH = lp.height
                     safeUpdateViewLayout(rv, lp)
@@ -779,29 +799,27 @@ class PeerFloatingAppService : Service() {
         val rv = rootView ?: return
         val dm = resources.displayMetrics
         isLandscape = !isLandscape
-        if (isLandscape) {
-            val minScreenDp = min(dm.widthPixels, dm.heightPixels) / dm.density
-            expandedW = if (minScreenDp >= 580f) {
-                dp(620).coerceAtMost((dm.widthPixels * 0.72f).roundToInt())
-            } else {
-                (dm.widthPixels * 0.84f).roundToInt().coerceIn(dp(320), dp(580))
-            }
-            expandedH = (expandedW * 0.62f).roundToInt().coerceIn(dp(240), (dm.heightPixels * 0.64f).roundToInt())
-        } else {
-            val minScreen = min(dm.widthPixels, dm.heightPixels)
-            val minScreenDp = minScreen / dm.density
-            if (minScreenDp >= 580f) {
-                expandedW = dp(390).coerceAtMost((dm.widthPixels * 0.44f).roundToInt())
-                expandedH = (expandedW * 1.72f).roundToInt().coerceIn(dp(440), (dm.heightPixels * 0.82f).roundToInt())
-            } else {
-                expandedW = (minScreen * 0.56f).roundToInt().coerceIn(dp(230), dp(330))
-                expandedH = (expandedW * 1.70f).roundToInt().coerceIn(dp(340), (dm.heightPixels * 0.74f).roundToInt())
-            }
-        }
+        val nextSize = FloatingOverlayGeometry.computeWindowSize(
+            screenW = dm.widthPixels,
+            screenH = dm.heightPixels,
+            density = dm.density,
+            isLandscape = isLandscape,
+        )
+        expandedW = nextSize.width
+        expandedH = nextSize.height
         lp.width = expandedW
         lp.height = expandedH
-        lp.x = lp.x.coerceIn(dp(8), max(dp(8), dm.widthPixels - lp.width - dp(8)))
-        lp.y = lp.y.coerceIn(dp(24), max(dp(24), dm.heightPixels - lp.height - dp(24)))
+        val clampedPos = FloatingOverlayGeometry.clampVisiblePosition(
+            x = lp.x,
+            y = lp.y,
+            windowW = lp.width,
+            windowH = lp.height,
+            screenW = dm.widthPixels,
+            screenH = dm.heightPixels,
+            density = dm.density,
+        )
+        lp.x = clampedPos.x
+        lp.y = clampedPos.y
         savedX = lp.x
         savedY = lp.y
         safeUpdateViewLayout(rv, lp)
@@ -958,8 +976,15 @@ class PeerFloatingAppService : Service() {
                     if (abs(dx) > slop || abs(dy) > slop) dragged = true
                     if (dragged) {
                         val dm = resources.displayMetrics
-                        bLp.x = (startX + dx).coerceIn(0, dm.widthPixels - dp(52))
-                        bLp.y = (startY + dy).coerceIn(dp(24), dm.heightPixels - dp(64))
+                        val clamped = FloatingOverlayGeometry.clampBubblePosition(
+                            targetX = startX + dx,
+                            targetY = startY + dy,
+                            screenW = dm.widthPixels,
+                            screenH = dm.heightPixels,
+                            density = dm.density,
+                        )
+                        bLp.x = clamped.x
+                        bLp.y = clamped.y
                         safeUpdateViewLayout(pill, bLp)
                     }
                     true
@@ -1025,6 +1050,11 @@ class PeerFloatingAppService : Service() {
         }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).roundToInt()
+
+    private fun stopForegroundAndSelf() {
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        stopSelf()
+    }
 
     private fun startForegroundNotification(appTitle: String, hostName: String) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return

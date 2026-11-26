@@ -873,6 +873,9 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             s.vd = vd;
             s.displayId = disp.getDisplayId();
             String uid = VirtualDisplayFactory.getUniqueId(disp);
+            if (uid == null || uid.isEmpty()) {
+                uid = services.getDisplayUniqueId(s.displayId);
+            }
             s.vdUniqueId = uid != null ? uid : "";
             services.configureVirtualDisplayWindowing(s.displayId, BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY);
 
@@ -923,7 +926,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             notifyRemoteStateChanged();
             System.out.println("OPALDESK_REMOTE_SESSION_READY sid=" + sessionId
                     + " role=" + (standalone ? "standalone" : "desktop")
-                    + " displayId=" + s.displayId + " " + s.width + "x" + s.height + "@" + s.fps);
+                    + " displayId=" + s.displayId + " " + s.width + "x" + s.height + "@" + s.fps
+                    + " vdUid=" + s.vdUniqueId);
         }
     }
 

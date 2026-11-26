@@ -73,6 +73,12 @@ object WallpaperStorage {
         }
     }
 
+    /** O(1) non-blocking RAM lookup safe to call directly on the UI thread during composition. */
+    fun getCachedWallpaperFast(path: String): ImageBitmap? {
+        if (path.isBlank()) return null
+        return if (path == cachedPath) cachedImage else null
+    }
+
     fun loadCachedWallpaper(path: String): ImageBitmap? {
         if (path.isBlank()) return null
         if (path == cachedPath) {

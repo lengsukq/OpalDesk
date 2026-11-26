@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 
 data class DiscoveredOpalPeer(
     val serviceName: String,
@@ -50,6 +51,9 @@ object OpalPeerDiscovery {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val mainExecutor = Executor { cmd -> mainHandler.post(cmd) }
+    private val nsdExec = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "OpalPeerNsd").apply { isDaemon = true }
+    }
     private val resolveQueue = ArrayDeque<NsdServiceInfo>()
     private val activeInfoCallbacks = HashMap<String, NsdManager.ServiceInfoCallback>()
     private val peersByKey = ConcurrentHashMap<String, DiscoveredOpalPeer>()
@@ -71,46 +75,53 @@ object OpalPeerDiscovery {
     private var localLanIp: String = ""
 
     fun syncAdvertise(ctx: Context, enabled: Boolean, port: Int, shortFingerprint: String) {
-        val shouldAdvertise = enabled && port > 0 && !OpalPeerCastMutex.isReceivingActive && hasLocalNetworkPermission(ctx)
-        if (!shouldAdvertise) {
-            stopAdvertise()
-            return
-        }
-        if (regListener != null && registeredPort == port && registeredFp == shortFingerprint) {
-            return
-        }
-        stopAdvertise()
-        val mgr = (ctx.applicationContext.getSystemService(Context.NSD_SERVICE) as? NsdManager) ?: return
-        nsdManager = mgr
-        val info = NsdServiceInfo().apply {
-            serviceName = "OpalDesk-${Build.MODEL}".take(48)
-            serviceType = SERVICE_TYPE
-            setPort(port)
-            setAttribute("device", Build.MODEL.orEmpty())
-            if (shortFingerprint.isNotBlank()) setAttribute("fp", shortFingerprint)
-            setAttribute("v", "1")
-        }
-        val listener = object : NsdManager.RegistrationListener {
-            override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
-                Log.i(TAG, "Advertised ${serviceInfo.serviceName} on :$port")
+        val appCtx = ctx.applicationContext
+        val shouldAdvertise = enabled && port > 0 && !OpalPeerCastMutex.isReceivingActive && hasLocalNetworkPermission(appCtx)
+        nsdExec.execute {
+            if (!shouldAdvertise) {
+                stopAdvertiseOnNsdThread()
+                return@execute
             }
-            override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                Log.w(TAG, "NSD advertise failed code=$errorCode")
+            if (regListener != null && registeredPort == port && registeredFp == shortFingerprint) {
+                return@execute
             }
-            override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) = Unit
-            override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = Unit
-        }
-        try {
-            mgr.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
-            regListener = listener
-            registeredPort = port
-            registeredFp = shortFingerprint
-        } catch (t: Throwable) {
-            Log.w(TAG, "registerService failed: ${t.message}")
+            stopAdvertiseOnNsdThread()
+            val mgr = (appCtx.getSystemService(Context.NSD_SERVICE) as? NsdManager) ?: return@execute
+            nsdManager = mgr
+            val info = NsdServiceInfo().apply {
+                serviceName = "OpalDesk-${Build.MODEL}".take(48)
+                serviceType = SERVICE_TYPE
+                setPort(port)
+                setAttribute("device", Build.MODEL.orEmpty())
+                if (shortFingerprint.isNotBlank()) setAttribute("fp", shortFingerprint)
+                setAttribute("v", "1")
+            }
+            val listener = object : NsdManager.RegistrationListener {
+                override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
+                    Log.i(TAG, "Advertised ${serviceInfo.serviceName} on :$port")
+                }
+                override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                    Log.w(TAG, "NSD advertise failed code=$errorCode")
+                }
+                override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) = Unit
+                override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = Unit
+            }
+            try {
+                mgr.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
+                regListener = listener
+                registeredPort = port
+                registeredFp = shortFingerprint
+            } catch (t: Throwable) {
+                Log.w(TAG, "registerService failed: ${t.message}")
+            }
         }
     }
 
     fun stopAdvertise() {
+        nsdExec.execute { stopAdvertiseOnNsdThread() }
+    }
+
+    private fun stopAdvertiseOnNsdThread() {
         val mgr = nsdManager
         val listener = regListener
         regListener = null
@@ -125,41 +136,50 @@ object OpalPeerDiscovery {
     }
 
     fun startBrowsing(ctx: Context, selfLanIp: String) {
-        localLanIp = selfLanIp.trim()
-        if (!hasLocalNetworkPermission(ctx)) {
-            stopBrowsing()
-            return
-        }
-        if (discListener != null) return
-        val mgr = (ctx.applicationContext.getSystemService(Context.NSD_SERVICE) as? NsdManager) ?: return
-        nsdManager = mgr
-        val listener = object : NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(regType: String) = Unit
-            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                discListener = null
+        val appCtx = ctx.applicationContext
+        val cleanIp = selfLanIp.trim()
+        val hasPerm = hasLocalNetworkPermission(appCtx)
+        nsdExec.execute {
+            localLanIp = cleanIp
+            if (!hasPerm) {
+                stopBrowsingOnNsdThread()
+                return@execute
             }
-            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
-                discListener = null
+            if (discListener != null) return@execute
+            val mgr = (appCtx.getSystemService(Context.NSD_SERVICE) as? NsdManager) ?: return@execute
+            nsdManager = mgr
+            val listener = object : NsdManager.DiscoveryListener {
+                override fun onDiscoveryStarted(regType: String) = Unit
+                override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                    nsdExec.execute { discListener = null }
+                }
+                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                    nsdExec.execute { discListener = null }
+                }
+                override fun onDiscoveryStopped(serviceType: String) = Unit
+                override fun onServiceFound(service: NsdServiceInfo) {
+                    if (!service.serviceType.contains("_opaldesk")) return
+                    resolvePeer(mgr, service)
+                }
+                override fun onServiceLost(service: NsdServiceInfo) {
+                    val removed = peersByKey.entries.removeIf { it.value.serviceName == service.serviceName }
+                    if (removed) publishSorted()
+                }
             }
-            override fun onDiscoveryStopped(serviceType: String) = Unit
-            override fun onServiceFound(service: NsdServiceInfo) {
-                if (!service.serviceType.contains("_opaldesk")) return
-                resolvePeer(mgr, service)
+            try {
+                mgr.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+                discListener = listener
+            } catch (t: Throwable) {
+                Log.w(TAG, "discoverServices failed: ${t.message}")
             }
-            override fun onServiceLost(service: NsdServiceInfo) {
-                val removed = peersByKey.entries.removeIf { it.value.serviceName == service.serviceName }
-                if (removed) publishSorted()
-            }
-        }
-        try {
-            mgr.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
-            discListener = listener
-        } catch (t: Throwable) {
-            Log.w(TAG, "discoverServices failed: ${t.message}")
         }
     }
 
     fun stopBrowsing() {
+        nsdExec.execute { stopBrowsingOnNsdThread() }
+    }
+
+    private fun stopBrowsingOnNsdThread() {
         val mgr = nsdManager
         val listener = discListener
         discListener = null

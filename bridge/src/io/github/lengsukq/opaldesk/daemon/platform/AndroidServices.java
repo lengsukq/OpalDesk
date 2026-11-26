@@ -68,6 +68,7 @@ public final class AndroidServices {
     public final Object iActivityManager;
 
     public final Method injectInputEventMethod;
+    public final SystemInputInjectorResolver.ResolvedInjector systemInputInjector;
     public final Method setDisplayIdMethod;
     public final Method startActivityMethod;
     public final Method focusTopTaskMethod;
@@ -104,7 +105,17 @@ public final class AndroidServices {
         this.iDisplayManager = iDisplayManager;
         this.iActivityManager = iActivityManager;
 
-        this.injectInputEventMethod = resolveInjectInputEventMethod(iInputManager);
+        this.systemInputInjector = SystemInputInjectorResolver.resolve(
+                iInputManager != null ? iInputManager.getClass() : null,
+                inputManager != null ? inputManager.getClass() : null,
+                InputEvent.class);
+        this.injectInputEventMethod = (systemInputInjector != null)
+                ? systemInputInjector.method
+                : resolveInjectInputEventMethod(iInputManager);
+        if (this.systemInputInjector == null) {
+            System.err.println("OPALDESK_INPUT_INJECTOR_MISSING iim=" + (iInputManager != null)
+                    + " im=" + (inputManager != null));
+        }
         this.setDisplayIdMethod = findMethodOrNull(InputEvent.class, "setDisplayId", int.class);
         this.startActivityMethod = findMethodByName(iActivityTaskManager, "startActivity", 11);
         this.focusTopTaskMethod = findMethodByName(iActivityTaskManager, "focusTopTask", 1);
@@ -897,6 +908,35 @@ public final class AndroidServices {
             f.set(target, value);
         } catch (ReflectiveOperationException ignored) {
         }
+    }
+
+    public boolean hasSystemInputInjector() {
+        if (systemInputInjector == null) return false;
+        return systemInputInjector.kind == SystemInputInjectorResolver.Kind.INPUT_MANAGER_2_ARG
+                ? (inputManager != null)
+                : (iInputManager != null);
+    }
+
+    public boolean invokeSystemInjectInputEvent(InputEvent ev, int mode) throws ReflectiveOperationException {
+        SystemInputInjectorResolver.ResolvedInjector inj = this.systemInputInjector;
+        if (inj == null || ev == null) return false;
+        Object res;
+        switch (inj.kind) {
+            case IINPUT_MANAGER_TARGET_3_ARG:
+                if (iInputManager == null) return false;
+                res = inj.method.invoke(iInputManager, ev, mode, -1);
+                break;
+            case INPUT_MANAGER_2_ARG:
+                if (inputManager == null) return false;
+                res = inj.method.invoke(inputManager, ev, mode);
+                break;
+            case IINPUT_MANAGER_2_ARG:
+            default:
+                if (iInputManager == null) return false;
+                res = inj.method.invoke(iInputManager, ev, mode);
+                break;
+        }
+        return !(res instanceof Boolean) || (Boolean) res;
     }
 
     private static Method resolveInjectInputEventMethod(Object iim) {

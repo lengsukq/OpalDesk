@@ -10,12 +10,9 @@ import android.view.MotionEvent;
 
 import io.github.lengsukq.opaldesk.daemon.DaemonConfig;
 import io.github.lengsukq.opaldesk.daemon.compositor.WindowSession;
-import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.platform.AndroidServices;
 import io.github.lengsukq.opaldesk.daemon.stream.UhidInputDevice;
-import io.github.lengsukq.opaldesk.daemon.stream.UhidProtocol;
 
-import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
@@ -31,7 +28,6 @@ import java.util.Map;
 public final class PerDisplayInputRouter {
     private static final long UHID_SETTLE_MS = 120L;
     private static final long UHID_RETRY_COOLDOWN_MS = 10_000L;
-    private static final long INJECT_WARN_COOLDOWN_MS = 3_000L;
     private static final float TAP_SLOP_PX = 36f;
 
     /** Callback notified after a clean short tap (ACTION_UP without drag) inside a live window. */
@@ -45,17 +41,13 @@ public final class PerDisplayInputRouter {
     }
 
     private final AndroidServices services;
-    private final DaemonConfig config;
+    private final InputFallbackDispatcher dispatcher;
     private final Object uhidLock = new Object();
     private final Map<Integer, UhidInputDevice> uhidByDisplay = new HashMap<>();
     private final Map<Integer, Long> uhidBlockedUntilMs = new HashMap<>();
 
-    private volatile boolean uhidAutoActivated = false;
     private volatile boolean localImeActive = false;
-    private volatile int lastInjectStatus = BridgeProtocol.INJECT_STATUS_SYSTEM;
-    private volatile long lastInjectWarnMs = 0L;
     private volatile TapUpListener tapUpListener;
-    private volatile InjectStatusListener injectStatusListener;
 
     private int lastDownWinId = -1;
     private float lastDownX = 0f;
@@ -66,7 +58,28 @@ public final class PerDisplayInputRouter {
 
     public PerDisplayInputRouter(AndroidServices services, DaemonConfig config) {
         this.services = services;
-        this.config = config;
+        this.dispatcher = new InputFallbackDispatcher(config, new InputFallbackDispatcher.BackendAdapter() {
+            @Override
+            public boolean isSystemInjectorAvailable() {
+                return services != null && services.hasSystemInputInjector();
+            }
+
+            @Override
+            public boolean injectViaSystem(Object ev, int displayId) throws Exception {
+                if (services == null || !(ev instanceof InputEvent)) return false;
+                InputEvent ie = (InputEvent) ev;
+                if (services.setDisplayIdMethod != null) {
+                    services.setDisplayIdMethod.invoke(ie, displayId);
+                }
+                return services.invokeSystemInjectInputEvent(ie, 0);
+            }
+
+            @Override
+            public boolean injectViaUhid(Object ev, int displayId, String vdUniqueId, int dispW, int dispH) {
+                if (!(ev instanceof InputEvent)) return false;
+                return PerDisplayInputRouter.this.injectViaUhid((InputEvent) ev, displayId, vdUniqueId, dispW, dispH);
+            }
+        });
     }
 
     public void setTapUpListener(TapUpListener listener) {
@@ -74,16 +87,7 @@ public final class PerDisplayInputRouter {
     }
 
     public void setInjectStatusListener(InjectStatusListener listener) {
-        this.injectStatusListener = listener;
-    }
-
-    private void updateInjectStatus(int nextStatus) {
-        if (lastInjectStatus == nextStatus) return;
-        lastInjectStatus = nextStatus;
-        InjectStatusListener l = injectStatusListener;
-        if (l != null) {
-            try { l.onInjectStatusChanged(nextStatus); } catch (RuntimeException ignored) {}
-        }
+        this.dispatcher.setStatusListener(listener != null ? listener::onInjectStatusChanged : null);
     }
 
     public void setLocalImeActive(boolean active) {
@@ -95,22 +99,14 @@ public final class PerDisplayInputRouter {
     }
 
     public int getLastInjectStatus() {
-        return lastInjectStatus;
+        return dispatcher.getLastInjectStatus();
     }
 
     public int onInputBackendConfigChanged(int mode) {
         synchronized (uhidLock) {
             uhidBlockedUntilMs.clear();
         }
-        if (mode != BridgeProtocol.INPUT_BACKEND_UHID) {
-            uhidAutoActivated = false;
-            releaseAllDisplays();
-            updateInjectStatus(BridgeProtocol.INJECT_STATUS_SYSTEM);
-        } else {
-            uhidAutoActivated = true;
-            updateInjectStatus(BridgeProtocol.INJECT_STATUS_UHID);
-        }
-        return lastInjectStatus;
+        return dispatcher.onInputBackendConfigChanged(mode, this::releaseAllDisplays);
     }
 
     public boolean injectWindowMotion(
@@ -353,59 +349,7 @@ public final class PerDisplayInputRouter {
     }
 
     private boolean dispatchToDisplay(InputEvent ev, int displayId, String vdUniqueId, int dispW, int dispH) {
-        int backend = config.getInputBackendMode();
-        if (backend == BridgeProtocol.INPUT_BACKEND_UHID
-                || (backend == BridgeProtocol.INPUT_BACKEND_AUTO && uhidAutoActivated)) {
-            if (injectViaUhid(ev, displayId, vdUniqueId, dispW, dispH)) {
-                updateInjectStatus(BridgeProtocol.INJECT_STATUS_UHID);
-                return true;
-            }
-            if (backend == BridgeProtocol.INPUT_BACKEND_UHID) {
-                updateInjectStatus(BridgeProtocol.INJECT_STATUS_BLOCKED);
-                return false;
-            }
-        }
-
-        if (services.iInputManager != null && services.injectInputEventMethod != null) {
-            try {
-                if (services.setDisplayIdMethod != null) {
-                    services.setDisplayIdMethod.invoke(ev, displayId);
-                }
-                Object res = services.injectInputEventMethod.invoke(services.iInputManager, ev, 0);
-                boolean ok = !(res instanceof Boolean) || (Boolean) res;
-                if (ok) {
-                    updateInjectStatus(BridgeProtocol.INJECT_STATUS_SYSTEM);
-                    return true;
-                }
-            } catch (ReflectiveOperationException | RuntimeException e) {
-                Throwable root = (e instanceof InvocationTargetException && e.getCause() != null)
-                        ? e.getCause() : e;
-                if (root instanceof SecurityException && backend == BridgeProtocol.INPUT_BACKEND_AUTO) {
-                    if (injectViaUhid(ev, displayId, vdUniqueId, dispW, dispH)) {
-                        boolean firstFallback = false;
-                        synchronized (uhidLock) {
-                            if (!uhidAutoActivated) {
-                                uhidAutoActivated = true;
-                                firstFallback = true;
-                            }
-                        }
-                        updateInjectStatus(BridgeProtocol.INJECT_STATUS_UHID);
-                        if (firstFallback) {
-                            System.out.println("OPALDESK_UHID_AUTO_FALLBACK_ACTIVE displayId=" + displayId);
-                        }
-                        return true;
-                    }
-                }
-                long nowMs = SystemClock.uptimeMillis();
-                if (nowMs - lastInjectWarnMs >= INJECT_WARN_COOLDOWN_MS) {
-                    lastInjectWarnMs = nowMs;
-                    System.err.println("OPALDESK_INPUT_INJECT_WARN displayId=" + displayId + ": "
-                            + UhidProtocol.unwrapThrowableMessage(root));
-                }
-            }
-        }
-        updateInjectStatus(BridgeProtocol.INJECT_STATUS_BLOCKED);
-        return false;
+        return dispatcher.dispatch(ev, displayId, vdUniqueId, dispW, dispH);
     }
 
     private boolean injectViaUhid(InputEvent ev, int displayId, String vdUniqueId, int dispW, int dispH) {

@@ -255,13 +255,30 @@ public final class VirtualDisplayFactory {
             }
         }
         Method m = sGetUniqueId;
-        if (m == null) return null;
-        try {
-            return (String) m.invoke(display);
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            System.err.println("OPALDESK_VD_UNIQUE_ID_WARN: " + e.getMessage());
-            return null;
+        if (m != null) {
+            try {
+                Object uid = m.invoke(display);
+                if (uid instanceof String && !((String) uid).isEmpty()) {
+                    return (String) uid;
+                }
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.err.println("OPALDESK_VD_UNIQUE_ID_WARN: " + e.getMessage());
+            }
         }
+        try {
+            Class<?> infoCls = Class.forName("android.view.DisplayInfo");
+            Object info = infoCls.getDeclaredConstructor().newInstance();
+            Method getInfo = findOptionalMethod(Display.class, "getDisplayInfo", infoCls);
+            if (getInfo != null) {
+                getInfo.invoke(display, info);
+                Object uid = infoCls.getField("uniqueId").get(info);
+                if (uid instanceof String && !((String) uid).isEmpty()) {
+                    return (String) uid;
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+        }
+        return null;
     }
 
     private static Method findOptionalMethod(Class<?> cls, String name, Class<?>... params) {

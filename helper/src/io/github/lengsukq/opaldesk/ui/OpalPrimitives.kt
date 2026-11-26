@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -89,6 +90,8 @@ import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
 import io.github.lengsukq.opaldesk.protocol.WindowTilingLayout
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /**
@@ -871,6 +874,7 @@ enum class ChromeGlyph {
     TILE_RIGHT,
     CONTROL_CENTER,
     WIFI,
+    WIFI_OFF,
     KEYBOARD,
     EXTERNAL_MONITOR,
     LOCK,
@@ -986,6 +990,13 @@ fun OpalGlyphIcon(
                 drawArc(tint, 225f, 90f, false, Offset(w * 0.08f, h * 0.18f), Size(w * 0.84f, h * 0.84f), style = Stroke(sw, cap = StrokeCap.Round))
                 drawArc(tint, 225f, 90f, false, Offset(w * 0.24f, h * 0.38f), Size(w * 0.52f, h * 0.52f), style = Stroke(sw, cap = StrokeCap.Round))
                 drawCircle(tint, radius = w * 0.085f, center = Offset(w * 0.50f, h * 0.78f))
+            }
+            ChromeGlyph.WIFI_OFF -> {
+                val muted = tint.copy(alpha = 0.55f)
+                drawArc(muted, 225f, 90f, false, Offset(w * 0.08f, h * 0.18f), Size(w * 0.84f, h * 0.84f), style = Stroke(sw, cap = StrokeCap.Round))
+                drawArc(muted, 225f, 90f, false, Offset(w * 0.24f, h * 0.38f), Size(w * 0.52f, h * 0.52f), style = Stroke(sw, cap = StrokeCap.Round))
+                drawCircle(muted, radius = w * 0.085f, center = Offset(w * 0.50f, h * 0.78f))
+                drawLine(tint, Offset(w * 0.16f, h * 0.16f), Offset(w * 0.84f, h * 0.84f), sw, StrokeCap.Round)
             }
             ChromeGlyph.KEYBOARD -> {
                 drawRoundRect(tint, Offset(w * 0.08f, h * 0.22f), Size(w * 0.84f, h * 0.56f), CornerRadius(2.dp.toPx()), Stroke(sw * 0.9f))
@@ -1148,13 +1159,21 @@ fun OpalAmbientBackdrop(
 ) {
     val isDark = OpalPalette.isDark
     val customWallpaperPath by AppPrefs.customWallpaperPathFlow.collectAsState()
-    val customBitmap = if (suspendBackdrop) {
-        null
-    } else {
-        remember(customWallpaperPath) {
-            WallpaperStorage.loadCachedWallpaper(customWallpaperPath)
+    var loadedWallpaper by remember(customWallpaperPath) {
+        mutableStateOf(WallpaperStorage.getCachedWallpaperFast(customWallpaperPath))
+    }
+    LaunchedEffect(customWallpaperPath, suspendBackdrop) {
+        if (suspendBackdrop || customWallpaperPath.isBlank()) return@LaunchedEffect
+        val fast = WallpaperStorage.getCachedWallpaperFast(customWallpaperPath)
+        if (fast != null) {
+            loadedWallpaper = fast
+        } else {
+            loadedWallpaper = withContext(Dispatchers.IO) {
+                WallpaperStorage.loadCachedWallpaper(customWallpaperPath)
+            }
         }
     }
+    val customBitmap = if (suspendBackdrop) null else loadedWallpaper
 
     val stops = if (isDark) {
         when (wallpaperPreset) {

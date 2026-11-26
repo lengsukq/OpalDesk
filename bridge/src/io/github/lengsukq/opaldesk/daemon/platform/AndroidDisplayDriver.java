@@ -139,7 +139,8 @@ public final class AndroidDisplayDriver
         System.out.println("OPALDESK_VD_CREATED name=" + name
                 + " displayId=" + displayId
                 + " size=" + width + "x" + height + "@" + dpi + "dpi"
-                + " flags=0x" + Integer.toHexString(chosenFlags[0]));
+                + " flags=0x" + Integer.toHexString(chosenFlags[0])
+                + " uid=" + (uniqueId != null ? uniqueId : ""));
         // Combined with VD_FLAGS_TRUSTED_IME (no OWN_FOCUS / STEAL_TOP_FOCUS_DISABLED),
         // DISPLAY_IME_POLICY_FALLBACK_DISPLAY routes the app's real InputConnection directly to
         // Display 0's IME (full width, works even with FLAG_SECURE password keyboards without
