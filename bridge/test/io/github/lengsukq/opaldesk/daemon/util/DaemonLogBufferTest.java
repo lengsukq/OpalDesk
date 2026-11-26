@@ -124,4 +124,30 @@ public class DaemonLogBufferTest {
         Files.createSymbolicLink(linkFile.toPath(), prevFile.toPath());
         assertEquals(0, DaemonLogBuffer.loadPreviousAbnormalLogFile(linkFile, 20));
     }
+
+    @Test
+    public void oversizedPrevLogReadsBoundedTailWithoutDroppingCrashEnd() throws Exception {
+        File tmpDir = Files.createTempDirectory("opaldesk-logbuf-big").toFile();
+        tmpDir.deleteOnExit();
+        File bigPrev = new File(tmpDir, "big.prev.log");
+        bigPrev.deleteOnExit();
+
+        StringBuilder sb = new StringBuilder(640 * 1024);
+        sb.append("OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=2000 api=36\n");
+        for (int i = 0; i < 8000; i++) {
+            sb.append("09:00:00.000 I/Daemon: padding-line-").append(i)
+                    .append(" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n");
+        }
+        sb.append("OPALDESK_UNCAUGHT_EXCEPTION thread=main: java.lang.IllegalStateException: tail-boom\n");
+        sb.append("OPALDESK_UNCAUGHT_END\n");
+        Files.write(bigPrev.toPath(), sb.toString().getBytes(StandardCharsets.UTF_8));
+        assertTrue(bigPrev.length() > 512L * 1024L);
+
+        int loaded = DaemonLogBuffer.loadPreviousAbnormalLogFile(bigPrev, 16);
+        assertEquals(16, loaded);
+        String snap = DaemonLogBuffer.snapshotTail(30);
+        assertTrue(snap.contains("[PREV_CRASH] OPALDESK_UNCAUGHT_EXCEPTION"));
+        assertTrue(snap.contains("[PREV_CRASH] OPALDESK_UNCAUGHT_END"));
+        assertFalse(snap.contains("padding-line-0 "));
+    }
 }

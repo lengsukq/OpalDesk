@@ -81,6 +81,7 @@ fun OutputResolutionSectionContent(
     var heightInput by remember { mutableStateOf(curActiveH.toString()) }
     var fpsInput by remember { mutableStateOf(if (curActiveFps > 0) curActiveFps.toString() else "") }
     var labelInput by remember { mutableStateOf("") }
+    var userEditedInputs by remember { mutableStateOf(false) }
     var inputError by remember { mutableStateOf("") }
     var editorExpanded by remember(extDisplay?.displayId, extDisplay?.supportedModes?.isEmpty(), remote.connected) {
         mutableStateOf(
@@ -95,6 +96,23 @@ fun OutputResolutionSectionContent(
 
     LaunchedEffect(Unit) {
         AppPrefs.hydrateFlows(ctx)
+    }
+
+    LaunchedEffect(
+        extDisplay?.displayId,
+        extDisplay?.width,
+        extDisplay?.height,
+        extDisplay?.refreshRateHz,
+        remote.connected,
+        remote.width,
+        remote.height,
+        remote.fpsX100,
+    ) {
+        if (!userEditedInputs) {
+            widthInput = curActiveW.toString()
+            heightInput = curActiveH.toString()
+            fpsInput = if (curActiveFps > 0) curActiveFps.toString() else ""
+        }
     }
 
     LaunchedEffect(pendingRevert?.token) {
@@ -117,6 +135,7 @@ fun OutputResolutionSectionContent(
         heightInput = spec.height.toString()
         fpsInput = if (spec.fps > 0) spec.fps.toString() else ""
         if (spec.label.isNotBlank()) labelInput = spec.label
+        userEditedInputs = false
         inputError = ""
     }
 
@@ -532,6 +551,7 @@ fun OutputResolutionSectionContent(
                             value = widthInput,
                             onValueChange = { raw ->
                                 widthInput = raw.filter { it.isDigit() }.take(4)
+                                userEditedInputs = true
                                 inputError = ""
                             },
                             placeholder = "如 2560",
@@ -547,6 +567,7 @@ fun OutputResolutionSectionContent(
                                 val oldW = widthInput
                                 widthInput = heightInput
                                 heightInput = oldW
+                                userEditedInputs = true
                                 inputError = ""
                             }
                             .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -565,6 +586,7 @@ fun OutputResolutionSectionContent(
                             value = heightInput,
                             onValueChange = { raw ->
                                 heightInput = raw.filter { it.isDigit() }.take(4)
+                                userEditedInputs = true
                                 inputError = ""
                             },
                             placeholder = "如 1440",
@@ -577,6 +599,7 @@ fun OutputResolutionSectionContent(
                             value = fpsInput,
                             onValueChange = { raw ->
                                 fpsInput = raw.filter { it.isDigit() }.take(3)
+                                userEditedInputs = true
                                 inputError = ""
                             },
                             placeholder = "自动",
@@ -605,6 +628,7 @@ fun OutputResolutionSectionContent(
                                 )
                                 .clickable {
                                     fpsInput = valStr
+                                    userEditedInputs = true
                                     inputError = ""
                                 }
                                 .padding(horizontal = 8.dp, vertical = 3.dp),

@@ -250,5 +250,13 @@ public class UtilTest {
         assertEquals(3, DisplayGeometryUtil.selectBestEdidModeForRefreshRate(ws, hs, rs, 2560, 1440, 120f));
         // When requesting 60Hz at 3840x2160, picks 3840x2160@60
         assertEquals(1, DisplayGeometryUtil.selectBestEdidModeForRefreshRate(ws, hs, rs, 3840, 2160, 60f));
+
+        // Rotated EDID panel fallback when exact orientation is absent, preferring exact when present
+        int[] rotWs = new int[]{1080, 1920};
+        int[] rotHs = new int[]{1920, 1080};
+        float[] rotRs = new float[]{60f, 60f};
+        assertEquals(1, DisplayGeometryUtil.selectBestEdidModeIndex(rotWs, rotHs, rotRs, 1920, 1080, 60f));
+        assertEquals(1, DisplayGeometryUtil.selectBestEdidModeIndex(
+                new int[]{1080, 1080}, new int[]{1920, 1920}, new float[]{60f, 120f}, 1920, 1080, 120f));
     }
 }

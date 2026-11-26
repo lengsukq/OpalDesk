@@ -5,12 +5,14 @@ import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.io.RandomAccessFile;
 import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
@@ -29,6 +31,8 @@ public final class DaemonLogBuffer {
     public static final int MAX_PREV_CRASH_LINES = 48;
     public static final int MAX_LINE_CHARS = 1024;
     public static final int MAX_SNAPSHOT_CHARS = 96 * 1024;
+    private static final long MAX_PREV_LOG_FILE_BYTES = 512L * 1024L;
+    private static final int OVERSIZED_PREV_TAIL_BYTES = 256 * 1024;
     public static final String CLEAN_SHUTDOWN_MARKER = "OPALDESK_DAEMON_SHUTDOWN_CLEAN";
 
     private static final class StickyEntry {
@@ -119,10 +123,8 @@ public final class DaemonLogBuffer {
         try {
             if (!prevFile.isFile() || Files.isSymbolicLink(prevFile.toPath())) return 0;
             long len = prevFile.length();
-            if (len <= 0L || len > 512L * 1024L) {
-                if (len <= 0L) return 0;
-            }
-            List<String> allLines = Files.readAllLines(prevFile.toPath(), StandardCharsets.UTF_8);
+            if (len <= 0L) return 0;
+            List<String> allLines = readBoundedTailLines(prevFile, len);
             int limit = Math.max(1, Math.min(maxLines, MAX_PREV_CRASH_LINES));
             List<String> tail = extractPreviousAbnormalTail(allLines, limit);
             if (tail.isEmpty()) return 0;
@@ -134,6 +136,33 @@ public final class DaemonLogBuffer {
         } catch (Throwable ignored) {
             return 0;
         }
+    }
+
+    private static List<String> readBoundedTailLines(File file, long fileLength) throws IOException {
+        if (fileLength <= MAX_PREV_LOG_FILE_BYTES) {
+            return Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+        }
+        long startOffset = Math.max(0L, fileLength - OVERSIZED_PREV_TAIL_BYTES);
+        int toRead = (int) Math.min(OVERSIZED_PREV_TAIL_BYTES, fileLength - startOffset);
+        byte[] buf = new byte[toRead];
+        int totalRead = 0;
+        try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
+            raf.seek(startOffset);
+            while (totalRead < toRead) {
+                int n = raf.read(buf, totalRead, toRead - totalRead);
+                if (n < 0) break;
+                totalRead += n;
+            }
+        }
+        if (totalRead <= 0) return Collections.emptyList();
+        String chunk = new String(buf, 0, totalRead, StandardCharsets.UTF_8);
+        List<String> split = Arrays.asList(chunk.split("\\r?\\n"));
+        // Drop the leading fragment when seeking into the middle of a file so neither line text
+        // nor any multi-byte UTF-8 boundary is surfaced half-formed.
+        if (startOffset > 0L && split.size() > 1) {
+            return split.subList(1, split.size());
+        }
+        return split;
     }
 
     /**

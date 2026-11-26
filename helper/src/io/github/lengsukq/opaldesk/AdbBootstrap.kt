@@ -42,6 +42,9 @@ object AdbBootstrap {
 
     private val PAIR_SPLIT_REGEX = Regex("[\\s:]+")
     private val exec = Executors.newSingleThreadExecutor()
+    private val postmortemExec = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "OpalAdbPostmortem").apply { isDaemon = true }
+    }
     private val bootstrapActiveCount = java.util.concurrent.atomic.AtomicInteger(0)
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -104,18 +107,20 @@ object AdbBootstrap {
             else -> 0
         }
         if (port !in 1..65535 || !AdbProcessRunner.isAllowedLocalHost(host)) return null
-        val fut = exec.submit<String?> {
+        val fut = postmortemExec.submit<String?> {
             if (bootstrapActiveCount.get() > 0) return@submit null
             try {
                 val startRes = AdbProcessRunner.runAdb(appCtx, 3000L, "start-server")
-                if (startRes.code != 0) return@submit null
+                if (startRes.code != 0 || bootstrapActiveCount.get() > 0) return@submit null
                 val (target, _) = AdbProcessRunner.connectAdbTarget(appCtx, host, port, timeoutMs = 2500L)
-                if (target == null) return@submit null
+                if (target == null || bootstrapActiveCount.get() > 0) return@submit null
                 AdbProcessRunner.runAdb(appCtx, 3000L, "-s", target, "shell", shellCmd).output.takeIf { it.isNotBlank() }
             } catch (_: Throwable) {
                 null
             } finally {
-                AdbProcessRunner.stopLocalAdbServerSync(appCtx)
+                if (bootstrapActiveCount.get() == 0) {
+                    AdbProcessRunner.stopLocalAdbServerSync(appCtx)
+                }
             }
         }
         return try {

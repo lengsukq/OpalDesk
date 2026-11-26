@@ -334,19 +334,26 @@ public final class DisplayGeometryUtil {
         if (widths == null || heights == null || rates == null) return -1;
         int count = Math.min(widths.length, Math.min(heights.length, rates.length));
         if (count <= 0 || reqW <= 0 || reqH <= 0) return -1;
-        int bestIdx = -1;
-        float bestScore = Float.MAX_VALUE;
+        int bestExactIdx = -1;
+        float bestExactScore = Float.MAX_VALUE;
+        int bestRotatedIdx = -1;
+        float bestRotatedScore = Float.MAX_VALUE;
         for (int i = 0; i < count; i++) {
+            float r = rates[i];
+            float score = (reqFps > 1f) ? Math.abs(r - reqFps) : -r;
             if (widths[i] == reqW && heights[i] == reqH) {
-                float r = rates[i];
-                float score = (reqFps > 1f) ? Math.abs(r - reqFps) : -r;
-                if (bestIdx < 0 || score < bestScore) {
-                    bestIdx = i;
-                    bestScore = score;
+                if (bestExactIdx < 0 || score < bestExactScore) {
+                    bestExactIdx = i;
+                    bestExactScore = score;
+                }
+            } else if (reqW != reqH && widths[i] == reqH && heights[i] == reqW) {
+                if (bestRotatedIdx < 0 || score < bestRotatedScore) {
+                    bestRotatedIdx = i;
+                    bestRotatedScore = score;
                 }
             }
         }
-        return bestIdx;
+        return bestExactIdx >= 0 ? bestExactIdx : bestRotatedIdx;
     }
 
     /**
