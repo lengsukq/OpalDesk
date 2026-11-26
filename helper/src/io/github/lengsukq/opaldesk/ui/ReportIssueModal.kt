@@ -440,10 +440,11 @@ fun ReportIssueModal(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             OpalText(
-                                text = "上传成功，感谢反馈！请保留以下反馈码便于排错定位：",
+                                text = "上传成功！已自动保存至「日志 → 我的反馈追踪」，后续可在 APP 内查看是否修复及对应版本：",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = OpalPalette.AccentEmerald,
+                                lineHeight = 17.sp,
                             )
                             Row(
                                 modifier = Modifier.fillMaxWidth(),

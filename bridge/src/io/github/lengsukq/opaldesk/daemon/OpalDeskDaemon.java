@@ -413,6 +413,7 @@ public final class OpalDeskDaemon implements Runnable {
         }
         try {
             if (services != null) {
+                services.clearAllForcedExternalDisplaySizes();
                 services.restoreDefaultDisplayTopFocus();
             }
         } catch (RuntimeException ignored) {

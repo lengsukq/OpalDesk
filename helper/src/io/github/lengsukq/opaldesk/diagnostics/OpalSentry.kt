@@ -31,15 +31,33 @@ data class ManualReportOutcome(
     val quota: FeedbackQuotaSnapshot,
 )
 
+data class FeedbackRefreshOutcome(
+    val success: Boolean,
+    val updatedCount: Int = 0,
+    val skippedByThrottle: Boolean = false,
+    val message: String = "",
+)
+
+data class FeedbackCodeLookupOutcome(
+    val success: Boolean,
+    val found: Boolean = false,
+    val item: FeedbackRemoteItem? = null,
+    val message: String = "",
+)
+
 /**
  * Central Sentry runtime coordinator for OpalDesk Android (:helper).
  * - Initializes SentryAndroid SDK with privacy-first defaults (no PII, no screenshots).
  * - Coordinates manual diagnostic log uploads with strict 5/day local natural-day rate limiting
  *   and confirmed HTTP 2xx receipt before incrementing quota.
+ * - Persists submitted feedback records locally and syncs resolution status / fixed versions.
  */
 object OpalSentry {
     private val uploadExecutor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "OpalSentryUpload").apply { isDaemon = true }
+    }
+    private val syncExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "OpalFeedbackSync").apply { isDaemon = true }
     }
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -47,6 +65,14 @@ object OpalSentry {
     private var initialized = false
 
     fun isConfigured(): Boolean = BuildConfig.SENTRY_DSN.isNotBlank()
+
+    fun resolvedStatusBaseUrl(): String =
+        FeedbackHistoryLogic.resolveStatusBaseUrl(
+            feedbackStatusUrl = BuildConfig.FEEDBACK_STATUS_URL,
+            sentryTunnelUrl = BuildConfig.SENTRY_TUNNEL_URL,
+        )
+
+    fun isStatusSyncConfigured(): Boolean = resolvedStatusBaseUrl().isNotEmpty()
 
     fun init(ctx: Context) {
         if (initialized) return
@@ -228,6 +254,13 @@ object OpalSentry {
             val outcome = when (uploadResult) {
                 is ManualUploadResult.Success -> {
                     val afterQuota = limiter.recordConfirmedUpload()
+                    FeedbackHistoryStore.recordSubmitted(
+                        ctx = appCtx,
+                        eventId = uploadResult.eventId,
+                        shortCode = uploadResult.shortCode,
+                        problemDescription = cleanDesc,
+                        reportedVersion = appVersion,
+                    )
                     OpalLogStore.clearAfterConfirmedUpload(daemonLogText)
                     OpalLogStore.i(
                         "Sentry",
@@ -253,10 +286,146 @@ object OpalSentry {
         }
     }
 
-    private fun dispatchMain(
-        callback: (ManualReportOutcome) -> Unit,
-        outcome: ManualReportOutcome,
+    fun refreshFeedbackStatusesAsync(
+        ctx: Context,
+        force: Boolean = false,
+        onComplete: (FeedbackRefreshOutcome) -> Unit = {},
     ) {
-        mainHandler.post { callback(outcome) }
+        val appCtx = ctx.applicationContext
+        FeedbackHistoryStore.init(appCtx)
+        val baseUrl = resolvedStatusBaseUrl()
+        if (baseUrl.isEmpty()) {
+            dispatchMain(
+                onComplete,
+                FeedbackRefreshOutcome(success = false, message = "当前构建未配置状态查询服务"),
+            )
+            return
+        }
+
+        syncExecutor.execute {
+            val nowMs = System.currentTimeMillis()
+            val records = FeedbackHistoryStore.snapshot()
+            if (!force && !FeedbackHistoryLogic.shouldAutoRefresh(records, nowMs)) {
+                dispatchMain(
+                    onComplete,
+                    FeedbackRefreshOutcome(success = true, updatedCount = 0, skippedByThrottle = true),
+                )
+                return@execute
+            }
+
+            val isLookupRecord: (FeedbackRecord) -> Boolean = { rec ->
+                rec.fromCodeLookup || rec.summary.startsWith("通过反馈码 #")
+            }
+            val eventIds = FeedbackHistoryLogic.selectEventIdsForBatchQuery(
+                records.filterNot(isLookupRecord),
+            )
+            val lookupRecords = records.filter { isLookupRecord(it) && (!it.status.isTerminal || force) }.take(5)
+            if (eventIds.isEmpty() && lookupRecords.isEmpty()) {
+                dispatchMain(
+                    onComplete,
+                    FeedbackRefreshOutcome(success = true, updatedCount = 0),
+                )
+                return@execute
+            }
+
+            val mergedUpdates = LinkedHashMap<String, FeedbackRemoteItem>()
+            var lastFailureMessage: String? = null
+
+            if (eventIds.isNotEmpty()) {
+                val installationId = AppPrefs.getOrCreateInstallationId(appCtx)
+                when (val res = FeedbackStatusClient.fetchBatchStatuses(baseUrl, installationId, eventIds)) {
+                    is FeedbackBatchSyncResult.Success -> mergedUpdates.putAll(res.items)
+                    is FeedbackBatchSyncResult.Failure -> {
+                        OpalLogStore.w("FeedbackSync", "Batch status sync failed: ${res.reason}")
+                        lastFailureMessage = res.reason
+                    }
+                }
+            }
+
+            for (rec in lookupRecords) {
+                when (val res = FeedbackStatusClient.lookupByShortCode(baseUrl, rec.shortCode)) {
+                    is FeedbackLookupSyncResult.Found -> {
+                        val key = FeedbackHistoryLogic.normalizeEventId(res.item.eventId)
+                            .ifEmpty { rec.eventId }
+                        mergedUpdates[key] = res.item
+                    }
+                    is FeedbackLookupSyncResult.NotFound -> Unit
+                    is FeedbackLookupSyncResult.Failure -> {
+                        OpalLogStore.w("FeedbackSync", "Lookup refresh failed for #${rec.shortCode}: ${res.reason}")
+                        if (lastFailureMessage == null) lastFailureMessage = res.reason
+                    }
+                }
+            }
+
+            if (mergedUpdates.isNotEmpty()) {
+                FeedbackHistoryStore.mergeRemoteStatuses(appCtx, mergedUpdates, System.currentTimeMillis())
+                dispatchMain(
+                    onComplete,
+                    FeedbackRefreshOutcome(success = true, updatedCount = mergedUpdates.size),
+                )
+            } else if (lastFailureMessage != null) {
+                dispatchMain(
+                    onComplete,
+                    FeedbackRefreshOutcome(success = false, message = lastFailureMessage),
+                )
+            } else {
+                dispatchMain(
+                    onComplete,
+                    FeedbackRefreshOutcome(success = true, updatedCount = 0),
+                )
+            }
+        }
+    }
+
+    fun lookupFeedbackByCodeAsync(
+        ctx: Context,
+        rawCode: String,
+        onComplete: (FeedbackCodeLookupOutcome) -> Unit,
+    ) {
+        val appCtx = ctx.applicationContext
+        FeedbackHistoryStore.init(appCtx)
+        val baseUrl = resolvedStatusBaseUrl()
+        if (baseUrl.isEmpty()) {
+            dispatchMain(
+                onComplete,
+                FeedbackCodeLookupOutcome(success = false, message = "当前构建未配置状态查询服务"),
+            )
+            return
+        }
+
+        syncExecutor.execute {
+            when (val res = FeedbackStatusClient.lookupByShortCode(baseUrl, rawCode)) {
+                is FeedbackLookupSyncResult.Found -> {
+                    FeedbackHistoryStore.upsertLookedUpRecord(appCtx, res.item, System.currentTimeMillis())
+                    dispatchMain(
+                        onComplete,
+                        FeedbackCodeLookupOutcome(success = true, found = true, item = res.item),
+                    )
+                }
+                is FeedbackLookupSyncResult.NotFound -> {
+                    dispatchMain(
+                        onComplete,
+                        FeedbackCodeLookupOutcome(
+                            success = true,
+                            found = false,
+                            message = "未查到该反馈码记录，请检查输入是否正确",
+                        ),
+                    )
+                }
+                is FeedbackLookupSyncResult.Failure -> {
+                    dispatchMain(
+                        onComplete,
+                        FeedbackCodeLookupOutcome(success = false, message = res.reason),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun <T> dispatchMain(
+        callback: (T) -> Unit,
+        value: T,
+    ) {
+        mainHandler.post { callback(value) }
     }
 }

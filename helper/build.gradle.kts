@@ -38,6 +38,12 @@ val resolvedSentryTunnelUrl = resolveBuildSecret(
     "OPALDESK_SENTRY_TUNNEL_URL",
     "SENTRY_TUNNEL_URL",
 )
+val resolvedFeedbackStatusUrl = resolveBuildSecret(
+    "feedbackStatusUrl",
+    "opaldesk.feedback.statusUrl",
+    "OPALDESK_FEEDBACK_STATUS_URL",
+    "FEEDBACK_STATUS_URL",
+)
 
 @Suppress("UnstableApiUsage")
 android {
@@ -53,10 +59,11 @@ android {
         applicationId = "io.github.lengsukq.opaldesk"
         minSdk = 30
         targetSdk = 37
-        versionCode = 10017
-        versionName = "1.0.17"
+        versionCode = 10018
+        versionName = "1.0.18"
         buildConfigField("String", "SENTRY_DSN", escapeBuildConfigString(resolvedSentryDsn))
         buildConfigField("String", "SENTRY_TUNNEL_URL", escapeBuildConfigString(resolvedSentryTunnelUrl))
+        buildConfigField("String", "FEEDBACK_STATUS_URL", escapeBuildConfigString(resolvedFeedbackStatusUrl))
         ndk {
             abiFilters += "arm64-v8a"
         }

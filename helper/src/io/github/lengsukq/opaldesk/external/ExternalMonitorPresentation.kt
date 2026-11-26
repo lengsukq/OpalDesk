@@ -334,7 +334,13 @@ class ExternalMonitorPresentation(
         return target.dispatchKeyEvent(event)
     }
 
+    @Suppress("DEPRECATION")
     private fun resolveLogicalDisplaySizePx(display: Display): Pair<Int, Int> {
+        val realPt = android.graphics.Point()
+        runCatching { display.getRealSize(realPt) }
+        if (realPt.x >= 320 && realPt.y >= 320) {
+            return realPt.x to realPt.y
+        }
         val physW = display.mode?.physicalWidth?.coerceAtLeast(480) ?: 1920
         val physH = display.mode?.physicalHeight?.coerceAtLeast(480) ?: 1080
         val rotated = display.rotation == Surface.ROTATION_90 || display.rotation == Surface.ROTATION_270

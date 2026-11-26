@@ -111,6 +111,9 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         volatile int width = 1920;
         volatile int height = 1080;
         volatile int dpi = 220;
+        volatile int initialWidth = 1920;
+        volatile int initialHeight = 1080;
+        volatile int initialDpi = 220;
         volatile float fps = 60f;
         volatile float requestedNativeFps = 60f;
         volatile int bitrateKbps = 12_000;
@@ -287,16 +290,30 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     /**
      * Reconfigures the active remote desktop session (USB / Wi-Fi cast) using the exact same
      * resolution & refresh-rate control surface as physical USB-C / HDMI external monitors.
+     * Passing {@code reqW <= 0 && reqH <= 0 && reqFps <= 0f} restores the receiver's original
+     * negotiated native resolution and refresh rate.
      */
     public boolean reconfigureActiveDesktop(int reqW, int reqH, float reqFps) {
         int sid = desktopSessionId;
         ActiveRemoteSession s = (sid > 0) ? sessions.get(sid) : null;
         if (s == null || s.closed) return false;
-        int targetW = reqW > 0 ? reqW : s.width;
-        int targetH = reqH > 0 ? reqH : s.height;
-        int fpsX100 = reqFps > 0f ? Math.round(reqFps * 100f) : Math.round(s.fps * 100f);
+        boolean resetToNative = (reqW <= 0 && reqH <= 0 && reqFps <= 0f);
+        int targetW = resetToNative ? s.initialWidth : (reqW > 0 ? reqW : s.width);
+        int targetH = resetToNative ? s.initialHeight : (reqH > 0 ? reqH : s.height);
+        int targetDpi;
+        if (resetToNative) {
+            targetDpi = s.initialDpi;
+        } else if (reqW > 0 && reqH > 0 && (reqW != s.width || reqH != s.height)) {
+            int shortEdge = Math.min(targetW, targetH);
+            targetDpi = Math.max(160, Math.min(440, Math.round(shortEdge * 160f / 720f)));
+        } else {
+            targetDpi = s.dpi;
+        }
+        int fpsX100 = resetToNative
+                ? Math.round(s.requestedNativeFps * 100f)
+                : (reqFps > 0f ? Math.round(reqFps * 100f) : Math.round(s.fps * 100f));
         OpalCastProtocol.ResizeConfig cfg = new OpalCastProtocol.ResizeConfig(
-                targetW, targetH, s.dpi, fpsX100, s.bitrateKbps,
+                targetW, targetH, targetDpi, fpsX100, 0,
                 OpalCastProtocol.DISPLAY_MODE_UNCHANGED, 0xFF);
         worker.execute(() -> reconfigureSession(s, cfg));
         return true;
@@ -825,6 +842,9 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             s.width = sink.getWidth();
             s.height = sink.getHeight();
             s.dpi = sink.getDpi();
+            s.initialWidth = s.width;
+            s.initialHeight = s.height;
+            s.initialDpi = s.dpi;
 
             String vdName = standalone ? ("OpalDesk-App-" + s.appPackage) : "OpalDesk-Remote";
             int dcor = BridgeProtocol.VD_FLAG_DESTROY_CONTENT_ON_REMOVAL;
@@ -998,8 +1018,11 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
 
     private static int computeRecommendedBitrateKbps(int w, int h, float fps) {
         long pixels = (long) Math.max(640, w) * Math.max(480, h);
+        boolean uhd = pixels >= 5_500_000L; // >= 4K / super-ultrawide
         boolean highRes = pixels >= 2_800_000L; // >= 2560x1100
         boolean highFps = fps >= 85f;
+        if (uhd && highFps) return DEFAULT_MAX_BITRATE_KBPS;
+        if (uhd) return 24_000;
         if (highRes && highFps) return 22_000;
         if (highRes) return 16_000;
         if (highFps) return 15_000;

@@ -164,19 +164,19 @@ class PeerCastViewerActivity : ComponentActivity() {
         }
 
         val dm = resources.displayMetrics
-        val isPortrait = dm.heightPixels > dm.widthPixels
-        reqWidth = if (isPortrait) {
-            (dm.widthPixels and 1.inv()).coerceIn(720, 1600)
-        } else {
-            (dm.widthPixels and 1.inv()).coerceIn(1280, 2560)
-        }
-        reqHeight = if (isPortrait) {
-            (dm.heightPixels and 1.inv()).coerceIn(1280, 2560)
-        } else {
-            (dm.heightPixels and 1.inv()).coerceIn(720, 1600)
-        }
-        reqDpi = dm.densityDpi.coerceIn(160, 360)
-        reqFps = (display?.mode?.refreshRate?.toInt() ?: 60).coerceIn(60, 120)
+        val bounds = runCatching { windowManager.currentWindowMetrics.bounds }.getOrNull()
+        val rawW = bounds?.width()?.takeIf { it > 0 } ?: dm.widthPixels
+        val rawH = bounds?.height()?.takeIf { it > 0 } ?: dm.heightPixels
+        val peerSpec = io.github.lengsukq.opaldesk.external.CustomResolutionPolicy.computePeerCastRequestSpec(
+            displayW = rawW,
+            displayH = rawH,
+            densityDpi = dm.densityDpi,
+            refreshRateHz = display?.mode?.refreshRate ?: 60f,
+        )
+        reqWidth = peerSpec.width
+        reqHeight = peerSpec.height
+        reqDpi = peerSpec.dpi
+        reqFps = peerSpec.fps
         videoW = reqWidth
         videoH = reqHeight
 

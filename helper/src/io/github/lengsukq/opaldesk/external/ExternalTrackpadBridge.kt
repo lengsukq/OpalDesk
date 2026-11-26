@@ -252,8 +252,97 @@ object ExternalDisplayPolicy {
         else -> PresentationFailureAction.FALLBACK_LOCAL_ONLY
     }
 
-    fun isSupportedExternalMode(width: Int, height: Int, refreshRate: Float): Boolean =
-        width >= 1280 && height >= 720 && refreshRate >= MIN_EXTERNAL_MODE_FPS
+    data class ExternalModeCandidate(
+        val width: Int,
+        val height: Int,
+        val refreshRateHz: Int,
+    )
+
+    fun isSupportedExternalMode(width: Int, height: Int, refreshRate: Float): Boolean {
+        val longEdge = maxOf(width, height)
+        val shortEdge = minOf(width, height)
+        return longEdge >= 1024 && shortEdge >= 600 && refreshRate >= MIN_EXTERNAL_MODE_FPS
+    }
+
+    /**
+     * Curates raw EDID modes from an external display so:
+     * 1. Fractional rates (59.94Hz / 119.88Hz) round cleanly to 60Hz / 120Hz instead of truncating to 59/119Hz.
+     * 2. Portrait monitors (1080×1920) & 4:3 projectors (1024×768) are preserved.
+     * 3. Each unique resolution keeps at most 2 representative refresh rates (peak + closest to 60Hz)
+     *    so high-res 24/25/30/50/59/60/120Hz EDID tables never crowd out 2K/1080p modes.
+     * 4. If all modes are smaller than 1024×600 (e.g. 800×480 portable HDMI screen), falls back to
+     *    keeping any valid mode >= 640×480 instead of returning an empty list.
+     */
+    fun curateExternalDisplayModes(
+        rawModes: List<Triple<Int, Int, Float>>,
+        maxCount: Int = 18,
+    ): List<ExternalModeCandidate> {
+        if (rawModes.isEmpty() || maxCount <= 0) return emptyList()
+        val primary = rawModes.filter { (w, h, hz) -> isSupportedExternalMode(w, h, hz) }
+        val pool = primary.ifEmpty {
+            rawModes.filter { (w, h, hz) ->
+                maxOf(w, h) >= CustomResolutionPolicy.MIN_LONG_EDGE &&
+                    minOf(w, h) >= CustomResolutionPolicy.MIN_SHORT_EDGE &&
+                    hz >= MIN_EXTERNAL_MODE_FPS
+            }
+        }
+        val byResolution = LinkedHashMap<Pair<Int, Int>, MutableSet<Int>>()
+        for ((w, h, hz) in pool) {
+            val roundedHz = hz.roundToInt().coerceAtLeast(24)
+            byResolution.getOrPut(w to h) { LinkedHashSet() }.add(roundedHz)
+        }
+        val curated = ArrayList<ExternalModeCandidate>()
+        for ((dims, hzSet) in byResolution) {
+            val sortedHz = hzSet.sortedDescending()
+            val chosen = ArrayList<Int>(2)
+            val peak = sortedHz.first()
+            chosen.add(peak)
+            val near60 = sortedHz.firstOrNull { kotlin.math.abs(it - 60) <= 2 && kotlin.math.abs(it - peak) >= 5 }
+            if (near60 != null) {
+                chosen.add(near60)
+            } else if (sortedHz.size > 1) {
+                val second = sortedHz.firstOrNull { kotlin.math.abs(it - peak) >= 10 }
+                if (second != null) chosen.add(second)
+            }
+            for (hz in chosen) {
+                curated.add(ExternalModeCandidate(dims.first, dims.second, hz))
+            }
+        }
+        return curated
+            .sortedWith(
+                compareByDescending<ExternalModeCandidate> { it.width.toLong() * it.height.toLong() }
+                    .thenByDescending { it.refreshRateHz },
+            )
+            .take(maxCount)
+    }
+
+    /**
+     * Resolves the currently active logical display dimensions, preferring [realW]×[realH]
+     * (which reflects forced custom display sizes via `wm size` and display rotation) over raw
+     * physical EDID mode dimensions [modeW]×[modeH].
+     */
+    fun resolveEffectiveDisplaySize(
+        modeW: Int,
+        modeH: Int,
+        realW: Int,
+        realH: Int,
+    ): Pair<Int, Int> {
+        if (realW >= 320 && realH >= 320) return realW to realH
+        if (modeW >= 320 && modeH >= 320) return modeW to modeH
+        return 1920 to 1080
+    }
+
+    fun isCustomForcedOverride(
+        activeW: Int,
+        activeH: Int,
+        nativeW: Int,
+        nativeH: Int,
+    ): Boolean {
+        if (activeW <= 0 || activeH <= 0 || nativeW <= 0 || nativeH <= 0) return false
+        val sameNormal = (activeW == nativeW && activeH == nativeH)
+        val sameRotated = (activeW == nativeH && activeH == nativeW)
+        return !sameNormal && !sameRotated
+    }
 
     /**
      * Computes symmetric (horizontalInsetPx, verticalInsetPx) margins for TV overscan compensation,

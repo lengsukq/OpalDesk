@@ -1105,20 +1105,14 @@ fun ConsoleDisplaySettingsTab(
                 iconKind = 0,
                 onClick = {
                     AppPrefs.setExternalUiScale(ctx, 1.25f)
+                    AppPrefs.setAutoCustomResolutionEnabled(ctx, false)
                     AppPrefs.setTrackpadSensitivity(ctx, AppPrefs.DEFAULT_TRACKPAD_SENSITIVITY)
                     BridgeClient.setPointerSpeedAsync(AppPrefs.DEFAULT_TRACKPAD_SENSITIVITY)
                     BridgeClient.updateDisplayPrefsAsync(targetFps = 0, windowDpiScalePct = 100)
                     if (extDisplay != null) {
-                        val best = extDisplay.supportedModes.firstOrNull()
-                        if (best != null) {
-                            BridgeClient.setExternalDisplayModeAsync(
-                                extDisplay.displayId, best.width, best.height, best.refreshRateHz.toFloat(),
-                            )
-                        } else {
-                            BridgeClient.setExternalDisplayModeAsync(extDisplay.displayId, 0, 0, 0f)
-                        }
+                        BridgeClient.setExternalDisplayModeAsync(extDisplay.displayId, 0, 0, 0f)
                     } else if (remote.connected) {
-                        BridgeClient.setExternalDisplayModeAsync(-1, remote.width, remote.height, 60f)
+                        BridgeClient.setExternalDisplayModeAsync(-1, 0, 0, 0f)
                     }
                     Toast.makeText(ctx, "已恢复全自动最佳分辨率、帧率与 DPI 配置", Toast.LENGTH_SHORT).show()
                 },
@@ -1275,100 +1269,14 @@ fun ConsoleDisplaySettingsTab(
         }
 
         ConsoleSectionTitle("画质与自适应")
-        // 1. Unified Output Resolution & Refresh Rate Switcher (USB-C / HDMI EDID & Wi-Fi / USB Cast)
+        // 1. Unified Output Resolution & Refresh Rate Switcher (EDID + Custom Width×Height×Hz + Auto-Revert)
         MacGlassSectionCard {
             OpalText(text = "分辨率与刷新率", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(4.dp))
-            when {
-                extDisplay != null -> {
-                    val outPrefix = if (extDisplay.isWirelessDisplay) "当前无线电视输出" else "当前物理外接输出"
-                    OpalText(
-                        text = "$outPrefix：${extDisplay.name} · ${extDisplay.width}×${extDisplay.height} @ ${extDisplay.refreshRateHz}Hz",
-                        fontSize = 12.sp,
-                        color = OpalPalette.AccentCyan,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    val modes = extDisplay.supportedModes
-                    if (modes.isNotEmpty()) {
-                        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            modes.chunked(2).forEach { pair ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                                    pair.forEach { m ->
-                                        val isCurrent = m.width == extDisplay.width &&
-                                            m.height == extDisplay.height &&
-                                            m.refreshRateHz == extDisplay.refreshRateHz
-                                        OpalButton(
-                                            label = "${m.width}×${m.height} · ${m.refreshRateHz}Hz",
-                                            compact = true,
-                                            filled = isCurrent,
-                                            accent = if (isCurrent) OpalPalette.AccentBlue else OpalPalette.TextSecondary,
-                                            onClick = {
-                                                BridgeClient.setExternalDisplayModeAsync(
-                                                    extDisplay.displayId, m.width, m.height, m.refreshRateHz.toFloat(),
-                                                ) { ok ->
-                                                    val msg = if (ok) "已切换输出至 ${m.width}×${m.height}@${m.refreshRateHz}Hz"
-                                                    else "当前显示器未接受该模式"
-                                                    Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
-                                                }
-                                            },
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                    }
-                                    if (pair.size == 1) Spacer(Modifier.weight(1f))
-                                }
-                            }
-                        }
-                    }
-                }
-                remote.connected -> {
-                    val curFps = (remote.fpsX100 / 100).coerceAtLeast(30)
-                    OpalText(
-                        text = "当前${remote.channelLabel}输出：${remote.peerName.ifBlank { "对端设备" }} · ${remote.width}×${remote.height} @ ${curFps}Hz",
-                        fontSize = 12.sp,
-                        color = OpalPalette.AccentCyan,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    val castPresets = listOf(
-                        Triple(1920, 1080, 60),
-                        Triple(1920, 1080, 120),
-                        Triple(2560, 1440, 60),
-                        Triple(2560, 1440, 120),
-                        Triple(2560, 1600, 60),
-                        Triple(2560, 1600, 120),
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                        castPresets.chunked(2).forEach { pair ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                                pair.forEach { (w, h, fps) ->
-                                    val isCurrent = remote.width == w && remote.height == h && abs(curFps - fps) <= 3
-                                    OpalButton(
-                                        label = "${w}×${h} · ${fps}Hz",
-                                        compact = true,
-                                        filled = isCurrent,
-                                        accent = if (isCurrent) OpalPalette.AccentBlue else OpalPalette.TextSecondary,
-                                        onClick = {
-                                            BridgeClient.setExternalDisplayModeAsync(-1, w, h, fps.toFloat()) { ok ->
-                                                val msg = if (ok) "已动态切换投屏至 ${w}×${h}@${fps}Hz"
-                                                else "切换投屏分辨率失败"
-                                                Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
-                                            }
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
-                                if (pair.size == 1) Spacer(Modifier.weight(1f))
-                            }
-                        }
-                    }
-                }
-                else -> {
-                    OpalText(
-                        text = "当前未连接 USB-C / HDMI 外接显示器或无线/USB 投屏；任一输出通道连接后，均可在此使用同一套界面直接切换分辨率与刷新率。",
-                        fontSize = 12.sp,
-                        color = OpalPalette.TextSecondary,
-                    )
-                }
-            }
+            Spacer(Modifier.height(6.dp))
+            OutputResolutionSectionContent(
+                extDisplay = extDisplay,
+                remote = remote,
+            )
         }
 
         // 3. Target Frame Rate & Output UI Scale (Unified for USB-C & Casting; DPI is adjusted visually inside DeX)

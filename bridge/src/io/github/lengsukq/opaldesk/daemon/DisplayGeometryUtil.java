@@ -300,6 +300,89 @@ public final class DisplayGeometryUtil {
     }
 
     /**
+     * Validates and even-aligns a custom external display size override ({@code wm size WxH -d <id>}).
+     * Supports both landscape and portrait dimensions up to 4K / ultrawide, returning {@code null}
+     * when {@code width <= 0} or {@code height <= 0}.
+     */
+    public static int[] alignExternalForcedSize(int width, int height) {
+        if (width <= 0 || height <= 0) return null;
+        boolean portrait = height > width;
+        int minW = portrait ? MIN_SHORT_EDGE : MIN_LONG_EDGE;
+        int maxW = portrait ? 2560 : MAX_ENCODER_LONG_EDGE;
+        int minH = portrait ? MIN_LONG_EDGE : MIN_SHORT_EDGE;
+        int maxH = portrait ? MAX_ENCODER_LONG_EDGE : 2560;
+        int safeW = width;
+        int safeH = height;
+        if (safeW > maxW || safeH > maxH) {
+            double scale = Math.min((double) maxW / safeW, (double) maxH / safeH);
+            safeW = (int) Math.round(safeW * scale);
+            safeH = (int) Math.round(safeH * scale);
+        }
+        return new int[]{
+                alignEven(safeW, minW, maxW),
+                alignEven(safeH, minH, maxH)
+        };
+    }
+
+    /**
+     * Picks the best matching EDID mode index for an exact {@code reqW x reqH} request.
+     * Matches either normal orientation or swapped orientation when physical EDID is reported rotated;
+     * when {@code reqFps > 1f}, chooses the closest refresh rate, otherwise chooses the highest refresh rate.
+     */
+    public static int selectBestEdidModeIndex(
+            int[] widths, int[] heights, float[] rates, int reqW, int reqH, float reqFps) {
+        if (widths == null || heights == null || rates == null) return -1;
+        int count = Math.min(widths.length, Math.min(heights.length, rates.length));
+        if (count <= 0 || reqW <= 0 || reqH <= 0) return -1;
+        int bestIdx = -1;
+        float bestScore = Float.MAX_VALUE;
+        for (int i = 0; i < count; i++) {
+            if (widths[i] == reqW && heights[i] == reqH) {
+                float r = rates[i];
+                float score = (reqFps > 1f) ? Math.abs(r - reqFps) : -r;
+                if (bestIdx < 0 || score < bestScore) {
+                    bestIdx = i;
+                    bestScore = score;
+                }
+            }
+        }
+        return bestIdx;
+    }
+
+    /**
+     * When applying a custom forced size not present in EDID, optionally finds an EDID mode at the
+     * display's current physical dimensions (or highest native resolution) that matches {@code reqFps}.
+     */
+    public static int selectBestEdidModeForRefreshRate(
+            int[] widths, int[] heights, float[] rates, int curW, int curH, float reqFps) {
+        if (widths == null || heights == null || rates == null || reqFps <= 1f) return -1;
+        int count = Math.min(widths.length, Math.min(heights.length, rates.length));
+        if (count <= 0) return -1;
+        int sameSizeBest = -1;
+        float sameSizeDiff = Float.MAX_VALUE;
+        int anyBest = -1;
+        float anyDiff = Float.MAX_VALUE;
+        long anyBestArea = -1L;
+        for (int i = 0; i < count; i++) {
+            float diff = Math.abs(rates[i] - reqFps);
+            if (diff > 2.5f) continue;
+            if (curW > 0 && curH > 0 && widths[i] == curW && heights[i] == curH) {
+                if (sameSizeBest < 0 || diff < sameSizeDiff) {
+                    sameSizeBest = i;
+                    sameSizeDiff = diff;
+                }
+            }
+            long area = (long) widths[i] * (long) heights[i];
+            if (anyBest < 0 || diff + 0.1f < anyDiff || (Math.abs(diff - anyDiff) <= 0.1f && area > anyBestArea)) {
+                anyBest = i;
+                anyDiff = diff;
+                anyBestArea = area;
+            }
+        }
+        return sameSizeBest >= 0 ? sameSizeBest : anyBest;
+    }
+
+    /**
      * Computes the usable desktop work area (excluding top menu bar and bottom floating dock).
      */
     public static IntRect computeWorkArea(int canvasW, int canvasH, int canvasDpi) {

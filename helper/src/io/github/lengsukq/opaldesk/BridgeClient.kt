@@ -17,6 +17,7 @@ import android.view.Surface
 import androidx.compose.ui.geometry.Offset
 import io.github.lengsukq.opaldesk.cast.OpalPeerCastMutex
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
+import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorScene
 import io.github.lengsukq.opaldesk.protocol.CompositorSceneParser
@@ -371,11 +372,15 @@ object BridgeClient {
         } ?: DaemonStatus(connected = false).also { _statusFlow.value = it }
     }
 
+    @Volatile
+    private var lastAutoResAppliedRemoteDisplayId: Int = -1
+
     fun refreshRemoteStatus(): RemoteStreamStatus {
         val svc = getService()
         if (svc == null) {
             val empty = RemoteStreamStatus()
             _remoteStatusFlow.value = empty
+            lastAutoResAppliedRemoteDisplayId = -1
             return empty
         }
         return transact(svc, BridgeProtocol.Tx.GET_REMOTE_STREAM_STATUS, oneway = false, writeArgs = {}) { r ->
@@ -395,7 +400,25 @@ object BridgeClient {
                 lanIp = r.readString().orEmpty(),
                 desktopDisplayId = if (r.dataAvail() >= 4) r.readInt() else -1,
             )
-        }?.also { _remoteStatusFlow.value = it } ?: _remoteStatusFlow.value
+        }?.also { st ->
+            _remoteStatusFlow.value = st
+            maybeAutoApplyCustomResolutionToRemote(st)
+        } ?: _remoteStatusFlow.value
+    }
+
+    private fun maybeAutoApplyCustomResolutionToRemote(st: RemoteStreamStatus) {
+        if (!st.hasActiveDesktopCast || st.desktopDisplayId <= 0) {
+            lastAutoResAppliedRemoteDisplayId = -1
+            return
+        }
+        if (st.desktopDisplayId == lastAutoResAppliedRemoteDisplayId) return
+        lastAutoResAppliedRemoteDisplayId = st.desktopDisplayId
+        val ctx = appContext ?: return
+        if (!AppPrefs.isAutoCustomResolutionEnabled(ctx)) return
+        val pref = AppPrefs.getDefaultCustomResolution(ctx)
+        if (pref.width != st.width || pref.height != st.height) {
+            setExternalDisplayModeAsync(-1, pref.width, pref.height, pref.fps.toFloat())
+        }
     }
 
     fun setWifiStreamEnabledAsync(enabled: Boolean, port: Int = 19878, onDone: (() -> Unit)? = null) {
@@ -528,6 +551,8 @@ object BridgeClient {
             if (ok) {
                 refreshRemoteStatus()
                 refreshStatus()
+                BridgeService.requestExternalDisplayRescan(0L)
+                BridgeService.requestExternalDisplayRescan(350L)
             }
             if (onDone != null) mainHandler.post { onDone(ok) }
         }

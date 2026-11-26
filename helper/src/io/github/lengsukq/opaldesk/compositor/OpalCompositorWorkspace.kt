@@ -162,6 +162,7 @@ fun OpalCompositorWorkspace(
     val status by BridgeClient.statusFlow.collectAsState()
     val scene by BridgeClient.sceneFlow.collectAsState()
     val remote by BridgeClient.remoteStatusFlow.collectAsState()
+    val extDisplay by io.github.lengsukq.opaldesk.BridgeService.externalDisplayFlow.collectAsState()
     val pendingPairing by BridgeClient.pendingPairingFlow.collectAsState()
     val extSession by ExternalTrackpadBridge.sessionFlow.collectAsState()
     val phoneTrackpadVisible by ExternalTrackpadBridge.phoneTrackpadVisibleFlow.collectAsState()
@@ -211,6 +212,7 @@ fun OpalCompositorWorkspace(
     var showControlCenter by remember { mutableStateOf(false) }
     var controlCenterInitialTab by remember { mutableStateOf(0) }
     var showDpiPopover by remember { mutableStateOf(false) }
+    var showResolutionModal by remember { mutableStateOf(false) }
     var showShortcutsPopover by remember { mutableStateOf(false) }
     var showFeatureGuide by remember { mutableStateOf(false) }
     var showNotificationCenter by remember { mutableStateOf(false) }
@@ -244,6 +246,7 @@ fun OpalCompositorWorkspace(
         showExposeOverview = false
         showControlCenter = false
         showDpiPopover = false
+        showResolutionModal = false
         showShortcutsPopover = false
         showFeatureGuide = false
         showNotificationCenter = false
@@ -488,8 +491,8 @@ fun OpalCompositorWorkspace(
                 modifier = Modifier
                     .fillMaxSize()
                     .onTapOrContextAction(
-                        showAppDrawer, showExposeOverview, showControlCenter, showDpiPopover, showShortcutsPopover,
-                        showFeatureGuide, contextMenuTarget, guideIconMenuPos, wallpaperMenuPos,
+                        showAppDrawer, showExposeOverview, showControlCenter, showDpiPopover, showResolutionModal,
+                        showShortcutsPopover, showFeatureGuide, contextMenuTarget, guideIconMenuPos, wallpaperMenuPos,
                         onPrimaryTap = { dismissAllPopovers() },
                         onContextAction = { pos ->
                             dismissAllPopovers()
@@ -918,6 +921,14 @@ fun OpalCompositorWorkspace(
                         showControlCenter = false
                         showDpiPopover = true
                     },
+                    onOpenResolutionSettings = if (isExternalMonitor || extDisplay != null || remote.connected) {
+                        {
+                            showControlCenter = false
+                            showResolutionModal = true
+                        }
+                    } else {
+                        null
+                    },
                     onOpenKeyboardShortcuts = {
                         showControlCenter = false
                         showShortcutsPopover = true
@@ -964,6 +975,28 @@ fun OpalCompositorWorkspace(
                         .padding(top = (CompositorGeometry.TOP_BAR_DP + 8f).dp, start = 12.dp, end = 12.dp)
                         .zIndex(10_022f),
                 )
+            }
+
+            // In-DeX Custom Resolution & Refresh Rate Modal
+            if (showResolutionModal) {
+                val resMaxH = (maxHeight - (CompositorGeometry.TOP_BAR_DP + effectiveDockInsetDp + 28f).dp)
+                    .coerceAtLeast(300.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(10_027f)
+                        .background(OpalPalette.ScrimColor.copy(alpha = 0.28f))
+                        .pointerInput(Unit) { detectTapGestures { showResolutionModal = false } }
+                        .padding(horizontal = 16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    io.github.lengsukq.opaldesk.ui.DexCustomResolutionWindow(
+                        extDisplay = extDisplay,
+                        remote = remote,
+                        maxHeight = resMaxH,
+                        onDismiss = { showResolutionModal = false },
+                    )
+                }
             }
 
             // In-DeX Keyboard Shortcuts Cheatsheet & Toggle Popover

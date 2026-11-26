@@ -272,14 +272,15 @@ fun ConsoleLogsTab(
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = OpalPalette.TextPrimary,
-                            maxLines = 1,
+                            maxLines = 2,
                         )
                     }
                     OpalText(
                         text = "问题解答、最新版本与需求改动都会在群内第一时间同步",
-                        fontSize = 10.5.sp,
+                        fontSize = 11.sp,
                         color = OpalPalette.TextSecondary,
-                        maxLines = 1,
+                        lineHeight = 15.sp,
+                        maxLines = 2,
                     )
                 }
                 Spacer(Modifier.width(10.dp))
@@ -350,6 +351,12 @@ fun ConsoleLogsTab(
                 )
             }
         }
+
+        // 1.5 Feedback Tracking & Resolution Status
+        FeedbackTrackingSection(
+            currentAppVersion = appVersion,
+            onOpenUpdateModal = onOpenUpdateModal,
+        )
 
         // 2. Filters & Log Stream
         ConsoleSectionTitle("实时日志流")

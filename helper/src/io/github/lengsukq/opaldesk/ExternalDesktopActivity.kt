@@ -639,6 +639,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         override fun closeExternalDesktop() = runOnUiThread { finish() }
     }
 
+    @Suppress("DEPRECATION")
     private fun publishDirectSession(currentDisplayId: Int, requestedWireless: Boolean = false): ExternalDesktopSession {
         if (currentDisplayId <= Display.DEFAULT_DISPLAY) {
             return ExternalDesktopSession()
@@ -646,9 +647,17 @@ class ExternalDesktopActivity : ComponentActivity() {
         val curDisplay = displayManager?.getDisplay(currentDisplayId)
             ?: display?.takeIf { it.displayId == currentDisplayId }
         val curMode = curDisplay?.mode
-        val widthPx = curMode?.physicalWidth?.coerceAtLeast(640) ?: resources.displayMetrics.widthPixels.coerceAtLeast(640)
-        val heightPx = curMode?.physicalHeight?.coerceAtLeast(480) ?: resources.displayMetrics.heightPixels.coerceAtLeast(480)
-        val hz = (curMode?.refreshRate ?: 60f).toInt().coerceAtLeast(24)
+        val realPt = android.graphics.Point()
+        if (curDisplay != null) {
+            runCatching { curDisplay.getRealSize(realPt) }
+        }
+        val (widthPx, heightPx) = ExternalDisplayPolicy.resolveEffectiveDisplaySize(
+            modeW = curMode?.physicalWidth ?: resources.displayMetrics.widthPixels,
+            modeH = curMode?.physicalHeight ?: resources.displayMetrics.heightPixels,
+            realW = realPt.x,
+            realH = realPt.y,
+        )
+        val hz = (curMode?.refreshRate ?: 60f).roundToInt().coerceAtLeast(24)
         val dispName = curDisplay?.name ?: "外接屏"
         val isRemoteCast = ExternalDisplayPolicy.isRemoteCastDisplay(
             displayId = currentDisplayId,

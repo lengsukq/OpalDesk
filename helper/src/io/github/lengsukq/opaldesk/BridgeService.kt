@@ -12,6 +12,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.graphics.Point
 import android.hardware.display.DisplayManager
 import android.media.MediaRouter
 import android.os.Build
@@ -21,6 +22,7 @@ import android.os.Looper
 import android.os.Process
 import android.util.Log
 import android.view.Display
+import kotlin.math.roundToInt
 import io.github.lengsukq.opaldesk.adb.AdbProcessRunner
 import io.github.lengsukq.opaldesk.cast.OpalPeerDiscovery
 import io.github.lengsukq.opaldesk.cast.PeerFloatingAppService
@@ -120,12 +122,24 @@ class BridgeService : Service() {
         @Volatile
         var sUserStopping: Boolean = false
 
+        @Volatile
+        private var activeInstance: BridgeService? = null
+
         private val _externalDisplayFlow = MutableStateFlow<ExternalDisplayInfo?>(null)
         val externalDisplayFlow: StateFlow<ExternalDisplayInfo?> = _externalDisplayFlow.asStateFlow()
 
         private val _detectedExternalDisplaysFlow = MutableStateFlow<List<ExternalDisplayInfo>>(emptyList())
         val detectedExternalDisplaysFlow: StateFlow<List<ExternalDisplayInfo>> =
             _detectedExternalDisplaysFlow.asStateFlow()
+
+        fun requestExternalDisplayRescan(delayMs: Long = 0L) {
+            val svc = activeInstance ?: return
+            if (delayMs > 0L) {
+                svc.handler.postDelayed({ svc.scanExternalDisplays(autoLaunchNew = false) }, delayMs)
+            } else {
+                svc.handler.post { svc.scanExternalDisplays(autoLaunchNew = false) }
+            }
+        }
 
         /**
          * Launches [ExternalDesktopActivity] onto [displayId] using the optimal hosting mode:
@@ -279,9 +293,14 @@ class BridgeService : Service() {
         val supportedModes: List<ExternalDisplayMode> = emptyList(),
         val transport: ExternalDisplayTransport = ExternalDisplayTransport.WIRED,
         val isPresentationCapable: Boolean = true,
+        val nativeWidth: Int = width,
+        val nativeHeight: Int = height,
     ) {
         val isWirelessDisplay: Boolean
             get() = transport == ExternalDisplayTransport.WIRELESS_TV
+
+        val isCustomSizeOverride: Boolean
+            get() = ExternalDisplayPolicy.isCustomForcedOverride(width, height, nativeWidth, nativeHeight)
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -332,6 +351,7 @@ class BridgeService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         startSessionForeground()
         displayManager = (getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)?.also { dm ->
             dm.registerDisplayListener(displayListener, handler)
@@ -378,6 +398,7 @@ class BridgeService : Service() {
     }
 
     override fun onDestroy() {
+        if (activeInstance === this) activeInstance = null
         if (screenWakeReceiverRegistered) {
             runCatching { unregisterReceiver(screenWakeReceiver) }
             screenWakeReceiverRegistered = false
@@ -402,6 +423,7 @@ class BridgeService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    @Suppress("DEPRECATION")
     private fun scanExternalDisplays(autoLaunchNew: Boolean) {
         val dm = displayManager ?: return
         val remoteDesktopId = BridgeClient.remoteStatusFlow.value.desktopDisplayId
@@ -409,25 +431,29 @@ class BridgeService : Service() {
         val allInfos = inspected.map { item ->
             val d = item.display
             val mode = d.mode
-            val modes = d.supportedModes
+            val rawModes = d.supportedModes
                 .orEmpty()
-                .filter { ExternalDisplayPolicy.isSupportedExternalMode(it.physicalWidth, it.physicalHeight, it.refreshRate) }
-                .map { ExternalDisplayMode(it.physicalWidth, it.physicalHeight, it.refreshRate.toInt().coerceAtLeast(24)) }
-                .distinct()
-                .sortedWith(
-                    compareByDescending<ExternalDisplayMode> { it.width.toLong() * it.height.toLong() }
-                        .thenByDescending { it.refreshRateHz },
-                )
-                .take(8)
+                .map { Triple(it.physicalWidth, it.physicalHeight, it.refreshRate) }
+            val modes = ExternalDisplayPolicy.curateExternalDisplayModes(rawModes, maxCount = 18)
+                .map { ExternalDisplayMode(it.width, it.height, it.refreshRateHz) }
+            val modeW = mode?.physicalWidth ?: 0
+            val modeH = mode?.physicalHeight ?: 0
+            val realPt = Point()
+            runCatching { d.getRealSize(realPt) }
+            val (effW, effH) = ExternalDisplayPolicy.resolveEffectiveDisplaySize(modeW, modeH, realPt.x, realPt.y)
+            val nativeW = if (modeW >= 320) modeW else effW
+            val nativeH = if (modeH >= 320) modeH else effH
             ExternalDisplayInfo(
                 displayId = d.displayId,
                 name = item.displayName,
-                width = mode?.physicalWidth ?: 1920,
-                height = mode?.physicalHeight ?: 1080,
-                refreshRateHz = (mode?.refreshRate ?: 60f).toInt().coerceAtLeast(24),
+                width = effW,
+                height = effH,
+                refreshRateHz = (mode?.refreshRate ?: 60f).roundToInt().coerceAtLeast(24),
                 supportedModes = modes,
                 transport = item.transport,
                 isPresentationCapable = item.isPresentationCapable,
+                nativeWidth = nativeW,
+                nativeHeight = nativeH,
             )
         }
         _detectedExternalDisplaysFlow.value = allInfos
@@ -440,13 +466,23 @@ class BridgeService : Service() {
         }
         _externalDisplayFlow.value = primary
 
-        if (autoLaunchNew
-            && primary.displayId != lastProjectedDisplayId
-            && AppPrefs.isAutoExternalDisplayEnabled(this)
-            && BridgeClient.statusFlow.value.connected
-        ) {
-            lastProjectedDisplayId = primary.displayId
-            projectToExternalDisplay(this, primary.displayId, primary.transport, primary.isPresentationCapable)
+        val isNewPrimary = autoLaunchNew && primary.displayId != lastProjectedDisplayId
+        if (isNewPrimary && BridgeClient.statusFlow.value.connected) {
+            if (AppPrefs.isAutoCustomResolutionEnabled(this)) {
+                val pref = AppPrefs.getDefaultCustomResolution(this)
+                if (pref.width != primary.width || pref.height != primary.height) {
+                    BridgeClient.setExternalDisplayModeAsync(
+                        primary.displayId,
+                        pref.width,
+                        pref.height,
+                        pref.fps.toFloat(),
+                    )
+                }
+            }
+            if (AppPrefs.isAutoExternalDisplayEnabled(this)) {
+                lastProjectedDisplayId = primary.displayId
+                projectToExternalDisplay(this, primary.displayId, primary.transport, primary.isPresentationCapable)
+            }
         }
     }
 

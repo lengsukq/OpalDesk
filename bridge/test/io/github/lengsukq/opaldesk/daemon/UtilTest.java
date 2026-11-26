@@ -18,6 +18,8 @@ import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -198,5 +200,55 @@ public class UtilTest {
         cfg2.loadAll();
         assertEquals(2, cfg2.getAppLaunchCount("com.tencent.mm"));
         assertEquals(1, cfg2.getAppLaunchCount("tv.danmaku.bili"));
+    }
+
+    @Test
+    public void testAlignExternalForcedSizeLandscapePortraitAndClamping() {
+        assertNull(DisplayGeometryUtil.alignExternalForcedSize(0, 1080));
+        assertNull(DisplayGeometryUtil.alignExternalForcedSize(1920, -10));
+
+        // 21:9 ultrawide preserved & even-aligned
+        int[] uw = DisplayGeometryUtil.alignExternalForcedSize(3441, 1441);
+        assertNotNull(uw);
+        assertEquals(3440, uw[0]);
+        assertEquals(1440, uw[1]);
+
+        // 4K landscape preserved
+        int[] uhd = DisplayGeometryUtil.alignExternalForcedSize(3840, 2160);
+        assertNotNull(uhd);
+        assertEquals(3840, uhd[0]);
+        assertEquals(2160, uhd[1]);
+
+        // Portrait external monitor preserved (not squashed to landscape!)
+        int[] port = DisplayGeometryUtil.alignExternalForcedSize(1080, 1920);
+        assertNotNull(port);
+        assertEquals(1080, port[0]);
+        assertEquals(1920, port[1]);
+
+        // Oversized input scaled down proportionally within 4096x2560
+        int[] huge = DisplayGeometryUtil.alignExternalForcedSize(5120, 2880);
+        assertNotNull(huge);
+        assertTrue(huge[0] <= 4096 && huge[1] <= 2560);
+        assertEquals(0, huge[0] & 1);
+        assertEquals(0, huge[1] & 1);
+    }
+
+    @Test
+    public void testSelectBestEdidModeIndexAndRefreshRateFallback() {
+        int[] ws = new int[]{3840, 3840, 2560, 2560, 1920, 1920};
+        int[] hs = new int[]{2160, 2160, 1440, 1440, 1080, 1080};
+        float[] rs = new float[]{30f, 60f, 60f, 120f, 60f, 144f};
+
+        // Exact resolution + target refresh rate
+        assertEquals(3, DisplayGeometryUtil.selectBestEdidModeIndex(ws, hs, rs, 2560, 1440, 120f));
+        // Exact resolution + auto refresh rate (0f) picks highest Hz
+        assertEquals(5, DisplayGeometryUtil.selectBestEdidModeIndex(ws, hs, rs, 1920, 1080, 0f));
+        // Custom 21:9 ultrawide not in EDID returns -1
+        assertEquals(-1, DisplayGeometryUtil.selectBestEdidModeIndex(ws, hs, rs, 3440, 1440, 60f));
+
+        // When forcing custom 3440x1440 @ 120Hz while monitor is currently at 2560x1440, picks 2560x1440@120
+        assertEquals(3, DisplayGeometryUtil.selectBestEdidModeForRefreshRate(ws, hs, rs, 2560, 1440, 120f));
+        // When requesting 60Hz at 3840x2160, picks 3840x2160@60
+        assertEquals(1, DisplayGeometryUtil.selectBestEdidModeForRefreshRate(ws, hs, rs, 3840, 2160, 60f));
     }
 }

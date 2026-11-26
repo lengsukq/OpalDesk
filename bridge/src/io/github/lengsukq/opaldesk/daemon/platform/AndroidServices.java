@@ -19,6 +19,7 @@ import android.view.InputEvent;
 import android.view.MotionEvent;
 
 import io.github.lengsukq.opaldesk.daemon.BridgeBuildConfig;
+import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil;
 import io.github.lengsukq.opaldesk.daemon.input.ImmsDumpInspector;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.util.ShellCommand;
@@ -31,8 +32,12 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -84,8 +89,11 @@ public final class AndroidServices {
     public final Method shouldShowSystemDecorsMethod;
     public final Method setIgnoreOrientationRequestMethod;
     public final Method setRemoveContentModeMethod;
+    public final Method setForcedDisplaySizeMethod;
+    public final Method clearForcedDisplaySizeMethod;
 
     private final Object displayPowerLock = new Object();
+    private final Set<Integer> forcedExternalSizeDisplays = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final HostScreenWakeMonitor wakeMonitor = new HostScreenWakeMonitor();
     private volatile boolean hostScreenOff = false;
     private volatile boolean displayControlResolved = false;
@@ -147,6 +155,12 @@ public final class AndroidServices {
                 : null;
         this.setRemoveContentModeMethod = (iWindowManager != null)
                 ? findMethodOrNull(iWindowManager.getClass(), "setRemoveContentMode", int.class, int.class)
+                : null;
+        this.setForcedDisplaySizeMethod = (iWindowManager != null)
+                ? findMethodOrNull(iWindowManager.getClass(), "setForcedDisplaySize", int.class, int.class, int.class)
+                : null;
+        this.clearForcedDisplaySizeMethod = (iWindowManager != null)
+                ? findMethodOrNull(iWindowManager.getClass(), "clearForcedDisplaySize", int.class)
                 : null;
     }
 
@@ -727,8 +741,15 @@ public final class AndroidServices {
     }
 
     /**
-     * Switches a physical external display's active EDID resolution & refresh rate via
-     * {@code DisplayManager.setUserPreferredDisplayMode} (or resets when {@code width <= 0}).
+     * Switches a physical external display's active resolution & refresh rate:
+     * <ol>
+     *   <li>When {@code width <= 0 || height <= 0}: clears both forced logical size and EDID preference.</li>
+     *   <li>When {@code (width, height)} matches an EDID {@link Display.Mode}: clears any prior forced size
+     *       and switches the hardware EDID mode via {@code DisplayManager.setUserPreferredDisplayMode}.</li>
+     *   <li>Otherwise (custom resolution or incomplete EDID): applies even-aligned AOSP
+     *       {@code IWindowManager.setForcedDisplaySize(displayId, w, h)} (equivalent to
+     *       {@code cmd window size WxH -d <displayId>}) strictly for {@code displayId > 0}.</li>
+     * </ol>
      */
     public boolean setExternalDisplayMode(int displayId, int width, int height, float fps) {
         if (displayId <= 0 || displayManager == null) return false;
@@ -736,29 +757,63 @@ public final class AndroidServices {
             Display disp = displayManager.getDisplay(displayId);
             if (disp == null) return false;
             if (width <= 0 || height <= 0) {
-                Method clearM = findMethodOrNull(DisplayManager.class, "clearUserPreferredDisplayMode", int.class);
-                if (clearM != null) {
-                    clearM.invoke(displayManager, displayId);
-                    return true;
-                }
-                return false;
+                boolean clearedForced = clearForcedExternalDisplaySize(displayId);
+                boolean clearedEdid = clearUserPreferredDisplayMode(displayId);
+                System.out.println("OPALDESK_RESET_DISP_MODE id=" + displayId
+                        + " forcedCleared=" + clearedForced + " edidCleared=" + clearedEdid);
+                return clearedForced || clearedEdid;
             }
             Display.Mode[] modes = disp.getSupportedModes();
-            if (modes == null || modes.length == 0) return false;
-            Display.Mode chosen = null;
-            float bestDiff = Float.MAX_VALUE;
-            for (Display.Mode m : modes) {
-                if (m.getPhysicalWidth() == width && m.getPhysicalHeight() == height) {
-                    float diff = (fps > 1f) ? Math.abs(m.getRefreshRate() - fps) : -m.getRefreshRate();
-                    if (chosen == null || diff < bestDiff) {
-                        chosen = m;
-                        bestDiff = diff;
-                    }
+            int modeCount = (modes != null) ? modes.length : 0;
+            int[] widths = new int[modeCount];
+            int[] heights = new int[modeCount];
+            float[] rates = new float[modeCount];
+            for (int i = 0; i < modeCount; i++) {
+                widths[i] = modes[i].getPhysicalWidth();
+                heights[i] = modes[i].getPhysicalHeight();
+                rates[i] = modes[i].getRefreshRate();
+            }
+
+            int exactIdx = DisplayGeometryUtil.selectBestEdidModeIndex(widths, heights, rates, width, height, fps);
+            if (exactIdx >= 0) {
+                clearForcedExternalDisplaySize(displayId);
+                if (applyUserPreferredDisplayMode(displayId, modes[exactIdx])) {
+                    System.out.println("OPALDESK_SET_DISP_MODE_EDID id=" + displayId
+                            + " mode=" + widths[exactIdx] + "x" + heights[exactIdx] + "@" + rates[exactIdx]);
+                    return true;
                 }
             }
-            if (chosen == null) return false;
+
+            int[] aligned = DisplayGeometryUtil.alignExternalForcedSize(width, height);
+            if (aligned == null) return false;
+
+            if (fps > 1f && modeCount > 0) {
+                Display.Mode cur = disp.getMode();
+                int curW = (cur != null) ? cur.getPhysicalWidth() : 0;
+                int curH = (cur != null) ? cur.getPhysicalHeight() : 0;
+                int fpsIdx = DisplayGeometryUtil.selectBestEdidModeForRefreshRate(
+                        widths, heights, rates, curW, curH, fps);
+                if (fpsIdx >= 0) {
+                    applyUserPreferredDisplayMode(displayId, modes[fpsIdx]);
+                }
+            }
+
+            boolean forcedOk = setForcedExternalDisplaySize(displayId, aligned[0], aligned[1]);
+            System.out.println("OPALDESK_SET_DISP_MODE_FORCED id=" + displayId
+                    + " req=" + width + "x" + height + "@" + fps
+                    + " applied=" + aligned[0] + "x" + aligned[1] + " ok=" + forcedOk);
+            return forcedOk;
+        } catch (RuntimeException e) {
+            System.err.println("OPALDESK_SET_DISP_MODE_WARN id=" + displayId + ": " + unwrapMessage(e));
+        }
+        return false;
+    }
+
+    private boolean applyUserPreferredDisplayMode(int displayId, Display.Mode chosen) {
+        if (displayId <= 0 || chosen == null) return false;
+        try {
             Method setM = findMethodOrNull(DisplayManager.class, "setUserPreferredDisplayMode", int.class, Display.Mode.class);
-            if (setM != null) {
+            if (setM != null && displayManager != null) {
                 setM.invoke(displayManager, displayId, chosen);
                 return true;
             }
@@ -771,9 +826,84 @@ public final class AndroidServices {
                 }
             }
         } catch (ReflectiveOperationException | RuntimeException e) {
-            System.err.println("OPALDESK_SET_DISP_MODE_WARN id=" + displayId + ": " + unwrapMessage(e));
+            System.err.println("OPALDESK_SET_EDID_MODE_WARN id=" + displayId + ": " + unwrapMessage(e));
         }
         return false;
+    }
+
+    private boolean clearUserPreferredDisplayMode(int displayId) {
+        if (displayId <= 0) return false;
+        try {
+            Method clearM = findMethodOrNull(DisplayManager.class, "clearUserPreferredDisplayMode", int.class);
+            if (clearM != null && displayManager != null) {
+                clearM.invoke(displayManager, displayId);
+                return true;
+            }
+            if (iDisplayManager != null) {
+                for (Method m : iDisplayManager.getClass().getMethods()) {
+                    if ("clearUserPreferredDisplayMode".equals(m.getName()) && m.getParameterCount() == 1) {
+                        m.invoke(iDisplayManager, displayId);
+                        return true;
+                    }
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.err.println("OPALDESK_CLEAR_EDID_MODE_WARN id=" + displayId + ": " + unwrapMessage(e));
+        }
+        return false;
+    }
+
+    /**
+     * Applies a logical display size override strictly on secondary displays ({@code displayId > 0}).
+     * Never modifies primary Display 0.
+     */
+    public boolean setForcedExternalDisplaySize(int displayId, int width, int height) {
+        if (displayId <= 0 || width <= 0 || height <= 0) return false;
+        if (iWindowManager != null && setForcedDisplaySizeMethod != null) {
+            try {
+                setForcedDisplaySizeMethod.invoke(iWindowManager, displayId, width, height);
+                forcedExternalSizeDisplays.add(displayId);
+                return true;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.err.println("OPALDESK_FORCED_SIZE_BINDER_WARN id=" + displayId + ": " + unwrapMessage(e));
+            }
+        }
+        ShellCommand.Result res = ShellCommand.runWithTimeout(
+                new String[]{"/system/bin/cmd", "window", "size", width + "x" + height, "-d", Integer.toString(displayId)},
+                2500L);
+        if (res.isSuccess()) {
+            forcedExternalSizeDisplays.add(displayId);
+            return true;
+        }
+        return false;
+    }
+
+    /** Clears any forced display size strictly on secondary displays ({@code displayId > 0}). */
+    public boolean clearForcedExternalDisplaySize(int displayId) {
+        if (displayId <= 0) return false;
+        forcedExternalSizeDisplays.remove(displayId);
+        if (iWindowManager != null && clearForcedDisplaySizeMethod != null) {
+            try {
+                clearForcedDisplaySizeMethod.invoke(iWindowManager, displayId);
+                return true;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.err.println("OPALDESK_CLEAR_FORCED_SIZE_BINDER_WARN id=" + displayId + ": " + unwrapMessage(e));
+            }
+        }
+        ShellCommand.Result res = ShellCommand.runWithTimeout(
+                new String[]{"/system/bin/cmd", "window", "size", "reset", "-d", Integer.toString(displayId)},
+                2500L);
+        return res.isSuccess();
+    }
+
+    /** Restores native sizing for all external displays overridden during this daemon lifecycle. */
+    public void clearAllForcedExternalDisplaySizes() {
+        List<Integer> snapshot = new ArrayList<>(forcedExternalSizeDisplays);
+        for (Integer id : snapshot) {
+            if (id != null && id > 0) {
+                clearForcedExternalDisplaySize(id);
+            }
+        }
     }
 
     /**

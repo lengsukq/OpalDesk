@@ -984,6 +984,7 @@ fun MacControlCenterPopover(
     onPickCustomWallpaper: () -> Unit,
     onSelectMouseTarget: (Int) -> Unit,
     onOpenDpiSettings: () -> Unit = {},
+    onOpenResolutionSettings: (() -> Unit)? = null,
     onOpenKeyboardShortcuts: () -> Unit = {},
     onOpenFeatureGuide: () -> Unit = {},
     onApplyTilingLayout: (WindowTilingLayout) -> Unit,
@@ -1791,6 +1792,38 @@ fun MacControlCenterPopover(
                             selectedIndex = fpsIdx,
                             onSelect = { onSelectTargetFps(fpsOpts[it]) },
                         )
+                    }
+
+                    // Compact Single-Row Custom Output Resolution Entry (External Monitor / Remote Cast)
+                    if (onOpenResolutionSettings != null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(infoCardShape)
+                                .background(OpalPalette.ChipFill)
+                                .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
+                                .clickable(onClick = onOpenResolutionSettings)
+                                .padding(horizontal = 11.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                OpalText(text = "分辨率自定义", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                OpalText(
+                                    text = "切换 EDID / 自由输入宽×高×刷新率",
+                                    fontSize = 10.sp,
+                                    color = OpalPalette.TextSecondary,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            OpalButton(
+                                label = "设置",
+                                compact = true,
+                                filled = false,
+                                accent = OpalPalette.AccentBlue,
+                                onClick = onOpenResolutionSettings,
+                            )
+                        }
                     }
 
                     // Compact Single-Row Real-time Visual DPI Entry

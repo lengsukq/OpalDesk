@@ -154,6 +154,7 @@ class SentryFeedbackTest {
             StandardCharsets.ISO_8859_1,
         )
         assertTrue(envelopeStr.contains("\"installation_id\":\"inst-9999-xxxx\""))
+        assertTrue(envelopeStr.contains("\"feedback_code\":\"A1B2C3D4\""))
         assertTrue(envelopeStr.contains("\"username\":\"leo\""))
         assertTrue(envelopeStr.contains("\"report_source\":\"manual_user_report\""))
         assertTrue(envelopeStr.contains("\"screenshot_attached\":false"))

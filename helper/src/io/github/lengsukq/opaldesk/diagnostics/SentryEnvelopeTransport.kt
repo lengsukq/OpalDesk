@@ -135,6 +135,7 @@ object SentryEnvelopeTransport {
             append("},")
             append("\"tags\":{")
             append("\"installation_id\":").append(jsonString(payload.installationId)).append(',')
+            append("\"feedback_code\":").append(jsonString(formatShortCode(cleanEventId))).append(',')
             append("\"report_source\":\"manual_user_report\",")
             append("\"app_version\":").append(jsonString(payload.appVersion)).append(',')
             append("\"android_api\":").append(jsonString(payload.androidApiLevel.toString())).append(',')
@@ -265,7 +266,7 @@ object SentryEnvelopeTransport {
     fun formatShortCode(eventId: String): String =
         eventId.replace("-", "").take(8).uppercase(Locale.ROOT)
 
-    private fun jsonString(raw: String): String = buildString(raw.length + 2) {
+    internal fun jsonString(raw: String): String = buildString(raw.length + 2) {
         append('"')
         for (ch in raw) {
             when (ch) {

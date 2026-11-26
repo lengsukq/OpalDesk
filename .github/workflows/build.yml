@@ -42,6 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       app_version: ${{ steps.build_apk.outputs.app_version }}
+      app_version_code: ${{ steps.build_apk.outputs.app_version_code }}
       apk_name: ${{ steps.build_apk.outputs.apk_name }}
       is_signed: ${{ steps.build_apk.outputs.is_signed }}
 
@@ -136,6 +137,7 @@ jobs:
           OPALDESK_EXPECTED_CERT_SHA256: ${{ secrets.OPALDESK_EXPECTED_CERT_SHA256 }}
           OPALDESK_SENTRY_DSN: ${{ secrets.OPALDESK_SENTRY_DSN }}
           OPALDESK_SENTRY_TUNNEL_URL: ${{ secrets.OPALDESK_SENTRY_TUNNEL_URL }}
+          OPALDESK_FEEDBACK_STATUS_URL: ${{ secrets.OPALDESK_FEEDBACK_STATUS_URL }}
         run: |
           chmod +x ./gradlew
           GRADLE_ARGS=(
@@ -153,6 +155,8 @@ jobs:
 
           VER="$(sed -nE 's/.*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' helper/build.gradle.kts | head -n 1)"
           VER="${VER:-0.0.1}"
+          VER_CODE="$(sed -nE 's/.*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' helper/build.gradle.kts | head -n 1)"
+          VER_CODE="${VER_CODE:-1}"
 
           mkdir -p build/out
           cp -f bridge/build/libs/opaldesk.jar build/out/opaldesk.jar
@@ -183,6 +187,7 @@ jobs:
 
           echo "APP_VERSION=$VER" >> "$GITHUB_ENV"
           echo "app_version=$VER" >> "$GITHUB_OUTPUT"
+          echo "app_version_code=$VER_CODE" >> "$GITHUB_OUTPUT"
           ls -lh build/out
 
       - name: Cleanup temporary keystore
@@ -409,3 +414,33 @@ jobs:
           prerelease: ${{ github.event_name == 'workflow_dispatch' && format('{0}', github.event.inputs.prerelease) == 'true' }}
           fail_on_unmatched_files: true
           files: ${{ steps.assets.outputs.files }}
+
+      - name: Register Sentry Release (optional)
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          APP_VERSION: ${{ needs.build-android.outputs.app_version }}
+          APP_VERSION_CODE: ${{ needs.build-android.outputs.app_version_code }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "${SENTRY_AUTH_TOKEN:-}" ] || [ -z "${SENTRY_ORG:-}" ] || [ -z "${SENTRY_PROJECT:-}" ]; then
+            echo "SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT not fully configured; skipping Sentry release registration."
+            exit 0
+          fi
+          export RELEASE_VER="io.github.lengsukq.opaldesk@${APP_VERSION}+${APP_VERSION_CODE}"
+          PAYLOAD=$(python3 -c '
+          import json, os
+          print(json.dumps({
+              "version": os.environ["RELEASE_VER"],
+              "projects": [os.environ["SENTRY_PROJECT"]],
+              "refs": [{"repository": os.environ["GITHUB_REPOSITORY"], "commit": os.environ["COMMIT_SHA"]}],
+          }))
+          ')
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "https://us.sentry.io/api/0/organizations/${SENTRY_ORG}/releases/" >/dev/null || \
+            echo "::warning::Sentry release registration failed (non-fatal)"

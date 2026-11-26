@@ -3,6 +3,8 @@ package io.github.lengsukq.opaldesk.prefs
 import android.content.Context
 import io.github.lengsukq.opaldesk.compositor.DockAppearancePolicy
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackQuotaStorage
+import io.github.lengsukq.opaldesk.external.CustomResolutionPolicy
+import io.github.lengsukq.opaldesk.external.CustomResolutionSpec
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -74,6 +76,11 @@ object AppPrefs {
     private const val KEY_GLOBAL_SHORTCUTS_ENABLED = "global_shortcuts_enabled_v1"
     private const val KEY_DISABLED_SHORTCUT_IDS = "disabled_shortcut_ids_v1"
     private const val KEY_SHOW_DESKTOP_GUIDE_ICON = "show_desktop_guide_icon_v1"
+    private const val KEY_CUSTOM_RES_PRESETS = "custom_resolution_presets_v1"
+    private const val KEY_AUTO_CUSTOM_RES_ENABLED = "auto_custom_resolution_enabled_v1"
+    private const val KEY_DEFAULT_CUSTOM_RES_W = "default_custom_resolution_w_v1"
+    private const val KEY_DEFAULT_CUSTOM_RES_H = "default_custom_resolution_h_v1"
+    private const val KEY_DEFAULT_CUSTOM_RES_FPS = "default_custom_resolution_fps_v1"
 
     private val DEFAULT_PINNED = listOf(
         "com.android.chrome",
@@ -164,6 +171,15 @@ object AppPrefs {
     private val _showDesktopGuideIconFlow = MutableStateFlow(true)
     val showDesktopGuideIconFlow: StateFlow<Boolean> = _showDesktopGuideIconFlow.asStateFlow()
 
+    private val _customResolutionPresetsFlow = MutableStateFlow<List<CustomResolutionSpec>>(emptyList())
+    val customResolutionPresetsFlow: StateFlow<List<CustomResolutionSpec>> = _customResolutionPresetsFlow.asStateFlow()
+
+    private val _autoCustomResolutionEnabledFlow = MutableStateFlow(false)
+    val autoCustomResolutionEnabledFlow: StateFlow<Boolean> = _autoCustomResolutionEnabledFlow.asStateFlow()
+
+    private val _defaultCustomResolutionFlow = MutableStateFlow(CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC)
+    val defaultCustomResolutionFlow: StateFlow<CustomResolutionSpec> = _defaultCustomResolutionFlow.asStateFlow()
+
     private fun prefs(ctx: Context?) =
         ctx?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -213,6 +229,15 @@ object AppPrefs {
             p.getString(KEY_DISABLED_SHORTCUT_IDS, null),
         )
         _showDesktopGuideIconFlow.value = p.getBoolean(KEY_SHOW_DESKTOP_GUIDE_ICON, true)
+        _customResolutionPresetsFlow.value = CustomResolutionPolicy.parsePresets(
+            p.getString(KEY_CUSTOM_RES_PRESETS, null),
+        )
+        _autoCustomResolutionEnabledFlow.value = p.getBoolean(KEY_AUTO_CUSTOM_RES_ENABLED, false)
+        val savedW = p.getInt(KEY_DEFAULT_CUSTOM_RES_W, CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC.width)
+        val savedH = p.getInt(KEY_DEFAULT_CUSTOM_RES_H, CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC.height)
+        val savedFps = p.getInt(KEY_DEFAULT_CUSTOM_RES_FPS, CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC.fps)
+        _defaultCustomResolutionFlow.value = CustomResolutionPolicy.sanitize(savedW, savedH, savedFps)
+            ?: CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC
     }
 
     private fun loadPkgList(p: android.content.SharedPreferences, key: String, fallbackKey: String): List<String> {
@@ -655,6 +680,54 @@ object AppPrefs {
     fun setDesktopGuideIconVisible(ctx: Context?, visible: Boolean) {
         prefs(ctx)?.edit()?.putBoolean(KEY_SHOW_DESKTOP_GUIDE_ICON, visible)?.apply()
         _showDesktopGuideIconFlow.value = visible
+    }
+
+    fun getCustomResolutionPresets(ctx: Context?): List<CustomResolutionSpec> {
+        hydrateFlows(ctx)
+        return _customResolutionPresetsFlow.value
+    }
+
+    fun addCustomResolutionPreset(ctx: Context?, spec: CustomResolutionSpec) {
+        hydrateFlows(ctx)
+        val updated = CustomResolutionPolicy.upsertPreset(_customResolutionPresetsFlow.value, spec)
+        prefs(ctx)?.edit()
+            ?.putString(KEY_CUSTOM_RES_PRESETS, CustomResolutionPolicy.serializePresets(updated))
+            ?.apply()
+        _customResolutionPresetsFlow.value = updated
+    }
+
+    fun removeCustomResolutionPreset(ctx: Context?, key: String) {
+        hydrateFlows(ctx)
+        val updated = CustomResolutionPolicy.removePreset(_customResolutionPresetsFlow.value, key)
+        prefs(ctx)?.edit()
+            ?.putString(KEY_CUSTOM_RES_PRESETS, CustomResolutionPolicy.serializePresets(updated))
+            ?.apply()
+        _customResolutionPresetsFlow.value = updated
+    }
+
+    fun isAutoCustomResolutionEnabled(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _autoCustomResolutionEnabledFlow.value
+    }
+
+    fun setAutoCustomResolutionEnabled(ctx: Context?, enabled: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_CUSTOM_RES_ENABLED, enabled)?.apply()
+        _autoCustomResolutionEnabledFlow.value = enabled
+    }
+
+    fun getDefaultCustomResolution(ctx: Context?): CustomResolutionSpec {
+        hydrateFlows(ctx)
+        return _defaultCustomResolutionFlow.value
+    }
+
+    fun setDefaultCustomResolution(ctx: Context?, spec: CustomResolutionSpec) {
+        val clean = CustomResolutionPolicy.sanitize(spec.width, spec.height, spec.fps, spec.label) ?: return
+        prefs(ctx)?.edit()
+            ?.putInt(KEY_DEFAULT_CUSTOM_RES_W, clean.width)
+            ?.putInt(KEY_DEFAULT_CUSTOM_RES_H, clean.height)
+            ?.putInt(KEY_DEFAULT_CUSTOM_RES_FPS, clean.fps)
+            ?.apply()
+        _defaultCustomResolutionFlow.value = clean
     }
 
     fun createFeedbackQuotaStorage(ctx: Context): FeedbackQuotaStorage {
