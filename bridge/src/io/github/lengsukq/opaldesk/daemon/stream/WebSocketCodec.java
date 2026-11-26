@@ -158,6 +158,20 @@ public final class WebSocketCodec {
             byte[] payload,
             int offset,
             int length) throws IOException {
+        writeBinaryFrame(out, writeLock, null, header18, payload, offset, length);
+    }
+
+    /**
+     * Zero-allocation overload reusing a caller-owned 10-byte WebSocket framing buffer under {@code writeLock}.
+     */
+    public static void writeBinaryFrame(
+            OutputStream out,
+            Object writeLock,
+            byte[] wsHeader10,
+            byte[] header18,
+            byte[] payload,
+            int offset,
+            int length) throws IOException {
         if (header18 == null || header18.length < OpalCastProtocol.HEADER_SIZE) {
             throw new IllegalArgumentException("header18 must have at least 18 bytes");
         }
@@ -166,7 +180,7 @@ public final class WebSocketCodec {
         }
         long totalLen = (long) OpalCastProtocol.HEADER_SIZE + length;
         synchronized (writeLock) {
-            writeServerFrameHeader(out, OPCODE_BINARY, totalLen);
+            writeServerFrameHeader(out, OPCODE_BINARY, totalLen, wsHeader10);
             out.write(header18, 0, OpalCastProtocol.HEADER_SIZE);
             if (length > 0) {
                 out.write(payload, offset, length);
@@ -217,7 +231,12 @@ public final class WebSocketCodec {
     }
 
     private static void writeServerFrameHeader(OutputStream out, int opcode, long payloadLen) throws IOException {
-        byte[] hdr = new byte[10];
+        writeServerFrameHeader(out, opcode, payloadLen, null);
+    }
+
+    private static void writeServerFrameHeader(
+            OutputStream out, int opcode, long payloadLen, byte[] reusableBuf) throws IOException {
+        byte[] hdr = (reusableBuf != null && reusableBuf.length >= 10) ? reusableBuf : new byte[10];
         hdr[0] = (byte) (0x80 | (opcode & 0x0F));
         int hdrLen;
         if (payloadLen <= MAX_LEN_7BIT) {

@@ -809,6 +809,53 @@ public final class AndroidServices {
         return false;
     }
 
+    /** Returns the active refresh rate (Hz) of {@code displayId}, or {@code 60f} if unavailable. */
+    public float getDisplayRefreshRate(int displayId) {
+        if (displayManager == null || displayId < 0) return 60f;
+        try {
+            Display disp = displayManager.getDisplay(displayId);
+            if (disp == null) return 60f;
+            Display.Mode cur = disp.getMode();
+            float hz = (cur != null && cur.getRefreshRate() > 1f) ? cur.getRefreshRate() : disp.getRefreshRate();
+            return DisplayGeometryUtil.clampFps(hz, 60f);
+        } catch (RuntimeException ignored) {
+            return 60f;
+        }
+    }
+
+    /** Switches an external physical display's EDID refresh rate at its current resolution. */
+    public boolean setExternalDisplayRefreshRate(int displayId, float fps) {
+        if (displayId <= 0 || displayManager == null || fps <= 1f) return false;
+        try {
+            Display disp = displayManager.getDisplay(displayId);
+            if (disp == null) return false;
+            Display.Mode[] modes = disp.getSupportedModes();
+            if (modes == null || modes.length == 0) return false;
+            int[] widths = new int[modes.length];
+            int[] heights = new int[modes.length];
+            float[] rates = new float[modes.length];
+            for (int i = 0; i < modes.length; i++) {
+                widths[i] = modes[i].getPhysicalWidth();
+                heights[i] = modes[i].getPhysicalHeight();
+                rates[i] = modes[i].getRefreshRate();
+            }
+            Display.Mode cur = disp.getMode();
+            int curW = (cur != null) ? cur.getPhysicalWidth() : 0;
+            int curH = (cur != null) ? cur.getPhysicalHeight() : 0;
+            int idx = DisplayGeometryUtil.selectBestEdidModeForRefreshRate(widths, heights, rates, curW, curH, fps);
+            if (idx < 0) return false;
+            boolean ok = applyUserPreferredDisplayMode(displayId, modes[idx]);
+            if (ok) {
+                System.out.println("OPALDESK_SET_EXT_FPS_EDID id=" + displayId
+                        + " mode=" + widths[idx] + "x" + heights[idx] + "@" + rates[idx]);
+            }
+            return ok;
+        } catch (RuntimeException e) {
+            System.err.println("OPALDESK_SET_EXT_FPS_WARN id=" + displayId + ": " + unwrapMessage(e));
+            return false;
+        }
+    }
+
     private boolean applyUserPreferredDisplayMode(int displayId, Display.Mode chosen) {
         if (displayId <= 0 || chosen == null) return false;
         try {
@@ -1133,6 +1180,169 @@ public final class AndroidServices {
                 }
             }
         }
+    }
+
+    /**
+     * Queries the current {@code Settings.Secure.DEFAULT_INPUT_METHOD} component ID,
+     * preferring direct {@code ContentResolver} access with a timeout-bounded shell fallback.
+     */
+    public String getDefaultInputMethodId() {
+        if (context != null) {
+            try {
+                String val = Settings.Secure.getString(
+                        context.getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
+                if (val != null && !val.trim().isEmpty() && !"null".equalsIgnoreCase(val.trim())) {
+                    return val.trim();
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+        ShellCommand.Result res = ShellCommand.runWithTimeout(
+                1500L, "settings", "get", "secure", "default_input_method");
+        if (res.isSuccess()) {
+            String trimmed = res.output.trim();
+            if (!trimmed.isEmpty() && !"null".equalsIgnoreCase(trimmed)) {
+                return trimmed;
+            }
+        }
+        return "";
+    }
+
+    /**
+     * Lists enabled Android IME component IDs using {@code ime list -s} with fallback to
+     * {@code Settings.Secure.ENABLED_INPUT_METHODS}.
+     */
+    public List<String> listEnabledInputMethodIds() {
+        ShellCommand.Result res = ShellCommand.runWithTimeout(2000L, "ime", "list", "-s");
+        if (res.isSuccess() && !res.output.trim().isEmpty()) {
+            List<String> parsed = parseLineImeIds(res.output);
+            if (!parsed.isEmpty()) {
+                return parsed;
+            }
+        }
+        String raw = "";
+        if (context != null) {
+            try {
+                String v = Settings.Secure.getString(
+                        context.getContentResolver(), Settings.Secure.ENABLED_INPUT_METHODS);
+                if (v != null) raw = v;
+            } catch (RuntimeException ignored) {
+            }
+        }
+        if (raw.isEmpty()) {
+            ShellCommand.Result secRes = ShellCommand.runWithTimeout(
+                    1500L, "settings", "get", "secure", "enabled_input_methods");
+            if (secRes.isSuccess()) raw = secRes.output.trim();
+        }
+        return parseEnabledImeSetting(raw);
+    }
+
+    /**
+     * Switches the active Android system IME as {@code uid=2000} via {@code ime set}
+     * (automatically calling {@code ime enable} first if needed), with {@code cmd input_method}
+     * and {@code Settings.Secure} fallbacks.
+     */
+    public boolean setDefaultInputMethodId(String imeId) {
+        if (!io.github.lengsukq.opaldesk.daemon.DaemonConfig.PackagePolicy.isValidImeId(imeId)) {
+            return false;
+        }
+        ShellCommand.Result res = ShellCommand.runWithTimeout(2500L, "ime", "set", imeId);
+        if (isImeSetSuccessful(res, imeId)) {
+            return true;
+        }
+        // Enable first in case the user picked an installed-but-disabled IME, then retry.
+        ShellCommand.runWithTimeout(2000L, "ime", "enable", imeId);
+        ShellCommand.Result retry = ShellCommand.runWithTimeout(2500L, "ime", "set", imeId);
+        if (isImeSetSuccessful(retry, imeId)) {
+            return true;
+        }
+        ShellCommand.Result cmdRes = ShellCommand.runWithTimeout(2500L, "cmd", "input_method", "set", imeId);
+        if (isImeSetSuccessful(cmdRes, imeId)) {
+            return true;
+        }
+        if (context != null) {
+            try {
+                boolean ok = Settings.Secure.putString(
+                        context.getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD, imeId);
+                if (ok) return true;
+            } catch (RuntimeException e) {
+                System.err.println("OPALDESK_IME_SET_SECURE_WARN id=" + imeId + ": " + unwrapMessage(e));
+            }
+        }
+        System.err.println("OPALDESK_IME_SET_FAIL id=" + imeId
+                + " out=" + (retry.output != null ? retry.output.trim() : ""));
+        return false;
+    }
+
+    /** Reads {@code Settings.Secure.show_ime_with_hard_keyboard} ({@code 0}, {@code 1}, or {@code -1} if unset). */
+    public int getShowImeWithHardKeyboard() {
+        if (context != null) {
+            try {
+                int v = Settings.Secure.getInt(context.getContentResolver(), "show_ime_with_hard_keyboard", -1);
+                if (v == 0 || v == 1) return v;
+            } catch (RuntimeException ignored) {
+            }
+        }
+        ShellCommand.Result res = ShellCommand.runWithTimeout(
+                1500L, "settings", "get", "secure", "show_ime_with_hard_keyboard");
+        if (res.isSuccess()) {
+            String trimmed = res.output.trim();
+            if ("0".equals(trimmed)) return 0;
+            if ("1".equals(trimmed)) return 1;
+        }
+        return -1;
+    }
+
+    /** Writes {@code Settings.Secure.show_ime_with_hard_keyboard} ({@code 0} or {@code 1}). */
+    public boolean setShowImeWithHardKeyboard(int value) {
+        if (value != 0 && value != 1) return false;
+        if (context != null) {
+            try {
+                if (Settings.Secure.putInt(context.getContentResolver(), "show_ime_with_hard_keyboard", value)) {
+                    return true;
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+        ShellCommand.Result res = ShellCommand.runWithTimeout(
+                1500L, "settings", "put", "secure", "show_ime_with_hard_keyboard", String.valueOf(value));
+        return res.isSuccess();
+    }
+
+    private boolean isImeSetSuccessful(ShellCommand.Result res, String expectedImeId) {
+        if (res == null || res.timedOut) return false;
+        String out = (res.output != null) ? res.output.trim() : "";
+        if (res.exitCode == 0 && !out.startsWith("Unknown") && !out.contains("cannot be selected")) {
+            return true;
+        }
+        return expectedImeId.equals(getDefaultInputMethodId());
+    }
+
+    private static List<String> parseLineImeIds(String raw) {
+        List<String> out = new ArrayList<>();
+        if (raw == null || raw.isEmpty()) return out;
+        for (String line : raw.split("\r?\n")) {
+            String trimmed = line.trim();
+            if (io.github.lengsukq.opaldesk.daemon.DaemonConfig.PackagePolicy.isValidImeId(trimmed)
+                    && !out.contains(trimmed)) {
+                out.add(trimmed);
+            }
+        }
+        return out;
+    }
+
+    private static List<String> parseEnabledImeSetting(String raw) {
+        List<String> out = new ArrayList<>();
+        if (raw == null || raw.isEmpty() || "null".equalsIgnoreCase(raw.trim())) return out;
+        for (String entry : raw.split(":")) {
+            int semi = entry.indexOf(';');
+            String id = (semi >= 0 ? entry.substring(0, semi) : entry).trim();
+            if (io.github.lengsukq.opaldesk.daemon.DaemonConfig.PackagePolicy.isValidImeId(id)
+                    && !out.contains(id)) {
+                out.add(id);
+            }
+        }
+        return out;
     }
 
     /**

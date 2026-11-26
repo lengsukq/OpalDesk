@@ -23,6 +23,8 @@ import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorScene
 import io.github.lengsukq.opaldesk.protocol.CompositorSceneParser
 import io.github.lengsukq.opaldesk.protocol.DaemonStatus
+import io.github.lengsukq.opaldesk.protocol.DexImeRuntimeState
+import io.github.lengsukq.opaldesk.protocol.DexImeStateParser
 import io.github.lengsukq.opaldesk.protocol.IpcTrustVerifier
 import io.github.lengsukq.opaldesk.protocol.PairingJsonParser
 import io.github.lengsukq.opaldesk.protocol.PendingPairingRequest
@@ -81,6 +83,11 @@ object BridgeClient {
 
     private val _trustedPeersFlow = MutableStateFlow<List<TrustedPeerEntry>>(emptyList())
     val trustedPeersFlow: StateFlow<List<TrustedPeerEntry>> = _trustedPeersFlow.asStateFlow()
+
+    private val _imeStateFlow = MutableStateFlow(DexImeRuntimeState())
+    val imeStateFlow: StateFlow<DexImeRuntimeState> = _imeStateFlow.asStateFlow()
+
+    private val activeDexSessionTags = CopyOnWriteArraySet<String>()
 
     data class ImeBridgeRequest(
         val windowId: Int,
@@ -159,6 +166,7 @@ object BridgeClient {
                 if (binder === next) {
                     binder = null
                     _statusFlow.value = DaemonStatus(connected = false)
+                    _imeStateFlow.value = DexImeRuntimeState()
                     OpalLogStore.w("IPC", "Daemon Binder died (linkToDeath)")
                     DaemonPostmortemCollector.onUnexpectedDaemonDeathAsync(appContext)
                     io.github.lengsukq.opaldesk.service.BaseOpalTileService.requestAllTilesUpdate(appContext)
@@ -186,6 +194,12 @@ object BridgeClient {
                 transact(next, BridgeProtocol.Tx.SET_AUDIO_ROUTE_MODE, oneway = false, writeArgs = { d ->
                     d.writeInt(audioMode)
                 }) { it.readInt() }
+                syncDexImeConfigSync(next, ctx)
+            }
+            if (activeDexSessionTags.isNotEmpty()) {
+                transact(next, BridgeProtocol.Tx.SET_DEX_IME_SESSION_ACTIVE, oneway = false, writeArgs = { d ->
+                    d.writeInt(1)
+                }) { it.readInt() }
             }
             if (localDesktopMousePinned) {
                 val mode = BridgeProtocol.MouseTarget.PIN_LOCAL_DISPLAY0
@@ -199,6 +213,7 @@ object BridgeClient {
             refreshRemoteStatus()
             refreshTrustedPeers()
             refreshPendingPairing()
+            refreshDexImeState()
             syncDaemonLogsThrottledLocked(minIntervalMs = 0L, maxLines = 400)
             io.github.lengsukq.opaldesk.service.BaseOpalTileService.requestAllTilesUpdate(appContext)
         }
@@ -373,6 +388,7 @@ object BridgeClient {
                 remoteMicEnabled = if (reply.dataAvail() >= 4) reply.readInt() != 0 else false,
                 remoteCameraEnabled = if (reply.dataAvail() >= 4) reply.readInt() != 0 else false,
                 audioRouteMode = if (reply.dataAvail() >= 4) reply.readInt() else BridgeProtocol.AudioRoute.SPLIT_BY_APP,
+                windowSupersampleMode = if (reply.dataAvail() >= 4) reply.readInt() else BridgeProtocol.WindowSupersample.COMPAT,
             )
         }?.also { st ->
             _statusFlow.value = st
@@ -612,9 +628,16 @@ object BridgeClient {
         return true
     }
 
-    fun updateDisplayPrefsAsync(targetFps: Int, windowDpiScalePct: Int) {
-        io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.setWorkingTargetFps(targetFps)
-        io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.setWorkingWindowDpiScalePct(windowDpiScalePct)
+    fun updateDisplayPrefsAsync(
+        targetFps: Int,
+        windowDpiScalePct: Int,
+        windowSupersampleMode: Int = -1,
+    ) {
+        io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.persistWorkingDisplayPrefs(
+            ctx = appContext,
+            targetFps = targetFps,
+            windowDpiScalePct = windowDpiScalePct,
+        )
         ioExec.execute {
             val svc = getService() ?: return@execute
             transact(
@@ -624,6 +647,9 @@ object BridgeClient {
                 writeArgs = { d ->
                     d.writeInt(targetFps)
                     d.writeInt(windowDpiScalePct)
+                    if (windowSupersampleMode >= 0) {
+                        d.writeInt(windowSupersampleMode)
+                    }
                 },
             ) { it.readInt() }
             refreshStatus()
@@ -1275,16 +1301,118 @@ object BridgeClient {
         }
     }
 
-    fun setLocalTextFieldFocusedOneway(focused: Boolean) {
+    fun setLocalTextFieldFocusedOneway(
+        focused: Boolean,
+        hostDisplayId: Int = android.view.Display.DEFAULT_DISPLAY,
+    ) {
         inputExec.execute {
             val svc = getService() ?: return@execute
             transact(
                 svc,
                 BridgeProtocol.Tx.SET_LOCAL_IME_FOCUS,
                 oneway = true,
-                writeArgs = { d -> d.writeInt(if (focused) 1 else 0) },
+                writeArgs = { d ->
+                    d.writeInt(if (focused) 1 else 0)
+                    d.writeInt(hostDisplayId.coerceAtLeast(0))
+                },
                 readReply = { Unit },
             )
+        }
+    }
+
+    private fun syncDexImeConfigSync(svc: IBinder, ctx: Context) {
+        val displayMode = AppPrefs.getDexImeDisplayMode(ctx)
+        val lockedIme = AppPrefs.getDexLockedImeId(ctx)
+        val muteOnCast = AppPrefs.isMuteHostImeOnCastEnabled(ctx)
+        val hardKbd = AppPrefs.getHardKbdSoftImeMode(ctx)
+        val autoBridgeCast = AppPrefs.isAutoBridgeImeOnCastEnabled(ctx)
+        transact(svc, BridgeProtocol.Tx.SET_DEX_IME_CONFIG, oneway = false, writeArgs = { d ->
+            d.writeInt(displayMode)
+            d.writeString(lockedIme)
+            d.writeInt(if (muteOnCast) 1 else 0)
+            d.writeInt(hardKbd)
+            d.writeInt(if (autoBridgeCast) 1 else 0)
+        }) { r ->
+            r.readInt()
+            if (r.dataAvail() > 0) r.readString()
+        }
+    }
+
+    fun setDexImeConfigAsync(
+        ctx: Context?,
+        displayMode: Int = AppPrefs.dexImeDisplayModeFlow.value,
+        lockedImeId: String = AppPrefs.dexLockedImeIdFlow.value,
+        muteHostOnCast: Boolean = AppPrefs.muteHostImeOnCastFlow.value,
+        showWithHardKbd: Int = AppPrefs.hardKbdSoftImeModeFlow.value,
+        autoBridgeImeOnCast: Boolean = AppPrefs.autoBridgeImeOnCastFlow.value,
+        onDone: ((ok: Boolean, activeImeId: String) -> Unit)? = null,
+    ) {
+        if (ctx != null) {
+            AppPrefs.setDexImeDisplayMode(ctx, displayMode)
+            AppPrefs.setDexLockedImeId(ctx, lockedImeId)
+            AppPrefs.setMuteHostImeOnCastEnabled(ctx, muteHostOnCast)
+            AppPrefs.setHardKbdSoftImeMode(ctx, showWithHardKbd)
+            AppPrefs.setAutoBridgeImeOnCastEnabled(ctx, autoBridgeImeOnCast)
+        }
+        ioExec.execute {
+            val svc = getService()
+            if (svc == null) {
+                if (onDone != null) mainHandler.post { onDone(false, "") }
+                return@execute
+            }
+            val result = transact(svc, BridgeProtocol.Tx.SET_DEX_IME_CONFIG, oneway = false, writeArgs = { d ->
+                d.writeInt(displayMode)
+                d.writeString(lockedImeId.trim())
+                d.writeInt(if (muteHostOnCast) 1 else 0)
+                d.writeInt(showWithHardKbd)
+                d.writeInt(if (autoBridgeImeOnCast) 1 else 0)
+            }) { r ->
+                val ok = r.readInt() != 0
+                val activeIme = if (r.dataAvail() > 0) r.readString().orEmpty() else ""
+                ok to activeIme
+            }
+            refreshDexImeState()
+            if (onDone != null) {
+                mainHandler.post { onDone(result?.first == true, result?.second.orEmpty()) }
+            }
+        }
+    }
+
+    fun setDexImeSessionActive(tag: String, active: Boolean) {
+        val wasActive = activeDexSessionTags.isNotEmpty()
+        if (active) {
+            activeDexSessionTags.add(tag)
+        } else {
+            activeDexSessionTags.remove(tag)
+        }
+        val nowActive = activeDexSessionTags.isNotEmpty()
+        if (wasActive == nowActive) return
+        ioExec.execute {
+            val svc = getService() ?: return@execute
+            transact(svc, BridgeProtocol.Tx.SET_DEX_IME_SESSION_ACTIVE, oneway = false, writeArgs = { d ->
+                d.writeInt(if (nowActive) 1 else 0)
+            }) { it.readInt() }
+            refreshDexImeState()
+        }
+    }
+
+    fun refreshDexImeState(): DexImeRuntimeState {
+        val svc = getService()
+        if (svc == null) {
+            val empty = DexImeRuntimeState()
+            _imeStateFlow.value = empty
+            return empty
+        }
+        val json = transact(svc, BridgeProtocol.Tx.GET_SYSTEM_IME_STATE, oneway = false, writeArgs = {}) { r ->
+            r.readString().orEmpty()
+        }
+        return DexImeStateParser.parse(json).also { _imeStateFlow.value = it }
+    }
+
+    fun refreshDexImeStateAsync(onDone: ((DexImeRuntimeState) -> Unit)? = null) {
+        ioExec.execute {
+            val state = refreshDexImeState()
+            if (onDone != null) mainHandler.post { onDone(state) }
         }
     }
 
@@ -1434,6 +1562,8 @@ object BridgeClient {
         _remoteStatusFlow.value = RemoteStreamStatus()
         _pendingPairingFlow.value = null
         _trustedPeersFlow.value = emptyList()
+        _imeStateFlow.value = DexImeRuntimeState()
+        activeDexSessionTags.clear()
         io.github.lengsukq.opaldesk.service.BaseOpalTileService.requestAllTilesUpdate(appContext)
     }
 

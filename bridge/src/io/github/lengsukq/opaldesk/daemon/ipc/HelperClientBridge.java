@@ -362,6 +362,23 @@ public final class HelperClientBridge {
     }
 
     /**
+     * Synchronously commits UTF-8 text into the currently focused Android {@code InputConnection}
+     * via the cert-pinned Helper process's built-in {@code OpalDeskImeService}.
+     *
+     * @return {@code true} only when {@code OpalDeskImeService} held an active editable
+     * {@code InputConnection} and committed the text cleanly without touching the clipboard.
+     */
+    public boolean commitTextViaBridgeIme(String text) {
+        if (config.shuttingDown || !isHelperAlive() || text == null || text.isEmpty() || text.length() > 65_536) {
+            return false;
+        }
+        Bundle extras = new Bundle();
+        extras.putString(BridgeProtocol.EXTRA_IME_COMMIT_TEXT, text);
+        Bundle res = callHelperProvider(BridgeProtocol.PROVIDER_METHOD_IME_COMMIT_TEXT, extras);
+        return res != null && res.getBoolean(BridgeProtocol.EXTRA_IME_COMMITTED, false);
+    }
+
+    /**
      * Signals the Helper UI immediately when an outgoing OpalCast session connects, resizes, or
      * disconnects so Display 0 console, Local DeX guards, and Remote Trackpad update without polling.
      */

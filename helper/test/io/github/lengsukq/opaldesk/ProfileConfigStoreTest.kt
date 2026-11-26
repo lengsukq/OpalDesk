@@ -185,4 +185,21 @@ class ProfileConfigStoreTest {
             AppPrefs.setExternalUiScale(null, originalScale)
         }
     }
+
+    @Test
+    fun persistWorkingDisplayPrefsSurvivesActiveSlotReloadWithoutResettingFpsToZero() {
+        ProfileConfigStore.loadSlot(null, 0)
+        ProfileConfigStore.persistWorkingDisplayPrefs(ctx = null, targetFps = 120, windowDpiScalePct = 115)
+
+        assertEquals(120, ProfileConfigStore.workingConfig.targetFps)
+        assertEquals(115, ProfileConfigStore.workingConfig.windowDpiScalePct)
+        assertEquals(120, ProfileConfigStore.stateFlow.value.activeSavedSlot.targetFps)
+        assertEquals(115, ProfileConfigStore.stateFlow.value.activeSavedSlot.windowDpiScalePct)
+
+        // Simulating Helper restart / re-hydration from serialized JSON preserves 120Hz instead of reverting to 0
+        val roundTripped = ProfileConfigStore.fromJson(ProfileConfigStore.toJson(ProfileConfigStore.stateFlow.value))
+        assertNotNull(roundTripped)
+        assertEquals(120, roundTripped!!.activeSavedSlot.targetFps)
+        assertEquals(115, roundTripped.activeSavedSlot.windowDpiScalePct)
+    }
 }

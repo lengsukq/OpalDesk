@@ -146,6 +146,7 @@ fun WindowSurfaceHost(
     window: CompositorWindow,
     headerHeightPx: Int,
     onTouchFocusRequested: () -> Unit,
+    occludedByFullscreen: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val profileState by ProfileConfigStore.stateFlow.collectAsState()
@@ -167,7 +168,7 @@ fun WindowSurfaceHost(
     var hasRenderedLiveFrame by remember(window.windowId) { mutableStateOf(false) }
     val lastHoverEventTime = remember(window.windowId) { AtomicLong(-1L) }
 
-    LaunchedEffect(window.windowId, window.isHibernated, window.snapshotVersion) {
+    LaunchedEffect(window.windowId, window.isHibernated, window.snapshotVersion, occludedByFullscreen) {
         if (window.hasSnapshot) {
             val bmp = withContext(Dispatchers.IO) {
                 BridgeClient.fetchWindowSnapshotBitmap(window.windowId, window.snapshotVersion)
@@ -176,7 +177,7 @@ fun WindowSurfaceHost(
                 hibernateBitmap = bmp
             }
         }
-        if (window.isHibernated) {
+        if (window.isHibernated || occludedByFullscreen) {
             hasRenderedLiveFrame = false
         }
     }
@@ -301,7 +302,7 @@ fun WindowSurfaceHost(
                 }
             },
     ) {
-        if (!window.isHibernated) {
+        if (!window.isHibernated && !occludedByFullscreen) {
             val holderState = remember(window.windowId) { SurfaceBindHolder(window.windowId) }
 
             DisposableEffect(window.windowId) {
@@ -322,7 +323,11 @@ fun WindowSurfaceHost(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
                     FixedBufferTextureView(ctx).apply {
-                        isOpaque = false
+                        if (io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge.sessionFlow.value.isRemoteCastDisplay) {
+                            pointerIcon = android.view.PointerIcon.getSystemIcon(ctx, android.view.PointerIcon.TYPE_NULL)
+                        }
+                        // Opaque app surfaces skip per-pixel GPU alpha blending against the desktop backdrop.
+                        isOpaque = true
                         LiveWindowPreviewRegistry.register(window.windowId, this)
                         surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                             override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
@@ -433,7 +438,7 @@ fun WindowSurfaceHost(
 
             // Seamless wake bridge: keep showing frozen snapshot until the live VirtualDisplay draws frame 1
             if (!hasRenderedLiveFrame) {
-                val snap = hibernateBitmap
+                val snap = hibernateBitmap ?: LiveWindowPreviewRegistry.getCachedPreview(window.windowId)
                 if (snap != null && !snap.isRecycled) {
                     Image(
                         bitmap = snap.asImageBitmap(),
@@ -443,6 +448,10 @@ fun WindowSurfaceHost(
                     )
                 }
             }
+        } else if (occludedByFullscreen && !window.isHibernated) {
+            // Completely covered by a fullscreen window: Surface is detached so SurfaceFlinger halts
+            // background VirtualDisplay rendering while preserving the live task & display lease.
+            Box(modifier = Modifier.fillMaxSize().background(OpalPalette.WindowCanvasBg))
         } else {
             // Hibernated window view: renders frozen TaskSnapshot with one-tap instant wake
             val snap = hibernateBitmap

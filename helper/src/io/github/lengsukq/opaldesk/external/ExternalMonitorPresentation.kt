@@ -119,12 +119,7 @@ class ExternalMonitorPresentation(
             )
             win.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
 
-            val peakMode = resolvePeakRefreshRateMode(targetDisplay)
-            if (peakMode != null) {
-                val lp = win.attributes
-                lp.preferredDisplayModeId = peakMode.modeId
-                win.attributes = lp
-            }
+            applyPreferredRefreshRate(BridgeClient.statusFlow.value.targetFps)
 
             WindowCompat.setDecorFitsSystemWindows(win, false)
             val decor = win.decorView
@@ -152,10 +147,14 @@ class ExternalMonitorPresentation(
                 OpalTheme {
                     val uiScale by AppPrefs.externalUiScaleFlow.collectAsState()
                     val overscanPct by AppPrefs.externalOverscanPctFlow.collectAsState()
+                    val status by BridgeClient.statusFlow.collectAsState()
                     val scene by BridgeClient.sceneFlow.collectAsState()
                     val imeRequest by BridgeClient.imeBridgeRequestFlow.collectAsState()
                     val controller = rememberNativeImeHostController()
                     imeController = controller
+                    LaunchedEffect(status.targetFps) {
+                        applyPreferredRefreshRate(status.targetFps)
+                    }
                     LaunchedEffect(overscanPct, displayWidthPx, displayHeightPx) {
                         val targetView = composeView ?: return@LaunchedEffect
                         val lp = targetView.layoutParams as? FrameLayout.LayoutParams ?: return@LaunchedEffect
@@ -203,6 +202,7 @@ class ExternalMonitorPresentation(
                         Box(modifier = Modifier.fillMaxSize()) {
                             NativeImeBridgeHost(
                                 controller = controller,
+                                hostWindow = window,
                                 onSendKey = { action, keyCode, meta ->
                                     val focused = BridgeClient.sceneFlow.value.focusedWindow
                                     if (focused != null && !focused.isMinimized) {
@@ -348,13 +348,50 @@ class ExternalMonitorPresentation(
         return if (rotated) (physH to physW) else (physW to physH)
     }
 
+    private fun applyPreferredRefreshRate(targetFps: Int) {
+        val win = window ?: return
+        val cur = targetDisplay.mode ?: return
+        val supported = targetDisplay.supportedModes ?: return
+        val candidates = supported.map {
+            ExternalDisplayPolicy.DisplayModeCandidate(
+                modeId = it.modeId,
+                width = it.physicalWidth,
+                height = it.physicalHeight,
+                refreshRate = it.refreshRate,
+            )
+        }
+        val chosen = ExternalDisplayPolicy.selectDisplayModeForTargetFps(
+            modes = candidates,
+            currentWidth = cur.physicalWidth,
+            currentHeight = cur.physicalHeight,
+            targetFps = targetFps,
+        ) ?: return
+        val lp = win.attributes
+        if (lp.preferredDisplayModeId != chosen.modeId || kotlin.math.abs(lp.preferredRefreshRate - chosen.refreshRate) > 0.5f) {
+            lp.preferredDisplayModeId = chosen.modeId
+            lp.preferredRefreshRate = chosen.refreshRate
+            win.attributes = lp
+        }
+    }
+
     private fun resolvePeakRefreshRateMode(display: Display): Display.Mode? {
         val cur = display.mode ?: return null
         val supported = display.supportedModes ?: return cur
-        return supported
-            .filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight }
-            .maxByOrNull { it.refreshRate }
-            ?: cur
+        val candidates = supported.map {
+            ExternalDisplayPolicy.DisplayModeCandidate(
+                modeId = it.modeId,
+                width = it.physicalWidth,
+                height = it.physicalHeight,
+                refreshRate = it.refreshRate,
+            )
+        }
+        val chosen = ExternalDisplayPolicy.selectPreferredDisplayMode(
+            modes = candidates,
+            currentWidth = cur.physicalWidth,
+            currentHeight = cur.physicalHeight,
+            preferHighestResolution = false,
+        ) ?: return cur
+        return supported.firstOrNull { it.modeId == chosen.modeId } ?: cur
     }
 }
 

@@ -19,11 +19,15 @@ public final class BridgeProtocol {
     public static final String HELPER_ACTION_BINDER_PUSH = "io.github.lengsukq.opaldesk.BINDER_PUSH";
     public static final String HELPER_SERVICE_CLASS = "io.github.lengsukq.opaldesk.BridgeService";
     public static final String HELPER_RECEIVER_CLASS = "io.github.lengsukq.opaldesk.AdbPairingReceiver";
+    public static final String OPALDESK_BRIDGE_IME_SERVICE_SUFFIX = "/.ime.OpalDeskImeService";
+    public static final String OPALDESK_BRIDGE_IME_ID =
+            io.github.lengsukq.opaldesk.daemon.BridgeBuildConfig.HELPER_PACKAGE + OPALDESK_BRIDGE_IME_SERVICE_SUFFIX;
 
     public static final String PROVIDER_METHOD_SET_BINDER = "setBinder";
     public static final String PROVIDER_METHOD_SYNC_SCENE = "syncScene";
     public static final String PROVIDER_METHOD_PAIRING_EVENT = "pairingEvent";
     public static final String PROVIDER_METHOD_IME_REQUEST = "imeRequest";
+    public static final String PROVIDER_METHOD_IME_COMMIT_TEXT = "imeCommitText";
     public static final String PROVIDER_METHOD_REMOTE_STATE_CHANGED = "remoteStateChanged";
 
     public static final String EXTRA_SYNC_SCENE_JSON = "sceneJson";
@@ -32,6 +36,8 @@ public final class BridgeProtocol {
     public static final String EXTRA_IME_WINDOW_ID = "windowId";
     public static final String EXTRA_IME_SHOW = "show";
     public static final String EXTRA_IME_INPUT_TYPE = "inputType";
+    public static final String EXTRA_IME_COMMIT_TEXT = "text";
+    public static final String EXTRA_IME_COMMITTED = "committed";
 
     public static final String CTL_CMD_SHUTDOWN = "SHUTDOWN";
     public static final String CTL_CMD_NEED_BINDER = "NEED_BINDER";
@@ -75,6 +81,9 @@ public final class BridgeProtocol {
     public static final int TX_SET_REMOTE_MEDIA_CONFIG = 43;
     public static final int TX_SET_AUDIO_ROUTE_MODE = 44;
     public static final int TX_LAUNCH_EXTERNAL_DESKTOP = 45;
+    public static final int TX_SET_DEX_IME_CONFIG = 46;
+    public static final int TX_SET_DEX_IME_SESSION_ACTIVE = 47;
+    public static final int TX_GET_SYSTEM_IME_STATE = 48;
     public static final int TX_SHUTDOWN = 99;
 
     // ---- Downlink Audio Routing Modes (OpalCast DeX) ----
@@ -167,6 +176,7 @@ public final class BridgeProtocol {
     public static final int WIN_ACTION_SET_PROFILE_TABLET = 9;
     public static final int WIN_ACTION_RELOAD_APP = 10;
     public static final int WIN_ACTION_TOGGLE_FULLSCREEN = 11;
+    public static final int WIN_ACTION_TOGGLE_ORIENTATION = 12;
 
     // ---- Input Backends & Status ----
     public static final int INPUT_BACKEND_AUTO = 0;
@@ -180,6 +190,20 @@ public final class BridgeProtocol {
     // ---- Display IME Policies (WindowManagerPolicyConstants) ----
     public static final int DISPLAY_IME_POLICY_LOCAL = 0;
     public static final int DISPLAY_IME_POLICY_FALLBACK_DISPLAY = 1;
+    public static final int DISPLAY_IME_POLICY_HIDE = 2;
+
+    // ---- User-Configurable DeX IME Display Modes ----
+    /** Smart automatic policy: LOCAL when physical/Pogo keyboard connected, FALLBACK otherwise. */
+    public static final int DEX_IME_DISPLAY_AUTO = 0;
+    /** Always render IME inside DeX / external monitor displays (never pop on Display 0). */
+    public static final int DEX_IME_DISPLAY_ALWAYS_LOCAL = 1;
+    /** Always route IME back to host phone Display 0. */
+    public static final int DEX_IME_DISPLAY_FALLBACK_HOST = 2;
+
+    // ---- Optional Physical Keyboard Soft-IME Override (show_ime_with_hard_keyboard) ----
+    public static final int HARD_KBD_SOFT_IME_SYSTEM = -1;
+    public static final int HARD_KBD_SOFT_IME_HIDE = 0;
+    public static final int HARD_KBD_SOFT_IME_SHOW = 1;
 
     private BridgeProtocol() {}
 }

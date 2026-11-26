@@ -54,8 +54,11 @@ public final class RemoteStreamServer {
     private static final int HANDSHAKE_TIMEOUT_MS = 10_000;
     private static final int SOCKET_IO_BUFFER_BYTES = 131_072;
     private static final int USB_SOCKET_SEND_BUF_BYTES = 512 * 1024;
-    // Cap Wi-Fi TCP send buffer to halve worst-case bufferbloat while sustaining up to 40 Mbps @ 50ms RTT.
-    private static final int WIFI_SOCKET_SEND_BUF_BYTES = 256 * 1024;
+    // 512 KiB Wi-Fi TCP send buffer absorbs single 2.5K/4K IDR bursts (~180-200ms @ 22 Mbps)
+    // without triggering premature sender-queue congestion drops while staying bounded against bufferbloat.
+    private static final int WIFI_SOCKET_SEND_BUF_BYTES = 512 * 1024;
+    // DSCP EF (46 << 2 = 0xB8) signals low-latency real-time media priority to 802.11e WMM Wi-Fi 6 APs.
+    private static final int REALTIME_MEDIA_TRAFFIC_CLASS = 0xB8;
 
     public interface SessionListener {
         void onSessionConnected(
@@ -85,6 +88,7 @@ public final class RemoteStreamServer {
         default void onCameraConfig(int sessionId, OpalCastProtocol.CameraConfigMsg msg) {}
         default void onCameraFrame(int sessionId, byte[] jpegData, long timestampUs) {}
         void onWifiUpgradeEnabled();
+        default void onVideoSoftCongestion(int sessionId) {}
         void onVideoCongestion(int sessionId);
         void onVideoQueueHealthy(int sessionId);
     }
@@ -452,6 +456,13 @@ public final class RemoteStreamServer {
 
     // ---- Session-addressed outbound frame senders ----
 
+    public void updateSessionTargetFps(int sessionId, float targetFps) {
+        ClientSession s = allSessions.get(sessionId);
+        if (s != null && !s.isClosed()) {
+            s.setTargetFps(targetFps);
+        }
+    }
+
     public void sendVideoConfig(int sessionId, OpalCastProtocol.VideoConfig config, long timestampUs) {
         ClientSession s = allSessions.get(sessionId);
         if (s != null && !s.isClosed() && config != null) {
@@ -460,9 +471,22 @@ public final class RemoteStreamServer {
     }
 
     public void sendVideoFrame(int sessionId, byte[] annexB, int flags, long timestampUs) {
+        int len = (annexB != null) ? annexB.length : 0;
+        sendVideoFrame(sessionId, annexB, len, flags, timestampUs, null);
+    }
+
+    public void sendVideoFrame(
+            int sessionId,
+            byte[] annexB,
+            int length,
+            int flags,
+            long timestampUs,
+            Consumer<byte[]> onRelease) {
         ClientSession s = allSessions.get(sessionId);
         if (s != null && !s.isClosed()) {
-            s.enqueue(OpalCastProtocol.TYPE_VIDEO_FRAME, flags, timestampUs, annexB);
+            s.enqueue(OpalCastProtocol.TYPE_VIDEO_FRAME, flags, timestampUs, annexB, length, onRelease);
+        } else if (onRelease != null && annexB != null) {
+            onRelease.accept(annexB);
         }
     }
 
@@ -730,7 +754,9 @@ public final class RemoteStreamServer {
 
             sock.setTcpNoDelay(true);
             sock.setKeepAlive(true);
-            try { sock.setSendBufferSize(WIFI_SOCKET_SEND_BUF_BYTES); } catch (SocketException ignored) {}
+            try { sock.setTrafficClass(REALTIME_MEDIA_TRAFFIC_CLASS); } catch (SocketException ignored) {}
+            int sendBufBytes = isUsbTetherLink ? USB_SOCKET_SEND_BUF_BYTES : WIFI_SOCKET_SEND_BUF_BYTES;
+            try { sock.setSendBufferSize(sendBufBytes); } catch (SocketException ignored) {}
             try { sock.setReceiveBufferSize(SOCKET_IO_BUFFER_BYTES); } catch (SocketException ignored) {}
             sock.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
             applySecureTlsProtocols(sock.getSupportedProtocols(), sock::setEnabledProtocols);
@@ -875,6 +901,7 @@ public final class RemoteStreamServer {
         ClientSession current = new ClientSession(
                 sessionId, sinkType, isAdbLocalSocket, permanentTrust, hello.sessionRole, hello.appPackage,
                 clientId, clientName, transport, frameTransport, listener);
+        current.setTargetFps(hello.fps > 0 ? hello.fps : 60f);
 
         ClientSession replaced = null;
         boolean capacityExceeded = false;

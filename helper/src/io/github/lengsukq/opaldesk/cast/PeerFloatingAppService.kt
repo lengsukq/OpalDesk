@@ -187,6 +187,7 @@ class PeerFloatingAppService : Service() {
     private var imeEditText: EditText? = null
 
     private var client: OpalCastPeerClient? = null
+    private var wifiLowLatencyLock: WifiLowLatencyLock? = null
     private var host: String = ""
     private var port: Int = 19878
     private var peerLabel: String = ""
@@ -315,6 +316,7 @@ class PeerFloatingAppService : Service() {
     private fun tearDownSessionOnly() {
         client?.stop()
         client = null
+        wifiLowLatencyLock?.release()
     }
 
     private fun connectRemoteSession() {
@@ -334,6 +336,14 @@ class PeerFloatingAppService : Service() {
             UsbTetherPeerDetector.resolveBoundNetworkForHost(host)
         } else {
             null
+        }
+        val wifiLock = wifiLowLatencyLock ?: WifiLowLatencyLock(this, "OpalDesk:FloatingCastRx").also {
+            wifiLowLatencyLock = it
+        }
+        if (boundNet == null) {
+            wifiLock.acquire()
+        } else {
+            wifiLock.release()
         }
         val peerClient = OpalCastPeerClient(
             host = host,
@@ -1410,7 +1420,7 @@ class PeerFloatingAppService : Service() {
 
     private fun commitRemoteResize() {
         val (streamW, streamH, reqDpi) = computeStreamSpecForView(expandedW, expandedH)
-        client?.sendResizeConfig(streamW, streamH, reqDpi, 60, 12_000)
+        client?.sendResizeConfig(streamW, streamH, reqDpi, 60)
     }
 
     /**

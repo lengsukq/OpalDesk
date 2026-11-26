@@ -48,12 +48,14 @@ public final class VirtualDisplayPool {
         public final Object handle;
         public final int displayId;
         public final String uniqueId;
+        public volatile float requestedFps;
 
-        Lease(int windowId, Object handle, int displayId, String uniqueId) {
+        Lease(int windowId, Object handle, int displayId, String uniqueId, float requestedFps) {
             this.windowId = windowId;
             this.handle = handle;
             this.displayId = displayId;
             this.uniqueId = uniqueId;
+            this.requestedFps = requestedFps;
         }
     }
 
@@ -157,7 +159,7 @@ public final class VirtualDisplayPool {
             return null;
         }
 
-        Lease lease = new Lease(target.windowId, created.handle, created.displayId, created.uniqueId);
+        Lease lease = new Lease(target.windowId, created.handle, created.displayId, created.uniqueId, fps);
         activeLeases.put(target.windowId, lease);
         return lease;
     }
@@ -190,7 +192,7 @@ public final class VirtualDisplayPool {
             driver.setVirtualDisplaySurface(oldLease.handle, surface);
             return null;
         }
-        Lease newLease = new Lease(target.windowId, created.handle, created.displayId, created.uniqueId);
+        Lease newLease = new Lease(target.windowId, created.handle, created.displayId, created.uniqueId, fps);
         activeLeases.put(target.windowId, newLease);
         return new RebindResult(oldLease, newLease);
     }
@@ -211,6 +213,7 @@ public final class VirtualDisplayPool {
     public synchronized void updateSurfaceFrameRateIfActive(int windowId, Object surface, float fps) {
         Lease lease = activeLeases.get(windowId);
         if (lease != null && surface != null) {
+            lease.requestedFps = fps;
             driver.setSurfaceFrameRate(surface, fps);
             driver.setVirtualDisplaySurface(lease.handle, surface);
         }

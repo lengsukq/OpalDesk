@@ -636,4 +636,36 @@ public class CompositorEngineTest {
         assertTrue("Closing third-party media app should still force-stop background playback",
                 runtime.forceStoppedPackages.contains("tv.danmaku.bili"));
     }
+
+    @Test
+    public void testToggleOrientationRotatesLandscapeWindowToFullHeightPortraitAndBack() {
+        File confF = new File(tmpDir.getRoot(), "orient_main.conf");
+        File profF = new File(tmpDir.getRoot(), "orient_prof.conf");
+        DaemonConfig cfg = new DaemonConfig(confF, profF);
+        cfg.updateRuntimeConfig(BridgeProtocol.INPUT_BACKEND_AUTO, 4, 1920, 1080, 240);
+
+        RecordingDriver driver = new RecordingDriver();
+        VirtualDisplayPool pool = new VirtualDisplayPool(driver, 4, false);
+        FakeRuntime runtime = new FakeRuntime();
+        CompositorEngine engine = new CompositorEngine(cfg, pool, runtime, null);
+
+        int wid = engine.openOrFocusWindow("com.ss.android.ugc.aweme", "", BridgeProtocol.PROFILE_DESKTOP, 0, 0, 0, 0);
+        engine.attachWindowSurface(wid, new Object(), 1200, 720, 240, 60f);
+
+        WindowSession before = engine.getWindowSnapshot(wid);
+        assertTrue("Desktop window starts landscape", before.contentWidth > before.contentHeight);
+
+        // Rotate landscape -> tall portrait (eliminates side letterboxing for vertical short-video apps)
+        assertTrue(engine.performWindowAction(wid, BridgeProtocol.WIN_ACTION_TOGGLE_ORIENTATION, null));
+        WindowSession portrait = engine.getWindowSnapshot(wid);
+        assertEquals(WindowProfile.PORTRAIT, portrait.profile);
+        assertEquals(BridgeProtocol.PRES_FLOATING, portrait.presentation);
+        assertTrue("Rotated portrait window must be taller than wide", portrait.contentHeight > portrait.contentWidth);
+
+        // Rotate portrait -> landscape desktop
+        assertTrue(engine.performWindowAction(wid, BridgeProtocol.WIN_ACTION_TOGGLE_ORIENTATION, null));
+        WindowSession landscape = engine.getWindowSnapshot(wid);
+        assertEquals(WindowProfile.DESKTOP, landscape.profile);
+        assertTrue("Second toggle restores landscape orientation", landscape.contentWidth > landscape.contentHeight);
+    }
 }

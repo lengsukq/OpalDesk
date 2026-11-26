@@ -23,7 +23,9 @@ public enum OpalCastSessionEvent: Sendable {
 /// Handles wired plaintext localhost and wireless TLS 1.2/1.3 with strict TOFU SHA-256 pinning,
 /// streaming frame reassembly, ping/pong RTT telemetry, bounded send backpressure, and auto-reconnect.
 public final class OpalCastSession: Sendable {
-    private static let heartbeatIntervalNs: UInt64 = 2_000_000_000 // 2 seconds
+    private static let heartbeatIntervalNs: UInt64 = 2_000_000_000 // 2 seconds timeout check cadence
+    private static let activePingIntervalNs: UInt64 = 5_000_000_000 // 5 seconds RTT probe while streaming
+    private static let idlePingThresholdNs: UInt64 = 4_000_000_000 // probe promptly after 4s silence
     private static let heartbeatTimeoutNs: UInt64 = 8_000_000_000 // 8 seconds
     private static let preAuthTimeoutNs: UInt64 = 75_000_000_000 // 75 seconds while awaiting phone consent
     private static let stalePingCutoffNs: UInt64 = 15_000_000_000 // 15 seconds
@@ -50,6 +52,7 @@ public final class OpalCastSession: Sendable {
         var capacityWaiters: [UInt64: CapacityWaiter] = [:]
         var nextPingId: UInt64 = 1
         var pendingPings: [UInt64: UInt64] = [:]
+        var lastPingSentNs: UInt64 = 0
         var lastInboundActivityNs: UInt64 = 0
         var hasReceivedAuthResult: Bool = false
         var verifiedFingerprint: String?
@@ -404,8 +407,18 @@ public final class OpalCastSession: Sendable {
                     }
                     // Do not send PINGs while awaiting interactive phone-side pairing approval.
                     guard s.hasReceivedAuthResult else { return .skip }
+                    // While downlink video is actively flowing, relax PING cadence from 2s to 5s
+                    // to reduce unnecessary Wi-Fi TX wakeups while preserving 8s dead-peer detection.
+                    let sinceInbound = (s.lastInboundActivityNs > 0 && nowNs >= s.lastInboundActivityNs)
+                        ? (nowNs - s.lastInboundActivityNs) : Self.idlePingThresholdNs
+                    let sinceLastPing = (s.lastPingSentNs > 0 && nowNs >= s.lastPingSentNs)
+                        ? (nowNs - s.lastPingSentNs) : Self.activePingIntervalNs
+                    if sinceInbound < Self.idlePingThresholdNs && sinceLastPing < Self.activePingIntervalNs {
+                        return .skip
+                    }
                     let id = s.nextPingId
                     s.nextPingId &+= 1
+                    s.lastPingSentNs = nowNs
                     s.pendingPings[id] = nowNs
                     return .sendPing(id)
                 }

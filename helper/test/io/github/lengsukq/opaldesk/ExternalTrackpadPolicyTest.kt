@@ -496,4 +496,106 @@ class ExternalTrackpadPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun selectPreferredDisplayModePicksPeakRefreshOrHighestSmoothResolution() {
+        val modes = listOf(
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 1, width = 1920, height = 1080, refreshRate = 60f),
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 2, width = 1920, height = 1080, refreshRate = 120f),
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 3, width = 2560, height = 1440, refreshRate = 144f),
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 4, width = 3840, height = 2160, refreshRate = 60f),
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 5, width = 3840, height = 2160, refreshRate = 30f),
+        )
+        // Same-resolution peak refresh upgrades 1080p@60Hz -> 1080p@120Hz (mode 2).
+        assertEquals(
+            2,
+            ExternalDisplayPolicy.selectPreferredDisplayMode(
+                modes = modes,
+                currentWidth = 1920,
+                currentHeight = 1080,
+                preferHighestResolution = false,
+            )?.modeId,
+        )
+        // Highest smooth (>=60Hz) resolution picks 4K@60Hz (mode 4) over 4K@30Hz (mode 5).
+        assertEquals(
+            4,
+            ExternalDisplayPolicy.selectPreferredDisplayMode(
+                modes = modes,
+                currentWidth = 1920,
+                currentHeight = 1080,
+                preferHighestResolution = true,
+            )?.modeId,
+        )
+    }
+
+    @Test
+    fun selectDisplayModeForTargetFpsMatchesRequestedRateOrFallsBackCleanly() {
+        val modes = listOf(
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 1, width = 2560, height = 1600, refreshRate = 60f),
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 2, width = 2560, height = 1600, refreshRate = 90f),
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 3, width = 2560, height = 1600, refreshRate = 120f),
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 4, width = 2560, height = 1600, refreshRate = 144f),
+        )
+        // Auto (0) selects peak refresh rate
+        assertEquals(4, ExternalDisplayPolicy.selectDisplayModeForTargetFps(modes, 2560, 1600, 0)?.modeId)
+        // Exact matches for 60 / 90 / 120 Hz
+        assertEquals(1, ExternalDisplayPolicy.selectDisplayModeForTargetFps(modes, 2560, 1600, 60)?.modeId)
+        assertEquals(2, ExternalDisplayPolicy.selectDisplayModeForTargetFps(modes, 2560, 1600, 90)?.modeId)
+        assertEquals(3, ExternalDisplayPolicy.selectDisplayModeForTargetFps(modes, 2560, 1600, 120)?.modeId)
+        // 100Hz not directly listed -> picks smallest mode >= 100Hz (120Hz, mode 3)
+        assertEquals(3, ExternalDisplayPolicy.selectDisplayModeForTargetFps(modes, 2560, 1600, 100)?.modeId)
+        // Refresh status hint clearly reports cap vs active match
+        assertTrue(ExternalDisplayPolicy.formatRefreshStatusHint(120, 60, 60, false).contains("上限"))
+        assertTrue(ExternalDisplayPolicy.formatRefreshStatusHint(120, 120, 144, false).contains("已生效"))
+    }
+
+    @Test
+    fun autoBlackoutWorksInPresentationModeAndSuppressesAutoPhoneTrackpad() {
+        val directPhysical = ExternalDesktopSession(
+            mode = ExternalDesktopMode.DIRECT_EXTENDED,
+            displayId = 2,
+            isRemoteCastDisplay = false,
+        )
+        assertTrue(
+            ExternalTrackpadPolicy.shouldAutoLaunchPhoneTrackpad(
+                session = directPhysical,
+                autoShowEnabled = true,
+                alreadyVisible = false,
+                autoBlackoutEnabled = false,
+            ),
+        )
+        assertFalse(
+            ExternalTrackpadPolicy.shouldAutoLaunchPhoneTrackpad(
+                session = directPhysical,
+                autoShowEnabled = true,
+                alreadyVisible = false,
+                autoBlackoutEnabled = true,
+            ),
+        )
+
+        // Presentation mode shows trackpad shell on Display 0, yet auto-blackout must still trigger once
+        assertTrue(
+            ExternalTrackpadPolicy.shouldTriggerAutoBlackout(
+                isExternalMonitor = true,
+                autoBlackoutEnabled = true,
+                daemonConnected = true,
+                hostScreenOff = false,
+                phoneTrackpadVisible = true,
+                isPresentationMode = true,
+                alreadyTriggeredForSession = false,
+            ),
+        )
+        // Once triggered in this session, manual wake must not be immediately forced back off
+        assertFalse(
+            ExternalTrackpadPolicy.shouldTriggerAutoBlackout(
+                isExternalMonitor = true,
+                autoBlackoutEnabled = true,
+                daemonConnected = true,
+                hostScreenOff = false,
+                phoneTrackpadVisible = true,
+                isPresentationMode = true,
+                alreadyTriggeredForSession = true,
+            ),
+        )
+    }
 }

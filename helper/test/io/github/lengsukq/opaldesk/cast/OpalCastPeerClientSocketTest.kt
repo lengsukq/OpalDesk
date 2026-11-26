@@ -22,13 +22,21 @@ class OpalCastPeerClientSocketTest {
         var connectedEndpoint: InetSocketAddress? = null
         var connectedTimeoutMs: Int = -1
         var tcpNoDelayFlag: Boolean = false
+        var trafficClassValue: Int = -1
+        var recvBufSize: Int = -1
         var closedFlag: Boolean = false
 
         override fun setTcpNoDelay(on: Boolean) {
             tcpNoDelayFlag = on
         }
 
-        override fun setReceiveBufferSize(size: Int) = Unit
+        override fun setTrafficClass(tc: Int) {
+            trafficClassValue = tc
+        }
+
+        override fun setReceiveBufferSize(size: Int) {
+            recvBufSize = size
+        }
         override fun setSendBufferSize(size: Int) = Unit
 
         override fun connect(endpoint: SocketAddress?, timeout: Int) {
@@ -48,13 +56,21 @@ class OpalCastPeerClientSocketTest {
         var connectedEndpoint: InetSocketAddress? = null
         var connectedTimeoutMs: Int = -1
         var tcpNoDelayFlag: Boolean = false
+        var trafficClassValue: Int = -1
+        var recvBufSize: Int = -1
         var closedFlag: Boolean = false
 
         override fun setTcpNoDelay(on: Boolean) {
             tcpNoDelayFlag = on
         }
 
-        override fun setReceiveBufferSize(size: Int) = Unit
+        override fun setTrafficClass(tc: Int) {
+            trafficClassValue = tc
+        }
+
+        override fun setReceiveBufferSize(size: Int) {
+            recvBufSize = size
+        }
         override fun setSendBufferSize(size: Int) = Unit
 
         override fun connect(endpoint: SocketAddress?, timeout: Int) {
@@ -134,6 +150,8 @@ class OpalCastPeerClientSocketTest {
 
         assertSame(ssl, result)
         assertTrue(ssl.tcpNoDelayFlag)
+        assertEquals(0xB8, ssl.trafficClassValue)
+        assertEquals(512 * 1024, ssl.recvBufSize)
         assertNotNull(ssl.connectedEndpoint)
         assertEquals("10.10.10.145", ssl.connectedEndpoint!!.hostString)
         assertEquals(19878, ssl.connectedEndpoint!!.port)
@@ -165,6 +183,7 @@ class OpalCastPeerClientSocketTest {
 
         assertSame(wrapped, result)
         assertTrue(raw.tcpNoDelayFlag)
+        assertEquals(1024 * 1024, raw.recvBufSize)
         assertEquals("192.168.42.129", raw.connectedEndpoint?.hostString)
         assertEquals(19878, raw.connectedEndpoint?.port)
         assertEquals(4_500, raw.connectedTimeoutMs)
@@ -192,5 +211,41 @@ class OpalCastPeerClientSocketTest {
 
         assertTrue(threw)
         assertTrue(ssl.closedFlag)
+    }
+
+    @Test
+    fun scalesBitrateAndTransportHintForHighRefreshAndUsbTethering() {
+        assertEquals(OpalCastPeerClient.TRANSPORT_HINT_WIFI_TLS, OpalCastPeerClient.resolveTransportHint(false))
+        assertEquals(OpalCastPeerClient.TRANSPORT_HINT_USB_TETHER, OpalCastPeerClient.resolveTransportHint(true))
+
+        // 2560x1600 @ 120Hz wireless gets balanced 22 Mbps (crisp HEVC without Wi-Fi burst thrashing).
+        val wifi2k120 = OpalCastPeerClient.computeTargetBitrateKbps(
+            width = 2560, height = 1600, fps = 120, isStandalone = false, isUsbTether = false,
+        )
+        assertEquals(22_000, wifi2k120)
+
+        // AudioTrack buffer provides >=160ms (~32 KiB at 48kHz stereo PCM16) to absorb Wi-Fi jitter bursts.
+        val audioBuf = OpalCastPeerClient.computeAudioTrackBufferBytes(
+            minBufBytes = 7680, sampleRate = 48_000, channels = 2,
+        )
+        assertTrue("Expected >= 32 KiB AudioTrack buffer, got $audioBuf", audioBuf >= 32_768)
+        assertEquals(0, audioBuf % 4096)
+
+        // USB Tethering boosts headroom significantly above Wi-Fi.
+        val usb2k120 = OpalCastPeerClient.computeTargetBitrateKbps(
+            width = 2560, height = 1600, fps = 120, isStandalone = false, isUsbTether = true,
+        )
+        assertTrue(usb2k120 > wifi2k120)
+        assertTrue(usb2k120 <= OpalCastPeerClient.MAX_USB_TETHER_BITRATE_KBPS)
+
+        // Standalone floating windows stay lightweight on Wi-Fi and boost cleanly on USB Tethering.
+        val wifiStandalone = OpalCastPeerClient.computeTargetBitrateKbps(
+            width = 800, height = 1440, fps = 60, isStandalone = true, isUsbTether = false,
+        )
+        val usbStandalone = OpalCastPeerClient.computeTargetBitrateKbps(
+            width = 800, height = 1440, fps = 60, isStandalone = true, isUsbTether = true,
+        )
+        assertEquals(9_000, wifiStandalone)
+        assertEquals(13_500, usbStandalone)
     }
 }

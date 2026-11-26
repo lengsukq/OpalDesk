@@ -120,11 +120,17 @@ class DesktopActivity : ComponentActivity() {
             OpalTheme {
                 val imeController = rememberNativeImeHostController()
                 activeImeController = imeController
+                val status by BridgeClient.statusFlow.collectAsState()
                 val imeRequest by BridgeClient.imeBridgeRequestFlow.collectAsState()
                 val scene by BridgeClient.sceneFlow.collectAsState()
                 val remote by BridgeClient.remoteStatusFlow.collectAsState()
                 var lastHandledImeSeq by remember {
                     mutableLongStateOf(BridgeClient.imeBridgeRequestFlow.value?.seq ?: 0L)
+                }
+
+                // Sync host panel refresh rate with the user's targetFps so LTPO displays don't stay throttled at 60Hz
+                LaunchedEffect(status.targetFps) {
+                    applyPreferredDisplayRefreshRate(status.targetFps)
                 }
 
                 // Never allow Local DeX to stay active concurrently with an outgoing remote cast
@@ -163,6 +169,7 @@ class DesktopActivity : ComponentActivity() {
                 Box(modifier = Modifier.fillMaxSize()) {
                     NativeImeBridgeHost(
                         controller = imeController,
+                        hostWindow = window,
                         onSendKey = { action, keyCode, meta ->
                             val focused = BridgeClient.sceneFlow.value.focusedWindow
                             if (focused != null && !focused.isMinimized) {
@@ -235,6 +242,7 @@ class DesktopActivity : ComponentActivity() {
         super.onStart()
         if (!BridgeClient.remoteStatusFlow.value.connected) {
             BridgeClient.setLocalDesktopMousePinAsync(true)
+            BridgeClient.setDexImeSessionActive("local_desktop", true)
         }
     }
 
@@ -243,12 +251,15 @@ class DesktopActivity : ComponentActivity() {
         if (BridgeClient.remoteStatusFlow.value.connected) {
             Toast.makeText(this, "投屏进行中，已锁定本机桌面", Toast.LENGTH_SHORT).show()
             BridgeClient.setLocalDesktopMousePinAsync(false)
+            BridgeClient.setDexImeSessionActive("local_desktop", false)
             finish()
             return
         }
         applyImmersiveFullscreen()
+        applyPreferredDisplayRefreshRate(BridgeClient.statusFlow.value.targetFps)
         BridgeClient.requestBinder(this)
         BridgeClient.setLocalDesktopMousePinAsync(true)
+        BridgeClient.setDexImeSessionActive("local_desktop", true)
         Thread({
             BridgeClient.refreshStatus()
             BridgeClient.refreshSceneSnapshot()
@@ -256,6 +267,7 @@ class DesktopActivity : ComponentActivity() {
             if (r.connected) {
                 runOnUiThread {
                     BridgeClient.setLocalDesktopMousePinAsync(false)
+                    BridgeClient.setDexImeSessionActive("local_desktop", false)
                     finish()
                 }
             }
@@ -264,11 +276,13 @@ class DesktopActivity : ComponentActivity() {
 
     override fun onStop() {
         BridgeClient.setLocalDesktopMousePinAsync(false)
+        BridgeClient.setDexImeSessionActive("local_desktop", false)
         super.onStop()
     }
 
     override fun onDestroy() {
         BridgeClient.setLocalDesktopMousePinAsync(false)
+        BridgeClient.setDexImeSessionActive("local_desktop", false)
         super.onDestroy()
     }
 
@@ -326,6 +340,32 @@ class DesktopActivity : ComponentActivity() {
         startActivity(
             MainActivity.createLaunchIntent(this, fromDesktop = true),
         )
+    }
+
+    private fun applyPreferredDisplayRefreshRate(targetFps: Int) {
+        val disp = display ?: return
+        val cur = disp.mode ?: return
+        val supported = disp.supportedModes ?: return
+        val candidates = supported.map {
+            io.github.lengsukq.opaldesk.external.ExternalDisplayPolicy.DisplayModeCandidate(
+                modeId = it.modeId,
+                width = it.physicalWidth,
+                height = it.physicalHeight,
+                refreshRate = it.refreshRate,
+            )
+        }
+        val chosen = io.github.lengsukq.opaldesk.external.ExternalDisplayPolicy.selectDisplayModeForTargetFps(
+            modes = candidates,
+            currentWidth = cur.physicalWidth,
+            currentHeight = cur.physicalHeight,
+            targetFps = targetFps,
+        ) ?: return
+        val lp = window.attributes
+        if (lp.preferredDisplayModeId != chosen.modeId || kotlin.math.abs(lp.preferredRefreshRate - chosen.refreshRate) > 0.5f) {
+            lp.preferredDisplayModeId = chosen.modeId
+            lp.preferredRefreshRate = chosen.refreshRate
+            window.attributes = lp
+        }
     }
 
     private fun applyImmersiveFullscreen() {

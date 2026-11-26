@@ -12,4 +12,6 @@
     <string name="tile_enter_dex_label">OpalDesk 桌面</string>
     <string name="tile_host_screen_label">物理息屏</string>
     <string name="tile_wifi_share_label">无线共享</string>
+    <string name="opaldesk_ime_label">OpalDesk 通道输入法</string>
+    <string name="opaldesk_ime_subtype_label">OpalDesk 无感直输通道</string>
 </resources>

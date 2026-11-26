@@ -144,6 +144,7 @@ class ExternalDesktopActivity : ComponentActivity() {
                 && actualDisplayId > Display.DEFAULT_DISPLAY
                 && displayId == actualDisplayId
             ) {
+                applyPreferredPeakDisplayMode(display)
                 refreshDirectSessionMetadata(actualDisplayId)
             }
         }
@@ -187,6 +188,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         if (currentDisplayId > Display.DEFAULT_DISPLAY) {
             runningInPresentationMode = false
             targetDisplayId = currentDisplayId
+            BridgeClient.setDexImeSessionActive("external_desktop", true)
             val session = publishDirectSession(currentDisplayId, requestedWireless)
             activeIsWirelessDisplay = session.isWirelessDisplay
             syncExternalMouseRouting(currentDisplayId)
@@ -200,6 +202,7 @@ class ExternalDesktopActivity : ComponentActivity() {
                     session = session,
                     autoShowEnabled = AppPrefs.isAutoShowPhoneTrackpadEnabled(this),
                     alreadyVisible = ExternalTrackpadBridge.phoneTrackpadVisibleFlow.value,
+                    autoBlackoutEnabled = AppPrefs.isAutoBlackoutOnCast(this),
                 )
             ) {
                 handler.post {
@@ -310,6 +313,7 @@ class ExternalDesktopActivity : ComponentActivity() {
                 targetDisplayId = freshDisplay.displayId
                 runningInPresentationMode = true
                 presentationSummary = pres.monitorSummary
+                BridgeClient.setDexImeSessionActive("external_desktop", true)
                 ExternalTrackpadBridge.publishSession(
                     owner = this,
                     session = ExternalDesktopSession(
@@ -408,6 +412,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         runningInPresentationMode = false
         targetDisplayId = Display.DEFAULT_DISPLAY
         ExternalTrackpadBridge.clearSessionIfOwner(this)
+        BridgeClient.setDexImeSessionActive("external_desktop", true)
         if (notifyExternalUnavailable && !fallbackNoticeShown) {
             fallbackNoticeShown = true
             Toast.makeText(
@@ -466,7 +471,37 @@ class ExternalDesktopActivity : ComponentActivity() {
         }
     }
 
+    private fun applyPreferredPeakDisplayMode(
+        targetDisplay: Display?,
+        targetFps: Int = BridgeClient.statusFlow.value.targetFps,
+    ) {
+        val disp = targetDisplay ?: return
+        val cur = disp.mode ?: return
+        val supported = disp.supportedModes ?: return
+        val candidates = supported.map {
+            ExternalDisplayPolicy.DisplayModeCandidate(
+                modeId = it.modeId,
+                width = it.physicalWidth,
+                height = it.physicalHeight,
+                refreshRate = it.refreshRate,
+            )
+        }
+        val chosen = ExternalDisplayPolicy.selectDisplayModeForTargetFps(
+            modes = candidates,
+            currentWidth = cur.physicalWidth,
+            currentHeight = cur.physicalHeight,
+            targetFps = targetFps,
+        ) ?: return
+        val lp = window.attributes
+        if (lp.preferredDisplayModeId != chosen.modeId || kotlin.math.abs(lp.preferredRefreshRate - chosen.refreshRate) > 0.5f) {
+            lp.preferredDisplayModeId = chosen.modeId
+            lp.preferredRefreshRate = chosen.refreshRate
+            window.attributes = lp
+        }
+    }
+
     private fun bindDirectExtendedWorkspaceUi(currentDisplayId: Int) {
+        applyPreferredPeakDisplayMode(display)
         val curMode = display?.mode
         val defaultW = curMode?.physicalWidth?.coerceAtLeast(640) ?: resources.displayMetrics.widthPixels.coerceAtLeast(640)
         val defaultH = curMode?.physicalHeight?.coerceAtLeast(480) ?: resources.displayMetrics.heightPixels.coerceAtLeast(480)
@@ -488,6 +523,9 @@ class ExternalDesktopActivity : ComponentActivity() {
         val initialOverscan = if (session.isPhysicalDirectExtended) AppPrefs.getExternalOverscanPct(this) else 0f
         val (initInsetH, initInsetV) = ExternalDisplayPolicy.computeOverscanInsetsPx(defaultW, defaultH, initialOverscan)
         val view = ComposeView(this).apply {
+            if (session.isRemoteCastDisplay) {
+                pointerIcon = android.view.PointerIcon.getSystemIcon(this@ExternalDesktopActivity, android.view.PointerIcon.TYPE_NULL)
+            }
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -502,10 +540,14 @@ class ExternalDesktopActivity : ComponentActivity() {
                     val overscanPct by AppPrefs.externalOverscanPctFlow.collectAsState()
                     val curExtSession by ExternalTrackpadBridge.sessionFlow.collectAsState()
                     val remoteCursor by BridgeClient.remoteTrackpadCursorFlow.collectAsState()
+                    val status by BridgeClient.statusFlow.collectAsState()
                     val scene by BridgeClient.sceneFlow.collectAsState()
                     val imeRequest by BridgeClient.imeBridgeRequestFlow.collectAsState()
                     val imeController = rememberNativeImeHostController()
                     directImeController = imeController
+                    LaunchedEffect(status.targetFps) {
+                        applyPreferredPeakDisplayMode(display, status.targetFps)
+                    }
                     LaunchedEffect(overscanPct, curExtSession.isPhysicalDirectExtended, curExtSession.widthPx, curExtSession.heightPx) {
                         val targetView = directComposeView ?: return@LaunchedEffect
                         val lp = targetView.layoutParams as? FrameLayout.LayoutParams ?: return@LaunchedEffect
@@ -557,6 +599,7 @@ class ExternalDesktopActivity : ComponentActivity() {
                         Box(modifier = Modifier.fillMaxSize()) {
                             NativeImeBridgeHost(
                                 controller = imeController,
+                                hostWindow = window,
                                 onSendKey = { action, keyCode, meta ->
                                     val focused = BridgeClient.sceneFlow.value.focusedWindow
                                     if (focused != null && !focused.isMinimized) {
@@ -614,6 +657,9 @@ class ExternalDesktopActivity : ComponentActivity() {
                 BridgeClient.updateRemoteTrackpadCursor(null)
             }
         }.apply {
+            if (session.isRemoteCastDisplay) {
+                pointerIcon = android.view.PointerIcon.getSystemIcon(this@ExternalDesktopActivity, android.view.PointerIcon.TYPE_NULL)
+            }
             setBackgroundColor(AndroidColor.BLACK)
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -775,6 +821,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         displayManager?.unregisterDisplayListener(displayListener)
         displayManager = null
         dismissPresentation()
+        BridgeClient.setDexImeSessionActive("external_desktop", false)
         ExternalTrackpadBridge.clearSessionIfOwner(this)
         if (BridgeClient.statusFlow.value.hostScreenOff) {
             BridgeClient.setHostScreenPowerAsync(true)
@@ -859,6 +906,12 @@ class ExternalDesktopActivity : ComponentActivity() {
 
     private fun syncExternalMouseRouting(extDisplayId: Int) {
         if (extDisplayId <= Display.DEFAULT_DISPLAY) return
+        if (ExternalTrackpadBridge.sessionFlow.value.isRemoteCastDisplay) {
+            // Isolate host USB/Bluetooth peripherals on Display 0 while casting to Windows/macOS
+            // so attached USB mice do not jump onto the virtual cast display or paint a duplicate cursor.
+            BridgeClient.releaseExternalMouseRoutingAsync()
+            return
+        }
         val mode = AppPrefs.getMouseTarget(this)
         BridgeClient.setMouseTargetAsync(mode, extDisplayId)
     }
@@ -868,6 +921,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         val p = presentation
         presentation = null
         if (p != null) {
+            BridgeClient.setDexImeSessionActive("external_desktop", false)
             try {
                 p.dismiss()
             } catch (_: Throwable) {

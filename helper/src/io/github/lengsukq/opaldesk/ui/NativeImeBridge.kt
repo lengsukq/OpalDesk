@@ -47,10 +47,13 @@ object OpalImeFocusTracker {
     var localComposeTextFieldFocused: Boolean = false
         private set
 
-    fun setLocalTextFieldFocused(focused: Boolean) {
+    fun setLocalTextFieldFocused(
+        focused: Boolean,
+        hostDisplayId: Int = android.view.Display.DEFAULT_DISPLAY,
+    ) {
         if (localComposeTextFieldFocused == focused) return
         localComposeTextFieldFocused = focused
-        BridgeClient.setLocalTextFieldFocusedOneway(focused)
+        BridgeClient.setLocalTextFieldFocusedOneway(focused, hostDisplayId)
     }
 }
 
@@ -211,6 +214,7 @@ object WorkstationKeyDispatcher {
 
     fun forwardToFocusedWindow(event: KeyEvent, forwardImeSwitch: Boolean = false): Boolean {
         if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) return false
+        if ((event.flags and KeyEvent.FLAG_CANCELED) != 0) return false
         if (!isForwardableKey(event.keyCode)) return false
         if (!forwardImeSwitch && isImeSwitchShortcut(event.keyCode, event.metaState)) return false
         val focused = BridgeClient.sceneFlow.value.focusedWindow ?: return false
@@ -243,6 +247,15 @@ object WorkstationKeyDispatcher {
         textCommitExec.execute {
             val focused = BridgeClient.sceneFlow.value.focusedWindow ?: return@execute
             if (focused.isMinimized) return@execute
+            // Fast path: when OpalDesk's built-in channel IME holds a live InputConnection to a
+            // managed app window (never looping back into OpalDesk itself), commit directly with
+            // zero clipboard mutation and zero Ctrl+V delay.
+            val committedDirectly = io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.commitTextSync(
+                text = text,
+                rejectSelfPackage = true,
+                selfPackageName = appCtx.packageName,
+            )
+            if (committedDirectly) return@execute
             val clipLatch = CountDownLatch(1)
             mainHandler.post {
                 try {
@@ -301,12 +314,14 @@ fun NativeImeBridgeHost(
     onCommitText: (String) -> Unit,
     onComposingChanged: (String) -> Unit = {},
     onImeVisibilityChanged: (Boolean) -> Unit = {},
+    hostWindow: android.view.Window? = null,
     modifier: Modifier = Modifier,
 ) {
     val curSendKey by rememberUpdatedState(onSendKey)
     val curCommitText by rememberUpdatedState(onCommitText)
     val curComposing by rememberUpdatedState(onComposingChanged)
     val curVisibility by rememberUpdatedState(onImeVisibilityChanged)
+    val curHostWindow by rememberUpdatedState(hostWindow)
 
     DisposableEffect(controller) {
         onDispose {
@@ -320,6 +335,7 @@ fun NativeImeBridgeHost(
         factory = { ctx ->
             NativeImeBridgeView(
                 ctx = ctx,
+                hostWindowProvider = { curHostWindow },
                 onSendKey = { a, k, m -> curSendKey(a, k, m) },
                 onCommitText = { txt -> curCommitText(txt) },
                 onComposingChanged = { comp -> curComposing(comp) },
@@ -337,6 +353,7 @@ fun NativeImeBridgeHost(
 @SuppressLint("ViewConstructor")
 internal class NativeImeBridgeView(
     ctx: Context,
+    private val hostWindowProvider: () -> android.view.Window?,
     private val onSendKey: (Int, Int, Int) -> Unit,
     private val onCommitText: (String) -> Unit,
     private val onComposingChanged: (String) -> Unit,
@@ -445,9 +462,10 @@ internal class NativeImeBridgeView(
     fun showIme(inputType: Int = 0) {
         activeInputType = if (inputType != 0) inputType else DEFAULT_INPUT_TYPE
         val gen = ++showAttemptGen
-        // Tell the daemon to keep Display 0 top-focused so InputMethodManagerService accepts showSoftInput
-        // and subsequent forwarded keystrokes do not steal top display focus away from the host Activity.
-        BridgeClient.setLocalTextFieldFocusedOneway(true)
+        // Keep THIS view's hosting display top-focused (external monitor or Display 0) so IMMS
+        // accepts showSoftInput on the correct screen instead of pulling focus back to Display 0.
+        val hostDispId = resolveHostDisplayId()
+        BridgeClient.setLocalTextFieldFocusedOneway(true, hostDispId)
         pendingShowAfterFocus = true
         triggerShowNow()
         postDelayed({
@@ -465,7 +483,7 @@ internal class NativeImeBridgeView(
                 // focus and daemon localImeActive lock so window keyboard input never gets stranded.
                 clearFocus()
                 if (!OpalImeFocusTracker.localComposeTextFieldFocused) {
-                    BridgeClient.setLocalTextFieldFocusedOneway(false)
+                    BridgeClient.setLocalTextFieldFocusedOneway(false, resolveHostDisplayId())
                 }
             }
         }, 450L)
@@ -476,7 +494,7 @@ internal class NativeImeBridgeView(
         requestFocus()
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.restartInput(this)
-        findHostActivity(context)?.window?.let { win ->
+        resolveOwnDisplayWindow()?.let { win ->
             WindowCompat.getInsetsController(win, this).show(WindowInsetsCompat.Type.ime())
         }
         imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
@@ -486,13 +504,31 @@ internal class NativeImeBridgeView(
         showAttemptGen++
         pendingShowAfterFocus = false
         onComposingChanged("")
-        BridgeClient.setLocalTextFieldFocusedOneway(false)
+        BridgeClient.setLocalTextFieldFocusedOneway(false, resolveHostDisplayId())
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.hideSoftInputFromWindow(windowToken, 0)
-        findHostActivity(context)?.window?.let { win ->
+        resolveOwnDisplayWindow()?.let { win ->
             WindowCompat.getInsetsController(win, this).hide(WindowInsetsCompat.Type.ime())
         }
         clearFocus()
+    }
+
+    private fun resolveHostDisplayId(): Int {
+        return display?.displayId
+            ?: hostWindowProvider()?.decorView?.display?.displayId
+            ?: android.view.Display.DEFAULT_DISPLAY
+    }
+
+    /**
+     * Resolves the Window that actually owns this view's Display. Never falls back to a Display 0
+     * Activity Window when this view is hosted inside a secondary-display Presentation.
+     */
+    private fun resolveOwnDisplayWindow(): android.view.Window? {
+        hostWindowProvider()?.let { return it }
+        val actWin = findHostActivity(context)?.window ?: return null
+        val myDispId = display?.displayId ?: return actWin
+        val actDispId = actWin.decorView.display?.displayId ?: android.view.Display.DEFAULT_DISPLAY
+        return if (myDispId == actDispId) actWin else null
     }
 
     private fun dispatchCommittedString(raw: String) {

@@ -869,6 +869,28 @@ public final class CompositorEngine {
                     focusWindowLocked(ws, now);
                     markDirtyAndNotifyLocked();
                     return true;
+                case BridgeProtocol.WIN_ACTION_TOGGLE_ORIENTATION: {
+                    boolean currentlyPortrait = ws.contentHeight > ws.contentWidth;
+                    boolean toPortrait = !currentlyPortrait;
+                    WindowProfile nextProfile = toPortrait ? WindowProfile.PORTRAIT : WindowProfile.DESKTOP;
+                    ws.profile = nextProfile;
+                    config.rememberProfile(ws.pkg, nextProfile);
+                    int canvasW = config.getCanvasWidth();
+                    int canvasH = config.getCanvasHeight();
+                    int canvasDpi = config.getCanvasDpi();
+                    ws.presentation = BridgeProtocol.PRES_FLOATING;
+                    ws.frame = computeRotatedWindowFrameLocked(ws.frame, toPortrait, canvasW, canvasH, canvasDpi);
+                    ws.restoreFrame = ws.frame;
+                    int[] spec = computeWindowSpecLocked(ws.frame, false, nextProfile, ws.pkg);
+                    ws.contentWidth = spec[0];
+                    ws.contentHeight = spec[1];
+                    ws.contentDpi = spec[2];
+                    vdPool.resizeIfActive(windowId, spec[0], spec[1], spec[2]);
+                    rememberWindowBoundsLocked(ws);
+                    focusWindowLocked(ws, now);
+                    markDirtyAndNotifyLocked();
+                    return true;
+                }
                 case BridgeProtocol.WIN_ACTION_RELOAD_APP:
                     pkgToReload = ws.pkg;
                     reloadCls = ws.activityClass;
@@ -1278,7 +1300,8 @@ public final class CompositorEngine {
                 profile,
                 config.getWindowDpiScalePct(),
                 runtimeBridge.getHostDisplayDpi(),
-                config.resolveEffectiveCustomDpi(pkg));
+                config.resolveEffectiveCustomDpi(pkg),
+                config.getWindowSupersampleMode());
     }
 
     private void rememberWindowBoundsLocked(WindowSession ws) {
@@ -1290,6 +1313,52 @@ public final class CompositorEngine {
                 ? BridgeProtocol.PRES_FLOATING : ws.presentation;
         config.rememberWindowBounds(
                 ws.pkg, rectToSave, config.getCanvasWidth(), config.getCanvasHeight(), presToSave);
+    }
+
+    private IntRect computeRotatedWindowFrameLocked(
+            IntRect currentFrame,
+            boolean toPortrait,
+            int canvasW,
+            int canvasH,
+            int canvasDpi) {
+        int cw = Math.max(360, canvasW);
+        int ch = Math.max(360, canvasH);
+        int topSafe = DisplayGeometryUtil.dpToPx(DisplayGeometryUtil.TOP_BAR_HEIGHT_DP, canvasDpi);
+        int bottomSafe = DisplayGeometryUtil.dpToPx(DisplayGeometryUtil.DOCK_RESERVED_BOTTOM_DP, canvasDpi);
+        int usableH = Math.max(260, ch - topSafe - bottomSafe - 16);
+        int usableW = Math.max(300, cw - 24);
+        int targetW;
+        int targetH;
+        if (toPortrait) {
+            // Maximize usable vertical height with a phone-friendly 9:16 aspect ratio so vertical video
+            // apps (Douyin / short dramas) fill the frame without side letterbox bars.
+            targetH = Math.min(usableH, Math.round(usableH * 0.96f));
+            targetW = Math.round(targetH * 9f / 16f);
+            if (targetW > usableW) {
+                targetW = usableW;
+                targetH = Math.min(usableH, Math.round(targetW * 16f / 9f));
+            }
+            if (targetW < 340) targetW = Math.min(usableW, 340);
+        } else {
+            // Rotate back to a spacious 16:10 landscape desktop window centered on the canvas.
+            targetW = Math.min(usableW, Math.round(usableW * 0.78f));
+            targetH = Math.min(usableH, Math.round(targetW * 10f / 16f));
+            if (targetH > usableH) {
+                targetH = usableH;
+                targetW = Math.min(usableW, Math.round(targetH * 16f / 10f));
+            }
+        }
+        int cx = (currentFrame != null && !currentFrame.isEmpty())
+                ? (currentFrame.left + currentFrame.right) / 2
+                : cw / 2;
+        int cy = (currentFrame != null && !currentFrame.isEmpty())
+                ? (currentFrame.top + currentFrame.bottom) / 2
+                : topSafe + usableH / 2;
+        int left = cx - targetW / 2;
+        int top = cy - targetH / 2;
+        return DisplayGeometryUtil.clampWindowFrame(
+                new IntRect(left, top, left + targetW, top + targetH),
+                cw, ch, canvasDpi);
     }
 
     private void applyProfileChangeLocked(WindowSession ws, WindowProfile nextProfile) {

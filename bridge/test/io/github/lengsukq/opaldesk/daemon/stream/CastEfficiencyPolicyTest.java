@@ -6,13 +6,18 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import io.github.lengsukq.opaldesk.daemon.DaemonConfig;
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil;
+import io.github.lengsukq.opaldesk.daemon.compositor.WindowProfile;
+import io.github.lengsukq.opaldesk.daemon.sink.DisplaySink;
 
 import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 
 public class CastEfficiencyPolicyTest {
     private static final int MAX_KBPS = 28_000;
@@ -133,5 +138,164 @@ public class CastEfficiencyPolicyTest {
                 "Bilibili");
         String json = new String(OpalCastProtocol.encodeDeviceState(ds), java.nio.charset.StandardCharsets.UTF_8);
         assertTrue(json.contains("\"fullscreenWindowTitle\":\"Bilibili\""));
+    }
+
+    @Test
+    public void encoderThermalAndQualityPoliciesSelectOptimalProfileCbrAndKeepalive() {
+        // Static repeat-frame keepalive: 10Hz only for Android high-refresh peers (>60Hz), 1Hz elsewhere.
+        assertEquals(DisplayGeometryUtil.AGGRESSIVE_REPEAT_FRAME_AFTER_US,
+                DisplayGeometryUtil.resolveRepeatPreviousFrameAfterUs("android", 120f));
+        assertEquals(DisplayGeometryUtil.AGGRESSIVE_REPEAT_FRAME_AFTER_US,
+                DisplayGeometryUtil.resolveRepeatPreviousFrameAfterUs("ANDROID", 90f));
+        assertEquals(DisplayGeometryUtil.DEFAULT_REPEAT_FRAME_AFTER_US,
+                DisplayGeometryUtil.resolveRepeatPreviousFrameAfterUs("android", 60f));
+        assertEquals(DisplayGeometryUtil.DEFAULT_REPEAT_FRAME_AFTER_US,
+                DisplayGeometryUtil.resolveRepeatPreviousFrameAfterUs("macos", 120f));
+        assertEquals(DisplayGeometryUtil.DEFAULT_REPEAT_FRAME_AFTER_US,
+                DisplayGeometryUtil.resolveRepeatPreviousFrameAfterUs("windows", 120f));
+        assertEquals(DisplayGeometryUtil.DEFAULT_REPEAT_FRAME_AFTER_US,
+                DisplayGeometryUtil.resolveRepeatPreviousFrameAfterUs("", 120f));
+
+        // Qualcomm & unknown encoders stay on CBR to keep zero-lookahead; MTK/Exynos/HiSilicon unlock VBR.
+        assertTrue(DisplayGeometryUtil.shouldPreferCbrMode("c2.qti.hevc.encoder"));
+        assertTrue(DisplayGeometryUtil.shouldPreferCbrMode("OMX.qcom.video.encoder.avc"));
+        assertTrue(DisplayGeometryUtil.shouldPreferCbrMode(null));
+        assertFalse(DisplayGeometryUtil.shouldPreferCbrMode("c2.mtk.hevc.encoder"));
+        assertFalse(DisplayGeometryUtil.shouldPreferCbrMode("c2.exynos.h264.encoder"));
+        assertFalse(DisplayGeometryUtil.shouldPreferCbrMode("c2.hisi.hevc.encoder"));
+
+        // H.264 prefers High Profile over Main/Baseline with highest supported level.
+        assertArrayEquals(
+                new int[]{DisplayGeometryUtil.AVC_PROFILE_HIGH, 65536},
+                DisplayGeometryUtil.selectPreferredProfileLevel(
+                        "video/avc",
+                        new int[]{1, 2, 8, 8},
+                        new int[]{32768, 32768, 16384, 65536}));
+        // H.264 falls back to Main if High is absent.
+        assertArrayEquals(
+                new int[]{DisplayGeometryUtil.AVC_PROFILE_MAIN, 32768},
+                DisplayGeometryUtil.selectPreferredProfileLevel(
+                        "video/avc",
+                        new int[]{1, 2},
+                        new int[]{65536, 32768}));
+        // HEVC picks Main profile with highest supported level.
+        assertArrayEquals(
+                new int[]{DisplayGeometryUtil.HEVC_PROFILE_MAIN, 16384},
+                DisplayGeometryUtil.selectPreferredProfileLevel(
+                        "video/hevc",
+                        new int[]{1, 2, 1},
+                        new int[]{4096, 32768, 16384}));
+    }
+
+    @Test
+    public void transportAwareBitrateCapsAndZeroFlickerReconfigureFastPaths() throws IOException {
+        assertTrue(DisplayGeometryUtil.isWiredSinkType(DisplaySink.SINK_REMOTE_USB));
+        assertTrue(DisplayGeometryUtil.isWiredSinkType(DisplaySink.SINK_REMOTE_USB_TETHER));
+        assertFalse(DisplayGeometryUtil.isWiredSinkType(DisplaySink.SINK_REMOTE_WIFI));
+        assertFalse(DisplayGeometryUtil.isWiredSinkType(DisplaySink.SINK_REMOTE_WIFI_ADB));
+
+        int wiredCap = DisplayGeometryUtil.resolveMaxBitrateKbpsForSink(DisplaySink.SINK_REMOTE_USB);
+        int tetherCap = DisplayGeometryUtil.resolveMaxBitrateKbpsForSink(DisplaySink.SINK_REMOTE_USB_TETHER);
+        int wifiCap = DisplayGeometryUtil.resolveMaxBitrateKbpsForSink(DisplaySink.SINK_REMOTE_WIFI);
+        assertEquals(DisplayGeometryUtil.WIRED_MAX_BITRATE_KBPS, wiredCap);
+        assertEquals(DisplayGeometryUtil.WIRED_MAX_BITRATE_KBPS, tetherCap);
+        assertEquals(DisplayGeometryUtil.WIRELESS_MAX_BITRATE_KBPS, wifiCap);
+
+        // Wired USB allows 45 Mbps; wireless clamps at 32 Mbps.
+        assertEquals(45_000, DisplayGeometryUtil.resolveSessionBitrateKbps(
+                45_000, 3840, 2160, 60f, true, wiredCap));
+        assertEquals(32_000, DisplayGeometryUtil.resolveSessionBitrateKbps(
+                45_000, 3840, 2160, 60f, true, wifiCap));
+
+        // Reconfigure fast-path classifier: NO_OP, BITRATE_ONLY, DPI_ONLY, FULL_RECONFIGURE.
+        assertEquals(DisplayGeometryUtil.ReconfigureAction.NO_OP,
+                DisplayGeometryUtil.planReconfigureAction(
+                        2560, 1440, 240, 60f, 16_000, 0, 0,
+                        2560, 1440, 240, 60f, 16_000, 0, 0));
+        assertEquals(DisplayGeometryUtil.ReconfigureAction.BITRATE_ONLY,
+                DisplayGeometryUtil.planReconfigureAction(
+                        2560, 1440, 240, 60f, 16_000, 0, 0,
+                        2560, 1440, 240, 60f, 28_000, 0, 0));
+        assertEquals(DisplayGeometryUtil.ReconfigureAction.DPI_ONLY,
+                DisplayGeometryUtil.planReconfigureAction(
+                        2560, 1440, 240, 60f, 16_000, 0, 0,
+                        2560, 1440, 280, 60f, 22_000, 0, 0));
+        assertEquals(DisplayGeometryUtil.ReconfigureAction.FULL_RECONFIGURE,
+                DisplayGeometryUtil.planReconfigureAction(
+                        2560, 1440, 240, 60f, 16_000, 0, 0,
+                        2560, 1440, 240, 120f, 16_000, 0, 0));
+        assertEquals(DisplayGeometryUtil.ReconfigureAction.FULL_RECONFIGURE,
+                DisplayGeometryUtil.planReconfigureAction(
+                        2560, 1440, 240, 60f, 16_000, 0, 0,
+                        1920, 1080, 240, 60f, 16_000, 0, 0));
+
+        // HELLO parser extracts optional clientPlatform and usb_tether transportHint cleanly.
+        byte[] helloJson = ("{\"protocolVersion\":1,\"clientName\":\"Pad\",\"clientId\":\"c1\","
+                + "\"transportHint\":\"usb_tether\",\"clientPlatform\":\"Android\"}")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        OpalCastProtocol.HelloMsg parsed = OpalCastProtocol.decodeHello(helloJson);
+        assertEquals("usb_tether", parsed.transportHint);
+        assertEquals("android", parsed.clientPlatform);
+    }
+
+    @Test
+    public void gradedWindowSupersamplingBalancesSharpnessAndGpuLoadAndPersistsConfig() throws Exception {
+        // 1280x800 desktop window on a 1920x1080 canvas hosted by a 560dpi flagship phone.
+        DisplayGeometryUtil.IntRect win = new DisplayGeometryUtil.IntRect(100, 100, 1380, 900);
+        int[] compat = DisplayGeometryUtil.resolveWindowBufferSpec(
+                win, 240, false, WindowProfile.DESKTOP, 100, 560, 0, DisplayGeometryUtil.WINDOW_SUPERSAMPLE_COMPAT);
+        int[] balanced = DisplayGeometryUtil.resolveWindowBufferSpec(
+                win, 240, false, WindowProfile.DESKTOP, 100, 560, 0, DisplayGeometryUtil.WINDOW_SUPERSAMPLE_BALANCED);
+        int[] native1x = DisplayGeometryUtil.resolveWindowBufferSpec(
+                win, 240, false, WindowProfile.DESKTOP, 100, 560, 0, DisplayGeometryUtil.WINDOW_SUPERSAMPLE_NATIVE_1X);
+
+        long compatPixels = (long) compat[0] * compat[1];
+        long balancedPixels = (long) balanced[0] * balanced[1];
+        long nativePixels = (long) native1x[0] * native1x[1];
+
+        assertTrue("NATIVE_1X must match exact window pixel width (1280), got " + native1x[0], native1x[0] == 1280);
+        assertTrue("BALANCED must reduce GPU pixel area vs COMPAT", balancedPixels < compatPixels);
+        assertTrue("NATIVE_1X must have smallest GPU pixel area", nativePixels < balancedPixels);
+        assertTrue("BALANCED long edge capped at 1920", Math.max(balanced[0], balanced[1]) <= 1920);
+
+        // Verify DaemonConfig persists windowSupersampleMode across reload.
+        File dir = Files.createTempDirectory("opal_ss_cfg").toFile();
+        File conf = new File(dir, "v2.conf");
+        File prof = new File(dir, "prof.conf");
+        try {
+            DaemonConfig cfg1 = new DaemonConfig(conf, prof);
+            cfg1.updateDisplayPrefs(120, 100, DisplayGeometryUtil.WINDOW_SUPERSAMPLE_NATIVE_1X);
+            DaemonConfig cfg2 = new DaemonConfig(conf, prof);
+            cfg2.loadAll();
+            assertEquals(120, cfg2.getTargetFps());
+            assertEquals(DisplayGeometryUtil.WINDOW_SUPERSAMPLE_NATIVE_1X, cfg2.getWindowSupersampleMode());
+        } finally {
+            conf.delete();
+            prof.delete();
+            dir.delete();
+        }
+    }
+
+    @Test
+    public void videoFrameBufferPoolReusesBucketsAndAvoidsOversizeRetention() {
+        VideoFrameBufferPool pool = new VideoFrameBufferPool();
+        byte[] a = pool.acquire(10_000);
+        assertEquals(16 * 1024, a.length);
+        pool.release(a);
+        assertEquals(1, pool.pooledCountForSize(10_000));
+        byte[] reused = pool.acquire(12_000);
+        assertTrue("Expected pooled byte[] instance to be reused without reallocation", reused == a);
+        assertEquals(0, pool.pooledCountForSize(10_000));
+
+        // Oversized (>512 KiB) frames allocate exact length and are not retained in buckets.
+        byte[] huge = pool.acquire(700_000);
+        assertEquals(700_000, huge.length);
+        pool.release(huge);
+        assertEquals(0, pool.pooledCountForSize(700_000));
+
+        // Clearing releases all cached references.
+        pool.release(reused);
+        pool.clear();
+        assertEquals(0, pool.pooledCountForSize(10_000));
     }
 }

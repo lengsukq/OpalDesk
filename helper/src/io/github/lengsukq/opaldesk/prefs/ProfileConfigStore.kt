@@ -317,6 +317,39 @@ object ProfileConfigStore {
             it.copy(targetFps = valid)
         }
 
+    /**
+     * Immediately persists display FPS / DPI scale preferences into both [workingConfig] and the
+     * active saved slot so Helper restarts or Binder reconnects never overwrite the user's chosen
+     * refresh rate back to 0 (Auto).
+     */
+    fun persistWorkingDisplayPrefs(
+        ctx: Context?,
+        targetFps: Int,
+        windowDpiScalePct: Int,
+    ): WorkspaceProfileConfig {
+        hydrate(ctx)
+        val validFps = if (targetFps == 0 || targetFps in 30..165) targetFps else 0
+        val validDpiPct = windowDpiScalePct.coerceIn(70, 160)
+        return synchronized(lock) {
+            val cur = _stateFlow.value
+            val updatedWorking = cur.workingConfig.copy(
+                id = cur.activeSlotId,
+                targetFps = validFps,
+                windowDpiScalePct = validDpiPct,
+            )
+            val nextSlots = cur.slots.map { slot ->
+                if (slot.id == cur.activeSlotId) {
+                    slot.copy(targetFps = validFps, windowDpiScalePct = validDpiPct)
+                } else {
+                    slot
+                }
+            }
+            val next = cur.copy(slots = nextSlots, workingConfig = updatedWorking)
+            persistSlotsLocked(ctx, next)
+            updatedWorking
+        }
+    }
+
     fun setWorkingMaxVdCount(maxVd: Int): WorkspaceProfileConfig =
         updateWorkingConfig { it.copy(maxVdCount = maxVd.coerceIn(2, 12)) }
 

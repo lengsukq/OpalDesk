@@ -249,6 +249,24 @@ function domButtonsToAndroidMask(buttons) {
   return mask;
 }
 
+const MOVE_COALESCE_INTERVAL_MS = 8; // ~120Hz ceiling; prevents 500-1000Hz gaming mice from flooding Wi-Fi/Binder
+
+function defaultScheduleMoveFlush(cb) {
+  if (typeof requestAnimationFrame === 'function') {
+    return { kind: 'raf', id: requestAnimationFrame(cb) };
+  }
+  return { kind: 'timeout', id: setTimeout(cb, MOVE_COALESCE_INTERVAL_MS) };
+}
+
+function defaultCancelMoveFlush(token) {
+  if (!token) return;
+  if (token.kind === 'raf' && typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(token.id);
+  } else if (token.kind === 'timeout') {
+    clearTimeout(token.id);
+  }
+}
+
 export class OpalInputController {
   constructor(canvas, imeInput, {
     getRemoteSize,
@@ -261,6 +279,9 @@ export class OpalInputController {
     onUserGesture,
     onSoftKeyboardStateChange,
     virtualKeyboardDevice,
+    now,
+    scheduleMoveFlush,
+    cancelMoveFlush,
   }) {
     this.canvas = canvas;
     this.imeInput = imeInput;
@@ -273,6 +294,9 @@ export class OpalInputController {
     this.onFileDrop = onFileDrop;
     this.onUserGesture = onUserGesture || (() => {});
     this.onSoftKeyboardStateChange = onSoftKeyboardStateChange || (() => {});
+    this.now = now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+    this.scheduleMoveFlush = scheduleMoveFlush || defaultScheduleMoveFlush;
+    this.cancelMoveFlush = cancelMoveFlush || defaultCancelMoveFlush;
 
     this.virtualKeyboardDevice = typeof virtualKeyboardDevice === 'boolean'
       ? virtualKeyboardDevice
@@ -289,6 +313,9 @@ export class OpalInputController {
     this.primaryLeftAsTouch = true; // Default: left-click & drag emits Android TOUCH for smooth scroll/swipe
     this.primaryTouchPointerId = null;
     this.lastTouchPt = null;
+    this.pendingMove = null;
+    this.lastMoveSentAt = -MOVE_COALESCE_INTERVAL_MS;
+    this.moveFlushHandle = null;
     this.isMac = /Mac|iPhone|iPad/.test(
       (typeof navigator !== 'undefined' && (navigator.platform || navigator.userAgent)) || ''
     );
@@ -297,7 +324,47 @@ export class OpalInputController {
     this.applyImeInputMode(this.virtualKeyboardDevice ? 'none' : 'text');
   }
 
+  queueCoalescedMove(move) {
+    this.pendingMove = move;
+    const elapsed = this.now() - this.lastMoveSentAt;
+    if (elapsed >= MOVE_COALESCE_INTERVAL_MS && this.moveFlushHandle === null) {
+      this.flushPendingMove();
+      return;
+    }
+    if (this.moveFlushHandle === null) {
+      this.moveFlushHandle = this.scheduleMoveFlush(() => {
+        this.moveFlushHandle = null;
+        this.flushPendingMove();
+      });
+    }
+  }
+
+  flushPendingMove() {
+    if (this.moveFlushHandle !== null) {
+      this.cancelMoveFlush(this.moveFlushHandle);
+      this.moveFlushHandle = null;
+    }
+    const move = this.pendingMove;
+    this.pendingMove = null;
+    if (!move || !this.enabled) return;
+    this.lastMoveSentAt = this.now();
+    if (move.kind === 'mouse') {
+      this.onMouse(MOUSE_MOVE_ABS, move.x, move.y, move.buttons, 0, 0, 0);
+    } else if (move.kind === 'touch') {
+      this.onTouch(TOUCH_MOVE, 0, move.pointers);
+    }
+  }
+
+  cancelPendingMove() {
+    if (this.moveFlushHandle !== null) {
+      this.cancelMoveFlush(this.moveFlushHandle);
+      this.moveFlushHandle = null;
+    }
+    this.pendingMove = null;
+  }
+
   setPrimaryLeftAsTouch(useTouch) {
+    this.flushPendingMove();
     if (this.primaryTouchPointerId !== null && this.lastTouchPt) {
       this.onTouch(TOUCH_CANCEL, 0, [{ pointerId: 0, x: this.lastTouchPt.x, y: this.lastTouchPt.y, pressure: 0 }]);
       this.primaryTouchPointerId = null;
@@ -319,6 +386,7 @@ export class OpalInputController {
       if (!this.enabled || e.pointerType === 'touch') return;
       this.onUserGesture();
       e.preventDefault();
+      this.flushPendingMove();
       try { this.canvas.setPointerCapture(e.pointerId); } catch {}
       const pt = this.mapClientPoint(e.clientX, e.clientY);
       if (!pt) return;
@@ -348,20 +416,30 @@ export class OpalInputController {
       if (!pt) return;
       if (this.primaryTouchPointerId === e.pointerId) {
         if ((e.buttons & 1) === 0) {
+          this.flushPendingMove();
           this.primaryTouchPointerId = null;
           this.lastTouchPt = pt;
           this.onTouch(TOUCH_UP, 0, [{ pointerId: 0, x: pt.x, y: pt.y, pressure: 0 }]);
           return;
         }
         this.lastTouchPt = pt;
-        this.onTouch(TOUCH_MOVE, 0, [{ pointerId: 0, x: pt.x, y: pt.y, pressure: 1.0 }]);
+        this.queueCoalescedMove({
+          kind: 'touch',
+          pointers: [{ pointerId: 0, x: pt.x, y: pt.y, pressure: 1.0 }],
+        });
         return;
       }
-      this.onMouse(MOUSE_MOVE_ABS, pt.x, pt.y, domButtonsToAndroidMask(e.buttons), 0, 0, 0);
+      this.queueCoalescedMove({
+        kind: 'mouse',
+        x: pt.x,
+        y: pt.y,
+        buttons: domButtonsToAndroidMask(e.buttons),
+      });
     });
 
     const endPrimaryTouch = (e, cancelled) => {
       if (this.primaryTouchPointerId !== e.pointerId) return false;
+      this.flushPendingMove();
       this.primaryTouchPointerId = null;
       const pt = this.mapClientPoint(e.clientX, e.clientY) || this.lastTouchPt;
       if (pt) {
@@ -375,6 +453,7 @@ export class OpalInputController {
       if (!this.enabled || e.pointerType === 'touch') return;
       e.preventDefault();
       if (endPrimaryTouch(e, false)) return;
+      this.flushPendingMove();
       const pt = this.mapClientPoint(e.clientX, e.clientY);
       if (!pt) return;
       this.onMouse(
@@ -400,6 +479,7 @@ export class OpalInputController {
 
     add(this.canvas, 'pointerleave', (e) => {
       if (!this.enabled || e.pointerType === 'touch' || e.buttons !== 0 || this.primaryTouchPointerId !== null) return;
+      this.flushPendingMove();
       const pt = this.mapClientPoint(e.clientX, e.clientY);
       if (pt) this.onMouse(MOUSE_HOVER_EXIT, pt.x, pt.y, 0, 0, 0, 0);
     });
@@ -410,6 +490,7 @@ export class OpalInputController {
       (e) => {
         if (!this.enabled) return;
         e.preventDefault();
+        this.flushPendingMove();
         const pt = this.mapClientPoint(e.clientX, e.clientY);
         if (!pt) return;
         // Android AXIS_VSCROLL positive scrolls up; invert DOM deltaY and normalize tick size
@@ -433,6 +514,7 @@ export class OpalInputController {
         if (pt) activeList.push({ pointerId: t.identifier, x: pt.x, y: pt.y, pressure: t.force || 1.0 });
       }
       if (type === 'start') {
+        this.flushPendingMove();
         if (ev.changedTouches.length > 0) {
           this.positionImeBridge(ev.changedTouches[0].clientX, ev.changedTouches[0].clientY);
         }
@@ -444,8 +526,11 @@ export class OpalInputController {
           this.onTouch(action, idx, activeList);
         }
       } else if (type === 'move') {
-        if (activeList.length > 0) this.onTouch(TOUCH_MOVE, 0, activeList);
+        if (activeList.length > 0) {
+          this.queueCoalescedMove({ kind: 'touch', pointers: activeList });
+        }
       } else {
+        this.flushPendingMove();
         // On touchend/cancel, include the lifted touch in pointers array per Android MotionEvent semantics
         for (let i = 0; i < ev.changedTouches.length; i++) {
           const ct = ev.changedTouches[i];
@@ -634,6 +719,7 @@ export class OpalInputController {
   setEnabled(enabled) {
     this.enabled = Boolean(enabled);
     if (!this.enabled) {
+      this.cancelPendingMove();
       this.composing = false;
       this.suppressedEchoChar = '';
       this.imeConsumedCodes.clear();
@@ -743,6 +829,7 @@ export class OpalInputController {
   }
 
   detach() {
+    this.cancelPendingMove();
     for (const [el, type, fn, opts] of this.boundHandlers) {
       el.removeEventListener(type, fn, opts);
     }

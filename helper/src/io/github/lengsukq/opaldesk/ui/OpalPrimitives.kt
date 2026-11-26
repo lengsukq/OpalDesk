@@ -645,12 +645,14 @@ fun OpalTextInput(
     singleLine: Boolean = true,
 ) {
     val colors = LocalOpalColors.current
+    val hostView = androidx.compose.ui.platform.LocalView.current
     val shape = RoundedCornerShape(11.dp)
     var fieldFocused by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         onDispose {
             if (fieldFocused) {
-                OpalImeFocusTracker.setLocalTextFieldFocused(false)
+                val dispId = hostView.display?.displayId ?: android.view.Display.DEFAULT_DISPLAY
+                OpalImeFocusTracker.setLocalTextFieldFocused(false, dispId)
             }
         }
     }
@@ -660,7 +662,8 @@ fun OpalTextInput(
         singleLine = singleLine,
         modifier = Modifier.onFocusChanged { st ->
             fieldFocused = st.isFocused
-            OpalImeFocusTracker.setLocalTextFieldFocused(st.isFocused)
+            val dispId = hostView.display?.displayId ?: android.view.Display.DEFAULT_DISPLAY
+            OpalImeFocusTracker.setLocalTextFieldFocused(st.isFocused, dispId)
         },
         textStyle = TextStyle(
             color = colors.textPrimary,
@@ -1548,38 +1551,41 @@ fun OpalAmbientBackdrop(
                         .background(veilColor),
                 )
             } else {
-                val blurModifier = if (Build.VERSION.SDK_INT >= 31) {
-                    Modifier.fillMaxSize().blur(26.dp)
-                } else {
-                    Modifier.fillMaxSize()
-                }
-                Canvas(modifier = blurModifier) {
+                // Multi-stop feathered radial gradients match the atmospheric glow without a costly
+                // full-screen 2K/4K RenderEffect Gaussian blur pass on every compositor frame.
+                Canvas(modifier = Modifier.fillMaxSize()) {
                     drawCircle(
                         brush = Brush.radialGradient(
-                            colors = listOf(glowA, Color.Transparent),
+                            0.0f to glowA,
+                            0.45f to glowA.copy(alpha = glowA.alpha * 0.42f),
+                            1.0f to Color.Transparent,
                             center = Offset(size.width * 0.20f, size.height * 0.22f),
-                            radius = size.maxDimension * 0.56f,
+                            radius = size.maxDimension * 0.58f,
                         ),
                         center = Offset(size.width * 0.20f, size.height * 0.22f),
+                        radius = size.maxDimension * 0.58f,
+                    )
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            0.0f to glowB,
+                            0.45f to glowB.copy(alpha = glowB.alpha * 0.42f),
+                            1.0f to Color.Transparent,
+                            center = Offset(size.width * 0.82f, size.height * 0.72f),
+                            radius = size.maxDimension * 0.56f,
+                        ),
+                        center = Offset(size.width * 0.82f, size.height * 0.72f),
                         radius = size.maxDimension * 0.56f,
                     )
                     drawCircle(
                         brush = Brush.radialGradient(
-                            colors = listOf(glowB, Color.Transparent),
-                            center = Offset(size.width * 0.82f, size.height * 0.72f),
-                            radius = size.maxDimension * 0.54f,
-                        ),
-                        center = Offset(size.width * 0.82f, size.height * 0.72f),
-                        radius = size.maxDimension * 0.54f,
-                    )
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(glowC, Color.Transparent),
+                            0.0f to glowC,
+                            0.45f to glowC.copy(alpha = glowC.alpha * 0.42f),
+                            1.0f to Color.Transparent,
                             center = Offset(size.width * 0.52f, size.height * 0.88f),
-                            radius = size.maxDimension * 0.42f,
+                            radius = size.maxDimension * 0.44f,
                         ),
                         center = Offset(size.width * 0.52f, size.height * 0.88f),
-                        radius = size.maxDimension * 0.42f,
+                        radius = size.maxDimension * 0.44f,
                     )
                 }
             }

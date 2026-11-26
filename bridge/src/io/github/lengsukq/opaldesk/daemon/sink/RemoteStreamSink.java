@@ -11,10 +11,12 @@ import android.view.Surface;
 
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil;
 import io.github.lengsukq.opaldesk.daemon.stream.OpalCastProtocol;
+import io.github.lengsukq.opaldesk.daemon.stream.VideoFrameBufferPool;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Locale;
+import java.util.function.Consumer;
 
 /**
  * Zero-copy MediaCodec hardware video encoder sink feeding OpalCast v1 VIDEO_CONFIG & VIDEO_FRAME.
@@ -27,18 +29,42 @@ public final class RemoteStreamSink implements DisplaySink {
 
     private static final String MIME_HEVC = "video/hevc";
     private static final String MIME_AVC = "video/avc";
+    private static final String KEY_MAX_FPS_TO_ENCODER = "max-fps-to-encoder";
     private static final int MIN_BITRATE_KBPS = 1500;
-    private static final int MAX_BITRATE_KBPS = 40_000;
+    private static final int MAX_BITRATE_KBPS = DisplayGeometryUtil.WIRED_MAX_BITRATE_KBPS;
     private static final int DEFAULT_ALIGNMENT = 8;
     private static final int GOP_INTERVAL_SECONDS = 15;
+    public static final long AGGRESSIVE_REPEAT_FRAME_AFTER_US = DisplayGeometryUtil.AGGRESSIVE_REPEAT_FRAME_AFTER_US;
+    public static final long DEFAULT_REPEAT_FRAME_AFTER_US = DisplayGeometryUtil.DEFAULT_REPEAT_FRAME_AFTER_US;
     private static final long DEQUEUE_TIMEOUT_US = 10_000L;
-    private static final long ABR_CONGESTION_COOLDOWN_MS = 1800L;
+    private static final long ABR_SOFT_CONGESTION_COOLDOWN_MS = 2_500L;
+    private static final long ABR_CONGESTION_COOLDOWN_MS = 2_000L;
     private static final long ABR_IDR_COOLDOWN_MS = 350L;
-    private static final long ABR_RECOVERY_INTERVAL_MS = 4000L;
+    private static final long ABR_RECOVERY_INTERVAL_MS = 6_000L;
+    private static final long ABR_SOFT_RECOVERY_HOLD_MS = 8_000L;
+
+    private enum ConfigTier {
+        OPTIMAL,
+        LOW_LATENCY_COMPAT,
+        MINIMAL
+    }
 
     public interface FrameListener {
         void onVideoConfig(OpalCastProtocol.VideoConfig config, long timestampUs);
         void onVideoFrame(byte[] annexBData, int flags, long timestampUs);
+        default void onVideoFrame(
+                byte[] annexBData, int length, int flags, long timestampUs, Consumer<byte[]> onRelease) {
+            byte[] exact = (annexBData != null && annexBData.length == length)
+                    ? annexBData
+                    : (annexBData != null ? Arrays.copyOf(annexBData, length) : OpalCastProtocol.EMPTY_BYTES);
+            try {
+                onVideoFrame(exact, flags, timestampUs);
+            } finally {
+                if (onRelease != null && annexBData != null && exact != annexBData) {
+                    onRelease.accept(annexBData);
+                }
+            }
+        }
         void onEncoderError(String reason);
     }
 
@@ -57,14 +83,20 @@ public final class RemoteStreamSink implements DisplaySink {
         final int maxW;
         final int maxH;
         final float maxFps;
+        final int preferredProfile;
+        final int preferredLevel;
 
-        SelectedEncoder(String codecName, int alignW, int alignH, int maxW, int maxH, float maxFps) {
+        SelectedEncoder(
+                String codecName, int alignW, int alignH, int maxW, int maxH, float maxFps,
+                int preferredProfile, int preferredLevel) {
             this.codecName = codecName;
             this.alignW = alignW;
             this.alignH = alignH;
             this.maxW = maxW;
             this.maxH = maxH;
             this.maxFps = maxFps;
+            this.preferredProfile = preferredProfile;
+            this.preferredLevel = preferredLevel;
         }
     }
 
@@ -74,7 +106,7 @@ public final class RemoteStreamSink implements DisplaySink {
         final int codecId;
         final int width;
         final int height;
-        final int dpi;
+        volatile int dpi;
         final float fps;
         final int displayMode;
         final int rotation;
@@ -100,11 +132,14 @@ public final class RemoteStreamSink implements DisplaySink {
     private final Object lock = new Object();
     private final FrameListener listener;
     private final int sinkType;
+    private final VideoFrameBufferPool framePool = new VideoFrameBufferPool();
     private volatile EncoderSession session;
     private volatile int currentBitrateKbps = 12_000;
     private volatile int targetBitrateKbps = 12_000;
-    private volatile int maxBitrateKbps = 24_000;
+    private volatile int maxBitrateKbps = 32_000;
+    private volatile long repeatPreviousFrameAfterUs = DEFAULT_REPEAT_FRAME_AFTER_US;
     private volatile int actualFpsX100 = 0;
+    private volatile long lastSoftCongestionMs = 0L;
     private volatile long lastCongestionMs = 0L;
     private volatile long lastCongestionIdrMs = 0L;
     private volatile long lastRecoveryMs = 0L;
@@ -120,6 +155,37 @@ public final class RemoteStreamSink implements DisplaySink {
         if (currentBitrateKbps > clamped) {
             updateBitrateKbps(clamped);
         }
+    }
+
+    public void setRepeatPreviousFrameAfterUs(long repeatUs) {
+        if (repeatUs <= 0L) {
+            this.repeatPreviousFrameAfterUs = 0L;
+        } else {
+            this.repeatPreviousFrameAfterUs = Math.max(50_000L, Math.min(5_000_000L, repeatUs));
+        }
+    }
+
+    /**
+     * Updates the cached DPI metadata on the active encoder session without recreating MediaCodec,
+     * used by DPI-only VirtualDisplay resize fast paths.
+     */
+    public void updateDpiOnly(int newDpi) {
+        EncoderSession s = this.session;
+        if (s != null && s.running) {
+            s.dpi = DisplayGeometryUtil.clampDpi(newDpi, s.width, s.height);
+        }
+    }
+
+    public static long resolveRepeatPreviousFrameAfterUs(String clientPlatform, float targetFps) {
+        return DisplayGeometryUtil.resolveRepeatPreviousFrameAfterUs(clientPlatform, targetFps);
+    }
+
+    public static boolean shouldPreferCbrMode(String codecName) {
+        return DisplayGeometryUtil.shouldPreferCbrMode(codecName);
+    }
+
+    public static int[] selectPreferredProfileLevel(String mime, int[] profiles, int[] levels) {
+        return DisplayGeometryUtil.selectPreferredProfileLevel(mime, profiles, levels);
     }
 
     /**
@@ -315,6 +381,25 @@ public final class RemoteStreamSink implements DisplaySink {
     }
 
     /**
+     * Soft ABR step-down (~10%) invoked when outbound video queue hits its soft watermark BEFORE
+     * any frames are dropped. Smoothly lowers bitrate with zero IDR spike and holds recovery long
+     * enough to prevent Qualcomm C2 rate-control sawtooth oscillation.
+     */
+    public void onSoftNetworkCongestion() {
+        long now = SystemClock.uptimeMillis();
+        if (now - lastSoftCongestionMs < ABR_SOFT_CONGESTION_COOLDOWN_MS
+                || now - lastCongestionMs < ABR_SOFT_CONGESTION_COOLDOWN_MS) {
+            return;
+        }
+        lastSoftCongestionMs = now;
+        lastRecoveryMs = now;
+        int reduced = Math.max(MIN_BITRATE_KBPS, (currentBitrateKbps * 90) / 100);
+        if (reduced < currentBitrateKbps) {
+            applyBitrateToCodec(reduced);
+        }
+    }
+
+    /**
      * Called by RemoteStreamServer when outbound video queue drops frames due to network congestion.
      * Applies immediate ABR step-down (~25%) with cooldown and throttled IDR recovery so weak Wi-Fi
      * links never spiral into an IDR storm.
@@ -365,11 +450,12 @@ public final class RemoteStreamSink implements DisplaySink {
         if (currentBitrateKbps >= target) return;
         long now = SystemClock.uptimeMillis();
         if (now - lastCongestionMs < ABR_RECOVERY_INTERVAL_MS
+                || now - lastSoftCongestionMs < ABR_SOFT_RECOVERY_HOLD_MS
                 || now - lastRecoveryMs < ABR_RECOVERY_INTERVAL_MS) {
             return;
         }
         lastRecoveryMs = now;
-        int next = Math.min(target, currentBitrateKbps + Math.max(1000, (target - currentBitrateKbps) / 3));
+        int next = Math.min(target, currentBitrateKbps + Math.max(500, (target - currentBitrateKbps) / 6));
         applyBitrateToCodec(next);
     }
 
@@ -395,6 +481,7 @@ public final class RemoteStreamSink implements DisplaySink {
             if (old != null) {
                 stopSessionQuietly(old);
             }
+            framePool.clear();
         }
     }
 
@@ -424,15 +511,20 @@ public final class RemoteStreamSink implements DisplaySink {
                     int h = dims[1];
                     int dpi = DisplayGeometryUtil.clampDpi(reqDpi, w, h);
                     for (float candFps : fpsCandidates) {
-                        // First try full low-latency params, then minimal safe params
-                        for (boolean lowLatency : new boolean[]{true, false}) {
+                        // Cascade: OPTIMAL (BT.709 + High/Main profile + max-fps cap + low-latency)
+                        // -> LOW_LATENCY_COMPAT (proven CBR low-latency) -> MINIMAL safe fallback.
+                        for (ConfigTier tier : ConfigTier.values()) {
                             MediaCodec codec = null;
                             Surface surf = null;
                             try {
                                 codec = (codecName != null)
                                         ? MediaCodec.createByCodecName(codecName)
                                         : MediaCodec.createEncoderByType(mime);
-                                MediaFormat fmt = buildVideoFormat(mime, w, h, candFps, bitrateKbps, lowLatency);
+                                String activeName = (codecName != null) ? codecName : codec.getName();
+                                MediaFormat fmt = buildVideoFormat(
+                                        mime, activeName, w, h, candFps, bitrateKbps,
+                                        selected.preferredProfile, selected.preferredLevel,
+                                        repeatPreviousFrameAfterUs, tier);
                                 codec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
                                 surf = codec.createInputSurface();
                                 // Do NOT call surf.setFrameRate(fps, FIXED_SOURCE) on MediaCodec's GraphicBufferSource:
@@ -440,9 +532,10 @@ public final class RemoteStreamSink implements DisplaySink {
                                 // stalls SurfaceFlinger output to 0 FPS whenever Display 0 switches to 120Hz Touch Boost.
                                 codec.start();
                                 System.out.println("OPALDESK_ENCODER_STARTED mime=" + mime
-                                        + " codec=" + (codecName != null ? codecName : "default")
+                                        + " codec=" + (activeName != null ? activeName : "default")
                                         + " size=" + w + "x" + h + "@" + dpi + "dpi fps=" + candFps
-                                        + " bitrate=" + bitrateKbps + "kbps lowLatency=" + lowLatency);
+                                        + " bitrate=" + bitrateKbps + "kbps tier=" + tier
+                                        + " repeatUs=" + repeatPreviousFrameAfterUs);
                                 return new EncoderSession(codec, surf, codecId, w, h, dpi, candFps, displayMode, rotation);
                             } catch (Throwable t) {
                                 lastErr = t;
@@ -498,7 +591,7 @@ public final class RemoteStreamSink implements DisplaySink {
         } catch (Throwable t) {
             System.err.println("OPALDESK_ENCODER_SCAN_WARN mime=" + mime + ": " + t.getMessage());
         }
-        return new SelectedEncoder(null, DEFAULT_ALIGNMENT, DEFAULT_ALIGNMENT, 0, 0, 0f);
+        return new SelectedEncoder(null, DEFAULT_ALIGNMENT, DEFAULT_ALIGNMENT, 0, 0, 0f, 0, 0);
     }
 
     private static SelectedEncoder buildSelectedEncoder(MediaCodecInfo info, String matchedType) {
@@ -507,6 +600,8 @@ public final class RemoteStreamSink implements DisplaySink {
         int maxW = 0;
         int maxH = 0;
         float maxFps = 0f;
+        int preferredProfile = 0;
+        int preferredLevel = 0;
         try {
             MediaCodecInfo.CodecCapabilities caps = info.getCapabilitiesForType(matchedType);
             MediaCodecInfo.VideoCapabilities vc = (caps != null) ? caps.getVideoCapabilities() : null;
@@ -520,10 +615,25 @@ public final class RemoteStreamSink implements DisplaySink {
                 if (hRange != null && hRange.getUpper() != null) maxH = hRange.getUpper();
                 if (fpsRange != null && fpsRange.getUpper() != null) maxFps = fpsRange.getUpper();
             }
+            if (caps != null && caps.profileLevels != null && caps.profileLevels.length > 0) {
+                int[] profiles = new int[caps.profileLevels.length];
+                int[] levels = new int[caps.profileLevels.length];
+                for (int i = 0; i < caps.profileLevels.length; i++) {
+                    MediaCodecInfo.CodecProfileLevel pl = caps.profileLevels[i];
+                    if (pl != null) {
+                        profiles[i] = pl.profile;
+                        levels[i] = pl.level;
+                    }
+                }
+                int[] chosen = selectPreferredProfileLevel(matchedType, profiles, levels);
+                preferredProfile = chosen[0];
+                preferredLevel = chosen[1];
+            }
         } catch (RuntimeException e) {
             System.err.println("OPALDESK_ENCODER_CAPS_WARN codec=" + info.getName() + ": " + e.getMessage());
         }
-        return new SelectedEncoder(info.getName(), alignW, alignH, maxW, maxH, maxFps);
+        return new SelectedEncoder(
+                info.getName(), alignW, alignH, maxW, maxH, maxFps, preferredProfile, preferredLevel);
     }
 
     private static String matchSupportedType(MediaCodecInfo info, String mime) {
@@ -570,7 +680,16 @@ public final class RemoteStreamSink implements DisplaySink {
     }
 
     private static MediaFormat buildVideoFormat(
-            String mime, int width, int height, float fps, int bitrateKbps, boolean lowLatency) {
+            String mime,
+            String codecName,
+            int width,
+            int height,
+            float fps,
+            int bitrateKbps,
+            int preferredProfile,
+            int preferredLevel,
+            long repeatAfterUs,
+            ConfigTier tier) {
         MediaFormat fmt = MediaFormat.createVideoFormat(mime, width, height);
         fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
         fmt.setInteger(MediaFormat.KEY_BIT_RATE, bitrateKbps * 1000);
@@ -579,10 +698,26 @@ public final class RemoteStreamSink implements DisplaySink {
         // Long GOP avoids periodic giant IDR bitrate/heat spikes over reliable TCP/TLS links;
         // on-demand REQUEST_IDR handles instant recovery on connect, resize, or congestion drop.
         fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, GOP_INTERVAL_SECONDS);
-        // Keepalive repeat at 10Hz on static desktop: tiny HEVC skip frames (<50 kbps) that prevent
-        // receiver panels (e.g. HyperOS MiMediaCodec) from throttling refresh rate down to 30Hz.
-        fmt.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L);
-        if (lowLatency) {
+        if (repeatAfterUs > 0L) {
+            fmt.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, repeatAfterUs);
+        }
+        if (tier == ConfigTier.OPTIMAL) {
+            // Explicit BT.709 SDR + Limited range VUI signaling prevents BT.601 color shift and
+            // washed-out/crushed greys on macOS VideoToolbox, WebCodecs, and Android decoders.
+            fmt.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709);
+            fmt.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
+            fmt.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED);
+            if (preferredProfile > 0 && preferredLevel > 0) {
+                fmt.setInteger(MediaFormat.KEY_PROFILE, preferredProfile);
+                fmt.setInteger(MediaFormat.KEY_LEVEL, preferredLevel);
+            }
+            if (Build.VERSION.SDK_INT >= 29) {
+                // Drop excess SurfaceFlinger frames when Display 0 touch-boosts above the remote
+                // target FPS (e.g. 120Hz phone feeding a 60Hz stream), preserving bits/frame & thermals.
+                fmt.setFloat(KEY_MAX_FPS_TO_ENCODER, (float) targetFps);
+            }
+        }
+        if (tier != ConfigTier.MINIMAL) {
             fmt.setInteger(MediaFormat.KEY_PRIORITY, 0);
             // Match actual target FPS instead of pinning 60fps streams to a 120fps encoder OPP rail.
             fmt.setInteger(MediaFormat.KEY_OPERATING_RATE, targetFps);
@@ -600,9 +735,12 @@ public final class RemoteStreamSink implements DisplaySink {
             if (Build.VERSION.SDK_INT >= 29) {
                 fmt.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0);
             }
-            // CBR disables Qualcomm C2 CVPFilter/evaDme 4-frame lookahead (output delay 4 -> 0)
-            // and prevents 30fps EVA DSP throttling on 2560x1600 high-FPS streams.
-            fmt.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
+            boolean useCbr = (tier == ConfigTier.LOW_LATENCY_COMPAT) || shouldPreferCbrMode(codecName);
+            fmt.setInteger(
+                    MediaFormat.KEY_BITRATE_MODE,
+                    useCbr
+                            ? MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+                            : MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR);
         }
         return fmt;
     }
@@ -615,6 +753,10 @@ public final class RemoteStreamSink implements DisplaySink {
     }
 
     private void drainLoop(EncoderSession s) {
+        try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY);
+        } catch (Throwable ignored) {
+        }
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
         long fpsWindowStartMs = SystemClock.uptimeMillis();
         int fpsWindowFrames = 0;
@@ -643,9 +785,6 @@ public final class RemoteStreamSink implements DisplaySink {
                     if (buf != null && info.size > 0) {
                         buf.position(info.offset);
                         buf.limit(info.offset + info.size);
-                        byte[] data = new byte[info.size];
-                        buf.get(data);
-
                         long ptsUs = (info.presentationTimeUs > 0)
                                 ? info.presentationTimeUs
                                 : (SystemClock.elapsedRealtimeNanos() / 1000L);
@@ -653,20 +792,27 @@ public final class RemoteStreamSink implements DisplaySink {
                         boolean isKey = (info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0;
 
                         if (isConfig) {
+                            byte[] data = new byte[info.size];
+                            buf.get(data);
                             if (s.lastCsd == null || !Arrays.equals(s.lastCsd, data)) {
                                 s.lastCsd = data;
                                 emitVideoConfig(s, data, ptsUs);
                             }
                         } else {
+                            int frameLen = info.size;
+                            byte[] data = framePool.acquire(frameLen);
+                            buf.get(data, 0, frameLen);
                             int frameFlags = 0;
                             if (isKey) {
                                 frameFlags |= OpalCastProtocol.FLAG_VIDEO_KEYFRAME;
-                                if (hasInlineParameterSets(s.codecId, data)) {
+                                if (hasInlineParameterSets(s.codecId, data, frameLen)) {
                                     frameFlags |= OpalCastProtocol.FLAG_VIDEO_CONFIG_INLINE;
                                 }
                             }
                             if (listener != null && s.running) {
-                                listener.onVideoFrame(data, frameFlags, ptsUs);
+                                listener.onVideoFrame(data, frameLen, frameFlags, ptsUs, framePool::release);
+                            } else {
+                                framePool.release(data);
                             }
                             fpsWindowFrames++;
                             long nowMs = SystemClock.uptimeMillis();
@@ -742,8 +888,8 @@ public final class RemoteStreamSink implements DisplaySink {
         return out;
     }
 
-    private static boolean hasInlineParameterSets(int codecId, byte[] annexB) {
-        if (annexB == null || annexB.length < 5) return false;
+    private static boolean hasInlineParameterSets(int codecId, byte[] annexB, int length) {
+        if (annexB == null || length < 5 || annexB.length < 5) return false;
         int offset;
         if (annexB[0] == 0 && annexB[1] == 0 && annexB[2] == 0 && annexB[3] == 1) {
             offset = 4;

@@ -197,11 +197,37 @@ export function buildStandaloneWindowQuery({
   return params.toString();
 }
 
+export function normalizeCastPrefs(raw = {}) {
+  const codec = raw?.preferredCodec === 'hevc' || raw?.preferredCodec === 'h264'
+    ? raw.preferredCodec
+    : '';
+  const fpsNum = Number(raw?.targetFps || 0);
+  const targetFps = [60, 90, 120].includes(fpsNum) ? fpsNum : 0;
+  const brNum = Number(raw?.bitrateKbps || 0);
+  const bitrateKbps = Number.isFinite(brNum) && brNum >= 2500 && brNum <= 50000
+    ? Math.round(brNum)
+    : 0;
+  const audioEnabled = typeof raw?.audioEnabled === 'boolean' ? raw.audioEnabled : null;
+  const hideLocalCursor = typeof raw?.hideLocalCursor === 'boolean' ? raw.hideLocalCursor : null;
+  const customAdbPath = typeof raw?.customAdbPath === 'string' && raw.customAdbPath.trim()
+    ? raw.customAdbPath.trim()
+    : '';
+  return {
+    preferredCodec: codec,
+    targetFps,
+    bitrateKbps,
+    audioEnabled,
+    hideLocalCursor,
+    customAdbPath,
+  };
+}
+
 export class OpalDesktopBridge {
   constructor(win = globalThis.window) {
     this.invokeFn = resolveTauriInvoke(win);
     this.enabled = this.invokeFn !== null;
     this.runtimeInfo = null;
+    this.clientPrefs = null;
     this.mdnsDevices = [];
     this.usbTetherDevices = [];
     this.trustedDevices = [];
@@ -221,8 +247,19 @@ export class OpalDesktopBridge {
     if (!this.enabled) return null;
     this.runtimeInfo = await this.invoke('desktop_runtime_info');
     this.adbStatus = this.runtimeInfo?.adb || this.adbStatus;
+    this.clientPrefs = this.runtimeInfo?.prefs || null;
     await Promise.all([this.refreshTrustedDevices(), this.pollMdnsDevices()]);
     return this.runtimeInfo;
+  }
+
+  async updateClientPrefs(patch) {
+    if (!this.enabled) return null;
+    try {
+      this.clientPrefs = await this.invoke('update_client_prefs', { patch });
+      return this.clientPrefs;
+    } catch {
+      return null;
+    }
   }
 
   startDiscoveryPolling(onUpdate, intervalMs = 2500) {

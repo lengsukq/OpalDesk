@@ -3,6 +3,7 @@ pub mod feedback;
 pub mod fingerprint;
 pub mod logs;
 pub mod mdns;
+pub mod prefs;
 pub mod tls_bridge;
 pub mod trust;
 pub mod usb_tether;
@@ -14,6 +15,7 @@ use feedback::{
 };
 use logs::{LogEntry, LogStore};
 use mdns::{DiscoveredMdnsDevice, MdnsScanner};
+use prefs::{ClientPrefs, ClientPrefsPatch, PrefsStore};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
@@ -41,6 +43,7 @@ struct StandaloneMeta {
 
 pub struct DesktopState {
     pub trust_store: Arc<TrustStore>,
+    pub prefs_store: Arc<PrefsStore>,
     pub tls_bridges: Arc<TlsBridgeRegistry>,
     pub mdns_scanner: Arc<MdnsScanner>,
     pub adb_manager: Arc<AdbManager>,
@@ -57,6 +60,7 @@ pub struct DesktopRuntimeInfo {
     pub version: &'static str,
     pub client_id: String,
     pub adb: AdbStatusInfo,
+    pub prefs: ClientPrefs,
     pub max_standalone_windows: usize,
 }
 
@@ -145,8 +149,27 @@ fn desktop_runtime_info(state: tauri::State<'_, DesktopState>) -> DesktopRuntime
         version: env!("CARGO_PKG_VERSION"),
         client_id: state.trust_store.client_id(),
         adb: state.adb_manager.status(),
+        prefs: state.prefs_store.get(),
         max_standalone_windows: MAX_STANDALONE_WINDOWS,
     }
+}
+
+#[tauri::command]
+fn get_client_prefs(state: tauri::State<'_, DesktopState>) -> ClientPrefs {
+    state.prefs_store.get()
+}
+
+#[tauri::command]
+fn update_client_prefs(
+    state: tauri::State<'_, DesktopState>,
+    patch: ClientPrefsPatch,
+) -> Result<ClientPrefs, String> {
+    let adb_changed = patch.custom_adb_path.is_some();
+    let saved = state.prefs_store.update(patch)?;
+    if adb_changed {
+        state.adb_manager.set_custom_adb_path(saved.custom_adb_path.clone());
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -230,7 +253,16 @@ fn set_custom_adb_path(
     state: tauri::State<'_, DesktopState>,
     path: Option<String>,
 ) -> AdbStatusInfo {
-    state.adb_manager.set_custom_adb_path(path)
+    let status = state.adb_manager.set_custom_adb_path(path);
+    if let Err(err) = state
+        .prefs_store
+        .set_custom_adb_path(status.custom_adb_path.clone())
+    {
+        state
+            .log_store
+            .warn("Prefs", &format!("Failed to persist custom ADB path: {err}"));
+    }
+    status
 }
 
 #[tauri::command]
@@ -718,9 +750,14 @@ pub fn run() {
             let resource_dir = app.path().resource_dir().ok();
 
             let trust_store = Arc::new(TrustStore::new(config_dir.join("trust-store.json")));
+            let prefs_store = Arc::new(PrefsStore::new(config_dir.join("client-prefs.json")));
             let tls_bridges = Arc::new(TlsBridgeRegistry::new());
             let mdns_scanner = Arc::new(MdnsScanner::start());
             let adb_manager = Arc::new(AdbManager::new(resource_dir));
+            let saved_prefs = prefs_store.get();
+            if saved_prefs.custom_adb_path.is_some() {
+                adb_manager.set_custom_adb_path(saved_prefs.custom_adb_path);
+            }
             let log_store = Arc::new(LogStore::new(config_dir.join("logs").join("opaldesk_desktop.log")));
             let feedback_manager = Arc::new(FeedbackManager::new(&config_dir, trust_store.client_id()));
 
@@ -736,6 +773,7 @@ pub fn run() {
 
             app.manage(DesktopState {
                 trust_store,
+                prefs_store,
                 tls_bridges,
                 mdns_scanner,
                 adb_manager,
@@ -749,6 +787,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             desktop_runtime_info,
+            get_client_prefs,
+            update_client_prefs,
             list_mdns_devices,
             refresh_mdns_devices,
             list_trusted_devices,

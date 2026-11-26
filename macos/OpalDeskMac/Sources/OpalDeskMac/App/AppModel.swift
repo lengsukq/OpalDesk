@@ -27,8 +27,10 @@ public final class AppModel {
         static let remoteDisconnectFlushNs: UInt64 = 60_000_000
         static let appListRefreshThrottleNs: UInt64 = 1_500_000_000
         static let postWindowActionRefreshDelayNs: UInt64 = 650_000_000
+        static let wiredUsbMaxLongEdge: Int = 3840
         static let wirelessAdbMaxLongEdge: Int = 2560
         static let defaultMaxLongEdge: Int = 2560
+        static let wifiMaxBitrateKbps: Int = 32_000
         static let wirelessAdbMaxBitrateKbps: Int = 16_000
         static let maxVisibleTransfers: Int = 6
         static let defaultCanvasSize = CGSize(width: 1280, height: 720)

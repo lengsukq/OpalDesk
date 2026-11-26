@@ -8,35 +8,65 @@ import java.io.OutputStream;
 import java.util.ArrayDeque;
 import java.util.Iterator;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
  * Dedicated outbound OpalCast v1.1 sender session with bounded video/audio queues,
- * keyframe-aware congestion dropping, and lock-free atomic teardown.
+ * two-tier soft/hard ABR congestion handling, pooled frame buffer return, and lock-free teardown.
  */
 final class ClientSession {
-    static final int MAX_QUEUED_VIDEO_FRAMES = 14;
-    static final int MAX_QUEUED_AUDIO_FRAMES = 12;
+    static final int SOFT_CONGESTION_VIDEO_FRAMES = 6;
+    static final int MAX_QUEUED_VIDEO_FRAMES = 12;
+    static final int MAX_QUEUED_AUDIO_FRAMES = 16;
     static final int MAX_TOTAL_QUEUED_FRAMES = 64;
+    static final long SOFT_CONGESTION_NOTIFY_COOLDOWN_MS = 2_500L;
     static final long AWAITING_KEYFRAME_RETRY_MS = 450L;
     private static final long HEALTHY_NOTIFY_INTERVAL_MS = 2000L;
+
+    /** Scales soft congestion watermark (~100 ms of video frames) cleanly for 30–165 Hz streams. */
+    static int resolveSoftCongestionWatermark(float targetFps) {
+        float safeFps = (targetFps > 0f && !Float.isNaN(targetFps)) ? targetFps : 60f;
+        int scaled = Math.round(safeFps * 0.10f);
+        return Math.max(SOFT_CONGESTION_VIDEO_FRAMES, Math.min(16, scaled));
+    }
+
+    /** Scales hard congestion drop ceiling (~170–200 ms of video frames) cleanly for 30–165 Hz streams. */
+    static int resolveHardCongestionWatermark(float targetFps) {
+        float safeFps = (targetFps > 0f && !Float.isNaN(targetFps)) ? targetFps : 60f;
+        int soft = resolveSoftCongestionWatermark(safeFps);
+        int scaled = Math.round(safeFps * 0.17f);
+        return Math.max(Math.max(MAX_QUEUED_VIDEO_FRAMES, soft + 6), Math.min(28, scaled));
+    }
 
     private static final class QueuedFrame {
         final int type;
         final int flags;
         final long timestampUs;
         final byte[] payload;
+        final int payloadLength;
         final boolean isVideo;
         final boolean isAudio;
         final boolean isKeyFrame;
+        private Consumer<byte[]> onRelease;
 
-        QueuedFrame(int type, int flags, long timestampUs, byte[] payload) {
+        QueuedFrame(int type, int flags, long timestampUs, byte[] payload, int payloadLength, Consumer<byte[]> onRelease) {
             this.type = type;
             this.flags = flags;
             this.timestampUs = timestampUs;
             this.payload = (payload != null) ? payload : OpalCastProtocol.EMPTY_BYTES;
+            this.payloadLength = Math.max(0, Math.min(payloadLength, this.payload.length));
             this.isVideo = (type == OpalCastProtocol.TYPE_VIDEO_FRAME);
             this.isAudio = (type == OpalCastProtocol.TYPE_AUDIO_FRAME);
             this.isKeyFrame = this.isVideo && ((flags & OpalCastProtocol.FLAG_VIDEO_KEYFRAME) != 0);
+            this.onRelease = onRelease;
+        }
+
+        void releaseBufferOnce() {
+            Consumer<byte[]> cb = this.onRelease;
+            if (cb != null) {
+                this.onRelease = null;
+                cb.accept(this.payload);
+            }
         }
     }
 
@@ -53,11 +83,15 @@ final class ClientSession {
     private final RemoteStreamServer.SessionListener listener;
 
     private final Object queueLock = new Object();
-    private final ArrayDeque<QueuedFrame> queue = new ArrayDeque<>();
+    private final ArrayDeque<QueuedFrame> priorityQueue = new ArrayDeque<>();
+    private final ArrayDeque<QueuedFrame> videoQueue = new ArrayDeque<>();
     private int queuedVideoFrames = 0;
     private int queuedAudioFrames = 0;
+    private int softVideoWatermark = SOFT_CONGESTION_VIDEO_FRAMES;
+    private int hardVideoWatermark = MAX_QUEUED_VIDEO_FRAMES;
     private boolean awaitingKeyFrame = false;
     private long lastKeyFrameRequestMs = 0L;
+    private long lastSoftCongestionNotifyMs = 0L;
     private long lastHealthyNotifyMs = 0L;
     private final java.util.function.LongSupplier monotonicClockMs;
 
@@ -131,6 +165,15 @@ final class ClientSession {
         return closed.get();
     }
 
+    void setTargetFps(float targetFps) {
+        int nextSoft = resolveSoftCongestionWatermark(targetFps);
+        int nextHard = resolveHardCongestionWatermark(targetFps);
+        synchronized (queueLock) {
+            this.softVideoWatermark = nextSoft;
+            this.hardVideoWatermark = nextHard;
+        }
+    }
+
     void startSenderThread() {
         senderThread = new Thread(this::sendLoop, "ExtStreamSender-" + sessionId);
         senderThread.setDaemon(true);
@@ -138,35 +181,50 @@ final class ClientSession {
     }
 
     void enqueue(int type, int flags, long timestampUs, byte[] payload) {
-        if (closed.get()) return;
-        QueuedFrame qf = new QueuedFrame(type, flags, timestampUs, payload);
+        int len = (payload != null) ? payload.length : 0;
+        enqueue(type, flags, timestampUs, payload, len, null);
+    }
+
+    void enqueue(int type, int flags, long timestampUs, byte[] payload, int payloadLength, Consumer<byte[]> onRelease) {
+        if (closed.get()) {
+            if (onRelease != null && payload != null) onRelease.accept(payload);
+            return;
+        }
+        QueuedFrame qf = new QueuedFrame(type, flags, timestampUs, payload, payloadLength, onRelease);
+        boolean triggerSoftCongestion = false;
         boolean triggerCongestion = false;
         boolean triggerIdrRetry = false;
         boolean triggerHealthy = false;
         boolean overflowClose = false;
+        boolean accepted = false;
         long nowMs = monotonicClockMs.getAsLong();
 
         synchronized (queueLock) {
-            if (closed.get()) return;
+            if (closed.get()) {
+                qf.releaseBufferOnce();
+                return;
+            }
 
             if (type == OpalCastProtocol.TYPE_VIDEO_CONFIG) {
                 dropAllQueuedVideoLocked(false);
                 awaitingKeyFrame = false;
                 lastKeyFrameRequestMs = 0L;
-                queue.addLast(qf);
+                videoQueue.addLast(qf);
+                accepted = true;
                 queueLock.notifyAll();
                 return;
             }
 
             if (qf.isVideo) {
                 if (qf.isKeyFrame) {
-                    if (queuedVideoFrames >= MAX_QUEUED_VIDEO_FRAMES / 2) {
+                    if (queuedVideoFrames >= hardVideoWatermark / 2) {
                         dropAllQueuedVideoLocked(false);
                     }
                     awaitingKeyFrame = false;
                     lastKeyFrameRequestMs = 0L;
-                    queue.addLast(qf);
+                    videoQueue.addLast(qf);
                     queuedVideoFrames++;
+                    accepted = true;
                     queueLock.notifyAll();
                     return;
                 }
@@ -177,15 +235,21 @@ final class ClientSession {
                         lastKeyFrameRequestMs = nowMs;
                         triggerIdrRetry = true;
                     }
-                } else if (queuedVideoFrames >= MAX_QUEUED_VIDEO_FRAMES) {
+                } else if (queuedVideoFrames >= hardVideoWatermark) {
                     dropAllQueuedVideoLocked(true);
                     awaitingKeyFrame = true;
                     lastKeyFrameRequestMs = nowMs;
                     triggerCongestion = true;
                 } else {
-                    queue.addLast(qf);
+                    videoQueue.addLast(qf);
                     queuedVideoFrames++;
-                    if (queuedVideoFrames <= 1) {
+                    accepted = true;
+                    if (queuedVideoFrames >= softVideoWatermark) {
+                        if (nowMs - lastSoftCongestionNotifyMs >= SOFT_CONGESTION_NOTIFY_COOLDOWN_MS) {
+                            lastSoftCongestionNotifyMs = nowMs;
+                            triggerSoftCongestion = true;
+                        }
+                    } else if (queuedVideoFrames <= 1) {
                         if (nowMs - lastHealthyNotifyMs >= HEALTHY_NOTIFY_INTERVAL_MS) {
                             lastHealthyNotifyMs = nowMs;
                             triggerHealthy = true;
@@ -197,31 +261,38 @@ final class ClientSession {
                 if (queuedAudioFrames >= MAX_QUEUED_AUDIO_FRAMES) {
                     dropOldestAudioLocked();
                 }
-                queue.addLast(qf);
+                priorityQueue.addLast(qf);
                 queuedAudioFrames++;
+                accepted = true;
                 queueLock.notifyAll();
             } else {
-                if (queue.size() >= MAX_TOTAL_QUEUED_FRAMES) {
+                if (totalQueuedLocked() >= MAX_TOTAL_QUEUED_FRAMES) {
                     dropAllQueuedVideoLocked(false);
                     awaitingKeyFrame = true;
                     lastKeyFrameRequestMs = nowMs;
                     triggerCongestion = true;
                 }
-                if (queue.size() >= MAX_TOTAL_QUEUED_FRAMES) {
+                if (totalQueuedLocked() >= MAX_TOTAL_QUEUED_FRAMES) {
                     overflowClose = true;
                 } else {
-                    queue.addLast(qf);
+                    priorityQueue.addLast(qf);
+                    accepted = true;
                     queueLock.notifyAll();
                 }
             }
         }
 
+        if (!accepted) {
+            qf.releaseBufferOnce();
+        }
         if (overflowClose) {
             close("Outbound queue overflow (unresponsive peer)");
             return;
         }
         if (triggerCongestion && listener != null) {
             listener.onVideoCongestion(sessionId);
+        } else if (triggerSoftCongestion && listener != null) {
+            listener.onVideoSoftCongestion(sessionId);
         } else if (triggerIdrRetry && listener != null) {
             System.out.println("OPALDESK_STREAM_IDR_RETRY sid=" + sessionId);
             listener.onRequestIdr(sessionId);
@@ -230,24 +301,30 @@ final class ClientSession {
         }
     }
 
+    private int totalQueuedLocked() {
+        return priorityQueue.size() + videoQueue.size();
+    }
+
     private void dropAllQueuedVideoLocked(boolean keepKeyFrames) {
-        Iterator<QueuedFrame> it = queue.iterator();
+        Iterator<QueuedFrame> it = videoQueue.iterator();
         while (it.hasNext()) {
             QueuedFrame item = it.next();
             if (item.isVideo && (!keepKeyFrames || !item.isKeyFrame)) {
                 it.remove();
                 queuedVideoFrames = Math.max(0, queuedVideoFrames - 1);
+                item.releaseBufferOnce();
             }
         }
     }
 
     private void dropOldestAudioLocked() {
-        Iterator<QueuedFrame> it = queue.iterator();
+        Iterator<QueuedFrame> it = priorityQueue.iterator();
         while (it.hasNext()) {
             QueuedFrame item = it.next();
             if (item.isAudio) {
                 it.remove();
                 queuedAudioFrames = Math.max(0, queuedAudioFrames - 1);
+                item.releaseBufferOnce();
                 return;
             }
         }
@@ -255,19 +332,28 @@ final class ClientSession {
 
     private void sendLoop() {
         try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY);
+        } catch (Throwable ignored) {
+            // Safe no-op in pure JVM unit tests.
+        }
+        try {
             while (!closed.get()) {
                 QueuedFrame next;
                 boolean shouldFlush;
                 synchronized (queueLock) {
-                    while (!closed.get() && queue.isEmpty()) {
+                    while (!closed.get() && priorityQueue.isEmpty() && videoQueue.isEmpty()) {
                         queueLock.wait(250L);
                     }
                     if (closed.get()) break;
-                    next = queue.pollFirst();
+                    // Always drain audio & control frames ahead of queued video frames so large HEVC
+                    // frames never head-of-line block tiny ~350-byte AAC packets on Wi-Fi.
+                    next = !priorityQueue.isEmpty() ? priorityQueue.pollFirst() : videoQueue.pollFirst();
                     if (next == null) continue;
                     if (next.isVideo) queuedVideoFrames = Math.max(0, queuedVideoFrames - 1);
                     if (next.isAudio) queuedAudioFrames = Math.max(0, queuedAudioFrames - 1);
-                    shouldFlush = queue.isEmpty() || next.isVideo
+                    shouldFlush = (priorityQueue.isEmpty() && videoQueue.isEmpty())
+                            || next.isVideo
+                            || (next.isAudio && priorityQueue.isEmpty())
                             || next.type == OpalCastProtocol.TYPE_VIDEO_CONFIG
                             || next.type == OpalCastProtocol.TYPE_WIFI_UPGRADE_READY
                             || next.type == OpalCastProtocol.TYPE_APP_LIST
@@ -276,11 +362,15 @@ final class ClientSession {
                             || next.type == OpalCastProtocol.TYPE_CAMERA_STATE
                             || next.type == OpalCastProtocol.TYPE_PONG;
                 }
-                frameWriter.writeFrame(
-                        next.type, next.flags, next.timestampUs,
-                        next.payload, 0, next.payload.length);
-                if (shouldFlush) {
-                    frameWriter.flush();
+                try {
+                    frameWriter.writeFrame(
+                            next.type, next.flags, next.timestampUs,
+                            next.payload, 0, next.payloadLength);
+                    if (shouldFlush) {
+                        frameWriter.flush();
+                    }
+                } finally {
+                    next.releaseBufferOnce();
                 }
             }
         } catch (InterruptedException ie) {
@@ -300,7 +390,14 @@ final class ClientSession {
         if (!closed.compareAndSet(false, true)) return;
         closeReason = (reason != null) ? reason : "";
         synchronized (queueLock) {
-            queue.clear();
+            for (QueuedFrame item : priorityQueue) {
+                item.releaseBufferOnce();
+            }
+            for (QueuedFrame item : videoQueue) {
+                item.releaseBufferOnce();
+            }
+            priorityQueue.clear();
+            videoQueue.clear();
             queuedVideoFrames = 0;
             queuedAudioFrames = 0;
             queueLock.notifyAll();

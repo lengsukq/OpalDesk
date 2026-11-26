@@ -51,6 +51,7 @@ public final class PerDisplayInputRouter {
 
     private volatile boolean localImeActive = false;
     private volatile boolean physicalKeyboardConnected = false;
+    private volatile java.util.function.BooleanSupplier hostMouseAnchoredProvider;
     private volatile int lastKeyTargetDisplayId = -1;
     private volatile TapUpListener tapUpListener;
 
@@ -110,6 +111,10 @@ public final class PerDisplayInputRouter {
 
     public void setPhysicalKeyboardConnected(boolean connected) {
         this.physicalKeyboardConnected = connected;
+    }
+
+    public void setHostMouseAnchoredProvider(java.util.function.BooleanSupplier provider) {
+        this.hostMouseAnchoredProvider = provider;
     }
 
     public boolean isPhysicalKeyboardConnected() {
@@ -220,11 +225,18 @@ public final class PerDisplayInputRouter {
                 triggerTapUpCheck = !localImeActive;
                 tapDownTs = lastDownUptimeMs;
                 if (!localImeActive) {
-                    if (isMouse) {
-                        // Keep hardware mouse pointer anchored on Display 0 / External Monitor while
+                    boolean mouseAnchored = isMouse
+                            && physicalKeyboardConnected
+                            && hostMouseAnchoredProvider != null
+                            && hostMouseAnchoredProvider.getAsBoolean();
+                    if (isMouse && !mouseAnchored) {
+                        // Keep unanchored hardware mouse pointer on Display 0 / External Monitor while
                         // TapUpListener still probes IMMS to raise NativeImeBridgeHost if an EditText focused.
                         services.focusDisplayTaskOnly(ws.displayId);
                     } else {
+                        // Touch taps, or clicks from a display-anchored mouse while a physical keyboard
+                        // is routed to this window: move top focus cleanly ONCE so the window's local
+                        // CJK IME binds without stealing an anchored hardware cursor.
                         services.focusDisplay(ws.displayId);
                     }
                 }

@@ -37,6 +37,7 @@ data class DaemonStatus(
     val remoteMicEnabled: Boolean = false,
     val remoteCameraEnabled: Boolean = false,
     val audioRouteMode: Int = BridgeProtocol.AudioRoute.SPLIT_BY_APP,
+    val windowSupersampleMode: Int = BridgeProtocol.WindowSupersample.COMPAT,
 ) {
     val injectBackendLabel: String
         get() = when {
@@ -112,6 +113,100 @@ data class TrustedPeerEntry(
     val clientName: String,
     val createdAtMs: Long,
 )
+
+data class DexImeRuntimeState(
+    val synced: Boolean = false,
+    val currentImeId: String = "",
+    val originalImeId: String = "",
+    val lockedImeId: String = "",
+    val bridgeImeId: String = BridgeProtocol.OPALDESK_BRIDGE_IME_ID,
+    val bridgeImeActive: Boolean = false,
+    val autoBridgeImeOnCast: Boolean = true,
+    val imeLockApplied: Boolean = false,
+    val hardKbdOverrideApplied: Boolean = false,
+    val dexSessionActive: Boolean = false,
+    val dexImeDisplayMode: Int = BridgeProtocol.DexImeDisplayMode.AUTO,
+    val muteHostImeOnCast: Boolean = false,
+    val showImeWithHardKeyboard: Int = BridgeProtocol.HardKbdSoftIme.SYSTEM,
+    val effectiveWindowImePolicy: Int = BridgeProtocol.DisplayImePolicy.FALLBACK_DISPLAY,
+    val physicalKeyboardDetected: Boolean = false,
+    val enabledImeIds: List<String> = emptyList(),
+)
+
+object DexImeStateParser {
+    private val strFieldRegex = Regex(""""([^"\\]+)"\s*:\s*"((?:\\.|[^"\\])*)"""")
+    private val boolFieldRegex = Regex(""""([^"\\]+)"\s*:\s*(true|false)""")
+    private val numFieldRegex = Regex(""""([^"\\]+)"\s*:\s*(-?\d+)""")
+    private val arrayFieldRegex = Regex(""""enabledImeIds"\s*:\s*\[(.*?)\]""", RegexOption.DOT_MATCHES_ALL)
+    private val quotedTokenRegex = Regex(""""((?:\\.|[^"\\])*)"""")
+
+    fun parse(json: String?): DexImeRuntimeState {
+        if (json.isNullOrBlank() || !json.trim().startsWith("{")) return DexImeRuntimeState()
+        val strMap = HashMap<String, String>()
+        strFieldRegex.findAll(json).forEach { m ->
+            strMap[m.groupValues[1]] = unescape(m.groupValues[2])
+        }
+        val boolMap = HashMap<String, Boolean>()
+        boolFieldRegex.findAll(json).forEach { m ->
+            boolMap[m.groupValues[1]] = m.groupValues[2] == "true"
+        }
+        val numMap = HashMap<String, Int>()
+        numFieldRegex.findAll(json).forEach { m ->
+            m.groupValues[2].toIntOrNull()?.let { numMap[m.groupValues[1]] = it }
+        }
+        val enabled = ArrayList<String>()
+        val arrMatch = arrayFieldRegex.find(json)
+        if (arrMatch != null) {
+            quotedTokenRegex.findAll(arrMatch.groupValues[1]).forEach { tok ->
+                val id = unescape(tok.groupValues[1]).trim()
+                if (id.isNotEmpty() && !enabled.contains(id)) {
+                    enabled.add(id)
+                }
+            }
+        }
+        return DexImeRuntimeState(
+            synced = true,
+            currentImeId = strMap["currentImeId"].orEmpty(),
+            originalImeId = strMap["originalImeId"].orEmpty(),
+            lockedImeId = strMap["lockedImeId"].orEmpty(),
+            bridgeImeId = strMap["bridgeImeId"].orEmpty().ifEmpty { BridgeProtocol.OPALDESK_BRIDGE_IME_ID },
+            bridgeImeActive = boolMap["bridgeImeActive"] == true,
+            autoBridgeImeOnCast = boolMap["autoBridgeImeOnCast"] ?: true,
+            imeLockApplied = boolMap["imeLockApplied"] == true,
+            hardKbdOverrideApplied = boolMap["hardKbdOverrideApplied"] == true,
+            dexSessionActive = boolMap["dexSessionActive"] == true,
+            dexImeDisplayMode = numMap["dexImeDisplayMode"] ?: BridgeProtocol.DexImeDisplayMode.AUTO,
+            muteHostImeOnCast = boolMap["muteHostImeOnCast"] == true,
+            showImeWithHardKeyboard = numMap["showImeWithHardKeyboard"] ?: BridgeProtocol.HardKbdSoftIme.SYSTEM,
+            effectiveWindowImePolicy = numMap["effectiveWindowImePolicy"] ?: BridgeProtocol.DisplayImePolicy.FALLBACK_DISPLAY,
+            physicalKeyboardDetected = boolMap["physicalKeyboardDetected"] == true,
+            enabledImeIds = enabled,
+        )
+    }
+
+    private fun unescape(raw: String): String {
+        if (!raw.contains('\\')) return raw
+        val sb = StringBuilder(raw.length)
+        var i = 0
+        while (i < raw.length) {
+            val ch = raw[i]
+            if (ch == '\\' && i + 1 < raw.length) {
+                when (val next = raw[i + 1]) {
+                    '"', '\\', '/' -> sb.append(next)
+                    'n' -> sb.append('\n')
+                    'r' -> sb.append('\r')
+                    't' -> sb.append('\t')
+                    else -> sb.append(next)
+                }
+                i += 2
+            } else {
+                sb.append(ch)
+                i++
+            }
+        }
+        return sb.toString()
+    }
+}
 
 object PairingJsonParser {
     private val strFieldRegex = Regex(""""([^"\\]+)"\s*:\s*"((?:\\.|[^"\\])*)"""")

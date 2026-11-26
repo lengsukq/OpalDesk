@@ -186,13 +186,20 @@ public final class ClipboardSyncService {
         }
         polling = true;
         Thread t = new Thread(() -> {
+            long currentIntervalMs = CLIPBOARD_POLL_INTERVAL_MS;
             while (polling) {
-                SystemClock.sleep(CLIPBOARD_POLL_INTERVAL_MS);
+                SystemClock.sleep(currentIntervalMs);
                 if (!polling) break;
                 try {
-                    pollAndroidClipboardOnce();
+                    boolean changed = pollAndroidClipboardOnce();
+                    // Exponential idle backoff (750ms -> 1500ms -> 3000ms -> 4000ms) cuts idle
+                    // Binder IPC wakeups by >75% while staying responsive on active copy/paste.
+                    currentIntervalMs = changed
+                            ? CLIPBOARD_POLL_INTERVAL_MS
+                            : Math.min(4_000L, currentIntervalMs * 2L);
                 } catch (Throwable err) {
                     System.err.println("OPALDESK_CLIPBOARD_POLL_ERR: " + err.getMessage());
+                    currentIntervalMs = Math.min(4_000L, currentIntervalMs * 2L);
                 }
             }
         }, "ExtClipboardSync");
@@ -210,11 +217,11 @@ public final class ClipboardSyncService {
         }
     }
 
-    private void pollAndroidClipboardOnce() {
+    private boolean pollAndroidClipboardOnce() {
         ClipData clip = AndroidServices.getPrimaryClip();
-        if (clip == null || clip.getItemCount() <= 0) return;
+        if (clip == null || clip.getItemCount() <= 0) return false;
         ClipData.Item item = clip.getItemAt(0);
-        if (item == null) return;
+        if (item == null) return false;
 
         // 1. Check image URI clipboard first
         Uri uri = item.getUri();
@@ -241,20 +248,20 @@ public final class ClipboardSyncService {
                         long seq = clipboardSeq.incrementAndGet();
                         host.sendClipboardImagePush(seq, pngBytes);
                     }
-                    return;
+                    return changed;
                 }
                 synchronized (clipboardLock) {
                     lastKnownImageUri = uriStr;
                 }
             }
-            return;
+            return false;
         }
 
         // 2. Plain text clipboard (100% compatible with v1.0)
         CharSequence cs = item.getText();
-        if (cs == null) return;
+        if (cs == null) return false;
         String current = cs.toString();
-        if (current.isEmpty()) return;
+        if (current.isEmpty()) return false;
         boolean changed = false;
         synchronized (clipboardLock) {
             if (!current.equals(lastKnownText)) {
@@ -266,6 +273,7 @@ public final class ClipboardSyncService {
             long seq = clipboardSeq.incrementAndGet();
             host.sendClipboardPush(seq, current);
         }
+        return changed;
     }
 
     private static boolean isImageClip(ClipData clip, Uri uri) {

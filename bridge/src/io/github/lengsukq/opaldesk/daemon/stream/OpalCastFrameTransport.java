@@ -35,7 +35,8 @@ public interface OpalCastFrameTransport {
     final class RawTransport implements OpalCastFrameTransport {
         private final InputStream in;
         private final OutputStream out;
-        private final byte[] headerBuf = new byte[OpalCastProtocol.HEADER_SIZE];
+        private final byte[] txHeaderBuf = new byte[OpalCastProtocol.HEADER_SIZE];
+        private final byte[] rxHeaderBuf = new byte[OpalCastProtocol.HEADER_SIZE];
 
         RawTransport(InputStream in, OutputStream out) {
             this.in = in;
@@ -47,7 +48,7 @@ public interface OpalCastFrameTransport {
             if (in == null) {
                 throw new IOException("RawTransport has no InputStream");
             }
-            return OpalCastProtocol.readFrame(in);
+            return OpalCastProtocol.readFrame(in, rxHeaderBuf);
         }
 
         @Override
@@ -58,7 +59,7 @@ public interface OpalCastFrameTransport {
                 byte[] payload,
                 int offset,
                 int length) throws IOException {
-            OpalCastProtocol.writeFrame(out, headerBuf, type, flags, timestampUs, payload, offset, length);
+            OpalCastProtocol.writeFrame(out, txHeaderBuf, type, flags, timestampUs, payload, offset, length);
         }
 
         @Override
@@ -75,6 +76,7 @@ public interface OpalCastFrameTransport {
         private final OutputStream out;
         private final Object writeLock = new Object();
         private final byte[] headerBuf = new byte[OpalCastProtocol.HEADER_SIZE];
+        private final byte[] wsHeaderBuf = new byte[10];
 
         WebSocketTransport(InputStream in, OutputStream out) {
             this.in = in;
@@ -112,7 +114,7 @@ public interface OpalCastFrameTransport {
             }
             synchronized (writeLock) {
                 OpalCastProtocol.encodeHeader(headerBuf, type, flags, length, timestampUs);
-                WebSocketCodec.writeBinaryFrame(out, writeLock, headerBuf, payload, offset, length);
+                WebSocketCodec.writeBinaryFrame(out, writeLock, wsHeaderBuf, headerBuf, payload, offset, length);
             }
         }
 

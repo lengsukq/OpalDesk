@@ -773,6 +773,11 @@ html, body {
   background: #05070d;
 }
 
+.canvas-wrap.hide-local-cursor,
+.canvas-wrap.hide-local-cursor .cast-canvas {
+  cursor: none;
+}
+
 .drop-overlay,
 .stage-overlay {
   position: fixed;

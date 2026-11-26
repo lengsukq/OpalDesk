@@ -78,6 +78,7 @@ fun CompositorWindowFrameNode(
     canvasW: Int,
     canvasH: Int,
     dockInsetDp: Float = CompositorGeometry.DOCK_INSET_DP,
+    occludedByFullscreen: Boolean = false,
     onSnapPreviewChanged: (WindowRect?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -162,12 +163,16 @@ fun CompositorWindowFrameNode(
         // Keep a SINGLE stable Column + WindowSurfaceHost composition slot across FLOATING / MAXIMIZED / FULLSCREEN
         // so entering or exiting fullscreen in streaming apps (Moonlight, UU远程) NEVER unmounts/recreates TextureView,
         // while skipping offscreen shadow/clip/border RenderNode layers in fullscreen to save GPU VRAM.
-        val columnModifier = if (isFullscreen) {
-            Modifier
+        val columnModifier = when {
+            isFullscreen -> Modifier
                 .fillMaxSize()
                 .background(OpalPalette.WindowCanvasBg)
-        } else {
-            Modifier
+            window.isMaximized -> Modifier
+                .fillMaxSize()
+                .clip(winShape)
+                .background(OpalPalette.WindowCanvasBg)
+                .border(0.9.dp, borderColor, winShape)
+            else -> Modifier
                 .fillMaxSize()
                 .shadow(
                     elevation = if (window.focused) 24.dp else 8.dp,
@@ -420,6 +425,13 @@ fun CompositorWindowFrameNode(
                         io.github.lengsukq.opaldesk.protocol.OpalWindowPinStore.toggle(window.windowId)
                     }
 
+                    HeaderSubtleIconButton(glyph = ChromeGlyph.ORIENTATION, focused = window.focused) {
+                        BridgeClient.sendWindowActionAsync(
+                            window.windowId,
+                            BridgeProtocol.WinAction.TOGGLE_ORIENTATION,
+                        )
+                    }
+
                     val profileLabel = when (window.profileCode) {
                         BridgeProtocol.Profile.PORTRAIT -> "竖屏"
                         BridgeProtocol.Profile.TABLET -> "平板"
@@ -473,6 +485,7 @@ fun CompositorWindowFrameNode(
                 onTouchFocusRequested = {
                     BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.FOCUS)
                 },
+                occludedByFullscreen = occludedByFullscreen,
                 modifier = Modifier.weight(1f),
             )
         }

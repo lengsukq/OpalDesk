@@ -12,6 +12,7 @@ import android.os.SystemClock;
 import io.github.lengsukq.opaldesk.daemon.compositor.CompositorEngine;
 import io.github.lengsukq.opaldesk.daemon.compositor.VirtualDisplayPool;
 import io.github.lengsukq.opaldesk.daemon.compositor.WindowSession;
+import io.github.lengsukq.opaldesk.daemon.input.DexImeManager;
 import io.github.lengsukq.opaldesk.daemon.input.ExternalMouseRouter;
 import io.github.lengsukq.opaldesk.daemon.input.ImmsDumpInspector;
 import io.github.lengsukq.opaldesk.daemon.input.MouseRoutingPolicy;
@@ -59,6 +60,7 @@ public final class OpalDeskDaemon implements Runnable {
     private final AndroidDisplayDriver displayDriver;
     private final PerDisplayInputRouter inputRouter;
     private final ExternalMouseRouter mouseRouter;
+    private final DexImeManager imeManager;
     private final VirtualDisplayPool vdPool;
     private final CompositorEngine compositor;
     private final OpalCastCompositorBridge remoteBridge;
@@ -89,6 +91,33 @@ public final class OpalDeskDaemon implements Runnable {
         this.displayDriver = new AndroidDisplayDriver(services, taskApi);
         this.inputRouter = new PerDisplayInputRouter(services, config);
         this.mouseRouter = new ExternalMouseRouter(services, config, mainHandler);
+        this.inputRouter.setHostMouseAnchoredProvider(this.mouseRouter::isHostMouseDisplayAnchored);
+        this.imeManager = new DexImeManager(config, new DexImeManager.SystemImeBridge() {
+            @Override
+            public String getDefaultInputMethodId() {
+                return services != null ? services.getDefaultInputMethodId() : "";
+            }
+
+            @Override
+            public java.util.List<String> listEnabledInputMethodIds() {
+                return services != null ? services.listEnabledInputMethodIds() : java.util.Collections.emptyList();
+            }
+
+            @Override
+            public boolean setDefaultInputMethodId(String imeId) {
+                return services != null && services.setDefaultInputMethodId(imeId);
+            }
+
+            @Override
+            public int getShowImeWithHardKeyboard() {
+                return services != null ? services.getShowImeWithHardKeyboard() : -1;
+            }
+
+            @Override
+            public boolean setShowImeWithHardKeyboard(int value) {
+                return services != null && services.setShowImeWithHardKeyboard(value);
+            }
+        });
         this.displayDriver.setInputRouter(this.inputRouter);
 
         this.helperBridge = new HelperClientBridge(services, config);
@@ -114,9 +143,13 @@ public final class OpalDeskDaemon implements Runnable {
                 inputRouter,
                 mouseRouter);
         this.remoteBridge.setPairingEventConsumer(helperBridge::pushPairingEvent);
+        this.remoteBridge.setDirectImeTextCommitter(helperBridge::commitTextViaBridgeIme);
         this.remoteBridge.setRemoteStateChangeListener(() -> {
             helperBridge.pushRemoteStateChanged();
-            bgExec.execute(this::syncWindowImePolicy);
+            bgExec.execute(() -> {
+                imeManager.setRemoteSessionActive(remoteBridge.hasAnyActiveSession());
+                syncWindowImePolicy();
+            });
         });
         this.mouseRouter.setPhysicalKeyboardListener(connected -> bgExec.execute(this::syncWindowImePolicy));
         this.displayDriver.setAllSurfacesDetachedListener(() -> {
@@ -142,6 +175,7 @@ public final class OpalDeskDaemon implements Runnable {
                 taskApi,
                 remoteBridge,
                 this::performShutdownCleanup);
+        binderService.bindImeControls(displayDriver, imeManager, () -> bgExec.execute(this::syncWindowImePolicy));
         helperBridge.setControlBinder(binderService);
         helperBridge.setOnHelperBound(() -> {
             String pending = remoteBridge.getPendingPairingJson();
@@ -160,6 +194,7 @@ public final class OpalDeskDaemon implements Runnable {
             compositor.detachAllClientSurfaces();
             mouseRouter.releaseToLocal();
             inputRouter.releaseAllDisplays();
+            imeManager.setClientDexSessionActive(false);
             if (services != null && !remoteBridge.hasActiveDesktopSession()) {
                 services.restoreDefaultDisplayTopFocus();
             }
@@ -248,6 +283,7 @@ public final class OpalDeskDaemon implements Runnable {
     private void start() {
         taskStackObserver.start();
         mouseRouter.start();
+        imeManager.recoverFromPreviousCrashIfNeeded();
         syncWindowImePolicy();
         remoteBridge.start();
         helperBridge.enqueuePushBinder(true);
@@ -295,7 +331,9 @@ public final class OpalDeskDaemon implements Runnable {
             long now = SystemClock.uptimeMillis();
             helperBridge.maybePushBinderOnTick(now);
             vdPool.setConfiguredMaxDisplays(config.getMaxActiveDisplays());
-            bgExec.execute(compositor::reconcileWithSystemTasks);
+            if (compositor.getWindowCount() > 0) {
+                bgExec.execute(compositor::reconcileWithSystemTasks);
+            }
         } catch (Throwable t) {
             System.err.println("OPALDESK_TICK_WARN: " + t.getMessage());
         }
@@ -309,6 +347,7 @@ public final class OpalDeskDaemon implements Runnable {
         if (remoteBridge != null) {
             bgExec.execute(remoteBridge::onCompositorWindowsChanged);
         }
+        bgExec.execute(this::syncFocusedWindowKeyboardRouting);
         if (mouseRouter != null && mouseRouter.hasPhysicalKeyboard()
                 && (remoteBridge == null || !remoteBridge.hasActiveDesktopSession())) {
             WindowSession focused = compositor.getFocusedLiveWindow();
@@ -320,12 +359,37 @@ public final class OpalDeskDaemon implements Runnable {
         }
     }
 
+    private void syncFocusedWindowKeyboardRouting() {
+        if (mouseRouter == null) return;
+        boolean remoteDesktop = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
+        mouseRouter.setRemoteDesktopActive(remoteDesktop);
+        WindowSession focused = compositor.getFocusedLiveWindow();
+        if (focused != null && focused.displayId > 0 && focused.vdUniqueId != null && !focused.vdUniqueId.isEmpty()) {
+            mouseRouter.setFocusedWindowTarget(focused.displayId, focused.vdUniqueId);
+        } else {
+            mouseRouter.setFocusedWindowTarget(-1, null);
+        }
+    }
+
     private void syncWindowImePolicy() {
         if (config.shuttingDown) return;
         boolean hasPhysKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
         boolean remoteDesktop = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
-        int desiredPolicy = MouseRoutingPolicy.resolveWindowDisplayImePolicy(hasPhysKbd, remoteDesktop, true);
+        int desiredPolicy = MouseRoutingPolicy.resolveWindowDisplayImePolicy(
+                hasPhysKbd,
+                remoteDesktop,
+                true,
+                config.getDexImeDisplayMode(),
+                config.isMuteHostImeOnCast());
         displayDriver.updateWindowImePolicy(desiredPolicy);
+        if (mouseRouter != null) {
+            mouseRouter.setRemoteDesktopActive(remoteDesktop);
+            syncFocusedWindowKeyboardRouting();
+            mouseRouter.resyncExternalDisplayImePolicy();
+        }
+        if (remoteBridge != null) {
+            remoteBridge.syncRemoteDisplayImePolicies();
+        }
         inputRouter.setPhysicalKeyboardConnected(hasPhysKbd);
         if (!hasPhysKbd) {
             inputRouter.releasePhysicalKeyboardUhidDevices();
@@ -342,7 +406,7 @@ public final class OpalDeskDaemon implements Runnable {
         boolean remoteDesktop = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
         if (config.shuttingDown || windowId <= 0 || displayId <= 0
                 || !MouseRoutingPolicy.shouldRunFallbackImeProbe(
-                        inputRouter.isLocalImeActive(), hasPhysKbd, remoteDesktop)) {
+                        inputRouter.isLocalImeActive(), hasPhysKbd, remoteDesktop, config.getDexImeDisplayMode())) {
             return;
         }
         final long gen = imeProbeGen.incrementAndGet();
@@ -362,7 +426,7 @@ public final class OpalDeskDaemon implements Runnable {
         boolean remoteDesktopActive = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
         if (config.shuttingDown || imeProbeGen.get() != gen
                 || !MouseRoutingPolicy.shouldRunFallbackImeProbe(
-                        inputRouter.isLocalImeActive(), hasPhysKbd, remoteDesktopActive)) {
+                        inputRouter.isLocalImeActive(), hasPhysKbd, remoteDesktopActive, config.getDexImeDisplayMode())) {
             return;
         }
         WindowSession ws = compositor.getWindowSnapshot(windowId);
@@ -427,6 +491,10 @@ public final class OpalDeskDaemon implements Runnable {
         }
         // Unbind hardware mice FIRST before tearing down VirtualDisplays so InputReader never sees
         // an active UniqueIdAssociation pointing at a destroyed VirtualDisplay.
+        try {
+            imeManager.onDaemonShutdown();
+        } catch (RuntimeException ignored) {
+        }
         try {
             mouseRouter.shutdown();
         } catch (RuntimeException ignored) {

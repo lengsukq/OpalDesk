@@ -239,3 +239,99 @@ test('OpalInputController suppresses passive soft-keyboard popups on tablets unt
     delete globalThis.document;
   }
 });
+
+test('OpalInputController coalesces high-frequency pointermove bursts and flushes before clicks', () => {
+  const listeners = new Map();
+  const canvasStub = {
+    addEventListener(type, fn) { listeners.set(type, fn); },
+    removeEventListener(type) { listeners.delete(type); },
+    setPointerCapture() {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1920, height: 1080 }),
+  };
+  const imeStub = {
+    value: '',
+    inputMode: '',
+    style: {},
+    setAttribute() {},
+    focus() {},
+    blur() {},
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  let fakeNow = 100;
+  let scheduledCb = null;
+  let cancelCount = 0;
+  const mouseEvents = [];
+
+  globalThis.window = {
+    innerWidth: 1920,
+    innerHeight: 1080,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  try {
+    const ctrl = new OpalInputController(canvasStub, imeStub, {
+      getRemoteSize: () => ({ width: 1920, height: 1080 }),
+      onMouse: (action, x, y, buttons, actionButton) => {
+        mouseEvents.push({ action, x: Math.round(x), y: Math.round(y), buttons, actionButton });
+      },
+      onTouch: () => {},
+      onKey: () => {},
+      onText: () => {},
+      virtualKeyboardDevice: true,
+      now: () => fakeNow,
+      scheduleMoveFlush: (cb) => {
+        scheduledCb = cb;
+        return { id: 1 };
+      },
+      cancelMoveFlush: () => {
+        scheduledCb = null;
+        cancelCount += 1;
+      },
+    });
+    ctrl.setPrimaryLeftAsTouch(false);
+    ctrl.attach();
+    ctrl.setEnabled(true);
+
+    const fire = (type, ev) => listeners.get(type)({ preventDefault() {}, ...ev });
+
+    // First move after idle sends immediately with zero added latency.
+    fire('pointermove', { pointerType: 'mouse', pointerId: 1, clientX: 100, clientY: 100, buttons: 0 });
+    assert.equal(mouseEvents.length, 1);
+    assert.equal(mouseEvents[0].x, 100);
+
+    // Rapid 1000Hz burst within 8ms window coalesces into one scheduled flush carrying the latest coordinate.
+    for (let i = 1; i <= 5; i += 1) {
+      fakeNow += 1;
+      fire('pointermove', { pointerType: 'mouse', pointerId: 1, clientX: 100 + i * 10, clientY: 100, buttons: 0 });
+    }
+    assert.equal(mouseEvents.length, 1);
+    assert.equal(typeof scheduledCb, 'function');
+
+    // Scheduled rAF/timer tick flushes only the latest position (150, 100).
+    fakeNow += 8;
+    const cb = scheduledCb;
+    scheduledCb = null;
+    cb();
+    assert.equal(mouseEvents.length, 2);
+    assert.equal(mouseEvents[1].x, 150);
+
+    // A pointermove followed 1ms later by pointerdown flushes the move BEFORE the click!
+    fakeNow += 1;
+    fire('pointermove', { pointerType: 'mouse', pointerId: 1, clientX: 300, clientY: 200, buttons: 0 });
+    assert.equal(mouseEvents.length, 2);
+    fakeNow += 1;
+    fire('pointerdown', { pointerType: 'mouse', pointerId: 1, clientX: 300, clientY: 200, button: 0, buttons: 1 });
+    assert.equal(mouseEvents.length, 4);
+    assert.equal(mouseEvents[2].action, 0); // MOUSE_MOVE_ABS
+    assert.equal(mouseEvents[2].x, 300);
+    assert.equal(mouseEvents[3].action, 1); // MOUSE_BUTTON_DOWN
+    assert.equal(mouseEvents[3].x, 300);
+    assert.ok(cancelCount >= 1);
+
+    ctrl.detach();
+  } finally {
+    delete globalThis.window;
+  }
+});

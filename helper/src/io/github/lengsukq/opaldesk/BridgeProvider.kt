@@ -36,6 +36,7 @@ class BridgeProvider : ContentProvider() {
             BridgeProtocol.PROVIDER_METHOD_SYNC_SCENE -> handleSyncScene(extras)
             BridgeProtocol.PROVIDER_METHOD_PAIRING_EVENT -> handlePairingEvent(extras)
             BridgeProtocol.PROVIDER_METHOD_IME_REQUEST -> handleImeRequest(extras)
+            BridgeProtocol.PROVIDER_METHOD_IME_COMMIT_TEXT -> handleImeCommitText(extras)
             BridgeProtocol.PROVIDER_METHOD_REMOTE_STATE_CHANGED -> handleRemoteStateChanged()
             else -> Bundle()
         }
@@ -94,6 +95,26 @@ class BridgeProvider : ContentProvider() {
             BridgeClient.onPushedImeRequest(windowId, show, inputType)
         }
         return Bundle().apply { putBoolean("ok", true) }
+    }
+
+    private fun handleImeCommitText(extras: Bundle?): Bundle {
+        val committed = if (!BridgeService.sUserStopping && extras != null) {
+            val text = extras.getString(BridgeProtocol.EXTRA_IME_COMMIT_TEXT).orEmpty()
+            if (text.isNotEmpty()) {
+                io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.commitTextSync(
+                    text = text,
+                    rejectSelfPackage = false,
+                )
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+        return Bundle().apply {
+            putBoolean("ok", true)
+            putBoolean(BridgeProtocol.EXTRA_IME_COMMITTED, committed)
+        }
     }
 
     private fun handleRemoteStateChanged(): Bundle {

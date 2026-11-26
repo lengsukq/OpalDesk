@@ -23,12 +23,14 @@ import {
   FILE_FLAG_DATA,
   FILE_FLAG_END,
   FILE_FLAG_START,
+  fitDimensionsToMaxBounds,
   FLAG_CLIPBOARD_IMAGE_PNG,
   FLAG_VIDEO_KEYFRAME,
   HEADER_SIZE,
   KEY_DOWN,
   MOUSE_SCROLL,
   PROTOCOL_VERSION,
+  resolveAutoCodecPreference,
   SYS_BACK,
   TEXT_MODE_COMMIT_PASTE,
   TOUCH_DOWN,
@@ -202,4 +204,35 @@ test('Keyboard mapper maps macOS Command+C to Android Ctrl+C', () => {
 test('decodeFrame rejects corrupted magic and truncated buffer', () => {
   assert.throws(() => decodeFrame(new Uint8Array([0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])));
   assert.throws(() => decodeFrame(encodeFrame(TYPE_VIDEO_FRAME, 0, 1n, new Uint8Array([1, 2, 3])).subarray(0, 19)));
+});
+
+test('fitDimensionsToMaxBounds preserves 16:9 aspect ratio on 4K displays without pillarbox distortion', () => {
+  // Wi-Fi desktop cap (2560x1600): 4K 16:9 scales proportionally to 2560x1440 (NOT 2560x1600!)
+  assert.deepEqual(fitDimensionsToMaxBounds(3840, 2160, 2560, 1600, 8), { width: 2560, height: 1440 });
+  // Wired USB desktop cap (3840x2160): native 4K stays crisp 1:1
+  assert.deepEqual(fitDimensionsToMaxBounds(3840, 2160, 3840, 2160, 8), { width: 3840, height: 2160 });
+  // Ultrawide 21:9 (3440x1440) inside 2560x1600 stays 21:9 aligned to 8px
+  assert.deepEqual(fitDimensionsToMaxBounds(3440, 1440, 2560, 1600, 8), { width: 2560, height: 1064 });
+});
+
+test('resolveAutoCodecPreference auto-selects HEVC when hardware-supported and honors saved choice', () => {
+  assert.equal(resolveAutoCodecPreference({ hevcSupported: true, savedCodec: '' }), 'hevc');
+  assert.equal(resolveAutoCodecPreference({ hevcSupported: false, savedCodec: '' }), 'h264');
+  assert.equal(resolveAutoCodecPreference({ hevcSupported: true, savedCodec: 'h264' }), 'h264');
+  assert.equal(resolveAutoCodecPreference({ hevcSupported: false, savedCodec: 'hevc' }), 'h264');
+});
+
+test('encodeHello and encodeResizeConfig support wired 45-50 Mbps bitrates and clientPlatform', () => {
+  const helloBytes = encodeHello({
+    clientName: 'Windows Edge',
+    clientPlatform: 'windows',
+    bitrateKbps: 45000,
+    transportHint: 'usb',
+  });
+  const parsed = JSON.parse(new TextDecoder().decode(helloBytes));
+  assert.equal(parsed.clientPlatform, 'windows');
+  assert.equal(parsed.bitrateKbps, 45000);
+
+  const resize = encodeResizeConfig({ width: 3840, height: 2160, dpi: 240, fps: 60, bitrateKbps: 48000 });
+  assert.equal(new DataView(resize.buffer).getInt32(8, false), 48000);
 });

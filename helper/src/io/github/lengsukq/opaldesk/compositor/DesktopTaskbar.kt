@@ -190,6 +190,7 @@ fun MacDesktopMenuBar(
     tray: SystemTrayInfo,
     isExternalMonitor: Boolean,
     hostScreenOff: Boolean,
+    showHostScreenToggle: Boolean = false,
     isCompactWidth: Boolean,
     showControlCenter: Boolean,
     showDpiPopover: Boolean = false,
@@ -204,6 +205,7 @@ fun MacDesktopMenuBar(
     onToggleAppDrawer: () -> Unit = {},
     onToggleExpose: () -> Unit = {},
     onTogglePhoneTrackpad: () -> Unit = {},
+    onToggleHostScreenPower: (Boolean) -> Unit = {},
     onToggleDpiPopover: () -> Unit = {},
     onToggleNotificationCenter: () -> Unit = {},
     onToggleFullscreen: () -> Unit,
@@ -392,6 +394,47 @@ fun MacDesktopMenuBar(
             Spacer(Modifier.width(6.dp))
         }
 
+        // Top-Bar Host Screen-Off Quick Toggle & Live Status Pill (External Display / Remote Cast)
+        if (showHostScreenToggle || hostScreenOff) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(
+                        if (hostScreenOff) OpalPalette.AccentEmerald.copy(alpha = 0.22f)
+                        else OpalPalette.ChipFill,
+                    )
+                    .clickable { onToggleHostScreenPower(hostScreenOff) }
+                    .padding(horizontal = if (isCompactWidth) 6.dp else 8.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(if (hostScreenOff) OpalPalette.AccentEmerald else OpalPalette.TextMuted),
+                )
+                OpalGlyphIcon(
+                    glyph = ChromeGlyph.SCREEN_OFF,
+                    tint = if (hostScreenOff) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
+                    size = 11.5.dp,
+                )
+                OpalText(
+                    text = when {
+                        hostScreenOff && isCompactWidth -> "已息屏"
+                        hostScreenOff -> "本机已息屏"
+                        isCompactWidth -> "息屏"
+                        else -> "本机息屏"
+                    },
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (hostScreenOff) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
+                    maxLines = 1,
+                )
+            }
+            Spacer(Modifier.width(6.dp))
+        }
+
         // Top-Right Notification Center Bell Trigger
         Row(
             modifier = Modifier
@@ -448,22 +491,6 @@ fun MacDesktopMenuBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(if (isCompactWidth) 6.dp else 9.dp),
         ) {
-            if (hostScreenOff) {
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(OpalPalette.AccentEmerald.copy(alpha = 0.22f))
-                        .padding(horizontal = 6.dp, vertical = 1.dp),
-                ) {
-                    OpalText(
-                        text = "息屏省电",
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = OpalPalette.AccentEmerald,
-                        maxLines = 1,
-                    )
-                }
-            }
             if (tray.wifiConnected) {
                 OpalGlyphIcon(
                     glyph = ChromeGlyph.WIFI,
@@ -953,6 +980,9 @@ fun MacControlCenterPopover(
     displaySummary: String,
     inputBackendLabel: String,
     targetFps: Int,
+    actualRefreshHz: Int = 60,
+    maxSupportedRefreshHz: Int = 60,
+    isRemoteCast: Boolean = false,
     windowDpiScalePct: Int,
     externalUiScale: Float,
     themeMode: Int,
@@ -960,6 +990,7 @@ fun MacControlCenterPopover(
     mouseTargetMode: Int,
     isExternalMonitor: Boolean,
     hostScreenOff: Boolean,
+    autoBlackoutOnCast: Boolean = false,
     rootEnhanced: Boolean = false,
     showHostScreenToggle: Boolean,
     showRemoteMediaSection: Boolean = false,
@@ -972,6 +1003,8 @@ fun MacControlCenterPopover(
     dockScale: Float = DockAppearancePolicy.DEFAULT_SCALE,
     globalShortcutsEnabled: Boolean = true,
     disabledShortcutIds: Set<String> = emptySet(),
+    dexImeDisplayMode: Int = BridgeProtocol.DexImeDisplayMode.AUTO,
+    dexLockedImeId: String = "",
     showDesktopGuideIcon: Boolean = true,
     maxHeight: Dp = 640.dp,
     initialTab: Int = 0,
@@ -986,12 +1019,15 @@ fun MacControlCenterPopover(
     onSelectWindowDpiPct: (Int) -> Unit,
     onSelectUiScale: (Float) -> Unit,
     onToggleHostScreenPower: (Boolean) -> Unit,
+    onToggleAutoBlackout: (Boolean) -> Unit = {},
     onSelectThemeMode: (Int) -> Unit,
     onSelectWallpaper: (Int) -> Unit,
     onPickCustomWallpaper: () -> Unit,
     onSelectMouseTarget: (Int) -> Unit,
     onOpenDpiSettings: () -> Unit = {},
     onOpenResolutionSettings: (() -> Unit)? = null,
+    onToggleExternalImeSync: (Boolean) -> Unit = {},
+    onOpenImeSettings: () -> Unit = {},
     onOpenKeyboardShortcuts: () -> Unit = {},
     onOpenFeatureGuide: () -> Unit = {},
     onApplyTilingLayout: (WindowTilingLayout) -> Unit,
@@ -1268,6 +1304,68 @@ fun MacControlCenterPopover(
                             )
                         } else {
                             Spacer(Modifier.weight(1f))
+                        }
+                    }
+
+                    // Quick External-Display IME Sync Row (1-tap for touchscreen external monitors)
+                    if (isExternalMonitor) {
+                        val imeLocalEnabled = dexImeDisplayMode == BridgeProtocol.DexImeDisplayMode.ALWAYS_LOCAL
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(infoCardShape)
+                                .background(
+                                    if (imeLocalEnabled) OpalPalette.AccentEmerald.copy(alpha = 0.14f)
+                                    else OpalPalette.ChipFill,
+                                )
+                                .border(
+                                    0.75.dp,
+                                    if (imeLocalEnabled) OpalPalette.AccentEmerald.copy(alpha = 0.45f)
+                                    else OpalPalette.BorderHairline,
+                                    infoCardShape,
+                                )
+                                .clickable { onToggleExternalImeSync(!imeLocalEnabled) }
+                                .padding(horizontal = 11.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                OpalGlyphIcon(
+                                    glyph = ChromeGlyph.KEYBOARD,
+                                    tint = if (imeLocalEnabled) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
+                                    size = 15.dp,
+                                )
+                                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                    OpalText(
+                                        text = "输入法同步外接屏",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (imeLocalEnabled) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
+                                    )
+                                    OpalText(
+                                        text = if (imeLocalEnabled) {
+                                            "已开启 · 触屏显示器直接弹出输入法"
+                                        } else {
+                                            "点击开启 · 方便触屏显示器就地打字"
+                                        },
+                                        fontSize = 10.sp,
+                                        color = OpalPalette.TextSecondary,
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            OpalButton(
+                                label = "更多",
+                                compact = true,
+                                filled = false,
+                                accent = OpalPalette.AccentBlue,
+                                onClick = onOpenImeSettings,
+                            )
                         }
                     }
 
@@ -1711,7 +1809,127 @@ fun MacControlCenterPopover(
                 }
 
                 else -> {
-                    // Tab 2: Dock Customization, Display, FPS, DPI, External Scaling & Appearance
+                    // Tab 2: Display & Refresh Rate Overview, Dock Customization, DPI, External Scaling & Appearance
+                    // Unified Display Resolution & Refresh Rate Card (immediately visible without scrolling)
+                    val effActualHz = actualRefreshHz.coerceAtLeast(24)
+                    val effMaxHz = maxSupportedRefreshHz.coerceAtLeast(effActualHz)
+                    val fpsReached = targetFps <= 0 || kotlin.math.abs(effActualHz - targetFps) <= 2
+                    val refreshStatusHint = io.github.lengsukq.opaldesk.external.ExternalDisplayPolicy.formatRefreshStatusHint(
+                        targetFps = targetFps,
+                        actualRefreshHz = effActualHz,
+                        maxSupportedHz = effMaxHz,
+                        isRemoteCast = isRemoteCast,
+                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(infoCardShape)
+                            .background(OpalPalette.ChipFill)
+                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
+                            .padding(horizontal = 11.dp, vertical = 9.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            OpalText(
+                                text = "分辨率与刷新率",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = OpalPalette.TextPrimary,
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (fpsReached) OpalPalette.AccentEmerald.copy(alpha = 0.18f)
+                                        else OpalPalette.AccentAmber.copy(alpha = 0.18f),
+                                    )
+                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                OpalText(
+                                    text = "${canvasW}×${canvasH} · ${effActualHz}Hz",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (fpsReached) OpalPalette.AccentEmerald else OpalPalette.AccentAmber,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+
+                        OpalText(
+                            text = refreshStatusHint,
+                            fontSize = 10.sp,
+                            color = OpalPalette.TextSecondary,
+                            maxLines = 2,
+                        )
+
+                        val fpsOpts = listOf(0, 60, 90, 100, 120)
+                        val fpsIdx = fpsOpts.indexOf(targetFps).let { if (it >= 0) it else 0 }
+                        OpalSegmentedRow(
+                            options = listOf("自动", "60Hz", "90Hz", "100Hz", "120Hz"),
+                            selectedIndex = fpsIdx,
+                            onSelect = { onSelectTargetFps(fpsOpts[it]) },
+                        )
+
+                        Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .let { base ->
+                                    if (onOpenResolutionSettings != null) base.clickable(onClick = onOpenResolutionSettings) else base
+                                },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                OpalText(
+                                    text = if (onOpenResolutionSettings != null) "输出分辨率自定义" else "当前画布分辨率",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                OpalText(
+                                    text = if (onOpenResolutionSettings != null) {
+                                        "当前 ${canvasW}×${canvasH} · 点击切换 EDID / 自定义宽×高×Hz"
+                                    } else {
+                                        "本机原生 ${canvasW}×${canvasH}（外接屏或投屏时可自由调整分辨率）"
+                                    },
+                                    fontSize = 10.sp,
+                                    color = OpalPalette.TextSecondary,
+                                    maxLines = 2,
+                                )
+                            }
+                            if (onOpenResolutionSettings != null) {
+                                Spacer(Modifier.width(8.dp))
+                                OpalButton(
+                                    label = "切换",
+                                    compact = true,
+                                    filled = false,
+                                    accent = OpalPalette.AccentBlue,
+                                    onClick = onOpenResolutionSettings,
+                                )
+                            }
+                        }
+
+                        if (showHostScreenToggle) {
+                            Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+                            OpalSwitchRow(
+                                title = "接入外屏自动息屏",
+                                subtitle = if (hostScreenOff) {
+                                    "本机当前已息屏省电 · 点顶栏或电源键可随时点亮"
+                                } else if (autoBlackoutOnCast) {
+                                    "已开启 · 进入外接屏或投屏 3 秒后自动熄灭本机屏幕"
+                                } else {
+                                    "开启后进入外接显示器自动熄灭本机屏幕省电降温"
+                                },
+                                checked = autoBlackoutOnCast,
+                                onCheckedChange = onToggleAutoBlackout,
+                            )
+                        }
+                    }
+
                     // Dedicated Dock Bar Customization Card (live preview at bottom of screen)
                     val isDefaultDock = dockVisible &&
                         DockAppearancePolicy.isDefaultOpacity(dockOpacity) &&
@@ -1790,49 +2008,6 @@ fun MacControlCenterPopover(
                         }
                     }
 
-                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        OpalText(text = "刷新率", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = OpalPalette.TextSecondary)
-                        val fpsOpts = listOf(0, 60, 90, 120)
-                        val fpsIdx = fpsOpts.indexOf(targetFps).let { if (it >= 0) it else 0 }
-                        OpalSegmentedRow(
-                            options = listOf("自动", "60Hz", "90Hz", "120Hz"),
-                            selectedIndex = fpsIdx,
-                            onSelect = { onSelectTargetFps(fpsOpts[it]) },
-                        )
-                    }
-
-                    // Compact Single-Row Custom Output Resolution Entry (External Monitor / Remote Cast)
-                    if (onOpenResolutionSettings != null) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(infoCardShape)
-                                .background(OpalPalette.ChipFill)
-                                .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
-                                .clickable(onClick = onOpenResolutionSettings)
-                                .padding(horizontal = 11.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                OpalText(text = "分辨率自定义", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                OpalText(
-                                    text = "切换 EDID / 自由输入宽×高×刷新率",
-                                    fontSize = 10.sp,
-                                    color = OpalPalette.TextSecondary,
-                                )
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            OpalButton(
-                                label = "设置",
-                                compact = true,
-                                filled = false,
-                                accent = OpalPalette.AccentBlue,
-                                onClick = onOpenResolutionSettings,
-                            )
-                        }
-                    }
-
                     // Compact Single-Row Real-time Visual DPI Entry
                     Row(
                         modifier = Modifier
@@ -1858,6 +2033,46 @@ fun MacControlCenterPopover(
                             compact = true,
                             filled = true,
                             onClick = onOpenDpiSettings,
+                        )
+                    }
+
+                    // Compact Single-Row DeX IME Display Routing & Keyboard Lock Entry
+                    val localImesForSummary = remember(ctx, selectedTab) {
+                        io.github.lengsukq.opaldesk.ui.DexImeCatalog.loadLocalEnabledImes(ctx)
+                    }
+                    val imeCustomized = dexImeDisplayMode == BridgeProtocol.DexImeDisplayMode.ALWAYS_LOCAL ||
+                        dexLockedImeId.isNotBlank()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(infoCardShape)
+                            .background(OpalPalette.ChipFill)
+                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
+                            .clickable(onClick = onOpenImeSettings)
+                            .padding(horizontal = 11.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            OpalText(text = "输入法与键盘锁定", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            OpalText(
+                                text = io.github.lengsukq.opaldesk.ui.DexImeCatalog.formatCompactEntrySubtitle(
+                                    dexImeDisplayMode,
+                                    dexLockedImeId,
+                                    localImesForSummary,
+                                ),
+                                fontSize = 10.sp,
+                                color = if (imeCustomized) OpalPalette.AccentEmerald else OpalPalette.TextSecondary,
+                                maxLines = 1,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        OpalButton(
+                            label = "设置",
+                            compact = true,
+                            filled = false,
+                            accent = OpalPalette.AccentBlue,
+                            onClick = onOpenImeSettings,
                         )
                     }
 
@@ -2431,6 +2646,7 @@ private const val FULLSCREEN_COLLAPSE_HOVER_GUARD_MS = 650L
 fun FullscreenExitOverlay(
     windowTitle: String,
     onExitFullscreen: () -> Unit,
+    onToggleOrientation: (() -> Unit)? = null,
     onReturnToDesktop: () -> Unit,
     onOpenControlCenter: () -> Unit,
     modifier: Modifier = Modifier,
@@ -2556,6 +2772,20 @@ fun FullscreenExitOverlay(
                         onExitFullscreen()
                     },
                 )
+                if (onToggleOrientation != null) {
+                    OpalTopPillChip(
+                        label = "旋转",
+                        glyph = ChromeGlyph.ORIENTATION,
+                        tint = OpalPalette.AccentEmerald,
+                        active = true,
+                        activeColor = OpalPalette.AccentEmerald,
+                        onClick = {
+                            isPointerHovering = false
+                            expanded = false
+                            onToggleOrientation()
+                        },
+                    )
+                }
                 OpalTopPillChip(
                     label = "桌面",
                     glyph = ChromeGlyph.HOME_HOUSE,

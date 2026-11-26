@@ -188,6 +188,21 @@ public final class DisplayGeometryUtil {
         return new int[]{baseW, baseH, baseDpi};
     }
 
+    public static final int WINDOW_SUPERSAMPLE_COMPAT = 0;
+    public static final int WINDOW_SUPERSAMPLE_BALANCED = 1;
+    public static final int WINDOW_SUPERSAMPLE_NATIVE_1X = 2;
+
+    private static final int BALANCED_SUPERSAMPLED_LONG_EDGE = 1920;
+    private static final long BALANCED_SUPERSAMPLED_PIXELS = 2_200_000L;
+    private static final float BALANCED_SUPERSAMPLE_MAX_SCALE = 1.45f;
+
+    public static int clampWindowSupersampleMode(int mode) {
+        if (mode == WINDOW_SUPERSAMPLE_BALANCED || mode == WINDOW_SUPERSAMPLE_NATIVE_1X) {
+            return mode;
+        }
+        return WINDOW_SUPERSAMPLE_COMPAT;
+    }
+
     public static int[] resolveWindowBufferSpec(
             IntRect windowFrame,
             int canvasDpi,
@@ -195,7 +210,8 @@ public final class DisplayGeometryUtil {
             WindowProfile profile,
             int dpiScalePct,
             int hostDisplayDpi) {
-        return resolveWindowBufferSpec(windowFrame, canvasDpi, fullscreen, profile, dpiScalePct, hostDisplayDpi, 0);
+        return resolveWindowBufferSpec(
+                windowFrame, canvasDpi, fullscreen, profile, dpiScalePct, hostDisplayDpi, 0, WINDOW_SUPERSAMPLE_COMPAT);
     }
 
     /**
@@ -213,6 +229,20 @@ public final class DisplayGeometryUtil {
             int dpiScalePct,
             int hostDisplayDpi,
             int customDpiOverride) {
+        return resolveWindowBufferSpec(
+                windowFrame, canvasDpi, fullscreen, profile, dpiScalePct, hostDisplayDpi,
+                customDpiOverride, WINDOW_SUPERSAMPLE_COMPAT);
+    }
+
+    public static int[] resolveWindowBufferSpec(
+            IntRect windowFrame,
+            int canvasDpi,
+            boolean fullscreen,
+            WindowProfile profile,
+            int dpiScalePct,
+            int hostDisplayDpi,
+            int customDpiOverride,
+            int supersampleMode) {
         int[] raw = computeContentBufferSize(windowFrame, canvasDpi, fullscreen);
         int rawW = raw[0];
         int rawH = raw[1];
@@ -221,10 +251,20 @@ public final class DisplayGeometryUtil {
         }
         WindowProfile effProfile = (profile != null) ? profile : WindowProfile.DESKTOP;
         int baseDpi = effProfile.resolveContentDpi(rawW, rawH, dpiScalePct);
+        int mode = clampWindowSupersampleMode(supersampleMode);
+        if (mode == WINDOW_SUPERSAMPLE_NATIVE_1X) {
+            return new int[]{rawW, rawH, baseDpi};
+        }
         int targetHostDpi = (hostDisplayDpi >= 240 && hostDisplayDpi <= MAX_DPI) ? hostDisplayDpi : 0;
         if (targetHostDpi > baseDpi) {
-            float scale = computeSupersampleScale(
-                    rawW, rawH, baseDpi, targetHostDpi, MAX_SUPERSAMPLED_LONG_EDGE, MAX_SUPERSAMPLED_PIXELS);
+            int maxLong = (mode == WINDOW_SUPERSAMPLE_BALANCED)
+                    ? BALANCED_SUPERSAMPLED_LONG_EDGE : MAX_SUPERSAMPLED_LONG_EDGE;
+            long maxPixels = (mode == WINDOW_SUPERSAMPLE_BALANCED)
+                    ? BALANCED_SUPERSAMPLED_PIXELS : MAX_SUPERSAMPLED_PIXELS;
+            float scale = computeSupersampleScale(rawW, rawH, baseDpi, targetHostDpi, maxLong, maxPixels);
+            if (mode == WINDOW_SUPERSAMPLE_BALANCED) {
+                scale = Math.min(scale, BALANCED_SUPERSAMPLE_MAX_SCALE);
+            }
             if (scale > 1.05f) {
                 int upW = alignEven(Math.round(rawW * scale), 240, MAX_WINDOW_EDGE_PX);
                 int upH = alignEven(Math.round(rawH * scale), 200, MAX_WINDOW_EDGE_PX);
@@ -329,8 +369,123 @@ public final class DisplayGeometryUtil {
     }
 
     public static final int MIN_SESSION_BITRATE_KBPS = 2_500;
+    public static final int WIRELESS_MAX_BITRATE_KBPS = 32_000;
+    public static final int WIRED_MAX_BITRATE_KBPS = 50_000;
     public static final int HEVC_BITRATE_SCALE_PCT = 75;
     public static final int MIN_STATUS_BAR_INSET_SDK = 34;
+
+    public static final long AGGRESSIVE_REPEAT_FRAME_AFTER_US = 100_000L;
+    public static final long DEFAULT_REPEAT_FRAME_AFTER_US = 1_000_000L;
+    public static final int AVC_PROFILE_MAIN = 2;
+    public static final int AVC_PROFILE_HIGH = 8;
+    public static final int HEVC_PROFILE_MAIN = 1;
+
+    private static final int SINK_TYPE_REMOTE_USB = 2;
+    private static final int SINK_TYPE_REMOTE_USB_TETHER = 6;
+
+    public enum ReconfigureAction {
+        NO_OP,
+        BITRATE_ONLY,
+        DPI_ONLY,
+        FULL_RECONFIGURE
+    }
+
+    public static boolean isWiredSinkType(int sinkType) {
+        return sinkType == SINK_TYPE_REMOTE_USB || sinkType == SINK_TYPE_REMOTE_USB_TETHER;
+    }
+
+    public static int resolveMaxBitrateKbpsForSink(int sinkType) {
+        return isWiredSinkType(sinkType) ? WIRED_MAX_BITRATE_KBPS : WIRELESS_MAX_BITRATE_KBPS;
+    }
+
+    /**
+     * Classifies a live RESIZE_CONFIG transition so bitrate-only and DPI-only updates avoid tearing
+     * down and recreating the hardware MediaCodec encoder (zero black flash, zero IDR storm).
+     */
+    public static ReconfigureAction planReconfigureAction(
+            int curW, int curH, int curDpi, float curFps, int curBitrateKbps, int curMode, int curRot,
+            int nextW, int nextH, int nextDpi, float nextFps, int nextBitrateKbps, int nextMode, int nextRot) {
+        boolean encoderShapeUnchanged = (curW == nextW)
+                && (curH == nextH)
+                && (Math.abs(curFps - nextFps) < 0.5f)
+                && (curMode == nextMode)
+                && (curRot == nextRot);
+        if (!encoderShapeUnchanged) {
+            return ReconfigureAction.FULL_RECONFIGURE;
+        }
+        if (curDpi != nextDpi) {
+            return ReconfigureAction.DPI_ONLY;
+        }
+        if (curBitrateKbps != nextBitrateKbps) {
+            return ReconfigureAction.BITRATE_ONLY;
+        }
+        return ReconfigureAction.NO_OP;
+    }
+
+    /**
+     * Chooses static-screen repeat-frame cadence based on receiver platform & target FPS:
+     * Android high-refresh peers (>60Hz) use 10Hz keepalive to prevent receiver panels (e.g.
+     * HyperOS MiMediaCodec) from throttling down to 30Hz; Mac/Windows/Web and 60Hz streams use
+     * 1Hz to slash static VENC & Wi-Fi radio wakeups (and heat) by 10x.
+     */
+    public static long resolveRepeatPreviousFrameAfterUs(String clientPlatform, float targetFps) {
+        boolean isAndroidPeer = "android".equalsIgnoreCase(
+                clientPlatform != null ? clientPlatform.trim() : "");
+        return (isAndroidPeer && targetFps > 60.5f)
+                ? AGGRESSIVE_REPEAT_FRAME_AFTER_US
+                : DEFAULT_REPEAT_FRAME_AFTER_US;
+    }
+
+    /**
+     * Qualcomm C2/OMX hardware encoders require CBR to disable CVPFilter/evaDme 4-frame lookahead;
+     * known non-Qualcomm HW encoders (MediaTek/Exynos/HiSilicon/Unisoc) benefit from VBR for lower
+     * static power and cleaner high-motion text bursts.
+     */
+    public static boolean shouldPreferCbrMode(String codecName) {
+        if (codecName == null || codecName.trim().isEmpty()) {
+            return true;
+        }
+        String lower = codecName.trim().toLowerCase(java.util.Locale.US);
+        if (lower.startsWith("c2.mtk.") || lower.startsWith("omx.mtk.")
+                || lower.startsWith("c2.exynos.") || lower.startsWith("omx.exynos.")
+                || lower.startsWith("c2.hisi.") || lower.startsWith("omx.hisi.")
+                || lower.startsWith("c2.unisoc.") || lower.startsWith("omx.sprd.")) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Selects the highest-efficiency standard profile (H.264 High -> Main, HEVC Main) and its
+     * highest advertised level from an encoder's capability table so H.264 encoders do not silently
+     * default to Baseline (CAVLC-only).
+     */
+    public static int[] selectPreferredProfileLevel(String mime, int[] profiles, int[] levels) {
+        if (mime == null || profiles == null || levels == null || profiles.length == 0) {
+            return new int[]{0, 0};
+        }
+        int count = Math.min(profiles.length, levels.length);
+        if ("video/avc".equalsIgnoreCase(mime)) {
+            int highLevel = findMaxLevelForProfile(profiles, levels, count, AVC_PROFILE_HIGH);
+            if (highLevel > 0) return new int[]{AVC_PROFILE_HIGH, highLevel};
+            int mainLevel = findMaxLevelForProfile(profiles, levels, count, AVC_PROFILE_MAIN);
+            if (mainLevel > 0) return new int[]{AVC_PROFILE_MAIN, mainLevel};
+        } else if ("video/hevc".equalsIgnoreCase(mime)) {
+            int mainLevel = findMaxLevelForProfile(profiles, levels, count, HEVC_PROFILE_MAIN);
+            if (mainLevel > 0) return new int[]{HEVC_PROFILE_MAIN, mainLevel};
+        }
+        return new int[]{0, 0};
+    }
+
+    private static int findMaxLevelForProfile(int[] profiles, int[] levels, int count, int targetProfile) {
+        int bestLevel = 0;
+        for (int i = 0; i < count; i++) {
+            if (profiles[i] == targetProfile && levels[i] > bestLevel) {
+                bestLevel = levels[i];
+            }
+        }
+        return bestLevel;
+    }
 
     /**
      * Only attach shell-owned {@code TYPE_STATUS_BAR} inset windows on Android 14+ (API 34+),

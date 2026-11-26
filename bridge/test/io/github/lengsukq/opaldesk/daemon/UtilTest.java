@@ -259,4 +259,33 @@ public class UtilTest {
         assertEquals(1, DisplayGeometryUtil.selectBestEdidModeIndex(
                 new int[]{1080, 1080}, new int[]{1920, 1920}, new float[]{60f, 120f}, 1920, 1080, 120f));
     }
+
+    @Test
+    public void testDaemonConfigConcurrentSaveMainConfPreservesTargetFpsWithoutRenameErrors() throws Exception {
+        java.io.File tmpDir = java.nio.file.Files.createTempDirectory("opaldesk_cfg_test").toFile();
+        java.io.File conf = new java.io.File(tmpDir, "opaldesk_v2.conf");
+        java.io.File prof = new java.io.File(tmpDir, "opaldesk_profiles.conf");
+        DaemonConfig cfg = new DaemonConfig(conf, prof);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            java.util.List<java.util.concurrent.Future<?>> futs = new java.util.ArrayList<>();
+            for (int i = 0; i < 16; i++) {
+                final int fps = (i % 2 == 0) ? 90 : 120;
+                futs.add(pool.submit(() -> cfg.updateDisplayPrefs(fps, 100)));
+            }
+            for (java.util.concurrent.Future<?> f : futs) {
+                f.get();
+            }
+            cfg.updateDisplayPrefs(120, 115);
+            DaemonConfig reloaded = new DaemonConfig(conf, prof);
+            reloaded.loadAll();
+            assertEquals(120, reloaded.getTargetFps());
+            assertEquals(115, reloaded.getWindowDpiScalePct());
+        } finally {
+            pool.shutdownNow();
+            conf.delete();
+            prof.delete();
+            tmpDir.delete();
+        }
+    }
 }

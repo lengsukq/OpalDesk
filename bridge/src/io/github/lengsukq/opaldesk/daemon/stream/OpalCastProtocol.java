@@ -95,8 +95,14 @@ public final class OpalCastProtocol {
     public static final String SESSION_ROLE_STANDALONE_APP = "standalone_app";
     public static final String SESSION_ROLE_APP_CATALOG = "app_catalog";
     public static final String TRANSPORT_HINT_USB = "usb";
+    public static final String TRANSPORT_HINT_USB_TETHER = "usb_tether";
     public static final String TRANSPORT_HINT_WIFI_ADB = "wifi_adb";
     public static final String TRANSPORT_HINT_WIFI_TLS = "wifi_tls";
+
+    public static final String CLIENT_PLATFORM_ANDROID = "android";
+    public static final String CLIENT_PLATFORM_MACOS = "macos";
+    public static final String CLIENT_PLATFORM_WINDOWS = "windows";
+    public static final String CLIENT_PLATFORM_WEB = "web";
 
     // Audio codec IDs
     public static final int AUDIO_CODEC_AAC_LC = 1;
@@ -264,7 +270,17 @@ public final class OpalCastProtocol {
      * throws {@link ProtocolException} on invalid magic or payloadLen > 16 MiB.
      */
     public static Frame readFrame(InputStream in) throws IOException {
-        byte[] header = new byte[HEADER_SIZE];
+        return readFrame(in, new byte[HEADER_SIZE]);
+    }
+
+    /**
+     * Reads one OpalCast v1 frame using a caller-owned reusable 18-byte header buffer to avoid
+     * per-frame heap allocation on high-frequency uplink input streams.
+     */
+    public static Frame readFrame(InputStream in, byte[] reusableHeaderBuf) throws IOException {
+        byte[] header = (reusableHeaderBuf != null && reusableHeaderBuf.length >= HEADER_SIZE)
+                ? reusableHeaderBuf
+                : new byte[HEADER_SIZE];
         int first = in.read();
         if (first < 0) {
             return null;
@@ -986,10 +1002,11 @@ public final class OpalCastProtocol {
         public final String authToken;
         public final String pinCode;
         // OpalCast v1.1 optional fields
-        public final String transportHint; // "usb" | "wifi_adb" | "wifi_tls" | ""
+        public final String transportHint; // "usb" | "usb_tether" | "wifi_adb" | "wifi_tls" | ""
         public final String sessionRole;   // "desktop" | "standalone_app"
         public final String appPackage;
         public final String appActivity;
+        public final String clientPlatform; // "android" | "macos" | "windows" | "web" | ""
 
         public HelloMsg(
                 int protocolVersion, String clientName, String clientId, String preferredCodec,
@@ -997,7 +1014,7 @@ public final class OpalCastProtocol {
                 int displayMode, boolean audioEnabled, String authToken, String pinCode) {
             this(protocolVersion, clientName, clientId, preferredCodec,
                     width, height, dpi, fps, bitrateKbps, displayMode, audioEnabled,
-                    authToken, pinCode, "", SESSION_ROLE_DESKTOP, "", "");
+                    authToken, pinCode, "", SESSION_ROLE_DESKTOP, "", "", "");
         }
 
         public HelloMsg(
@@ -1005,6 +1022,17 @@ public final class OpalCastProtocol {
                 int width, int height, int dpi, int fps, int bitrateKbps,
                 int displayMode, boolean audioEnabled, String authToken, String pinCode,
                 String transportHint, String sessionRole, String appPackage, String appActivity) {
+            this(protocolVersion, clientName, clientId, preferredCodec,
+                    width, height, dpi, fps, bitrateKbps, displayMode, audioEnabled,
+                    authToken, pinCode, transportHint, sessionRole, appPackage, appActivity, "");
+        }
+
+        public HelloMsg(
+                int protocolVersion, String clientName, String clientId, String preferredCodec,
+                int width, int height, int dpi, int fps, int bitrateKbps,
+                int displayMode, boolean audioEnabled, String authToken, String pinCode,
+                String transportHint, String sessionRole, String appPackage, String appActivity,
+                String clientPlatform) {
             this.protocolVersion = protocolVersion;
             this.clientName = (clientName != null) ? clientName : "Mac";
             this.clientId = (clientId != null) ? clientId : "";
@@ -1023,6 +1051,7 @@ public final class OpalCastProtocol {
             this.sessionRole = role.isEmpty() ? SESSION_ROLE_DESKTOP : role;
             this.appPackage = (appPackage != null) ? appPackage.trim() : "";
             this.appActivity = (appActivity != null) ? appActivity.trim() : "";
+            this.clientPlatform = (clientPlatform != null) ? clientPlatform.trim().toLowerCase(java.util.Locale.ROOT) : "";
         }
 
         public boolean isStandaloneApp() {
@@ -1057,7 +1086,8 @@ public final class OpalCastProtocol {
                     obj.getString("transportHint", ""),
                     obj.getString("sessionRole", SESSION_ROLE_DESKTOP),
                     obj.getString("appPackage", ""),
-                    obj.getString("appActivity", ""));
+                    obj.getString("appActivity", ""),
+                    obj.getString("clientPlatform", ""));
         } catch (RuntimeException t) {
             throw new ProtocolException("Invalid HELLO JSON: " + t.getMessage(), t);
         }

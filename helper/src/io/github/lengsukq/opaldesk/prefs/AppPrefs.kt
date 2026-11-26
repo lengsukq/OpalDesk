@@ -45,6 +45,7 @@ object AppPrefs {
     private const val KEY_ROOT_ENHANCE = "root_enhance_optional"
     private const val KEY_AUTO_ENTER_DEX = "auto_enter_dex_on_launch_v1"
     private const val KEY_AUTO_EXT_DISPLAY = "auto_project_ext_display"
+    private const val KEY_AUTO_BLACKOUT_ON_CAST = "auto_blackout_on_cast_v1"
     private const val KEY_AUTO_SHOW_PHONE_TRACKPAD = "auto_show_phone_trackpad_on_external"
     private const val KEY_EXTERNAL_PROJECTION_MODE = "external_projection_mode_v1"
     private const val KEY_EXTERNAL_OVERSCAN_PCT = "external_overscan_pct_v1"
@@ -82,6 +83,11 @@ object AppPrefs {
     private const val KEY_DEFAULT_CUSTOM_RES_H = "default_custom_resolution_h_v1"
     private const val KEY_DEFAULT_CUSTOM_RES_FPS = "default_custom_resolution_fps_v1"
     private const val KEY_USB_TETHER_CAST_ENABLED = "usb_tether_cast_enabled_v1"
+    private const val KEY_DEX_IME_DISPLAY_MODE = "dex_ime_display_mode_v1"
+    private const val KEY_DEX_LOCKED_IME_ID = "dex_locked_ime_id_v1"
+    private const val KEY_MUTE_HOST_IME_ON_CAST = "mute_host_ime_on_cast_v1"
+    private const val KEY_HARD_KBD_SOFT_IME_MODE = "hard_kbd_soft_ime_mode_v1"
+    private const val KEY_AUTO_BRIDGE_IME_ON_CAST = "auto_bridge_ime_on_cast_v1"
 
     private val DEFAULT_PINNED = listOf(
         "com.android.chrome",
@@ -130,6 +136,9 @@ object AppPrefs {
 
     private val _autoShowPhoneTrackpadFlow = MutableStateFlow(true)
     val autoShowPhoneTrackpadFlow: StateFlow<Boolean> = _autoShowPhoneTrackpadFlow.asStateFlow()
+
+    private val _autoBlackoutOnCastFlow = MutableStateFlow(false)
+    val autoBlackoutOnCastFlow: StateFlow<Boolean> = _autoBlackoutOnCastFlow.asStateFlow()
 
     private val _autoEnterDexFlow = MutableStateFlow(false)
     val autoEnterDexFlow: StateFlow<Boolean> = _autoEnterDexFlow.asStateFlow()
@@ -184,6 +193,25 @@ object AppPrefs {
     private val _usbTetherCastEnabledFlow = MutableStateFlow(false)
     val usbTetherCastEnabledFlow: StateFlow<Boolean> = _usbTetherCastEnabledFlow.asStateFlow()
 
+    private val _dexImeDisplayModeFlow = MutableStateFlow(
+        io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.AUTO,
+    )
+    val dexImeDisplayModeFlow: StateFlow<Int> = _dexImeDisplayModeFlow.asStateFlow()
+
+    private val _dexLockedImeIdFlow = MutableStateFlow("")
+    val dexLockedImeIdFlow: StateFlow<String> = _dexLockedImeIdFlow.asStateFlow()
+
+    private val _muteHostImeOnCastFlow = MutableStateFlow(false)
+    val muteHostImeOnCastFlow: StateFlow<Boolean> = _muteHostImeOnCastFlow.asStateFlow()
+
+    private val _hardKbdSoftImeModeFlow = MutableStateFlow(
+        io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM,
+    )
+    val hardKbdSoftImeModeFlow: StateFlow<Int> = _hardKbdSoftImeModeFlow.asStateFlow()
+
+    private val _autoBridgeImeOnCastFlow = MutableStateFlow(true)
+    val autoBridgeImeOnCastFlow: StateFlow<Boolean> = _autoBridgeImeOnCastFlow.asStateFlow()
+
     private fun prefs(ctx: Context?) =
         ctx?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -205,6 +233,7 @@ object AppPrefs {
         _appLaunchCountsFlow.value = parseLaunchCounts(p.getString(KEY_APP_LAUNCH_COUNTS, null))
         _autoCheckUpdateFlow.value = p.getBoolean(KEY_AUTO_CHECK_UPDATE, true)
         _autoShowPhoneTrackpadFlow.value = p.getBoolean(KEY_AUTO_SHOW_PHONE_TRACKPAD, true)
+        _autoBlackoutOnCastFlow.value = p.getBoolean(KEY_AUTO_BLACKOUT_ON_CAST, false)
         _autoEnterDexFlow.value = p.getBoolean(KEY_AUTO_ENTER_DEX, false)
         _externalProjectionModeFlow.value = p.getInt(KEY_EXTERNAL_PROJECTION_MODE, PROJECTION_MODE_AUTO)
             .coerceIn(PROJECTION_MODE_AUTO, PROJECTION_MODE_PRESENTATION)
@@ -243,6 +272,26 @@ object AppPrefs {
         _defaultCustomResolutionFlow.value = CustomResolutionPolicy.sanitize(savedW, savedH, savedFps)
             ?: CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC
         _usbTetherCastEnabledFlow.value = p.getBoolean(KEY_USB_TETHER_CAST_ENABLED, false)
+        _dexImeDisplayModeFlow.value = p.getInt(
+            KEY_DEX_IME_DISPLAY_MODE,
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.AUTO,
+        ).coerceIn(
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.AUTO,
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.FALLBACK_HOST,
+        )
+        _dexLockedImeIdFlow.value = p.getString(KEY_DEX_LOCKED_IME_ID, "").orEmpty().trim()
+        _muteHostImeOnCastFlow.value = p.getBoolean(KEY_MUTE_HOST_IME_ON_CAST, false)
+        val rawHardKbd = p.getInt(
+            KEY_HARD_KBD_SOFT_IME_MODE,
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM,
+        )
+        _hardKbdSoftImeModeFlow.value = when (rawHardKbd) {
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.HIDE,
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SHOW,
+            -> rawHardKbd
+            else -> io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM
+        }
+        _autoBridgeImeOnCastFlow.value = p.getBoolean(KEY_AUTO_BRIDGE_IME_ON_CAST, true)
     }
 
     private fun loadPkgList(p: android.content.SharedPreferences, key: String, fallbackKey: String): List<String> {
@@ -454,6 +503,16 @@ object AppPrefs {
         val clean = path.trim()
         prefs(ctx)?.edit()?.putString(KEY_CUSTOM_WALLPAPER_PATH, clean)?.apply()
         _customWallpaperPathFlow.value = clean
+    }
+
+    fun isAutoBlackoutOnCast(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _autoBlackoutOnCastFlow.value
+    }
+
+    fun setAutoBlackoutOnCast(ctx: Context?, enabled: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_BLACKOUT_ON_CAST, enabled)?.apply()
+        _autoBlackoutOnCastFlow.value = enabled
     }
 
     fun clearCustomWallpaper(ctx: Context?) {
@@ -743,6 +802,67 @@ object AppPrefs {
     fun setUsbTetherCastEnabled(ctx: Context?, enabled: Boolean) {
         prefs(ctx)?.edit()?.putBoolean(KEY_USB_TETHER_CAST_ENABLED, enabled)?.apply()
         _usbTetherCastEnabledFlow.value = enabled
+    }
+
+    fun getDexImeDisplayMode(ctx: Context?): Int {
+        hydrateFlows(ctx)
+        return _dexImeDisplayModeFlow.value
+    }
+
+    fun setDexImeDisplayMode(ctx: Context?, mode: Int) {
+        val clamped = mode.coerceIn(
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.AUTO,
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.FALLBACK_HOST,
+        )
+        prefs(ctx)?.edit()?.putInt(KEY_DEX_IME_DISPLAY_MODE, clamped)?.apply()
+        _dexImeDisplayModeFlow.value = clamped
+    }
+
+    fun getDexLockedImeId(ctx: Context?): String {
+        hydrateFlows(ctx)
+        return _dexLockedImeIdFlow.value
+    }
+
+    fun setDexLockedImeId(ctx: Context?, imeId: String) {
+        val clean = imeId.trim()
+        prefs(ctx)?.edit()?.putString(KEY_DEX_LOCKED_IME_ID, clean)?.apply()
+        _dexLockedImeIdFlow.value = clean
+    }
+
+    fun isMuteHostImeOnCastEnabled(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _muteHostImeOnCastFlow.value
+    }
+
+    fun setMuteHostImeOnCastEnabled(ctx: Context?, enabled: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_MUTE_HOST_IME_ON_CAST, enabled)?.apply()
+        _muteHostImeOnCastFlow.value = enabled
+    }
+
+    fun getHardKbdSoftImeMode(ctx: Context?): Int {
+        hydrateFlows(ctx)
+        return _hardKbdSoftImeModeFlow.value
+    }
+
+    fun setHardKbdSoftImeMode(ctx: Context?, mode: Int) {
+        val clamped = when (mode) {
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.HIDE,
+            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SHOW,
+            -> mode
+            else -> io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM
+        }
+        prefs(ctx)?.edit()?.putInt(KEY_HARD_KBD_SOFT_IME_MODE, clamped)?.apply()
+        _hardKbdSoftImeModeFlow.value = clamped
+    }
+
+    fun isAutoBridgeImeOnCastEnabled(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _autoBridgeImeOnCastFlow.value
+    }
+
+    fun setAutoBridgeImeOnCastEnabled(ctx: Context?, enabled: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_BRIDGE_IME_ON_CAST, enabled)?.apply()
+        _autoBridgeImeOnCastFlow.value = enabled
     }
 
     fun createFeedbackQuotaStorage(ctx: Context): FeedbackQuotaStorage {

@@ -259,6 +259,7 @@ public struct HelloPayload: Encodable, Sendable, Equatable {
     public var authToken: String
     public var pinCode: String
     public var transportHint: String
+    public var clientPlatform: String
     public var sessionRole: String
     public var appPackage: String
     public var appActivity: String
@@ -278,6 +279,7 @@ public struct HelloPayload: Encodable, Sendable, Equatable {
         authToken: String = "",
         pinCode: String = "",
         transportHint: String = OpalCastTransportHint.usb.rawValue,
+        clientPlatform: String = "macos",
         sessionRole: String = OpalCastSessionRole.desktop.rawValue,
         appPackage: String = "",
         appActivity: String = ""
@@ -296,6 +298,7 @@ public struct HelloPayload: Encodable, Sendable, Equatable {
         self.authToken = authToken
         self.pinCode = pinCode
         self.transportHint = transportHint
+        self.clientPlatform = clientPlatform
         self.sessionRole = sessionRole
         self.appPackage = appPackage
         self.appActivity = appActivity

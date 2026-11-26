@@ -208,6 +208,105 @@ object ExternalDisplayPolicy {
         return transport == ExternalDisplayTransport.WIRELESS_TV
     }
 
+    data class DisplayModeCandidate(
+        val modeId: Int,
+        val width: Int,
+        val height: Int,
+        val refreshRate: Float,
+    )
+
+    /**
+     * Picks the optimal hardware display mode for an external monitor:
+     * - When [preferHighestResolution] is true, prefers the highest-pixel-area mode that still
+     *   delivers >= 59.5Hz (falling back to highest refresh rate if all high-res modes are 30Hz).
+     * - Otherwise locks to [currentWidth] x [currentHeight] and picks its peak refresh rate
+     *   (e.g., upgrading a 120Hz/144Hz USB-C monitor out of 60Hz default).
+     */
+    fun selectPreferredDisplayMode(
+        modes: List<DisplayModeCandidate>,
+        currentWidth: Int,
+        currentHeight: Int,
+        preferHighestResolution: Boolean = false,
+    ): DisplayModeCandidate? {
+        if (modes.isEmpty()) return null
+        val valid = modes.filter { it.width >= 320 && it.height >= 240 && it.refreshRate >= MIN_EXTERNAL_MODE_FPS }
+        if (valid.isEmpty()) return modes.first()
+
+        if (preferHighestResolution) {
+            val smooth = valid.filter { it.refreshRate >= 59.5f }
+            val pool = smooth.ifEmpty { valid }
+            return pool.maxWithOrNull(
+                compareBy<DisplayModeCandidate> { it.width.toLong() * it.height.toLong() }
+                    .thenBy { it.refreshRate },
+            )
+        }
+        val sameRes = valid.filter { it.width == currentWidth && it.height == currentHeight }
+        if (sameRes.isNotEmpty()) {
+            return sameRes.maxByOrNull { it.refreshRate }
+        }
+        return valid.maxWithOrNull(
+            compareBy<DisplayModeCandidate> { it.width.toLong() * it.height.toLong() }
+                .thenBy { it.refreshRate },
+        )
+    }
+
+    /**
+     * Picks the best hardware [DisplayModeCandidate] at [currentWidth] × [currentHeight] matching
+     * the user's requested [targetFps] (`0` = auto peak refresh rate).
+     */
+    fun selectDisplayModeForTargetFps(
+        modes: List<DisplayModeCandidate>,
+        currentWidth: Int,
+        currentHeight: Int,
+        targetFps: Int,
+    ): DisplayModeCandidate? {
+        if (modes.isEmpty()) return null
+        val valid = modes.filter { it.width >= 320 && it.height >= 240 && it.refreshRate >= MIN_EXTERNAL_MODE_FPS }
+        if (valid.isEmpty()) return modes.first()
+        val sameRes = valid.filter { it.width == currentWidth && it.height == currentHeight }
+        val pool = sameRes.ifEmpty { valid }
+        if (targetFps <= 0) {
+            return pool.maxByOrNull { it.refreshRate }
+        }
+        val req = targetFps.toFloat()
+        val exact = pool.filter { kotlin.math.abs(it.refreshRate - req) <= 2.5f }
+        if (exact.isNotEmpty()) {
+            return exact.minByOrNull { kotlin.math.abs(it.refreshRate - req) }
+        }
+        val atOrAbove = pool.filter { it.refreshRate >= req - 2.5f }
+        if (atOrAbove.isNotEmpty()) {
+            return atOrAbove.minByOrNull { it.refreshRate }
+        }
+        return pool.maxByOrNull { it.refreshRate }
+    }
+
+    /**
+     * Formats an intuitive status subtitle explaining the effective display refresh rate vs target.
+     */
+    fun formatRefreshStatusHint(
+        targetFps: Int,
+        actualRefreshHz: Int,
+        maxSupportedHz: Int,
+        isRemoteCast: Boolean,
+    ): String {
+        val cleanActual = actualRefreshHz.coerceAtLeast(24)
+        val cleanMax = maxSupportedHz.coerceAtLeast(cleanActual)
+        return when {
+            isRemoteCast && targetFps <= 0 ->
+                "自动匹配投屏端 · 当前输出 ${cleanActual}Hz"
+            isRemoteCast ->
+                "目标 ${targetFps}Hz · 当前投屏输出 ${cleanActual}Hz"
+            targetFps <= 0 ->
+                "自动匹配屏幕最高刷新率 · 当前 ${cleanActual}Hz（上限 ${cleanMax}Hz）"
+            targetFps > cleanMax + 2 ->
+                "当前屏幕最高支持 ${cleanMax}Hz，已按上限 ${cleanActual}Hz 输出"
+            kotlin.math.abs(cleanActual - targetFps) <= 2 ->
+                "目标 ${targetFps}Hz 已生效 · 当前 ${cleanActual}Hz"
+            else ->
+                "已请求 ${targetFps}Hz · 当前面板 ${cleanActual}Hz（上限 ${cleanMax}Hz）"
+        }
+    }
+
     enum class Display0ExternalAction {
         USE_PRESENTATION,
         RELAUNCH_DIRECT_VIA_SHELL,
@@ -401,7 +500,30 @@ object ExternalTrackpadPolicy {
         session: ExternalDesktopSession,
         autoShowEnabled: Boolean,
         alreadyVisible: Boolean,
-    ): Boolean = session.isPhysicalDirectExtended && autoShowEnabled && !alreadyVisible
+        autoBlackoutEnabled: Boolean = false,
+    ): Boolean = session.isPhysicalDirectExtended && autoShowEnabled && !autoBlackoutEnabled && !alreadyVisible
+
+    /**
+     * Decides whether the thermal-saving auto screen-off timer should trigger on entering an
+     * external monitor or remote cast workstation.
+     *
+     * <p>In Presentation mode Display 0 hosts the trackpad shell by default, so [phoneTrackpadVisible]
+     * must not block auto-blackout when the user explicitly opted in to auto screen-off.
+     */
+    fun shouldTriggerAutoBlackout(
+        isExternalMonitor: Boolean,
+        autoBlackoutEnabled: Boolean,
+        daemonConnected: Boolean,
+        hostScreenOff: Boolean,
+        phoneTrackpadVisible: Boolean,
+        isPresentationMode: Boolean,
+        alreadyTriggeredForSession: Boolean,
+    ): Boolean {
+        if (!isExternalMonitor || !autoBlackoutEnabled || !daemonConnected || hostScreenOff || alreadyTriggeredForSession) {
+            return false
+        }
+        return isPresentationMode || !phoneTrackpadVisible
+    }
 
     fun canControlPhoneTrackpad(
         isExternalMonitor: Boolean,

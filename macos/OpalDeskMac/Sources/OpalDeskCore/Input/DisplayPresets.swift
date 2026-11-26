@@ -8,7 +8,7 @@ public enum DisplayPresets {
     public static let fpsOptions: [Int] = [60, 90, 120]
     public static let defaultFPS: Int = 60
 
-    public static let bitrateKbpsRange: ClosedRange<Int> = 4000...32000
+    public static let bitrateKbpsRange: ClosedRange<Int> = 4000...48000
     public static let bitrateStepKbps: Int = 2000
     public static let defaultBitrateKbps: Int = 16000
 

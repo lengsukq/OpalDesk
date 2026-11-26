@@ -1555,6 +1555,48 @@ fun ConsoleDisplaySettingsTab(
                 },
             )
 
+            Spacer(Modifier.height(14.dp))
+            OpalText(text = "窗口渲染超采样（清晰度 / 发热权衡）", fontSize = 12.sp, color = OpalPalette.TextSecondary)
+            Spacer(Modifier.height(3.dp))
+            val supersampleHint = when (status.windowSupersampleMode) {
+                BridgeProtocol.WindowSupersample.BALANCED ->
+                    "适度超采（上限 1.45× / 1080p）：降低约 40% GPU 发热并保持常规应用清晰"
+                BridgeProtocol.WindowSupersample.NATIVE_1X ->
+                    "1:1 物理像素点对点渲染：文字最锐利、发热最低（若微信等应用字体偏大请切回兼容超采）"
+                else ->
+                    "完整向手机高 DPI 超采：最大化兼容微信等固定密度应用，多窗 GPU 负载较高"
+            }
+            OpalText(text = supersampleHint, fontSize = 11.sp, color = OpalPalette.TextMuted)
+            Spacer(Modifier.height(6.dp))
+            val supersampleModes = listOf(
+                BridgeProtocol.WindowSupersample.COMPAT,
+                BridgeProtocol.WindowSupersample.BALANCED,
+                BridgeProtocol.WindowSupersample.NATIVE_1X,
+            )
+            val supersampleIdx = supersampleModes.indexOf(status.windowSupersampleMode).let { if (it >= 0) it else 0 }
+            OpalSegmentedRow(
+                options = listOf("兼容超采", "均衡省电", "1:1 原生"),
+                selectedIndex = supersampleIdx,
+                onSelect = { idx ->
+                    BridgeClient.updateDisplayPrefsAsync(
+                        targetFps = status.targetFps,
+                        windowDpiScalePct = status.windowDpiScalePct,
+                        windowSupersampleMode = supersampleModes[idx],
+                    )
+                },
+            )
+
+            Spacer(Modifier.height(14.dp))
+            val autoBlackoutOnCast by AppPrefs.autoBlackoutOnCastFlow.collectAsState()
+            OpalSwitchRow(
+                title = "投屏 / 外接屏自动息屏省电",
+                subtitle = "进入外接显示器或远程投屏 3 秒后自动熄灭本机屏幕以省电降温（顶栏或电源键随时亮屏）",
+                checked = autoBlackoutOnCast,
+                onCheckedChange = { enabled ->
+                    AppPrefs.setAutoBlackoutOnCast(ctx, enabled)
+                },
+            )
+
             Spacer(Modifier.height(10.dp))
             OpalText(
                 text = "应用窗口 DPI 请进入 DeX 桌面后，通过顶栏 DPI 入口实时可视化调节",
@@ -1737,6 +1779,8 @@ fun ConsoleDisplaySettingsTab(
                 }
             }
         }
+
+        ConsoleDexImeCard()
 
         ConsoleKeyboardShortcutsCard()
     }

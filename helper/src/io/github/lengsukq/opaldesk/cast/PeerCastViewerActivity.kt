@@ -89,6 +89,7 @@ class PeerCastViewerActivity : ComponentActivity() {
     }
 
     private var client: OpalCastPeerClient? = null
+    private var wifiLowLatencyLock: WifiLowLatencyLock? = null
     private var micCapturer: PeerMicCapturer? = null
     private var cameraCapturer: PeerCameraCapturer? = null
     private var activeSurface: android.view.Surface? = null
@@ -384,6 +385,14 @@ class PeerCastViewerActivity : ComponentActivity() {
             UsbTetherPeerDetector.resolveBoundNetworkForHost(targetHost)
         } else {
             null
+        }
+        val wifiLock = wifiLowLatencyLock ?: WifiLowLatencyLock(this, "OpalDesk:PeerCastRx").also {
+            wifiLowLatencyLock = it
+        }
+        if (boundNet == null) {
+            wifiLock.acquire()
+        } else {
+            wifiLock.release()
         }
         val peerClient = OpalCastPeerClient(
             host = targetHost,
@@ -692,6 +701,8 @@ class PeerCastViewerActivity : ComponentActivity() {
         stopLocalCameraCaptureOnly()
         client?.stop()
         client = null
+        wifiLowLatencyLock?.release()
+        wifiLowLatencyLock = null
         OpalPeerCastMutex.endReceiving(MUTEX_TAG)
         super.onDestroy()
     }

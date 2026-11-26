@@ -18,6 +18,14 @@ public final class DisplayCanvasNSView: NSView {
 
     private let videoLayer: AVSampleBufferDisplayLayer
     private var trackingAreaRef: NSTrackingArea?
+    private static let transparentCursor: NSCursor = {
+        let img = NSImage(size: NSSize(width: 1, height: 1))
+        img.lockFocus()
+        NSColor.clear.setFill()
+        NSRect(x: 0, y: 0, width: 1, height: 1).fill()
+        img.unlockFocus()
+        return NSCursor(image: img, hotSpot: .zero)
+    }()
 
     public var config: DisplayCanvasConfig
     public var callbacks: DisplayCanvasCallbacks
@@ -162,6 +170,13 @@ public final class DisplayCanvasNSView: NSView {
         videoLayer.frame = bounds
         CATransaction.commit()
         reportCurrentSize()
+    }
+
+    public override func resetCursorRects() {
+        super.resetCursorRects()
+        if config.hideLocalCursor {
+            addCursorRect(bounds, cursor: Self.transparentCursor)
+        }
     }
 
     public override func updateTrackingAreas() {

@@ -12,8 +12,10 @@ import android.view.Surface;
 import io.github.lengsukq.opaldesk.daemon.DaemonConfig;
 import io.github.lengsukq.opaldesk.daemon.compositor.CompositorEngine;
 import io.github.lengsukq.opaldesk.daemon.compositor.WindowSession;
+import io.github.lengsukq.opaldesk.daemon.input.DexImeManager;
 import io.github.lengsukq.opaldesk.daemon.input.ExternalMouseRouter;
 import io.github.lengsukq.opaldesk.daemon.input.PerDisplayInputRouter;
+import io.github.lengsukq.opaldesk.daemon.platform.AndroidDisplayDriver;
 import io.github.lengsukq.opaldesk.daemon.platform.AndroidServices;
 import io.github.lengsukq.opaldesk.daemon.platform.TaskApiAdapter;
 import io.github.lengsukq.opaldesk.daemon.stream.OpalCastCompositorBridge;
@@ -37,6 +39,9 @@ public final class BridgeBinderService extends Binder {
     private final TaskApiAdapter taskApi;
     private final OpalCastCompositorBridge remoteBridge;
     private final Runnable shutdownTrigger;
+    private volatile AndroidDisplayDriver displayDriver;
+    private volatile DexImeManager imeManager;
+    private volatile Runnable imePolicySyncTrigger;
 
     public BridgeBinderService(
             AndroidServices services,
@@ -58,6 +63,15 @@ public final class BridgeBinderService extends Binder {
         this.remoteBridge = remoteBridge;
         this.shutdownTrigger = shutdownTrigger;
         attachInterface(null, BridgeProtocol.BINDER_DESC);
+    }
+
+    public void bindImeControls(
+            AndroidDisplayDriver displayDriver,
+            DexImeManager imeManager,
+            Runnable imePolicySyncTrigger) {
+        this.displayDriver = displayDriver;
+        this.imeManager = imeManager;
+        this.imePolicySyncTrigger = imePolicySyncTrigger;
     }
 
     @Override
@@ -101,6 +115,7 @@ public final class BridgeBinderService extends Binder {
                     reply.writeInt(config.isRemoteMicEnabled() ? 1 : 0);
                     reply.writeInt(config.isRemoteCameraEnabled() ? 1 : 0);
                     reply.writeInt(config.getAudioRouteMode());
+                    reply.writeInt(config.getWindowSupersampleMode());
                 }
                 return true;
             }
@@ -368,20 +383,35 @@ public final class BridgeBinderService extends Binder {
             case BridgeProtocol.TX_UPDATE_DISPLAY_PREFS: {
                 int targetFps = data.readInt();
                 int dpiScalePct = data.readInt();
+                int reqSupersample = (data.dataAvail() >= 4) ? data.readInt() : -1;
                 int prevFps = config.getTargetFps();
                 int prevDpi = config.getWindowDpiScalePct();
-                config.updateDisplayPrefs(targetFps, dpiScalePct);
+                int prevSupersample = config.getWindowSupersampleMode();
+                config.updateDisplayPrefs(targetFps, dpiScalePct, reqSupersample);
                 int nextFps = config.getTargetFps();
                 int nextDpi = config.getWindowDpiScalePct();
-                if (nextDpi != prevDpi) {
+                int nextSupersample = config.getWindowSupersampleMode();
+                if (nextDpi != prevDpi || nextSupersample != prevSupersample) {
                     compositor.reapplyWindowDpiScale();
                 }
                 if (nextFps != prevFps) {
-                    float autoFallback = (remoteBridge != null && remoteBridge.hasActiveDesktopSession())
-                            ? remoteBridge.getActiveNativeFps() : 60f;
+                    boolean remoteActive = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
+                    int boundExtId = (mouseRouter != null) ? mouseRouter.getBoundDisplayId() : -1;
+                    float autoFallback;
+                    if (remoteActive) {
+                        autoFallback = remoteBridge.getActiveNativeFps();
+                    } else if (services != null && boundExtId > 0) {
+                        autoFallback = services.getDisplayRefreshRate(boundExtId);
+                    } else if (services != null) {
+                        autoFallback = services.getDisplayRefreshRate(android.view.Display.DEFAULT_DISPLAY);
+                    } else {
+                        autoFallback = 60f;
+                    }
                     compositor.reapplyTargetFps(autoFallback);
-                    if (remoteBridge != null) {
+                    if (remoteActive) {
                         remoteBridge.applyTargetFpsIfActive(nextFps);
+                    } else if (services != null && boundExtId > 0 && nextFps > 0) {
+                        services.setExternalDisplayRefreshRate(boundExtId, (float) nextFps);
                     }
                 }
                 if (reply != null) reply.writeInt(1);
@@ -390,10 +420,6 @@ public final class BridgeBinderService extends Binder {
             case BridgeProtocol.TX_SET_MOUSE_TARGET: {
                 int targetMode = data.readInt();
                 int externalDisplayId = data.readInt();
-                if (externalDisplayId <= 0 && targetMode == BridgeProtocol.MOUSE_TARGET_EXTERNAL
-                        && remoteBridge != null && remoteBridge.hasActiveDesktopSession()) {
-                    externalDisplayId = remoteBridge.getActiveDesktopDisplayId();
-                }
                 int boundCount = (mouseRouter != null)
                         ? mouseRouter.setMouseTarget(targetMode, externalDisplayId)
                         : 0;
@@ -417,14 +443,23 @@ public final class BridgeBinderService extends Binder {
             }
             case BridgeProtocol.TX_SET_LOCAL_IME_FOCUS: {
                 boolean focused = data.readInt() != 0;
+                int hostDisplayId = (data.dataAvail() >= 4)
+                        ? data.readInt()
+                        : android.view.Display.DEFAULT_DISPLAY;
                 if (inputRouter != null) {
                     inputRouter.setLocalImeActive(focused);
+                }
+                if (mouseRouter != null) {
+                    mouseRouter.setLocalImeActive(focused);
                 }
                 if (remoteBridge != null) {
                     remoteBridge.setLocalHostTextFieldFocused(focused);
                 }
                 if (focused && services != null) {
-                    services.focusDisplay(android.view.Display.DEFAULT_DISPLAY);
+                    int targetDisplay = (hostDisplayId >= 0)
+                            ? hostDisplayId
+                            : android.view.Display.DEFAULT_DISPLAY;
+                    services.focusDisplay(targetDisplay);
                 }
                 if (reply != null) reply.writeInt(1);
                 return true;
@@ -525,6 +560,65 @@ public final class BridgeBinderService extends Binder {
                 boolean isWireless = data.readInt() != 0;
                 boolean ok = services != null && services.launchExternalDesktopOnDisplay(displayId, isWireless);
                 if (reply != null) reply.writeInt(ok ? 1 : 0);
+                return true;
+            }
+            case BridgeProtocol.TX_SET_DEX_IME_CONFIG: {
+                int displayMode = data.readInt();
+                String lockedImeId = data.readString();
+                boolean muteHostOnCast = data.readInt() != 0;
+                int showWithHardKbd = (data.dataAvail() >= 4)
+                        ? data.readInt()
+                        : BridgeProtocol.HARD_KBD_SOFT_IME_SYSTEM;
+                boolean autoBridgeOnCast = (data.dataAvail() >= 4)
+                        ? (data.readInt() != 0)
+                        : config.isAutoBridgeImeOnCast();
+                config.updateDexImeConfig(displayMode, lockedImeId, muteHostOnCast, showWithHardKbd, autoBridgeOnCast);
+                DexImeManager mgr = this.imeManager;
+                if (mgr != null) {
+                    mgr.onConfigUpdated();
+                }
+                Runnable sync = this.imePolicySyncTrigger;
+                if (sync != null) {
+                    sync.run();
+                }
+                String activeIme = (mgr != null) ? mgr.getCurrentDefaultImeIdSafe() : "";
+                System.out.println("OPALDESK_DEX_IME_CFG mode=" + config.getDexImeDisplayMode()
+                        + " locked=" + config.getDexLockedImeId()
+                        + " muteCast=" + config.isMuteHostImeOnCast()
+                        + " hardKbd=" + config.getShowImeWithHardKeyboard()
+                        + " autoBridgeCast=" + config.isAutoBridgeImeOnCast()
+                        + " activeIme=" + activeIme);
+                if (reply != null) {
+                    reply.writeInt(1);
+                    reply.writeString(activeIme);
+                }
+                return true;
+            }
+            case BridgeProtocol.TX_SET_DEX_IME_SESSION_ACTIVE: {
+                boolean active = data.readInt() != 0;
+                DexImeManager mgr = this.imeManager;
+                if (mgr != null) {
+                    mgr.setClientDexSessionActive(active);
+                }
+                Runnable sync = this.imePolicySyncTrigger;
+                if (sync != null) {
+                    sync.run();
+                }
+                if (reply != null) reply.writeInt(1);
+                return true;
+            }
+            case BridgeProtocol.TX_GET_SYSTEM_IME_STATE: {
+                DexImeManager mgr = this.imeManager;
+                boolean physKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
+                boolean remoteDesktop = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
+                int effPolicy = io.github.lengsukq.opaldesk.daemon.input.MouseRoutingPolicy.resolveWindowDisplayImePolicy(
+                        physKbd,
+                        remoteDesktop,
+                        true,
+                        config.getDexImeDisplayMode(),
+                        config.isMuteHostImeOnCast());
+                String json = (mgr != null) ? mgr.toStateJson(effPolicy, physKbd) : "{}";
+                if (reply != null) reply.writeString(json);
                 return true;
             }
             case BridgeProtocol.TX_SHUTDOWN: {

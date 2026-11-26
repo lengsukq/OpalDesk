@@ -24,6 +24,7 @@ public final class PreferencesStore {
         static let pinnedDockPackages = "opaldesk.pref.pinnedDockPackages"
         static let dockAutoHide = "opaldesk.pref.dockAutoHide"
         static let usbTetherDiscoveryEnabled = "opaldesk.pref.usbTetherDiscoveryEnabled"
+        static let hideLocalCursor = "opaldesk.pref.hideLocalCursor"
     }
 
     private let defaults: UserDefaults
@@ -97,6 +98,11 @@ public final class PreferencesStore {
         didSet { defaults.set(usbTetherDiscoveryEnabled, forKey: Key.usbTetherDiscoveryEnabled) }
     }
 
+    /// Hides the macOS cursor over the cast canvas when the remote Android host renders its own pointer.
+    public var hideLocalCursor: Bool {
+        didSet { defaults.set(hideLocalCursor, forKey: Key.hideLocalCursor) }
+    }
+
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -144,5 +150,6 @@ public final class PreferencesStore {
         self.pinnedDockPackages = defaults.stringArray(forKey: Key.pinnedDockPackages) ?? []
         self.dockAutoHide = defaults.object(forKey: Key.dockAutoHide) as? Bool ?? false
         self.usbTetherDiscoveryEnabled = defaults.object(forKey: Key.usbTetherDiscoveryEnabled) as? Bool ?? false
+        self.hideLocalCursor = defaults.object(forKey: Key.hideLocalCursor) as? Bool ?? false
     }
 }

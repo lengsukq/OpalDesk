@@ -15,10 +15,12 @@ object BridgeProtocol {
     const val ACTION_NEED_BINDER = "io.github.lengsukq.opaldesk.daemon.NEED_BINDER"
 
     const val PROVIDER_AUTHORITY = "io.github.lengsukq.opaldesk.provider"
+    const val OPALDESK_BRIDGE_IME_ID = "io.github.lengsukq.opaldesk/.ime.OpalDeskImeService"
     const val PROVIDER_METHOD_SET_BINDER = "setBinder"
     const val PROVIDER_METHOD_SYNC_SCENE = "syncScene"
     const val PROVIDER_METHOD_PAIRING_EVENT = "pairingEvent"
     const val PROVIDER_METHOD_IME_REQUEST = "imeRequest"
+    const val PROVIDER_METHOD_IME_COMMIT_TEXT = "imeCommitText"
     const val PROVIDER_METHOD_REMOTE_STATE_CHANGED = "remoteStateChanged"
 
     const val EXTRA_CALLBACK_BINDER = "cb"
@@ -29,6 +31,8 @@ object BridgeProtocol {
     const val EXTRA_IME_WINDOW_ID = "windowId"
     const val EXTRA_IME_SHOW = "show"
     const val EXTRA_IME_INPUT_TYPE = "inputType"
+    const val EXTRA_IME_COMMIT_TEXT = "text"
+    const val EXTRA_IME_COMMITTED = "committed"
 
     object Tx {
         const val GET_DAEMON_STATUS = 10
@@ -67,7 +71,34 @@ object BridgeProtocol {
         const val SET_REMOTE_MEDIA_CONFIG = 43
         const val SET_AUDIO_ROUTE_MODE = 44
         const val LAUNCH_EXTERNAL_DESKTOP = 45
+        const val SET_DEX_IME_CONFIG = 46
+        const val SET_DEX_IME_SESSION_ACTIVE = 47
+        const val GET_SYSTEM_IME_STATE = 48
         const val SHUTDOWN = 99
+    }
+
+    object DisplayImePolicy {
+        const val LOCAL = 0
+        const val FALLBACK_DISPLAY = 1
+        const val HIDE = 2
+    }
+
+    object DexImeDisplayMode {
+        const val AUTO = 0
+        const val ALWAYS_LOCAL = 1
+        const val FALLBACK_HOST = 2
+    }
+
+    object WindowSupersample {
+        const val COMPAT = 0
+        const val BALANCED = 1
+        const val NATIVE_1X = 2
+    }
+
+    object HardKbdSoftIme {
+        const val SYSTEM = -1
+        const val HIDE = 0
+        const val SHOW = 1
     }
 
     object AudioRoute {
@@ -78,6 +109,18 @@ object BridgeProtocol {
     object TlsBindScope {
         const val ALL = 0
         const val USB_TETHER_ONLY = 1
+    }
+
+    object RemoteSink {
+        const val NONE = 0
+        const val REMOTE_USB = 2
+        const val REMOTE_WIFI = 3
+        const val REMOTE_WIFI_ADB = 4
+        const val LOCAL = 5
+        const val REMOTE_USB_TETHER = 6
+
+        fun isWireless(sinkType: Int): Boolean =
+            sinkType == REMOTE_WIFI || sinkType == REMOTE_WIFI_ADB
     }
 
     object PairingDecision {
@@ -131,6 +174,7 @@ object BridgeProtocol {
         const val SET_PROFILE_TABLET = 9
         const val RELOAD_APP = 10
         const val TOGGLE_FULLSCREEN = 11
+        const val TOGGLE_ORIENTATION = 12
     }
 
     object InputBackend {

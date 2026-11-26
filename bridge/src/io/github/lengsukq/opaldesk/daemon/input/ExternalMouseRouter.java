@@ -37,13 +37,21 @@ public final class ExternalMouseRouter {
         final int bindKind; // 1=descriptor, 2=uniquePort, 3=legacyUniquePort, 4=physicalPort
         final int targetDisplayId;
         final String displayUniqueId;
+        final boolean isMouse;
 
-        BoundMouse(String descriptor, String location, int bindKind, int targetDisplayId, String displayUniqueId) {
+        BoundMouse(
+                String descriptor,
+                String location,
+                int bindKind,
+                int targetDisplayId,
+                String displayUniqueId,
+                boolean isMouse) {
             this.descriptor = descriptor;
             this.location = location;
             this.bindKind = bindKind;
             this.targetDisplayId = targetDisplayId;
             this.displayUniqueId = displayUniqueId;
+            this.isMouse = isMouse;
         }
     }
 
@@ -63,6 +71,10 @@ public final class ExternalMouseRouter {
     private volatile int activeDisplayPort = -1;
     private volatile int observedExternalDisplayId = -1;
     private volatile String observedExternalDisplayUniqueId = null;
+    private volatile int focusedWindowDisplayId = -1;
+    private volatile String focusedWindowUniqueId = null;
+    private volatile boolean localImeActive = false;
+    private volatile boolean remoteDesktopActive = false;
     private int imePolicyOverriddenDisplayId = -1;
     private int imePolicyOriginalValue = -1;
     private volatile boolean physicalKeyboardConnected = false;
@@ -273,11 +285,57 @@ public final class ExternalMouseRouter {
             activeDisplayPort = -1;
             observedExternalDisplayId = -1;
             observedExternalDisplayUniqueId = null;
+            focusedWindowDisplayId = -1;
+            focusedWindowUniqueId = null;
+            localImeActive = false;
             restoreExternalDisplayImePolicyLocked();
         }
         resyncBindings();
         if (services != null) {
             services.restoreDefaultDisplayTopFocus();
+        }
+    }
+
+    /**
+     * Updates the focused live {@code OpalWin-*} VirtualDisplay target for direct physical-keyboard
+     * routing so Bluetooth/USB/Pogo keyboards feed local CJK IMEs directly without bouncing window
+     * focus against the outer external monitor or Display 0.
+     */
+    public void setFocusedWindowTarget(int displayId, String vdUniqueId) {
+        int nextId = (displayId > 0 && vdUniqueId != null && !vdUniqueId.isEmpty()) ? displayId : -1;
+        String nextUid = (nextId > 0) ? vdUniqueId : null;
+        boolean changed;
+        synchronized (lock) {
+            changed = (focusedWindowDisplayId != nextId)
+                    || (nextUid == null ? focusedWindowUniqueId != null : !nextUid.equals(focusedWindowUniqueId));
+            focusedWindowDisplayId = nextId;
+            focusedWindowUniqueId = nextUid;
+        }
+        if (changed) {
+            resyncBindings();
+        }
+    }
+
+    /** Routes physical keyboards back to the host outer display while an OpalDesk Compose TextField or soft IME is active. */
+    public void setLocalImeActive(boolean active) {
+        boolean changed;
+        synchronized (lock) {
+            changed = (localImeActive != active);
+            localImeActive = active;
+        }
+        if (changed) {
+            resyncBindings();
+        }
+    }
+
+    public void setRemoteDesktopActive(boolean active) {
+        boolean changed;
+        synchronized (lock) {
+            changed = (remoteDesktopActive != active);
+            remoteDesktopActive = active;
+        }
+        if (changed) {
+            resyncBindings();
         }
     }
 
@@ -289,7 +347,7 @@ public final class ExternalMouseRouter {
         synchronized (lock) {
             int extCount = 0;
             for (BoundMouse bm : boundByKey.values()) {
-                if (bm.targetDisplayId > 0) extCount++;
+                if (bm.isMouse && bm.targetDisplayId > 0) extCount++;
             }
             return extCount;
         }
@@ -298,9 +356,20 @@ public final class ExternalMouseRouter {
     public int getBoundDisplayId() {
         synchronized (lock) {
             for (BoundMouse bm : boundByKey.values()) {
-                if (bm.targetDisplayId > 0) return bm.targetDisplayId;
+                if (bm.isMouse && bm.targetDisplayId > 0) return bm.targetDisplayId;
             }
             return -1;
+        }
+    }
+
+    /** Returns {@code true} when physical mice are actively display-anchored (external monitor or Display 0). */
+    public boolean isHostMouseDisplayAnchored() {
+        synchronized (lock) {
+            if (localDesktopPinned) return true;
+            for (BoundMouse bm : boundByKey.values()) {
+                if (bm.isMouse && bm.targetDisplayId >= 0) return true;
+            }
+            return false;
         }
     }
 
@@ -347,28 +416,40 @@ public final class ExternalMouseRouter {
     private int resyncBindings() {
         if (services == null || services.inputManager == null) return 0;
         synchronized (lock) {
-            int desiredDisplayId = -1;
-            String desiredUniqueId = null;
-            int desiredPort = -1;
+            int outerDisplayId = -1;
+            String outerUniqueId = null;
+            int outerPort = -1;
 
-            boolean routeExternal = config.getMouseTargetMode() == BridgeProtocol.MOUSE_TARGET_EXTERNAL
-                    && activeExternalDisplayId > 0
-                    && ((activeDisplayUniqueId != null && !activeDisplayUniqueId.isEmpty()) || activeDisplayPort >= 0);
+            boolean routeExternal = MouseRoutingPolicy.shouldRoutePhysicalPeripheralsToDisplay(
+                    config.getMouseTargetMode(),
+                    activeExternalDisplayId,
+                    activeDisplayUniqueId,
+                    activeDisplayPort);
             if (routeExternal) {
-                desiredDisplayId = activeExternalDisplayId;
-                desiredUniqueId = activeDisplayUniqueId;
-                desiredPort = activeDisplayPort;
+                outerDisplayId = activeExternalDisplayId;
+                outerUniqueId = activeDisplayUniqueId;
+                outerPort = activeDisplayPort;
             } else if (localDesktopPinned) {
                 String d0Uid = services.getDisplayUniqueId(android.view.Display.DEFAULT_DISPLAY);
                 int d0Port = services.getDisplayPhysicalPort(android.view.Display.DEFAULT_DISPLAY);
                 if ((d0Uid != null && !d0Uid.isEmpty()) || d0Port >= 0) {
-                    desiredDisplayId = android.view.Display.DEFAULT_DISPLAY;
-                    desiredUniqueId = d0Uid;
-                    desiredPort = d0Port;
+                    outerDisplayId = android.view.Display.DEFAULT_DISPLAY;
+                    outerUniqueId = d0Uid;
+                    outerPort = d0Port;
                 }
             }
 
-            if (desiredDisplayId < 0) {
+            int dexImeMode = (config != null) ? config.getDexImeDisplayMode() : BridgeProtocol.DEX_IME_DISPLAY_AUTO;
+            boolean workstationActive = routeExternal || localDesktopPinned;
+            boolean routeKbdToWindow = MouseRoutingPolicy.shouldRoutePhysicalKeyboardToFocusedWindow(
+                    workstationActive,
+                    remoteDesktopActive,
+                    localImeActive,
+                    dexImeMode,
+                    focusedWindowDisplayId,
+                    focusedWindowUniqueId != null && !focusedWindowUniqueId.isEmpty());
+
+            if (outerDisplayId < 0 && !routeKbdToWindow) {
                 unbindLocked();
                 return 0;
             }
@@ -383,10 +464,32 @@ public final class ExternalMouseRouter {
                 for (int id : ids) {
                     InputDevice dev = services.inputManager.getInputDevice(id);
                     if (dev == null) continue;
-                    if (!shouldRouteDevice(
-                            dev.getName(), dev.getSources(), dev.getKeyboardType(), dev.isVirtual(), dev.isExternal())) {
+                    boolean isMouse = MouseRoutingPolicy.isPhysicalMouse(
+                            dev.getName(), dev.getSources(), dev.isVirtual(), dev.isExternal());
+                    boolean isPureKbd = MouseRoutingPolicy.isPurePhysicalKeyboardForWindowRouting(
+                            dev.getName(), dev.getSources(), dev.getKeyboardType(), dev.isVirtual(), dev.isExternal());
+                    if (!isMouse && !isPureKbd) {
                         continue;
                     }
+
+                    int desiredDisplayId;
+                    String desiredUniqueId;
+                    int desiredPort;
+                    if (isPureKbd && routeKbdToWindow) {
+                        desiredDisplayId = focusedWindowDisplayId;
+                        desiredUniqueId = focusedWindowUniqueId;
+                        desiredPort = -1;
+                    } else if (isMouse || (isPureKbd && dev.isExternal())) {
+                        if (outerDisplayId < 0) continue;
+                        desiredDisplayId = outerDisplayId;
+                        desiredUniqueId = outerUniqueId;
+                        desiredPort = outerPort;
+                    } else {
+                        // Built-in Pogo-Pin keyboard when not routing directly to a focused OpalWin-*
+                        // stays unassociated on Display 0.
+                        continue;
+                    }
+
                     String descriptor = dev.getDescriptor();
                     String location = extractInputLocation(dev);
                     String key = (descriptor != null && !descriptor.isEmpty()) ? descriptor : location;
@@ -395,6 +498,7 @@ public final class ExternalMouseRouter {
 
                     BoundMouse existing = boundByKey.get(key);
                     boolean sameTarget = existing != null
+                            && existing.isMouse == isMouse
                             && existing.targetDisplayId == desiredDisplayId
                             && ((desiredUniqueId == null && existing.displayUniqueId == null)
                                     || (desiredUniqueId != null && desiredUniqueId.equals(existing.displayUniqueId)));
@@ -407,14 +511,18 @@ public final class ExternalMouseRouter {
                     }
                     int kind = bindSingle(descriptor, location, desiredUniqueId, desiredPort);
                     if (kind > 0) {
-                        boundByKey.put(key, new BoundMouse(descriptor, location, kind, desiredDisplayId, desiredUniqueId));
-                        System.out.println("OPALDESK_MOUSE_ROUTED name=" + dev.getName()
+                        boundByKey.put(key, new BoundMouse(
+                                descriptor, location, kind, desiredDisplayId, desiredUniqueId, isMouse));
+                        String tag = (isPureKbd && routeKbdToWindow)
+                                ? "OPALDESK_KBD_ROUTED_WINDOW"
+                                : "OPALDESK_MOUSE_ROUTED";
+                        System.out.println(tag + " name=" + dev.getName()
                                 + " displayId=" + desiredDisplayId
                                 + " uniqueId=" + desiredUniqueId + " kind=" + kind);
                     }
                 }
             }
-            // Prune disconnected mice cleanly
+            // Prune disconnected or newly-unrouted devices cleanly
             ArrayList<String> staleKeys = new ArrayList<>();
             for (String k : boundByKey.keySet()) {
                 if (!stillPresentKeys.contains(k)) staleKeys.add(k);
@@ -449,6 +557,13 @@ public final class ExternalMouseRouter {
         }
     }
 
+    public void resyncExternalDisplayImePolicy() {
+        synchronized (lock) {
+            syncExternalDisplayImePolicyLocked();
+        }
+        resyncBindings();
+    }
+
     private boolean detectPhysicalKeyboardConnected() {
         if (services == null || services.inputManager == null) return false;
         try {
@@ -456,7 +571,7 @@ public final class ExternalMouseRouter {
             if (ids == null) return false;
             for (int id : ids) {
                 InputDevice dev = services.inputManager.getInputDevice(id);
-                if (dev != null && MouseRoutingPolicy.isPhysicalAlphabeticKeyboard(
+                if (dev != null && MouseRoutingPolicy.isAlphabeticHardwareKeyboardForIme(
                         dev.getName(), dev.getSources(), dev.getKeyboardType(), dev.isVirtual(), dev.isExternal())) {
                     return true;
                 }
@@ -467,17 +582,19 @@ public final class ExternalMouseRouter {
     }
 
     /**
-     * When a physical keyboard is connected during a physical external-monitor session (HDMI / USB-C /
-     * Miracast, never OpalCast {@code virtual:*} displays), switches the external display's IME policy
-     * to {@code DISPLAY_IME_POLICY_LOCAL} so OpalDesk's own in-desktop search fields render their CJK
-     * candidate bar on the monitor; restores the prior policy as soon as the keyboard or monitor leaves.
+     * Synchronizes a physical external monitor's {@code DisplayImePolicy} (HDMI / USB-C / Miracast,
+     * never OpalCast {@code virtual:*} displays) according to the user's DeX IME display mode and
+     * connected physical/Pogo-Pin keyboard state; restores the prior policy on exit or unplug.
      */
     private void syncExternalDisplayImePolicyLocked() {
         if (services == null) return;
         int extId = observedExternalDisplayId;
         String extUid = observedExternalDisplayUniqueId;
         boolean isPhysicalExternal = extId > 0 && (extUid == null || !extUid.startsWith("virtual:"));
-        int desiredTarget = (isPhysicalExternal && physicalKeyboardConnected) ? extId : -1;
+        int dexImeMode = (config != null) ? config.getDexImeDisplayMode() : BridgeProtocol.DEX_IME_DISPLAY_AUTO;
+        boolean wantLocal = MouseRoutingPolicy.shouldForcePhysicalExternalDisplayLocalIme(
+                isPhysicalExternal, physicalKeyboardConnected, dexImeMode);
+        int desiredTarget = wantLocal ? extId : -1;
 
         if (desiredTarget == imePolicyOverriddenDisplayId) {
             return;
@@ -492,7 +609,7 @@ public final class ExternalMouseRouter {
                 imePolicyOverriddenDisplayId = desiredTarget;
                 imePolicyOriginalValue = (prior >= 0) ? prior : BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY;
                 System.out.println("OPALDESK_EXT_DISPLAY_IME_POLICY displayId=" + desiredTarget
-                        + " policy=LOCAL prior=" + imePolicyOriginalValue);
+                        + " policy=LOCAL mode=" + dexImeMode + " prior=" + imePolicyOriginalValue);
             }
         }
     }
@@ -553,6 +670,8 @@ public final class ExternalMouseRouter {
             }
             if (dev == null) continue;
             if (!shouldRouteDevice(
+                    dev.getName(), dev.getSources(), dev.getKeyboardType(), dev.isVirtual(), dev.isExternal())
+                    && !MouseRoutingPolicy.isPurePhysicalKeyboardForWindowRouting(
                     dev.getName(), dev.getSources(), dev.getKeyboardType(), dev.isVirtual(), dev.isExternal())) {
                 continue;
             }

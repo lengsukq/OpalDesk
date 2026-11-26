@@ -18,6 +18,10 @@ public interface DisplaySink {
         return sinkType == SINK_REMOTE_WIFI || sinkType == SINK_REMOTE_USB_TETHER;
     }
 
+    static boolean isWiredSink(int sinkType) {
+        return io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil.isWiredSinkType(sinkType);
+    }
+
     int getSinkType();
 
     boolean isActive();

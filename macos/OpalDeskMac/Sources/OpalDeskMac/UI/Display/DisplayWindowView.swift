@@ -73,7 +73,8 @@ public struct DisplayWindowView: View {
                     videoHeight: model.currentVideoHeight,
                     mapCommandToCtrl: model.preferences.mapCommandToCtrl,
                     isCanvasInteractive: model.isAuthenticated && model.videoMetrics.totalFramesDecoded > 0,
-                    focusGeneration: canvasFocusGeneration
+                    focusGeneration: canvasFocusGeneration,
+                    hideLocalCursor: model.preferences.hideLocalCursor
                 ),
                 callbacks: model.streamBridge.makeCanvasCallbacks(
                     isAuthenticated: { model.isAuthenticated },
@@ -230,6 +231,20 @@ public struct DisplayWindowView: View {
                         .tint(model.isBlackoutActive ? .blue : nil)
                         .controlSize(.small)
                         .help(model.isBlackoutActive ? "点亮手机屏幕" : "熄灭手机屏幕")
+
+                        Button {
+                            model.preferences.hideLocalCursor.toggle()
+                        } label: {
+                            Label(
+                                model.preferences.hideLocalCursor ? "单指针" : "本机指针",
+                                systemImage: model.preferences.hideLocalCursor ? "cursorarrow.slash" : "cursorarrow"
+                            )
+                            .font(.system(size: 11, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(model.preferences.hideLocalCursor ? .cyan : nil)
+                        .controlSize(.small)
+                        .help("隐藏投屏画布上的 Mac 本机光标，避免与 Android 端指针重叠显示")
 
                         topBarDivider
 

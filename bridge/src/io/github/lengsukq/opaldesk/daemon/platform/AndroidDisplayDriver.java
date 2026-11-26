@@ -67,13 +67,12 @@ public final class AndroidDisplayDriver
     }
 
     /**
-     * Dynamically updates the {@code DisplayImePolicy} across all live trusted {@code OpalWin-*}
-     * VirtualDisplays whenever a physical keyboard connects/disconnects or remote casting toggles.
+     * Dynamically updates the {@code DisplayImePolicy} ({@code LOCAL}, {@code FALLBACK_DISPLAY},
+     * or {@code HIDE}) across all live trusted {@code OpalWin-*} VirtualDisplays whenever a
+     * physical keyboard connects/disconnects, remote casting toggles, or the user updates DeX IME prefs.
      */
     public void updateWindowImePolicy(int desiredPolicy) {
-        int clamped = (desiredPolicy == BridgeProtocol.DISPLAY_IME_POLICY_LOCAL)
-                ? BridgeProtocol.DISPLAY_IME_POLICY_LOCAL
-                : BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY;
+        int clamped = normalizeImePolicy(desiredPolicy);
         this.desiredWindowImePolicy = clamped;
         for (Map.Entry<Integer, Boolean> entry : trustedByDisplayId.entrySet()) {
             int dispId = entry.getKey();
@@ -81,10 +80,28 @@ public final class AndroidDisplayDriver
             int effective = trusted ? clamped : BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY;
             boolean ok = services.setDisplayImePolicy(dispId, effective);
             System.out.println("OPALDESK_VD_IME_POLICY displayId=" + dispId
-                    + " policy=" + (effective == BridgeProtocol.DISPLAY_IME_POLICY_LOCAL ? "LOCAL" : "FALLBACK")
+                    + " policy=" + imePolicyName(effective)
                     + " trusted=" + trusted
                     + " ok=" + ok);
         }
+    }
+
+    public int getDesiredWindowImePolicy() {
+        return desiredWindowImePolicy;
+    }
+
+    private static int normalizeImePolicy(int policy) {
+        if (policy == BridgeProtocol.DISPLAY_IME_POLICY_LOCAL
+                || policy == BridgeProtocol.DISPLAY_IME_POLICY_HIDE) {
+            return policy;
+        }
+        return BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY;
+    }
+
+    private static String imePolicyName(int policy) {
+        if (policy == BridgeProtocol.DISPLAY_IME_POLICY_LOCAL) return "LOCAL";
+        if (policy == BridgeProtocol.DISPLAY_IME_POLICY_HIDE) return "HIDE";
+        return "FALLBACK";
     }
 
     public void shutdown() {
@@ -172,7 +189,7 @@ public final class AndroidDisplayDriver
                 + " displayId=" + displayId
                 + " size=" + width + "x" + height + "@" + dpi + "dpi"
                 + " flags=0x" + Integer.toHexString(chosenFlags[0])
-                + " imePolicy=" + (effectiveImePolicy == BridgeProtocol.DISPLAY_IME_POLICY_LOCAL ? "LOCAL" : "FALLBACK")
+                + " imePolicy=" + imePolicyName(effectiveImePolicy)
                 + " uid=" + (uniqueId != null ? uniqueId : ""));
         // Use DISPLAY_IME_POLICY_LOCAL when a physical keyboard is connected (so native CJK candidate
         // bars render directly inside the window on external monitors/local DeX instead of hiding on
@@ -210,7 +227,10 @@ public final class AndroidDisplayDriver
         Surface surf = (Surface) surfaceObj;
         if (!surf.isValid()) return;
         try {
-            surf.setFrameRate(fps, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+            int compat = (Build.VERSION.SDK_INT >= 31 && fps > 60.5f)
+                    ? Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
+                    : Surface.FRAME_RATE_COMPATIBILITY_DEFAULT;
+            surf.setFrameRate(fps, compat);
         } catch (RuntimeException ignored) {
         }
     }

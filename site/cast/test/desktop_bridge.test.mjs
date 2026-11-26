@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildStandaloneWindowQuery, OpalDesktopBridge } from '../js/desktop_bridge.js';
+import { buildStandaloneWindowQuery, normalizeCastPrefs, OpalDesktopBridge } from '../js/desktop_bridge.js';
 
 test('scanUsbTetherDevices stays no-op outside Tauri desktop environment', async () => {
   const bridge = new OpalDesktopBridge({});
@@ -113,4 +113,49 @@ test('desktop bridge forwards standalone pin, reload, and feedback Tauri command
   assert.equal(calls[2].cmd, 'submit_feedback_report');
   assert.equal(calls[2].args.kind, 'feature');
   assert.equal(calls[2].args.includeLogs, false);
+});
+
+test('normalizeCastPrefs validates codec, fps, bitrate, cursor, and ADB path; bridge updates native prefs', async () => {
+  const norm = normalizeCastPrefs({
+    preferredCodec: 'hevc',
+    targetFps: 120,
+    bitrateKbps: 22000,
+    audioEnabled: false,
+    hideLocalCursor: true,
+    customAdbPath: '  C:\\Android\\adb.exe  ',
+  });
+  assert.deepEqual(norm, {
+    preferredCodec: 'hevc',
+    targetFps: 120,
+    bitrateKbps: 22000,
+    audioEnabled: false,
+    hideLocalCursor: true,
+    customAdbPath: 'C:\\Android\\adb.exe',
+  });
+
+  const invalid = normalizeCastPrefs({
+    preferredCodec: 'vp9',
+    targetFps: 75,
+    bitrateKbps: 999999,
+  });
+  assert.equal(invalid.preferredCodec, '');
+  assert.equal(invalid.targetFps, 0);
+  assert.equal(invalid.bitrateKbps, 0);
+
+  const calls = [];
+  const fakeWin = {
+    __TAURI__: {
+      core: {
+        async invoke(cmd, args) {
+          calls.push({ cmd, args });
+          return { ...norm, ...(args?.patch || {}) };
+        },
+      },
+    },
+  };
+  const bridge = new OpalDesktopBridge(fakeWin);
+  const updated = await bridge.updateClientPrefs({ targetFps: 90, bitrateKbps: 32000 });
+  assert.equal(calls[0].cmd, 'update_client_prefs');
+  assert.deepEqual(calls[0].args, { patch: { targetFps: 90, bitrateKbps: 32000 } });
+  assert.equal(updated.targetFps, 90);
 });

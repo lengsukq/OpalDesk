@@ -205,6 +205,8 @@ fun OpalCompositorWorkspace(
     val dockScale by AppPrefs.dockScaleFlow.collectAsState()
     val globalShortcutsEnabled by AppPrefs.globalShortcutsEnabledFlow.collectAsState()
     val disabledShortcutIds by AppPrefs.disabledShortcutIdsFlow.collectAsState()
+    val dexImeDisplayMode by AppPrefs.dexImeDisplayModeFlow.collectAsState()
+    val dexLockedImeId by AppPrefs.dexLockedImeIdFlow.collectAsState()
     val showDesktopGuideIcon by AppPrefs.showDesktopGuideIconFlow.collectAsState()
 
     val profileState by io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.stateFlow.collectAsState()
@@ -214,6 +216,7 @@ fun OpalCompositorWorkspace(
     var controlCenterInitialTab by remember { mutableStateOf(0) }
     var showDpiPopover by remember { mutableStateOf(false) }
     var showResolutionModal by remember { mutableStateOf(false) }
+    var showImePopover by remember { mutableStateOf(false) }
     var showShortcutsPopover by remember { mutableStateOf(false) }
     var showFeatureGuide by remember { mutableStateOf(false) }
     var showNotificationCenter by remember { mutableStateOf(false) }
@@ -248,6 +251,7 @@ fun OpalCompositorWorkspace(
         showControlCenter = false
         showDpiPopover = false
         showResolutionModal = false
+        showImePopover = false
         showShortcutsPopover = false
         showFeatureGuide = false
         showNotificationCenter = false
@@ -350,14 +354,61 @@ fun OpalCompositorWorkspace(
         }
     }
 
-    // Keep hostScreenOff status indicator synced promptly if the user double-taps to wake the phone
+    // Keep hostScreenOff status indicator synced if the user wakes Display 0 via power button
+    // (relaxed 5s interval halves idle Binder wakeups).
     LaunchedEffect(status.connected, status.hostScreenOff) {
         if (status.connected && status.hostScreenOff) {
             while (true) {
-                delay(2_500L)
+                delay(5_000L)
                 withContext(Dispatchers.IO) {
                     BridgeClient.refreshStatus()
                 }
+            }
+        }
+    }
+
+    // Optional thermal-saving auto-blackout: turns off the phone's OLED panel 3s after entering
+    // external monitor or remote cast DeX mode, firing once per session so manual wake-ups stay on.
+    val autoBlackoutOnCast by AppPrefs.autoBlackoutOnCastFlow.collectAsState()
+    var triggeredAutoBlackout by remember { mutableStateOf(false) }
+    var autoBlackoutAttemptedForSession by remember(isExternalMonitor, autoBlackoutOnCast) { mutableStateOf(false) }
+    LaunchedEffect(
+        isExternalMonitor,
+        autoBlackoutOnCast,
+        status.connected,
+        phoneTrackpadVisible,
+        extSession.isPresentation,
+    ) {
+        if (ExternalTrackpadPolicy.shouldTriggerAutoBlackout(
+                isExternalMonitor = isExternalMonitor,
+                autoBlackoutEnabled = autoBlackoutOnCast,
+                daemonConnected = status.connected,
+                hostScreenOff = status.hostScreenOff,
+                phoneTrackpadVisible = phoneTrackpadVisible,
+                isPresentationMode = extSession.isPresentation,
+                alreadyTriggeredForSession = autoBlackoutAttemptedForSession,
+            )
+        ) {
+            delay(3_000L)
+            if (!BridgeClient.statusFlow.value.hostScreenOff) {
+                autoBlackoutAttemptedForSession = true
+                triggeredAutoBlackout = true
+                BridgeClient.setHostScreenPowerAsync(false) { ok ->
+                    if (ok) {
+                        Toast.makeText(
+                            ctx,
+                            "已自动熄灭本机屏幕（点顶栏状态或本机电源键随时点亮）",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
+            }
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            if (triggeredAutoBlackout) {
+                BridgeClient.setHostScreenPowerAsync(true)
             }
         }
     }
@@ -383,10 +434,27 @@ fun OpalCompositorWorkspace(
                 .coerceAtLeast(180.dp)
             val shortcutRowsPerCol = (usableHeightDp.value / 88f).toInt().coerceIn(3, 8)
             val fullscreenWin = scene.visibleWindows.firstOrNull { it.isFullscreen }
+            val activeDisplayMetrics = remember(isExternalMonitor, remote.connected, remote.fpsX100, extSession.refreshRateHz, extDisplay, status.targetFps, canvasW, canvasH) {
+                val hostDisp = runCatching { ctx.display }.getOrNull()
+                val actualHz = when {
+                    remote.connected && remote.fpsX100 > 0 -> (remote.fpsX100 / 100f).roundToInt().coerceAtLeast(24)
+                    isExternalMonitor && extSession.refreshRateHz > 0 -> extSession.refreshRateHz
+                    else -> (hostDisp?.mode?.refreshRate ?: hostDisp?.refreshRate ?: 60f).roundToInt().coerceAtLeast(24)
+                }
+                val maxHz = when {
+                    remote.connected -> 120
+                    isExternalMonitor && extDisplay != null && extDisplay!!.supportedModes.isNotEmpty() ->
+                        extDisplay!!.supportedModes.maxOf { it.refreshRateHz }.coerceAtLeast(actualHz)
+                    hostDisp?.supportedModes?.isNotEmpty() == true ->
+                        hostDisp.supportedModes.maxOf { it.refreshRate.roundToInt() }.coerceAtLeast(actualHz)
+                    else -> actualHz
+                }
+                actualHz to maxHz
+            }
             val displaySummary = when {
                 remote.connected -> "${remote.channelLabel} · ${remote.peerName.ifBlank { "投屏端" }} · ${remote.width}×${remote.height} @ ${remote.fpsX100 / 100}Hz"
                 externalMonitorSummary.isNotBlank() -> externalMonitorSummary
-                else -> "桌面画布 · ${canvasW}×${canvasH}"
+                else -> "桌面画布 · ${canvasW}×${canvasH} @ ${activeDisplayMetrics.first}Hz"
             }
 
             val currentTarget = remember(isExternalMonitor, remote.connected, remote.peerName, externalMonitorSummary, canvasW, canvasH) {
@@ -567,6 +635,7 @@ fun OpalCompositorWorkspace(
                         canvasW = canvasW,
                         canvasH = canvasH,
                         dockInsetDp = effectiveDockInsetDp,
+                        occludedByFullscreen = (fullscreenWin != null && win.windowId != fullscreenWin.windowId),
                         onSnapPreviewChanged = { snapPreviewRect = it },
                         modifier = Modifier.zIndex(CompositorGeometry.effectiveZOrder(win, pinnedWindowIds).toFloat()),
                     )
@@ -580,6 +649,7 @@ fun OpalCompositorWorkspace(
                     tray = trayInfo,
                     isExternalMonitor = isExternalMonitor,
                     hostScreenOff = status.hostScreenOff,
+                    showHostScreenToggle = isExternalMonitor || remote.connected || status.hostScreenOff,
                     isCompactWidth = isCompactWidth,
                     showControlCenter = showControlCenter,
                     showDpiPopover = showDpiPopover,
@@ -604,6 +674,16 @@ fun OpalCompositorWorkspace(
                     onTogglePhoneTrackpad = {
                         dismissAllPopovers()
                         togglePhoneTrackpadFromExternal()
+                    },
+                    onToggleHostScreenPower = { screenOn ->
+                        BridgeClient.setHostScreenPowerAsync(screenOn) { ok ->
+                            val msg = when {
+                                !ok -> "当前设备暂不支持物理息屏控制"
+                                screenOn -> "已点亮原手机屏幕"
+                                else -> "已熄灭原手机屏幕（双击手机屏幕或点顶栏随时点亮）"
+                            }
+                            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+                        }
                     },
                     onToggleDpiPopover = {
                         val next = !showDpiPopover
@@ -648,6 +728,13 @@ fun OpalCompositorWorkspace(
                         BridgeClient.sendWindowActionAsync(
                             fullscreenWin.windowId,
                             BridgeProtocol.WinAction.TOGGLE_FULLSCREEN,
+                        )
+                    },
+                    onToggleOrientation = {
+                        dismissAllPopovers()
+                        BridgeClient.sendWindowActionAsync(
+                            fullscreenWin.windowId,
+                            BridgeProtocol.WinAction.TOGGLE_ORIENTATION,
                         )
                     },
                     onReturnToDesktop = {
@@ -829,6 +916,9 @@ fun OpalCompositorWorkspace(
                     displaySummary = displaySummary,
                     inputBackendLabel = status.injectBackendLabel,
                     targetFps = status.targetFps,
+                    actualRefreshHz = activeDisplayMetrics.first,
+                    maxSupportedRefreshHz = activeDisplayMetrics.second,
+                    isRemoteCast = remote.connected,
                     windowDpiScalePct = status.windowDpiScalePct,
                     externalUiScale = externalUiScale,
                     themeMode = themeMode,
@@ -836,6 +926,7 @@ fun OpalCompositorWorkspace(
                     mouseTargetMode = mouseTargetMode,
                     isExternalMonitor = isExternalMonitor,
                     hostScreenOff = status.hostScreenOff,
+                    autoBlackoutOnCast = autoBlackoutOnCast,
                     rootEnhanced = status.rootEnhanced,
                     showHostScreenToggle = isExternalMonitor || remote.connected || status.hostScreenOff,
                     showRemoteMediaSection = isExternalMonitor && (remote.connected || remote.hasActiveDesktopCast),
@@ -848,6 +939,8 @@ fun OpalCompositorWorkspace(
                     dockScale = dockScale,
                     globalShortcutsEnabled = globalShortcutsEnabled,
                     disabledShortcutIds = disabledShortcutIds,
+                    dexImeDisplayMode = dexImeDisplayMode,
+                    dexLockedImeId = dexLockedImeId,
                     showDesktopGuideIcon = showDesktopGuideIcon,
                     maxHeight = ccMaxH,
                     initialTab = controlCenterInitialTab,
@@ -902,6 +995,14 @@ fun OpalCompositorWorkspace(
                             Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
                         }
                     },
+                    onToggleAutoBlackout = { enabled ->
+                        AppPrefs.setAutoBlackoutOnCast(ctx, enabled)
+                        Toast.makeText(
+                            ctx,
+                            if (enabled) "已开启接入外屏自动息屏（3 秒后自动熄灭本机屏）" else "已关闭自动息屏，可随时点顶栏手动息屏",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    },
                     onSelectThemeMode = { mode ->
                         AppPrefs.setThemeMode(ctx, mode)
                     },
@@ -929,6 +1030,31 @@ fun OpalCompositorWorkspace(
                         }
                     } else {
                         null
+                    },
+                    onToggleExternalImeSync = { syncToExternal ->
+                        val nextMode = if (syncToExternal) {
+                            BridgeProtocol.DexImeDisplayMode.ALWAYS_LOCAL
+                        } else {
+                            BridgeProtocol.DexImeDisplayMode.AUTO
+                        }
+                        AppPrefs.setDexImeDisplayMode(ctx, nextMode)
+                        BridgeClient.setDexImeConfigAsync(
+                            ctx = ctx,
+                            displayMode = nextMode,
+                            lockedImeId = dexLockedImeId,
+                            muteHostOnCast = AppPrefs.isMuteHostImeOnCastEnabled(ctx),
+                            showWithHardKbd = AppPrefs.getHardKbdSoftImeMode(ctx),
+                            autoBridgeImeOnCast = AppPrefs.isAutoBridgeImeOnCastEnabled(ctx),
+                        )
+                        Toast.makeText(
+                            ctx,
+                            if (syncToExternal) "输入法已同步至外接显示器，触屏可直接输入" else "已恢复智能输入法位置（外接键鼠在屏内，纯触控回本机）",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    },
+                    onOpenImeSettings = {
+                        showControlCenter = false
+                        showImePopover = true
                     },
                     onOpenKeyboardShortcuts = {
                         showControlCenter = false
@@ -1002,6 +1128,23 @@ fun OpalCompositorWorkspace(
                         onDismiss = { showResolutionModal = false },
                     )
                 }
+            }
+
+            // In-DeX IME Display Routing & Locked Keyboard Popover
+            if (showImePopover) {
+                val imeMaxH = (maxHeight - (CompositorGeometry.TOP_BAR_DP + 24f).dp).coerceAtLeast(240.dp)
+                io.github.lengsukq.opaldesk.ui.DexImeSettingsPopover(
+                    maxHeight = imeMaxH,
+                    onOpenSystemImeSettings = {
+                        showImePopover = false
+                        openSystemSettingsInDex(android.provider.Settings.ACTION_INPUT_METHOD_SETTINGS)
+                    },
+                    onDismiss = { showImePopover = false },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = (CompositorGeometry.TOP_BAR_DP + 8f).dp, start = 12.dp, end = 12.dp)
+                        .zIndex(10_023f),
+                )
             }
 
             // In-DeX Keyboard Shortcuts Cheatsheet & Toggle Popover

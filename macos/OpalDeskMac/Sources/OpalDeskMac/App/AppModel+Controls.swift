@@ -326,15 +326,25 @@ extension AppModel {
     }
 
     func effectiveAdaptiveMaxLongEdge() -> Int {
-        if case .wirelessADB = activeConnection?.transport { return Tuning.wirelessAdbMaxLongEdge }
-        return Tuning.defaultMaxLongEdge
+        switch activeConnection?.transport {
+        case .wiredUSB:
+            return Tuning.wiredUsbMaxLongEdge
+        case .wirelessADB:
+            return Tuning.wirelessAdbMaxLongEdge
+        case .wirelessWiFi, nil:
+            return Tuning.defaultMaxLongEdge
+        }
     }
 
     func effectiveBitrateKbps() -> Int {
-        if case .wirelessADB = activeConnection?.transport {
+        switch activeConnection?.transport {
+        case .wiredUSB:
+            return preferences.bitrateKbps
+        case .wirelessADB:
             return min(preferences.bitrateKbps, Tuning.wirelessAdbMaxBitrateKbps)
+        case .wirelessWiFi, nil:
+            return min(preferences.bitrateKbps, Tuning.wifiMaxBitrateKbps)
         }
-        return preferences.bitrateKbps
     }
 
     func resolveCurrentTargetDimensions() -> (width: Int, height: Int) {

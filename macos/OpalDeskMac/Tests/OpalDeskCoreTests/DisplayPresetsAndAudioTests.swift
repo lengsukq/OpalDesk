@@ -22,15 +22,20 @@ struct DisplayPresetsAndAudioTests {
         #expect(DisplayPresets.bitrateKbpsRange.upperBound % DisplayPresets.bitrateStepKbps == 0)
         #expect(DisplayPresets.singleWidthDpRange.contains(DisplayPresets.defaultSingleWidthDp))
 
-        // Bitrate clamping
+        // Bitrate clamping (supports wired USB up to 48 Mbps)
         #expect(DisplayPresets.clampBitrateKbps(-1000) == DisplayPresets.bitrateKbpsRange.lowerBound)
         #expect(DisplayPresets.clampBitrateKbps(0) == DisplayPresets.bitrateKbpsRange.lowerBound)
         #expect(DisplayPresets.clampBitrateKbps(3999) == 4000)
         #expect(DisplayPresets.clampBitrateKbps(4000) == 4000)
         #expect(DisplayPresets.clampBitrateKbps(16000) == 16000)
         #expect(DisplayPresets.clampBitrateKbps(32000) == 32000)
-        #expect(DisplayPresets.clampBitrateKbps(32001) == 32000)
+        #expect(DisplayPresets.clampBitrateKbps(48000) == 48000)
+        #expect(DisplayPresets.clampBitrateKbps(48001) == 48000)
         #expect(DisplayPresets.clampBitrateKbps(Int.max) == DisplayPresets.bitrateKbpsRange.upperBound)
+
+        // HelloPayload identifies macOS platform so Android daemon uses low-power 1Hz static keepalive.
+        let macHello = HelloPayload(clientName: "Mac", clientId: "mac-1")
+        #expect(macHello.clientPlatform == "macos")
 
         // Adaptive single-app width (dp) clamping
         #expect(DisplayPresets.clampSingleWidthDp(-50) == DisplayPresets.singleWidthDpRange.lowerBound)

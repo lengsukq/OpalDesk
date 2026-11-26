@@ -1,5 +1,4 @@
 use crate::fingerprint;
-use futures_util::{SinkExt, StreamExt};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -470,7 +469,6 @@ impl TlsBridgeRegistry {
 
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let target_host = clean_host.clone();
-        let target_path = clean_path.clone();
         let pin_for_task = full_verified_fp.clone();
 
         tokio::spawn(async move {
@@ -487,10 +485,9 @@ impl TlsBridgeRegistry {
                         };
                         let _ = local_tcp.set_nodelay(true);
                         let h = target_host.clone();
-                        let pth = target_path.clone();
                         let pin = pin_for_task.clone();
                         tokio::spawn(async move {
-                            let _ = relay_single_ws_connection(local_tcp, &h, port, &pth, &pin).await;
+                            let _ = relay_single_ws_connection(local_tcp, &h, port, &pin).await;
                         });
                     }
                 }
@@ -526,17 +523,12 @@ impl TlsBridgeRegistry {
 }
 
 async fn relay_single_ws_connection(
-    local_tcp: TcpStream,
+    mut local_tcp: TcpStream,
     host: &str,
     port: u16,
-    path: &str,
     expected_pin: &str,
 ) -> Result<(), String> {
-    let local_ws = tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::accept_async(local_tcp))
-        .await
-        .map_err(|_| "本地 WebSocket 握手超时".to_string())?
-        .map_err(|e| format!("本地 WebSocket 握手失败: {e}"))?;
-
+    let _ = local_tcp.set_nodelay(true);
     let addr = format_host_port(host, port);
     let server_name = parse_server_name(host)?;
     let verified_slot = Arc::new(Mutex::new(None));
@@ -553,7 +545,7 @@ async fn relay_single_ws_connection(
         .map_err(|e| format!("连接远端 {addr} 失败: {e}"))?;
     let _ = remote_tcp.set_nodelay(true);
 
-    let tls_stream = tokio::time::timeout(
+    let mut tls_stream = tokio::time::timeout(
         CONNECT_TIMEOUT,
         TlsConnector::from(tls_cfg).connect(server_name, remote_tcp),
     )
@@ -561,42 +553,11 @@ async fn relay_single_ws_connection(
     .map_err(|_| "远端 TLS 握手超时".to_string())?
     .map_err(|e| format!("远端 TLS 握手失败: {e}"))?;
 
-    let upstream_url = format!("wss://{}{}", addr, path);
-    let (remote_ws, _) = tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        tokio_tungstenite::client_async(upstream_url, tls_stream),
-    )
-    .await
-    .map_err(|_| "远端 WebSocket 升级超时".to_string())?
-    .map_err(|e| format!("远端 WebSocket 升级失败: {e}"))?;
-
-    let (mut local_sink, mut local_stream) = local_ws.split();
-    let (mut remote_sink, mut remote_stream) = remote_ws.split();
-
-    let client_to_server = async {
-        while let Some(Ok(msg)) = local_stream.next().await {
-            let closing = msg.is_close();
-            if remote_sink.send(msg).await.is_err() || closing {
-                break;
-            }
-        }
-        let _ = remote_sink.close().await;
-    };
-
-    let server_to_client = async {
-        while let Some(Ok(msg)) = remote_stream.next().await {
-            let closing = msg.is_close();
-            if local_sink.send(msg).await.is_err() || closing {
-                break;
-            }
-        }
-        let _ = local_sink.close().await;
-    };
-
-    tokio::select! {
-        _ = client_to_server => {}
-        _ = server_to_client => {}
-    }
-
+    // Zero-parse byte-stream splice: Android WebSocketHttpHandler directly serves WebView2's
+    // HTTP/1.1 Upgrade and RFC 6455 frames inside the pinned TLS tunnel, eliminating double
+    // WebSocket deframing/reframing, per-frame Vec<u8> allocation, and extra flushes.
+    let _ = tokio::io::copy_bidirectional(&mut local_tcp, &mut tls_stream).await;
+    let _ = tls_stream.shutdown().await;
+    let _ = local_tcp.shutdown().await;
     Ok(())
 }

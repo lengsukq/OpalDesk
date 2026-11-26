@@ -26,6 +26,7 @@ import kotlin.math.roundToInt
 import io.github.lengsukq.opaldesk.adb.AdbProcessRunner
 import io.github.lengsukq.opaldesk.cast.OpalPeerDiscovery
 import io.github.lengsukq.opaldesk.cast.PeerFloatingAppService
+import io.github.lengsukq.opaldesk.cast.WifiLowLatencyLock
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import io.github.lengsukq.opaldesk.external.ExternalDisplayPolicy
 import io.github.lengsukq.opaldesk.external.ExternalDisplayTransport
@@ -36,9 +37,14 @@ import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.PendingPairingRequest
 import io.github.lengsukq.opaldesk.service.DisplayLaunchHelper
 import io.github.lengsukq.opaldesk.web.WebActivationService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.system.exitProcess
 
@@ -304,6 +310,8 @@ class BridgeService : Service() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var senderWifiLowLatencyLock: WifiLowLatencyLock? = null
     private var displayManager: DisplayManager? = null
     private var mediaRouter: MediaRouter? = null
     private var mediaRouterRegistered = false
@@ -380,11 +388,26 @@ class BridgeService : Service() {
             }
             screenWakeReceiverRegistered = true
         }
+        senderWifiLowLatencyLock = WifiLowLatencyLock(this, "OpalDesk:WifiCastTx")
+        serviceScope.launch {
+            BridgeClient.remoteStatusFlow.collect { remote ->
+                val needLowLatency = remote.connected && BridgeProtocol.RemoteSink.isWireless(remote.sinkType)
+                if (needLowLatency) {
+                    senderWifiLowLatencyLock?.acquire()
+                } else {
+                    senderWifiLowLatencyLock?.release()
+                }
+            }
+        }
         scanExternalDisplays(autoLaunchNew = true)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startSessionForeground()
+        if (!startSessionForeground()) {
+            OpalLogStore.w("Service", "Foreground promotion denied by OS -> stopping cleanly to avoid Background ANR")
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         scanExternalDisplays(autoLaunchNew = false)
         return START_STICKY
     }
@@ -399,6 +422,9 @@ class BridgeService : Service() {
 
     override fun onDestroy() {
         if (activeInstance === this) activeInstance = null
+        serviceScope.cancel()
+        senderWifiLowLatencyLock?.release()
+        senderWifiLowLatencyLock = null
         if (screenWakeReceiverRegistered) {
             runCatching { unregisterReceiver(screenWakeReceiver) }
             screenWakeReceiverRegistered = false
@@ -495,8 +521,8 @@ class BridgeService : Service() {
         projectToDisplay(ctx, displayId, transport, isPresentationCapable = isPresentationCapable)
     }
 
-    private fun startSessionForeground() {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+    private fun startSessionForeground(): Boolean {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return false
         val channel = NotificationChannel(
             CHANNEL_ID,
             "OpalDesk 桌面引擎服务",
@@ -522,14 +548,16 @@ class BridgeService : Service() {
             .setOngoing(true)
             .build()
 
-        try {
+        return try {
             if (Build.VERSION.SDK_INT >= 34) {
                 startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             } else {
                 startForeground(NOTIF_ID, notif)
             }
+            true
         } catch (t: Throwable) {
             Log.w(TAG, "startForeground warning: ${t.message}")
+            false
         }
     }
 }

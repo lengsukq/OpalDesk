@@ -214,6 +214,74 @@ public class ExternalMouseRouterTest {
     }
 
     @Test
+    public void configurableDexImeModesAndPogoKeyboardDetectionBehaveDeterministically() {
+        // Built-in tablet Pogo-Pin / dock keyboards are recognized for IME switching without matching phone gpio-keys
+        assertTrue(MouseRoutingPolicy.isAlphabeticHardwareKeyboardForIme(
+                "Xiaomi Pad Keyboard", MouseRoutingPolicy.SOURCE_KEYBOARD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, false));
+        assertTrue(MouseRoutingPolicy.isAlphabeticHardwareKeyboardForIme(
+                "pogo-kbd", MouseRoutingPolicy.SOURCE_KEYBOARD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, false));
+        assertFalse(MouseRoutingPolicy.isAlphabeticHardwareKeyboardForIme(
+                "gpio-keys", MouseRoutingPolicy.SOURCE_KEYBOARD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, false));
+        assertFalse(MouseRoutingPolicy.isAlphabeticHardwareKeyboardForIme(
+                "OpalDesk Virtual Keyboard 4", MouseRoutingPolicy.SOURCE_KEYBOARD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, false));
+
+        // DEX_IME_DISPLAY_ALWAYS_LOCAL forces LOCAL even without physical keyboard, including remote cast
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_LOCAL,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(
+                        false, false, true, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL, false));
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_LOCAL,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(
+                        false, true, true, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL, true));
+        // Untrusted VirtualDisplays still degrade safely to FALLBACK_DISPLAY to avoid WMS SecurityException
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(
+                        false, false, false, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL, false));
+
+        // DEX_IME_DISPLAY_FALLBACK_HOST keeps FALLBACK_DISPLAY even with physical keyboard
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(
+                        true, false, true, BridgeProtocol.DEX_IME_DISPLAY_FALLBACK_HOST, false));
+
+        // muteHostImeOnCast applies DISPLAY_IME_POLICY_HIDE (2) during remote cast in AUTO mode
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_HIDE,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(
+                        false, true, true, BridgeProtocol.DEX_IME_DISPLAY_AUTO, true));
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_HIDE,
+                MouseRoutingPolicy.resolveRemoteOuterDisplayImePolicy(
+                        BridgeProtocol.DEX_IME_DISPLAY_AUTO, true, true));
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_LOCAL,
+                MouseRoutingPolicy.resolveRemoteOuterDisplayImePolicy(
+                        BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL, true, true));
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY,
+                MouseRoutingPolicy.resolveRemoteOuterDisplayImePolicy(
+                        BridgeProtocol.DEX_IME_DISPLAY_AUTO, false, true));
+
+        // Physical external monitor forces LOCAL in ALWAYS_LOCAL even without physical keyboard
+        assertTrue(MouseRoutingPolicy.shouldForcePhysicalExternalDisplayLocalIme(
+                true, false, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL));
+        assertFalse(MouseRoutingPolicy.shouldForcePhysicalExternalDisplayLocalIme(
+                true, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO));
+        assertTrue(MouseRoutingPolicy.shouldForcePhysicalExternalDisplayLocalIme(
+                true, true, BridgeProtocol.DEX_IME_DISPLAY_AUTO));
+        assertFalse(MouseRoutingPolicy.shouldForcePhysicalExternalDisplayLocalIme(
+                true, true, BridgeProtocol.DEX_IME_DISPLAY_FALLBACK_HOST));
+        assertFalse(MouseRoutingPolicy.shouldForcePhysicalExternalDisplayLocalIme(
+                false, true, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL));
+
+        // Display 0 fallback IME probe is suppressed in ALWAYS_LOCAL so Display 0 never steals focus
+        assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                false, false, false, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL));
+        assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                false, false, true, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL));
+        assertTrue(MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                false, true, false, BridgeProtocol.DEX_IME_DISPLAY_FALLBACK_HOST));
+    }
+
+    @Test
     public void sideNavigationMouseButtonTouchSequenceIsSuppressed() {
         assertTrue(MouseRoutingPolicy.isSideNavigationOnlyButtonState(MouseRoutingPolicy.BUTTON_BACK));
         assertTrue(MouseRoutingPolicy.isSideNavigationOnlyButtonState(MouseRoutingPolicy.BUTTON_FORWARD));
@@ -247,5 +315,68 @@ public class ExternalMouseRouterTest {
                 MouseRoutingPolicy.ACTION_HOVER_MOVE, true, MouseRoutingPolicy.BUTTON_BACK, true));
         assertFalse(MouseRoutingPolicy.shouldSuppressSideNavigationMouseTouch(
                 MouseRoutingPolicy.ACTION_SCROLL, true, MouseRoutingPolicy.BUTTON_BACK, true));
+    }
+
+    @Test
+    public void purePhysicalKeyboardsRouteDirectlyToFocusedWindowToPreventImePingPong() {
+        // Pure Bluetooth / USB / Pogo keyboards qualify for direct focused-window association
+        assertTrue(MouseRoutingPolicy.isPurePhysicalKeyboardForWindowRouting(
+                "T88-BT2 Keyboard", MouseRoutingPolicy.SOURCE_KEYBOARD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, true));
+        assertTrue(MouseRoutingPolicy.isPurePhysicalKeyboardForWindowRouting(
+                "Xiaomi Pad Keyboard", MouseRoutingPolicy.SOURCE_KEYBOARD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, false));
+
+        // Combo mouse+keyboard devices stay anchored on outer display so the mouse pointer never traps offscreen
+        assertFalse(MouseRoutingPolicy.isPurePhysicalKeyboardForWindowRouting(
+                "Logitech MX Combo",
+                MouseRoutingPolicy.SOURCE_MOUSE | MouseRoutingPolicy.SOURCE_KEYBOARD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC,
+                false,
+                true));
+        assertFalse(MouseRoutingPolicy.isPurePhysicalKeyboardForWindowRouting(
+                "BT5.0 Mouse", MouseRoutingPolicy.SOURCE_MOUSE, 0, false, true));
+        assertFalse(MouseRoutingPolicy.isPurePhysicalKeyboardForWindowRouting(
+                "OpalDesk Virtual Keyboard 82", MouseRoutingPolicy.SOURCE_KEYBOARD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, true));
+        assertFalse(MouseRoutingPolicy.isPurePhysicalKeyboardForWindowRouting(
+                "gpio-keys", MouseRoutingPolicy.SOURCE_KEYBOARD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, false));
+
+        // Route directly to focused OpalWin-* when workstation active, local/external (not remote cast),
+        // no local OpalDesk TextField active, and not forced to FALLBACK_HOST
+        assertTrue(MouseRoutingPolicy.shouldRoutePhysicalKeyboardToFocusedWindow(
+                true, false, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, 82, true));
+        assertTrue(MouseRoutingPolicy.shouldRoutePhysicalKeyboardToFocusedWindow(
+                true, false, false, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL, 82, true));
+
+        // Must immediately yield back to outer display / host whenever local search box opens,
+        // remote cast is active, FALLBACK_HOST is chosen, workstation exits, or no window is focused
+        assertFalse(MouseRoutingPolicy.shouldRoutePhysicalKeyboardToFocusedWindow(
+                true, false, true, BridgeProtocol.DEX_IME_DISPLAY_AUTO, 82, true));
+        assertFalse(MouseRoutingPolicy.shouldRoutePhysicalKeyboardToFocusedWindow(
+                true, true, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, 82, true));
+        assertFalse(MouseRoutingPolicy.shouldRoutePhysicalKeyboardToFocusedWindow(
+                true, false, false, BridgeProtocol.DEX_IME_DISPLAY_FALLBACK_HOST, 82, true));
+        assertFalse(MouseRoutingPolicy.shouldRoutePhysicalKeyboardToFocusedWindow(
+                false, false, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, 82, true));
+        assertFalse(MouseRoutingPolicy.shouldRoutePhysicalKeyboardToFocusedWindow(
+                true, false, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, -1, false));
+    }
+
+    @Test
+    public void remoteVirtualCastDisplaysIsolateHostPhysicalPeripherals() {
+        assertTrue(MouseRoutingPolicy.isVirtualCastDisplayUniqueId("virtual:com.android.shell,2000,OpalDesk-Remote,68"));
+        assertFalse(MouseRoutingPolicy.isVirtualCastDisplayUniqueId("local:4630947134992368259"));
+
+        // Physical HDMI/USB-C external monitor accepts host peripheral routing in EXTERNAL mode
+        assertTrue(MouseRoutingPolicy.shouldRoutePhysicalPeripheralsToDisplay(
+                BridgeProtocol.MOUSE_TARGET_EXTERNAL, 5, "local:4630947134992368259", 1));
+        // Virtual OpalCast displays MUST NOT hijack host USB/Bluetooth mice/keyboards
+        assertFalse(MouseRoutingPolicy.shouldRoutePhysicalPeripheralsToDisplay(
+                BridgeProtocol.MOUSE_TARGET_EXTERNAL, 83, "virtual:com.android.shell,2000,OpalDesk-Remote,68", -1));
+        // LOCAL mode never routes to external displays
+        assertFalse(MouseRoutingPolicy.shouldRoutePhysicalPeripheralsToDisplay(
+                BridgeProtocol.MOUSE_TARGET_LOCAL, 5, "local:4630947134992368259", 1));
     }
 }

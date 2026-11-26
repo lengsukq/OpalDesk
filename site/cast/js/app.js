@@ -12,6 +12,7 @@ import {
   evaluateCertificateTrust,
   formatShortFingerprint,
   isTauriDesktop,
+  normalizeCastPrefs,
   OpalDesktopBridge,
 } from './desktop_bridge.js';
 import { OpalDiagnosticsController } from './diagnostics_controller.js';
@@ -49,7 +50,9 @@ import {
   FILE_FLAG_DATA,
   FILE_FLAG_END,
   FILE_FLAG_START,
+  fitDimensionsToMaxBounds,
   FLAG_CLIPBOARD_IMAGE_PNG,
+  resolveAutoCodecPreference,
   SESSION_ROLE_DESKTOP,
   SESSION_ROLE_STANDALONE_APP,
   SYS_BACK,
@@ -94,8 +97,69 @@ import { OpalVideoDecoder, probeVideoCodecs } from './video_decoder.js';
 const STORAGE_CLIENT_ID = 'opaldesk-web-client-id-v1';
 const STORAGE_DEVICES = 'opaldesk-web-devices-v1';
 const STORAGE_THEME = 'opaldesk-showcase-theme-v1';
+const STORAGE_CODEC = 'opaldesk-web-codec-pref-v1';
+const STORAGE_FPS = 'opaldesk-web-fps-pref-v1';
+const STORAGE_BITRATE = 'opaldesk-web-bitrate-pref-v1';
+const STORAGE_AUDIO = 'opaldesk-web-audio-pref-v1';
+const STORAGE_HIDE_CURSOR = 'opaldesk-web-hide-cursor-v1';
 const STORAGE_USB_TETHER_BETA = 'opaldesk-usb-tether-beta-v1';
 const FILE_CHUNK_SIZE = 64 * 1024;
+
+function loadCodecPref() {
+  try {
+    return localStorage.getItem(STORAGE_CODEC) || '';
+  } catch {
+    return '';
+  }
+}
+
+function saveCodecPref(codec) {
+  try {
+    if (codec === 'hevc' || codec === 'h264') {
+      localStorage.setItem(STORAGE_CODEC, codec);
+    }
+  } catch {
+    // Ignore storage restriction
+  }
+}
+
+function loadLocalCastPrefs() {
+  try {
+    const rawAudio = localStorage.getItem(STORAGE_AUDIO);
+    const rawHideCursor = localStorage.getItem(STORAGE_HIDE_CURSOR);
+    return normalizeCastPrefs({
+      preferredCodec: loadCodecPref(),
+      targetFps: Number(localStorage.getItem(STORAGE_FPS) || 0),
+      bitrateKbps: Number(localStorage.getItem(STORAGE_BITRATE) || 0),
+      audioEnabled: rawAudio === null ? null : rawAudio === '1',
+      hideLocalCursor: rawHideCursor === null ? null : rawHideCursor === '1',
+    });
+  } catch {
+    return normalizeCastPrefs();
+  }
+}
+
+function saveLocalCastPrefs(patch = {}) {
+  try {
+    if (patch.preferredCodec === 'hevc' || patch.preferredCodec === 'h264') {
+      localStorage.setItem(STORAGE_CODEC, patch.preferredCodec);
+    }
+    if (typeof patch.targetFps === 'number' && [60, 90, 120].includes(patch.targetFps)) {
+      localStorage.setItem(STORAGE_FPS, String(patch.targetFps));
+    }
+    if (typeof patch.bitrateKbps === 'number' && patch.bitrateKbps >= 2500 && patch.bitrateKbps <= 50000) {
+      localStorage.setItem(STORAGE_BITRATE, String(Math.round(patch.bitrateKbps)));
+    }
+    if (typeof patch.audioEnabled === 'boolean') {
+      localStorage.setItem(STORAGE_AUDIO, patch.audioEnabled ? '1' : '0');
+    }
+    if (typeof patch.hideLocalCursor === 'boolean') {
+      localStorage.setItem(STORAGE_HIDE_CURSOR, patch.hideLocalCursor ? '1' : '0');
+    }
+  } catch {
+    // Ignore storage restriction
+  }
+}
 
 function loadUsbTetherBetaPref() {
   try {
@@ -359,6 +423,7 @@ class OpalCastWebApp {
     if (this.desktop.enabled) {
       await this.initDesktopMode();
     }
+    this.restoreSavedCastPrefs();
     await Promise.all([this.diagnostics.initialize(), this.standalone.initialize()]);
     this.renderRecentDevices();
     this.installTrustPopupListener();
@@ -375,9 +440,17 @@ class OpalCastWebApp {
     } else {
       badge.textContent = caps.hevc ? 'H.264 + HEVC 硬解就绪' : 'H.264 硬解就绪';
       badge.classList.add('ok');
-      if (!caps.hevc) {
-        const hevcOpt = $('castCodecSelect').querySelector('option[value="hevc"]');
-        if (hevcOpt) hevcOpt.textContent = 'HEVC / H.265 (当前浏览器未检出硬解)';
+      const codecSelect = $('castCodecSelect');
+      if (codecSelect) {
+        const merged = this.resolveSavedCastPrefs();
+        codecSelect.value = resolveAutoCodecPreference({
+          hevcSupported: caps.hevc,
+          savedCodec: merged.preferredCodec,
+        });
+        if (!caps.hevc) {
+          const hevcOpt = codecSelect.querySelector('option[value="hevc"]');
+          if (hevcOpt) hevcOpt.textContent = 'HEVC / H.265 (当前浏览器未检出硬解)';
+        }
       }
     }
 
@@ -409,8 +482,9 @@ class OpalCastWebApp {
       if (info?.clientId) {
         this.clientId = info.clientId;
       }
-      if (info?.adb?.customAdbPath) {
-        $('customAdbPathInput').value = info.adb.customAdbPath;
+      const persistedAdbPath = info?.adb?.customAdbPath || info?.prefs?.customAdbPath || '';
+      if (persistedAdbPath) {
+        $('customAdbPathInput').value = persistedAdbPath;
       }
     } catch {
       // Keep graceful fallback if native state init encounters an error
@@ -423,6 +497,57 @@ class OpalCastWebApp {
     this.syncDesktopUsbTetherUi();
     this.renderDesktopMdnsDevices(this.desktop.mdnsDevices);
     this.desktop.startDiscoveryPolling((devices) => this.renderDesktopMdnsDevices(devices));
+  }
+
+  resolveSavedCastPrefs() {
+    const local = loadLocalCastPrefs();
+    const native = this.desktop.enabled && this.desktop.clientPrefs
+      ? normalizeCastPrefs(this.desktop.clientPrefs)
+      : normalizeCastPrefs();
+    return {
+      preferredCodec: native.preferredCodec || local.preferredCodec || '',
+      targetFps: native.targetFps || local.targetFps || 0,
+      bitrateKbps: native.bitrateKbps || local.bitrateKbps || 0,
+      audioEnabled: native.audioEnabled !== null ? native.audioEnabled : local.audioEnabled,
+      hideLocalCursor: native.hideLocalCursor !== null ? native.hideLocalCursor : Boolean(local.hideLocalCursor),
+    };
+  }
+
+  restoreSavedCastPrefs() {
+    const saved = this.resolveSavedCastPrefs();
+    const fpsEl = $('castFpsSelect');
+    if (fpsEl && saved.targetFps && fpsEl.querySelector(`option[value="${saved.targetFps}"]`)) {
+      fpsEl.value = String(saved.targetFps);
+    }
+    const brEl = $('castBitrateSelect');
+    if (brEl && saved.bitrateKbps && brEl.querySelector(`option[value="${saved.bitrateKbps}"]`)) {
+      brEl.value = String(saved.bitrateKbps);
+    }
+    const audioEl = $('castAudioCheck');
+    if (audioEl && typeof saved.audioEnabled === 'boolean') {
+      audioEl.checked = saved.audioEnabled;
+    }
+    const codecEl = $('castCodecSelect');
+    if (codecEl && saved.preferredCodec && codecEl.querySelector(`option[value="${saved.preferredCodec}"]`)) {
+      codecEl.value = saved.preferredCodec;
+    }
+    this.hideLocalCursor = Boolean(saved.hideLocalCursor);
+    this.syncLocalCursorUi?.();
+  }
+
+  persistCastPrefs(patch) {
+    saveLocalCastPrefs(patch);
+    if (this.desktop.enabled) {
+      this.desktop.updateClientPrefs(patch);
+    }
+  }
+
+  syncLocalCursorUi() {
+    const hide = Boolean(this.hideLocalCursor);
+    const wrap = $('canvasWrap');
+    if (wrap) wrap.classList.toggle('hide-local-cursor', hide);
+    const chk = $('hideLocalCursorCheck');
+    if (chk) chk.checked = hide;
   }
 
   applyUrlParams() {
@@ -517,6 +642,22 @@ class OpalCastWebApp {
       this.copyText(`adb forward tcp:${port} localabstract:opaldesk_stream`, '已复制 USB 转发命令');
     });
     $('castPortInput').addEventListener('input', () => this.updateUsbForwardHint());
+    $('castCodecSelect')?.addEventListener('change', (e) => {
+      const codec = e.target.value;
+      saveCodecPref(codec);
+      this.persistCastPrefs({ preferredCodec: codec });
+    });
+    $('castFpsSelect')?.addEventListener('change', (e) => {
+      const fps = Number(e.target.value) || 60;
+      this.persistCastPrefs({ targetFps: fps });
+    });
+    $('castBitrateSelect')?.addEventListener('change', (e) => {
+      const bitrateKbps = Number(e.target.value) || 14000;
+      this.persistCastPrefs({ bitrateKbps });
+    });
+    $('castAudioCheck')?.addEventListener('change', (e) => {
+      this.persistCastPrefs({ audioEnabled: Boolean(e.target.checked) });
+    });
     $('connectCastBtn').addEventListener('click', () => this.startCastConnection());
     $('openCastTrustBtn').addEventListener('click', () => {
       const host = $('castHostInput').value.trim();
@@ -712,6 +853,12 @@ class OpalCastWebApp {
       this.applyLiveResizeConfig();
       $('qualityPopover').hidden = true;
       this.input.focusIme();
+    });
+    $('hideLocalCursorCheck')?.addEventListener('change', (e) => {
+      this.hideLocalCursor = Boolean(e.target.checked);
+      this.syncLocalCursorUi();
+      this.persistCastPrefs({ hideLocalCursor: this.hideLocalCursor });
+      this.showToast(this.hideLocalCursor ? '已隐藏投屏画面内的本机指针（使用端侧单指针）' : '已恢复显示本机系统指针');
     });
 
     // App launcher popover
@@ -1325,6 +1472,7 @@ class OpalCastWebApp {
         audioEnabled: this.sessionRole === SESSION_ROLE_DESKTOP && $('castAudioCheck').checked,
         authToken: savedToken,
         transportHint: isUsb ? 'usb' : 'wifi_tls',
+        clientPlatform: this.desktop.enabled ? 'windows' : 'web',
         sessionRole: this.sessionRole,
         appPackage: this.standaloneAppPkg,
         appActivity: this.standaloneAppCls,
@@ -1589,11 +1737,22 @@ class OpalCastWebApp {
 
   computeInitialStreamSpec() {
     const isStandalone = this.sessionRole === SESSION_ROLE_STANDALONE_APP;
+    const isWired = this.transportMode === 'usb';
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const vw = Math.max(640, Math.round(window.innerWidth * dpr));
     const vh = Math.max(480, Math.round(window.innerHeight * dpr));
-    const width = isStandalone ? 1080 : Math.min(2560, vw & ~7);
-    const height = isStandalone ? 2280 : Math.min(1600, vh & ~7);
+    let width;
+    let height;
+    if (isStandalone) {
+      width = 1080;
+      height = 2280;
+    } else {
+      const maxW = isWired ? 3840 : 2560;
+      const maxH = isWired ? 2160 : 1600;
+      const fitted = fitDimensionsToMaxBounds(vw, vh, maxW, maxH, 8);
+      width = fitted.width;
+      height = fitted.height;
+    }
     const dpi = isStandalone ? 380 : Math.max(160, Math.min(320, Math.round(160 * dpr)));
     const fps = Number($('castFpsSelect').value) || 60;
     const bitrateKbps = Number($('castBitrateSelect').value) || 14000;
@@ -1608,10 +1767,15 @@ class OpalCastWebApp {
       const rect = $('canvasWrap').getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const isStandalone = this.sessionRole === SESSION_ROLE_STANDALONE_APP;
+      const isWired = this.transportMode === 'usb';
       const minW = isStandalone ? 480 : 640;
-      const maxH = isStandalone ? 2560 : 1600;
-      w = Math.min(2560, Math.max(minW, Math.round(rect.width * dpr)));
-      h = Math.min(maxH, Math.max(480, Math.round(rect.height * dpr)));
+      const rawW = Math.max(minW, Math.round(rect.width * dpr));
+      const rawH = Math.max(480, Math.round(rect.height * dpr));
+      const maxW = isStandalone ? 2560 : (isWired ? 3840 : 2560);
+      const maxH = isStandalone ? 2560 : (isWired ? 2160 : 1600);
+      const fitted = fitDimensionsToMaxBounds(rawW, rawH, maxW, maxH, 8);
+      w = fitted.width;
+      h = fitted.height;
     } else {
       const [pw, ph] = this.resizeMode.split('x').map(Number);
       w = pw || 1920;
@@ -1620,6 +1784,13 @@ class OpalCastWebApp {
     const fps = Number($('liveFpsSelect').value) || Number($('castFpsSelect').value) || 60;
     const bitrateKbps = Number($('liveBitrateSelect').value) || Number($('castBitrateSelect').value) || 14000;
     const dpi = Number($('liveDpiSelect')?.value) || 0;
+    if ($('castFpsSelect')?.querySelector(`option[value="${fps}"]`)) {
+      $('castFpsSelect').value = String(fps);
+    }
+    if ($('castBitrateSelect')?.querySelector(`option[value="${bitrateKbps}"]`)) {
+      $('castBitrateSelect').value = String(bitrateKbps);
+    }
+    this.persistCastPrefs({ targetFps: fps, bitrateKbps });
     this.sendOpalFrame(TYPE_RESIZE_CONFIG, 0, encodeResizeConfig({ width: w, height: h, dpi, fps, bitrateKbps }));
   }
 

@@ -155,6 +155,28 @@ export function decodeFrame(bufferOrU8) {
 
 // ---- Uplink encoders (Web -> Android) ----
 
+export function fitDimensionsToMaxBounds(reqW, reqH, maxW, maxH, align = 8) {
+  const step = Math.max(2, align & ~1);
+  let w = Math.max(320, Math.round(reqW) & ~(step - 1));
+  let h = Math.max(320, Math.round(reqH) & ~(step - 1));
+  if (maxW > 0 && maxH > 0 && (w > maxW || h > maxH)) {
+    const scale = Math.min(maxW / w, maxH / h);
+    const capW = Math.floor(maxW / step) * step;
+    const capH = Math.floor(maxH / step) * step;
+    w = Math.min(capW, Math.max(320, Math.floor((w * scale) / step) * step));
+    h = Math.min(capH, Math.max(320, Math.floor((h * scale) / step) * step));
+  }
+  return { width: w, height: h };
+}
+
+export function resolveAutoCodecPreference({ hevcSupported = false, savedCodec = '' } = {}) {
+  if (savedCodec === 'hevc' || savedCodec === 'h264') {
+    if (savedCodec === 'hevc' && !hevcSupported) return 'h264';
+    return savedCodec;
+  }
+  return hevcSupported ? 'hevc' : 'h264';
+}
+
 export function encodeHello({
   clientName = 'OpalDesk Web',
   clientId = '',
@@ -168,6 +190,7 @@ export function encodeHello({
   audioEnabled = true,
   authToken = '',
   transportHint = 'wifi_tls',
+  clientPlatform = 'web',
   sessionRole = SESSION_ROLE_DESKTOP,
   appPackage = '',
   appActivity = '',
@@ -181,12 +204,13 @@ export function encodeHello({
     height: Math.max(320, Math.round(height)),
     dpi: Math.max(120, Math.min(560, Math.round(dpi))),
     fps: Math.max(30, Math.min(120, Math.round(fps))),
-    bitrateKbps: Math.max(2500, Math.min(28000, Math.round(bitrateKbps))),
+    bitrateKbps: Math.max(2500, Math.min(50000, Math.round(bitrateKbps))),
     displayMode,
     audioEnabled: Boolean(audioEnabled),
     authToken,
     pinCode: '',
     transportHint,
+    clientPlatform,
     sessionRole,
     appPackage,
     appActivity,
@@ -212,7 +236,7 @@ export function encodeResizeConfig({
   v.setUint16(2, alignedH, false);
   v.setUint16(4, wireDpi, false);
   v.setUint16(6, Math.round(Math.max(30, Math.min(120, fps)) * 100), false);
-  v.setInt32(8, Math.max(2000, Math.min(28000, Math.round(bitrateKbps))), false);
+  v.setInt32(8, Math.max(2000, Math.min(50000, Math.round(bitrateKbps))), false);
   v.setUint8(12, displayMode & 0xff);
   v.setUint8(13, rotation & 0xff);
   return new Uint8Array(buf);

@@ -5,6 +5,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.SyncFailedException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Single source of truth for crash-safe atomic file persistence (write temp -> fsync -> chmod -> rename).
@@ -14,6 +17,7 @@ public final class AtomicFiles {
     public static final int MODE_DEFAULT = -1;
     public static final int MODE_OWNER_RW = 0600;
     public static final int MODE_WORLD_READABLE = 0644;
+    private static final AtomicLong TMP_SEQ = new AtomicLong();
 
     private AtomicFiles() {}
 
@@ -51,37 +55,62 @@ public final class AtomicFiles {
             throw new IOException("Failed to create parent directory: " + parent.getAbsolutePath());
         }
 
-        File tmp = new File(parent, "." + absTarget.getName() + "." + System.nanoTime() + ".tmp");
+        File tmp = new File(
+                parent,
+                "." + absTarget.getName() + "." + System.nanoTime() + "." + TMP_SEQ.incrementAndGet() + ".tmp");
         boolean renamed = false;
         try {
-            try (FileOutputStream fos = new FileOutputStream(tmp, false)) {
-                fos.write(data);
-                fos.flush();
-                try {
-                    fos.getFD().sync();
-                } catch (SyncFailedException sfe) {
-                    System.err.println("OPALDESK_ATOMIC_FSYNC_WARN file=" + absTarget.getAbsolutePath()
-                            + ": " + sfe.getMessage());
-                }
-            }
-
+            writeAndSync(tmp, data, absTarget.getAbsolutePath());
             applyMode(tmp, mode);
 
-            if (!tmp.renameTo(absTarget)) {
-                if (absTarget.exists() && !absTarget.delete()) {
-                    throw new IOException("Failed to remove existing target before rename: "
-                            + absTarget.getAbsolutePath());
-                }
-                if (!tmp.renameTo(absTarget)) {
-                    throw new IOException("Failed to rename temp file " + tmp.getName()
-                            + " to " + absTarget.getAbsolutePath());
+            IOException moveFailure = null;
+            try {
+                Files.move(tmp.toPath(), absTarget.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                renamed = true;
+            } catch (IOException moveErr) {
+                moveFailure = moveErr;
+                if (tmp.renameTo(absTarget)) {
+                    renamed = true;
                 }
             }
-            renamed = true;
+
+            if (!renamed) {
+                // On Android /data/local/tmp (sticky bit 1777), replacing a pre-existing file owned by
+                // a different UID (e.g. previous root launch before dropping to uid=2000) can reject
+                // rename() even when the target is writable; fall back to direct synced overwrite.
+                try {
+                    writeAndSync(absTarget, data, absTarget.getAbsolutePath());
+                    applyMode(absTarget, mode);
+                } catch (IOException directErr) {
+                    IOException combined = new IOException(
+                            "Failed to rename temp file " + tmp.getName()
+                                    + " to " + absTarget.getAbsolutePath()
+                                    + " (" + (moveFailure != null ? moveFailure.getMessage() : "renameTo=false")
+                                    + "); direct fallback failed: " + directErr.getMessage(),
+                            directErr);
+                    if (moveFailure != null) {
+                        combined.addSuppressed(moveFailure);
+                    }
+                    throw combined;
+                }
+            }
         } finally {
             if (!renamed && tmp.exists() && !tmp.delete()) {
                 System.err.println("OPALDESK_ATOMIC_TMP_CLEANUP_WARN failed to delete "
                         + tmp.getAbsolutePath());
+            }
+        }
+    }
+
+    private static void writeAndSync(File file, byte[] data, String logicalPath) throws IOException {
+        try (FileOutputStream fos = new FileOutputStream(file, false)) {
+            fos.write(data);
+            fos.flush();
+            try {
+                fos.getFD().sync();
+            } catch (SyncFailedException sfe) {
+                System.err.println("OPALDESK_ATOMIC_FSYNC_WARN file=" + logicalPath
+                        + ": " + sfe.getMessage());
             }
         }
     }
