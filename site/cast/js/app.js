@@ -639,6 +639,7 @@ class OpalCastWebApp {
       this.toggleFullscreen();
       this.input.focusIme();
     });
+    document.addEventListener('fullscreenchange', () => this.syncFullscreenUi());
 
     // Quality popover
     $('tbQualityBtn').addEventListener('click', () => {
@@ -1776,8 +1777,12 @@ class OpalCastWebApp {
   syncMicUi() {
     const btn = $('tbMicBtn');
     if (!btn) return;
-    btn.classList.toggle('active', Boolean(this.micEnabled));
-    btn.textContent = this.micEnabled ? '麦已开' : '麦克风';
+    const on = Boolean(this.micEnabled);
+    btn.classList.toggle('active-emerald', on);
+    btn.classList.remove('active');
+    const tip = on ? '麦克风已开启 · 点击关闭' : '向手机回传本机麦克风声音';
+    btn.title = tip;
+    btn.setAttribute('aria-label', on ? '关闭麦克风' : '麦克风');
   }
 
   async toggleRemoteCamera() {
@@ -1822,30 +1827,69 @@ class OpalCastWebApp {
   syncCameraUi() {
     const btn = $('tbCameraBtn');
     if (!btn) return;
-    btn.classList.toggle('active', Boolean(this.cameraEnabled));
-    btn.textContent = this.cameraEnabled ? '镜头已开' : '摄像头';
+    const on = Boolean(this.cameraEnabled);
+    btn.classList.toggle('active-emerald', on);
+    btn.classList.remove('active');
+    const tip = on ? '摄像头映射已开启 · 点击关闭' : 'Root 后开启：向手机映射本机摄像头';
+    btn.title = tip;
+    btn.setAttribute('aria-label', on ? '关闭摄像头' : '摄像头');
   }
 
   syncKeyboardUi(open) {
     const btn = $('tbKeyboardBtn');
     if (!btn) return;
-    btn.classList.toggle('active', Boolean(open));
-    btn.textContent = open ? '收起键盘' : '键盘';
+    const on = Boolean(open);
+    btn.classList.toggle('active', on);
+    const tip = on ? '收起软键盘' : '弹出 / 收起软键盘';
+    btn.title = tip;
+    btn.setAttribute('aria-label', on ? '收起键盘' : '软键盘');
   }
 
   syncAudioUi(st) {
     const btn = $('tbAudioBtn');
+    if (!btn) return;
+    const onIcon = btn.querySelector('.tb-icon-sound-on');
+    const offIcon = btn.querySelector('.tb-icon-sound-off');
+    const lbl = btn.querySelector('.tb-inline-label');
     if (st.needsGesture) {
-      btn.textContent = '点此出声';
+      if (onIcon) onIcon.hidden = false;
+      if (offIcon) offIcon.hidden = true;
+      if (lbl) {
+        lbl.textContent = '点此出声';
+        lbl.hidden = false;
+      }
       btn.classList.add('active');
+      btn.title = '点此解锁并播放声音';
+      btn.setAttribute('aria-label', '点此出声');
       this.showToast('浏览器需要手势以解锁音频', '开启声音', () => this.audio.resumeFromGesture());
     } else if (st.muted) {
-      btn.textContent = '已静音';
+      if (onIcon) onIcon.hidden = true;
+      if (offIcon) offIcon.hidden = false;
+      if (lbl) lbl.hidden = true;
       btn.classList.remove('active');
+      btn.title = '已静音 · 点击恢复声音';
+      btn.setAttribute('aria-label', '恢复声音');
     } else {
-      btn.textContent = '声音';
+      if (onIcon) onIcon.hidden = false;
+      if (offIcon) offIcon.hidden = true;
+      if (lbl) lbl.hidden = true;
       btn.classList.remove('active');
+      btn.title = '静音 / 开启声音';
+      btn.setAttribute('aria-label', '声音');
     }
+  }
+
+  syncFullscreenUi() {
+    const btn = $('tbFullscreenBtn');
+    if (!btn) return;
+    const isFs = Boolean(document.fullscreenElement);
+    const enterIcon = btn.querySelector('.tb-icon-fs-enter');
+    const exitIcon = btn.querySelector('.tb-icon-fs-exit');
+    if (enterIcon) enterIcon.hidden = isFs;
+    if (exitIcon) exitIcon.hidden = !isFs;
+    btn.classList.toggle('active', isFs);
+    btn.title = isFs ? '退出全屏' : '全屏显示';
+    btn.setAttribute('aria-label', isFs ? '退出全屏' : '全屏显示');
   }
 
   bumpToolbarVisibility() {

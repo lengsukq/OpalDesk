@@ -16,7 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,12 +55,16 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
+import io.github.lengsukq.opaldesk.ui.ChromeGlyph
 import io.github.lengsukq.opaldesk.ui.NativeImeBridgeHost
 import io.github.lengsukq.opaldesk.ui.NativeImeHostController
 import io.github.lengsukq.opaldesk.ui.OpalButton
 import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.OpalText
 import io.github.lengsukq.opaldesk.ui.OpalTheme
+import io.github.lengsukq.opaldesk.ui.OpalTopPillChip
+import io.github.lengsukq.opaldesk.ui.OpalTopPillDivider
+import io.github.lengsukq.opaldesk.ui.OpalTopPillIconButton
 import io.github.lengsukq.opaldesk.ui.WorkstationKeyDispatcher
 import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
 import io.github.lengsukq.opaldesk.ui.rememberNativeImeHostController
@@ -97,6 +103,7 @@ class PeerCastViewerActivity : ComponentActivity() {
     private var videoH by mutableIntStateOf(1080)
     private var videoFps by mutableIntStateOf(60)
     private var toolbarExpanded by mutableStateOf(true)
+    private var toolbarInteractTick by mutableIntStateOf(0)
     private var micEnabled by mutableStateOf(false)
     private var cameraEnabled by mutableStateOf(false)
     private var cameraFacing by mutableStateOf("front")
@@ -200,9 +207,9 @@ class PeerCastViewerActivity : ComponentActivity() {
         setContent {
             OpalTheme {
                 val imeController = rememberNativeImeHostController()
-                LaunchedEffect(connected) {
-                    if (connected && toolbarExpanded) {
-                        kotlinx.coroutines.delay(2_200L)
+                LaunchedEffect(connected, toolbarExpanded, toolbarInteractTick, showAppPicker) {
+                    if (connected && toolbarExpanded && !showAppPicker) {
+                        kotlinx.coroutines.delay(if (toolbarInteractTick == 0) 2_200L else 5_000L)
                         toolbarExpanded = false
                     }
                 }
@@ -229,11 +236,26 @@ class PeerCastViewerActivity : ComponentActivity() {
                         imeVisible = imeVisible,
                         composingText = composingText,
                         imeController = imeController,
-                        onToggleToolbar = { toolbarExpanded = !toolbarExpanded },
-                        onToggleMic = { toggleRemoteMic() },
-                        onToggleCamera = { toggleRemoteCamera() },
-                        onFlipCamera = { flipRemoteCamera() },
-                        onToggleIme = { imeController.toggleKeyboard(imeVisible) },
+                        onToggleToolbar = {
+                            toolbarExpanded = !toolbarExpanded
+                            if (toolbarExpanded) toolbarInteractTick += 1
+                        },
+                        onToggleMic = {
+                            toolbarInteractTick += 1
+                            toggleRemoteMic()
+                        },
+                        onToggleCamera = {
+                            toolbarInteractTick += 1
+                            toggleRemoteCamera()
+                        },
+                        onFlipCamera = {
+                            toolbarInteractTick += 1
+                            flipRemoteCamera()
+                        },
+                        onToggleIme = {
+                            toolbarInteractTick += 1
+                            imeController.toggleKeyboard(imeVisible)
+                        },
                         onImeVisibilityChanged = { vis ->
                             imeVisible = vis
                             if (!vis) composingText = ""
@@ -262,14 +284,27 @@ class PeerCastViewerActivity : ComponentActivity() {
                             c.handleGenericMouseMotion(ev, w, h)
                         },
                         onOpenFloatingPicker = {
+                            toolbarExpanded = false
                             client?.requestAppList()
                             showAppPicker = true
                         },
                         onRetryConnect = { startPeerSession() },
-                        onSendBack = { client?.sendSystemAction(OpalCastPeerClient.SYS_BACK) },
-                        onSendHome = { client?.sendSystemAction(OpalCastPeerClient.SYS_HOME) },
-                        onToggleMode = { client?.sendSystemAction(OpalCastPeerClient.SYS_TOGGLE_DISPLAY_MODE) },
-                        onRequestIdr = { client?.requestKeyFrame() },
+                        onSendBack = {
+                            toolbarInteractTick += 1
+                            client?.sendSystemAction(OpalCastPeerClient.SYS_BACK)
+                        },
+                        onSendHome = {
+                            toolbarInteractTick += 1
+                            client?.sendSystemAction(OpalCastPeerClient.SYS_HOME)
+                        },
+                        onToggleMode = {
+                            toolbarInteractTick += 1
+                            client?.sendSystemAction(OpalCastPeerClient.SYS_TOGGLE_DISPLAY_MODE)
+                        },
+                        onRequestIdr = {
+                            toolbarInteractTick += 1
+                            client?.requestKeyFrame()
+                        },
                         onDisconnect = { finish() },
                     )
 
@@ -740,12 +775,13 @@ private fun PeerCastViewerContent(
             }
         }
 
-        // Top floating Liquid Frosted Glass remote control pill (TopCenter so it never blocks Top-Right Status Bar)
+        // Unified Top-Center Liquid Frosted Glass remote control pill (icons for universal actions,
+        // concise text kept for OpalDesk-specific actions & safe Disconnect)
         if (toolbarExpanded) {
             Row(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 10.dp, start = 12.dp, end = 12.dp)
+                    .padding(top = 8.dp, start = 12.dp, end = 12.dp)
                     .liquidGlassSurface(
                         shape = CircleShape,
                         fill = OpalPalette.LiquidDockFill,
@@ -753,9 +789,9 @@ private fun PeerCastViewerContent(
                         elevation = 18.dp,
                     )
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 13.dp, vertical = 7.dp),
+                    .padding(horizontal = 11.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Box(
                     modifier = Modifier
@@ -768,102 +804,141 @@ private fun PeerCastViewerContent(
                     fontSize = 11.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
+                    modifier = Modifier.widthIn(max = 210.dp),
                 )
-                PillChip(
-                    label = if (micEnabled) "麦已开" else "麦克风",
-                    tint = if (micEnabled) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
+                OpalTopPillDivider()
+                OpalTopPillIconButton(
+                    glyph = ChromeGlyph.MIC,
+                    contentDescription = if (micEnabled) "关闭麦克风" else "开启麦克风",
                     active = micEnabled,
+                    activeColor = OpalPalette.AccentEmerald,
                     onClick = onToggleMic,
                 )
-                PillChip(
-                    label = if (cameraEnabled) "摄像头已开" else "摄像头",
-                    tint = if (cameraEnabled) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
+                OpalTopPillIconButton(
+                    glyph = ChromeGlyph.CAMERA,
+                    contentDescription = if (cameraEnabled) "关闭摄像头" else "开启摄像头",
                     active = cameraEnabled,
+                    activeColor = OpalPalette.AccentEmerald,
                     onClick = onToggleCamera,
                 )
                 if (cameraEnabled) {
-                    PillChip(
-                        label = if (cameraFacing == "back") "后摄⇄" else "前摄⇄",
+                    OpalTopPillChip(
+                        label = if (cameraFacing == "back") "后" else "前",
+                        glyph = ChromeGlyph.CAMERA_FLIP,
                         tint = OpalPalette.AccentCyan,
+                        active = true,
+                        activeColor = OpalPalette.AccentCyan,
                         onClick = onFlipCamera,
                     )
                 }
-                PillChip(
-                    label = if (imeVisible) "收起输入法" else "输入法",
-                    tint = if (imeVisible) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
+                OpalTopPillIconButton(
+                    glyph = ChromeGlyph.KEYBOARD,
+                    contentDescription = if (imeVisible) "收起输入法" else "输入法",
                     active = imeVisible,
+                    activeColor = OpalPalette.AccentBlue,
                     onClick = onToggleIme,
                 )
-                PillChip("应用悬浮窗", tint = OpalPalette.AccentBlue, onClick = onOpenFloatingPicker)
-                PillChip("返回", onClick = onSendBack)
-                PillChip("桌面", onClick = onSendHome)
-                PillChip("镜像/桌面", onClick = onToggleMode)
-                PillChip("刷新", onClick = onRequestIdr)
-                PillChip("收起", onClick = onToggleToolbar)
-                PillChip("断开", tint = OpalPalette.AccentDanger, onClick = onDisconnect)
+                OpalTopPillDivider()
+                OpalTopPillChip(
+                    label = "悬浮窗",
+                    tint = OpalPalette.AccentBlue,
+                    active = true,
+                    activeColor = OpalPalette.AccentBlue,
+                    onClick = onOpenFloatingPicker,
+                )
+                OpalTopPillChip(
+                    label = "镜像/桌面",
+                    onClick = onToggleMode,
+                )
+                OpalTopPillDivider()
+                OpalTopPillIconButton(
+                    glyph = ChromeGlyph.BACK,
+                    contentDescription = "返回",
+                    onClick = onSendBack,
+                )
+                OpalTopPillIconButton(
+                    glyph = ChromeGlyph.HOME_HOUSE,
+                    contentDescription = "桌面",
+                    onClick = onSendHome,
+                )
+                OpalTopPillIconButton(
+                    glyph = ChromeGlyph.RELOAD,
+                    contentDescription = "刷新画面",
+                    onClick = onRequestIdr,
+                )
+                OpalTopPillDivider()
+                OpalTopPillIconButton(
+                    glyph = ChromeGlyph.CHEVRON_UP,
+                    contentDescription = "收起",
+                    tint = OpalPalette.TextSecondary,
+                    onClick = onToggleToolbar,
+                )
+                OpalTopPillChip(
+                    label = "断开",
+                    danger = true,
+                    onClick = onDisconnect,
+                )
             }
         } else {
             Row(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 2.dp)
+                    .padding(top = 3.dp)
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures { _, dragAmount ->
+                            if (dragAmount > 6f) onToggleToolbar()
+                        }
+                    }
                     .liquidGlassSurface(
                         shape = CircleShape,
                         fill = OpalPalette.LiquidDockFill,
                         rim = OpalPalette.LiquidGlassRim,
                         elevation = 12.dp,
                     )
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 if (micEnabled) {
-                    PillChip(
-                        label = "麦已开",
-                        tint = OpalPalette.AccentEmerald,
+                    OpalTopPillIconButton(
+                        glyph = ChromeGlyph.MIC,
+                        contentDescription = "关闭麦克风",
                         active = true,
+                        activeColor = OpalPalette.AccentEmerald,
                         onClick = onToggleMic,
                     )
                 }
                 if (cameraEnabled) {
-                    PillChip(
-                        label = "摄像头已开",
-                        tint = OpalPalette.AccentEmerald,
+                    OpalTopPillIconButton(
+                        glyph = ChromeGlyph.CAMERA,
+                        contentDescription = "关闭摄像头",
                         active = true,
+                        activeColor = OpalPalette.AccentEmerald,
                         onClick = onToggleCamera,
                     )
-                    PillChip(
-                        label = if (cameraFacing == "back") "后摄⇄" else "前摄⇄",
+                    OpalTopPillChip(
+                        label = if (cameraFacing == "back") "后" else "前",
+                        glyph = ChromeGlyph.CAMERA_FLIP,
                         tint = OpalPalette.AccentCyan,
+                        active = true,
+                        activeColor = OpalPalette.AccentCyan,
                         onClick = onFlipCamera,
                     )
                 }
-                PillChip(
-                    label = if (imeVisible) "收起输入法" else "输入法",
-                    tint = if (imeVisible) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
+                OpalTopPillIconButton(
+                    glyph = ChromeGlyph.KEYBOARD,
+                    contentDescription = if (imeVisible) "收起输入法" else "输入法",
                     active = imeVisible,
+                    activeColor = OpalPalette.AccentBlue,
                     onClick = onToggleIme,
                 )
-                PillChip("投屏控制", onClick = onToggleToolbar)
+                OpalTopPillIconButton(
+                    glyph = ChromeGlyph.CHEVRON_DOWN,
+                    contentDescription = "展开投屏控制",
+                    tint = OpalPalette.TextSecondary,
+                    onClick = onToggleToolbar,
+                )
             }
         }
-    }
-}
-
-@Composable
-private fun PillChip(
-    label: String,
-    tint: Color = OpalPalette.TextPrimary,
-    active: Boolean = false,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .clip(CircleShape)
-            .background(if (active) OpalPalette.ChipActiveFill else OpalPalette.ChipFill)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 9.dp, vertical = 4.dp),
-    ) {
-        OpalText(text = label, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = tint, maxLines = 1)
     }
 }

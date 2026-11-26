@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -174,15 +175,21 @@ fun DexTrackpadScreen(
             )
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
+                    .align(Alignment.TopCenter)
                     .systemBarsPadding()
-                    .padding(16.dp)
+                    .padding(top = 10.dp)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.10f))
+                    .background(Color.White.copy(alpha = 0.12f))
+                    .border(0.6.dp, Color.White.copy(alpha = 0.20f), CircleShape)
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures { _, dragAmount ->
+                            if (dragAmount > 6f) oledDimMode = false
+                        }
+                    }
                     .clickable { oledDimMode = false }
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
             ) {
-                OpalText(text = "点亮控制栏", fontSize = 11.5.sp, color = Color(0xFF94A3B8))
+                OpalText(text = "点亮控制栏", fontSize = 11.5.sp, color = Color(0xFFCBD5E1))
             }
         }
         return

@@ -315,17 +315,37 @@
         <span id="stageTelemetry" class="mono tb-meta">等待画面…</span>
       </div>
       <div class="tb-actions">
-        <button id="tbBackBtn" type="button" class="tb-btn" title="返回 (Esc / 右键)">返回</button>
-        <button id="tbHomeBtn" type="button" class="tb-btn" title="显示桌面">桌面</button>
+        <button id="tbBackBtn" type="button" class="tb-btn tb-icon-btn" title="返回 (Esc / 右键)" aria-label="返回">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 3.2L5.5 8l5 4.8" /></svg>
+        </button>
+        <button id="tbHomeBtn" type="button" class="tb-btn tb-icon-btn" title="显示桌面" aria-label="显示桌面">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.2 7.8L8 2.6l5.8 5.2M4 7.2v5.8h8V7.2" /></svg>
+        </button>
+        <span class="tb-sep" aria-hidden="true"></span>
         <button id="tbBlackoutBtn" type="button" class="tb-btn" title="一键熄灭 / 点亮手机主屏 (Alt+Shift+B)">黑屏</button>
         <button id="tbAppsBtn" type="button" class="tb-btn" title="打开手机应用或独立小窗">应用</button>
         <button id="tbInputModeBtn" type="button" class="tb-btn active" title="切换左键拖拽模式：触控滑动（推荐） / 鼠标指针">触控</button>
-        <button id="tbKeyboardBtn" type="button" class="tb-btn" title="弹出 / 收起软键盘">键盘</button>
-        <button id="tbMicBtn" type="button" class="tb-btn" title="向手机回传本机麦克风声音">麦克风</button>
-        <button id="tbCameraBtn" type="button" class="tb-btn" title="Root 后开启：向手机映射本机摄像头">摄像头</button>
-        <button id="tbAudioBtn" type="button" class="tb-btn" title="静音 / 开启声音">声音</button>
         <button id="tbQualityBtn" type="button" class="tb-btn" title="分辨率与刷新率">画质</button>
-        <button id="tbFullscreenBtn" type="button" class="tb-btn" title="全屏显示">全屏</button>
+        <span class="tb-sep" aria-hidden="true"></span>
+        <button id="tbKeyboardBtn" type="button" class="tb-btn tb-icon-btn" title="弹出 / 收起软键盘" aria-label="软键盘">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="3.5" width="13" height="9" rx="1.8" /><path d="M4.2 6.8h.01M6.7 6.8h.01M9.3 6.8h.01M11.8 6.8h.01M4.8 9.8h6.4" /></svg>
+        </button>
+        <button id="tbMicBtn" type="button" class="tb-btn tb-icon-btn" title="向手机回传本机麦克风声音" aria-label="麦克风">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.8" width="5" height="7.4" rx="2.5" /><path d="M3.2 7.4a4.8 4.8 0 0 0 9.6 0M8 12.2v2.2M5.2 14.4h5.6" /></svg>
+        </button>
+        <button id="tbCameraBtn" type="button" class="tb-btn tb-icon-btn" title="Root 后开启：向手机映射本机摄像头" aria-label="摄像头">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="3.8" width="8.6" height="8.4" rx="1.8" /><path d="M10.3 6.4l4.2-2.1v7.4l-4.2-2.1z" /></svg>
+        </button>
+        <button id="tbAudioBtn" type="button" class="tb-btn tb-icon-btn" title="静音 / 开启声音" aria-label="声音">
+          <svg class="tb-icon-sound-on" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.2 6.2h2.7l3.4-2.8v9.2L4.9 9.8H2.2zM11 5.6a3.4 3.4 0 0 1 0 4.8M12.9 3.8a6 6 0 0 1 0 8.4" /></svg>
+          <svg class="tb-icon-sound-off" viewBox="0 0 16 16" aria-hidden="true" hidden><path d="M2.2 6.2h2.7l3.4-2.8v9.2L4.9 9.8H2.2zM10.8 6l3.6 4M14.4 6l-3.6 4" /></svg>
+          <span class="tb-inline-label" hidden>点此出声</span>
+        </button>
+        <button id="tbFullscreenBtn" type="button" class="tb-btn tb-icon-btn" title="全屏显示" aria-label="全屏显示">
+          <svg class="tb-icon-fs-enter" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.4 6V2.4H6M10 2.4h3.6V6M13.6 10v3.6H10M6 13.6H2.4V10" /></svg>
+          <svg class="tb-icon-fs-exit" viewBox="0 0 16 16" aria-hidden="true" hidden><path d="M2.4 6H6V2.4M13.6 6H10V2.4M13.6 10H10v3.6M2.4 10H6v3.6" /></svg>
+        </button>
+        <span class="tb-sep" aria-hidden="true"></span>
         <button id="tbDisconnectBtn" type="button" class="tb-btn danger" title="断开投屏">断开</button>
       </div>
     </div>

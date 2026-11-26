@@ -61,11 +61,14 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.pointer.isBackPressed
 import androidx.compose.ui.input.pointer.isForwardPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
@@ -937,6 +940,117 @@ enum class ChromeGlyph {
     EXTERNAL_MONITOR,
     LOCK,
     SCREEN_OFF,
+    MIC,
+    CAMERA,
+    CAMERA_FLIP,
+    HOME_HOUSE,
+    EXIT_FULLSCREEN,
+    CHEVRON_UP,
+    CHEVRON_DOWN,
+}
+
+/**
+ * Compact capsule icon button shared by top-center floating control pills (Fullscreen overlay & PeerCast bar).
+ */
+@Composable
+fun OpalTopPillIconButton(
+    glyph: ChromeGlyph,
+    contentDescription: String,
+    tint: Color = OpalPalette.TextPrimary,
+    active: Boolean = false,
+    activeColor: Color = OpalPalette.AccentBlue,
+    onClick: () -> Unit,
+) {
+    val effectiveTint = if (active) activeColor else tint
+    val bg = if (active) {
+        activeColor.copy(alpha = if (OpalPalette.isDark) 0.24f else 0.16f)
+    } else {
+        OpalPalette.ChipFill
+    }
+    val borderColor = if (active) {
+        activeColor.copy(alpha = if (OpalPalette.isDark) 0.48f else 0.36f)
+    } else {
+        Color.Transparent
+    }
+    Box(
+        modifier = Modifier
+            .size(width = 30.dp, height = 26.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .border(0.8.dp, borderColor, CircleShape)
+            .semantics { this.contentDescription = contentDescription }
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        OpalGlyphIcon(glyph = glyph, tint = effectiveTint, size = 13.5.dp)
+    }
+}
+
+/**
+ * Matching-height capsule text (or optional leading icon + text) chip for domain-specific top-pill actions
+ * whose semantics are clearer with concise wording than an icon alone.
+ */
+@Composable
+fun OpalTopPillChip(
+    label: String,
+    glyph: ChromeGlyph? = null,
+    tint: Color = OpalPalette.TextPrimary,
+    active: Boolean = false,
+    activeColor: Color = OpalPalette.AccentBlue,
+    filled: Boolean = false,
+    danger: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val accent = if (danger) OpalPalette.AccentDanger else activeColor
+    val bg = when {
+        filled -> accent
+        danger -> OpalPalette.AccentDanger.copy(alpha = if (OpalPalette.isDark) 0.20f else 0.12f)
+        active -> accent.copy(alpha = if (OpalPalette.isDark) 0.22f else 0.14f)
+        else -> OpalPalette.ChipFill
+    }
+    val borderColor = when {
+        filled -> Color.White.copy(alpha = 0.22f)
+        danger -> OpalPalette.AccentDanger.copy(alpha = if (OpalPalette.isDark) 0.42f else 0.30f)
+        active -> accent.copy(alpha = if (OpalPalette.isDark) 0.42f else 0.30f)
+        else -> Color.Transparent
+    }
+    val contentTint = when {
+        filled -> Color.White
+        danger -> OpalPalette.AccentDanger
+        else -> tint
+    }
+    Row(
+        modifier = Modifier
+            .height(26.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .border(0.8.dp, borderColor, CircleShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = if (glyph != null) 8.dp else 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (glyph != null) {
+            OpalGlyphIcon(glyph = glyph, tint = contentTint, size = 12.dp)
+        }
+        OpalText(
+            text = label,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = contentTint,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+fun OpalTopPillDivider() {
+    Box(
+        modifier = Modifier
+            .width(1.dp)
+            .height(14.dp)
+            .background(OpalPalette.DividerColor),
+    )
 }
 
 @Composable
@@ -1102,6 +1216,115 @@ fun OpalGlyphIcon(
                     style = Stroke(width = sw, cap = StrokeCap.Round),
                 )
                 drawLine(tint, Offset(w * 0.50f, h * 0.10f), Offset(w * 0.50f, h * 0.46f), sw, StrokeCap.Round)
+            }
+            ChromeGlyph.MIC -> {
+                drawRoundRect(
+                    tint,
+                    Offset(w * 0.34f, h * 0.10f),
+                    Size(w * 0.32f, h * 0.46f),
+                    CornerRadius(w * 0.16f),
+                    Stroke(sw),
+                )
+                drawArc(
+                    color = tint,
+                    startAngle = 0f,
+                    sweepAngle = 180f,
+                    useCenter = false,
+                    topLeft = Offset(w * 0.20f, h * 0.24f),
+                    size = Size(w * 0.60f, h * 0.46f),
+                    style = Stroke(width = sw, cap = StrokeCap.Round),
+                )
+                drawLine(tint, Offset(w * 0.50f, h * 0.70f), Offset(w * 0.50f, h * 0.88f), sw, StrokeCap.Round)
+                drawLine(tint, Offset(w * 0.32f, h * 0.88f), Offset(w * 0.68f, h * 0.88f), sw, StrokeCap.Round)
+            }
+            ChromeGlyph.CAMERA -> {
+                drawRoundRect(
+                    tint,
+                    Offset(w * 0.08f, h * 0.24f),
+                    Size(w * 0.54f, h * 0.52f),
+                    CornerRadius(2.2.dp.toPx()),
+                    Stroke(sw),
+                )
+                val lens = Path().apply {
+                    moveTo(w * 0.64f, h * 0.40f)
+                    lineTo(w * 0.92f, h * 0.27f)
+                    lineTo(w * 0.92f, h * 0.73f)
+                    lineTo(w * 0.64f, h * 0.60f)
+                    close()
+                }
+                drawPath(lens, tint, style = Stroke(width = sw * 0.95f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            }
+            ChromeGlyph.CAMERA_FLIP -> {
+                drawArc(
+                    color = tint,
+                    startAngle = 210f,
+                    sweepAngle = 125f,
+                    useCenter = false,
+                    topLeft = Offset(w * 0.16f, h * 0.16f),
+                    size = Size(w * 0.68f, h * 0.68f),
+                    style = Stroke(width = sw * 0.95f, cap = StrokeCap.Round),
+                )
+                drawLine(tint, Offset(w * 0.68f, h * 0.28f), Offset(w * 0.82f, h * 0.34f), sw * 0.95f, StrokeCap.Round)
+                drawLine(tint, Offset(w * 0.82f, h * 0.19f), Offset(w * 0.82f, h * 0.34f), sw * 0.95f, StrokeCap.Round)
+                drawArc(
+                    color = tint,
+                    startAngle = 30f,
+                    sweepAngle = 125f,
+                    useCenter = false,
+                    topLeft = Offset(w * 0.16f, h * 0.16f),
+                    size = Size(w * 0.68f, h * 0.68f),
+                    style = Stroke(width = sw * 0.95f, cap = StrokeCap.Round),
+                )
+                drawLine(tint, Offset(w * 0.32f, h * 0.72f), Offset(w * 0.18f, h * 0.66f), sw * 0.95f, StrokeCap.Round)
+                drawLine(tint, Offset(w * 0.18f, h * 0.81f), Offset(w * 0.18f, h * 0.66f), sw * 0.95f, StrokeCap.Round)
+            }
+            ChromeGlyph.HOME_HOUSE -> {
+                val roof = Path().apply {
+                    moveTo(w * 0.12f, h * 0.48f)
+                    lineTo(w * 0.50f, h * 0.15f)
+                    lineTo(w * 0.88f, h * 0.48f)
+                }
+                drawPath(roof, tint, style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                val walls = Path().apply {
+                    moveTo(w * 0.24f, h * 0.44f)
+                    lineTo(w * 0.24f, h * 0.84f)
+                    lineTo(w * 0.76f, h * 0.84f)
+                    lineTo(w * 0.76f, h * 0.44f)
+                }
+                drawPath(walls, tint, style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            }
+            ChromeGlyph.EXIT_FULLSCREEN -> {
+                val stroke = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                val corners = listOf(
+                    Triple(Offset(w * 0.14f, h * 0.38f), Offset(w * 0.38f, h * 0.38f), Offset(w * 0.38f, h * 0.14f)),
+                    Triple(Offset(w * 0.86f, h * 0.38f), Offset(w * 0.62f, h * 0.38f), Offset(w * 0.62f, h * 0.14f)),
+                    Triple(Offset(w * 0.14f, h * 0.62f), Offset(w * 0.38f, h * 0.62f), Offset(w * 0.38f, h * 0.86f)),
+                    Triple(Offset(w * 0.86f, h * 0.62f), Offset(w * 0.62f, h * 0.62f), Offset(w * 0.62f, h * 0.86f)),
+                )
+                corners.forEach { (a, b, c) ->
+                    val p = Path().apply {
+                        moveTo(a.x, a.y)
+                        lineTo(b.x, b.y)
+                        lineTo(c.x, c.y)
+                    }
+                    drawPath(p, tint, style = stroke)
+                }
+            }
+            ChromeGlyph.CHEVRON_UP -> {
+                val p = Path().apply {
+                    moveTo(w * 0.20f, h * 0.64f)
+                    lineTo(w * 0.50f, h * 0.34f)
+                    lineTo(w * 0.80f, h * 0.64f)
+                }
+                drawPath(p, tint, style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            }
+            ChromeGlyph.CHEVRON_DOWN -> {
+                val p = Path().apply {
+                    moveTo(w * 0.20f, h * 0.36f)
+                    lineTo(w * 0.50f, h * 0.66f)
+                    lineTo(w * 0.80f, h * 0.36f)
+                }
+                drawPath(p, tint, style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round))
             }
         }
     }

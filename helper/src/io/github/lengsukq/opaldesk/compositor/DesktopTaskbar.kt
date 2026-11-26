@@ -9,6 +9,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.KeyEvent
 import androidx.compose.foundation.Image
@@ -44,6 +45,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -53,6 +55,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -74,6 +78,9 @@ import io.github.lengsukq.opaldesk.ui.OpalStatusBadge
 import io.github.lengsukq.opaldesk.ui.OpalSwitchRow
 import io.github.lengsukq.opaldesk.ui.OpalText
 import io.github.lengsukq.opaldesk.ui.OpalTextInput
+import io.github.lengsukq.opaldesk.ui.OpalTopPillChip
+import io.github.lengsukq.opaldesk.ui.OpalTopPillDivider
+import io.github.lengsukq.opaldesk.ui.OpalTopPillIconButton
 import io.github.lengsukq.opaldesk.ui.TilingLayoutPreviewIcon
 import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
 import io.github.lengsukq.opaldesk.ui.onTapOrContextAction
@@ -2410,9 +2417,15 @@ private fun ContextMenuRow(
     }
 }
 
+private const val FULLSCREEN_INITIAL_REVEAL_MS = 2_200L
+private const val FULLSCREEN_AUTO_HIDE_MS = 4_500L
+private const val FULLSCREEN_COLLAPSE_HOVER_GUARD_MS = 650L
+
 /**
- * Unobtrusive Top-Center Pull-Down / Tap Handle shown exclusively during True App Fullscreen mode
- * (watching video / gaming), letting the user exit fullscreen, return to desktop, or open Control Center.
+ * Unified Top-Center Pull-Down / Tap / Mouse-Hover Control Pill shown during True App Fullscreen mode
+ * (local DeX, USB-C/HDMI external monitor, Miracast, and USB/Wireless cast desktops).
+ *
+ * Collapses into a minimal top-center grab handle so it never overlaps an app's top-right action bar.
  */
 @Composable
 fun FullscreenExitOverlay(
@@ -2422,58 +2435,106 @@ fun FullscreenExitOverlay(
     onOpenControlCenter: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(true) }
+    var initialReveal by remember { mutableStateOf(true) }
+    var isPointerHovering by remember { mutableStateOf(false) }
+    var manualCollapseAtMs by remember { mutableLongStateOf(0L) }
 
-    LaunchedEffect(expanded) {
-        if (expanded) {
-            delay(4_500L)
-            expanded = false
-        }
+    LaunchedEffect(expanded, isPointerHovering, initialReveal) {
+        if (!expanded || isPointerHovering) return@LaunchedEffect
+        delay(if (initialReveal) FULLSCREEN_INITIAL_REVEAL_MS else FULLSCREEN_AUTO_HIDE_MS)
+        initialReveal = false
+        expanded = false
     }
 
     Box(
         modifier = modifier,
-        contentAlignment = Alignment.TopEnd,
+        contentAlignment = Alignment.TopCenter,
     ) {
         if (!expanded) {
             Box(
                 modifier = Modifier
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.28f))
-                    .border(0.6.dp, Color.White.copy(alpha = 0.34f), CircleShape)
+                    .width(104.dp)
+                    .height(22.dp)
                     .pointerInput(Unit) {
-                        detectTapGestures { expanded = true }
+                        detectTapGestures {
+                            initialReveal = false
+                            expanded = true
+                        }
                     }
                     .pointerInput(Unit) {
                         detectVerticalDragGestures { _, dragAmount ->
-                            if (dragAmount > 6f) expanded = true
+                            if (dragAmount > 6f) {
+                                initialReveal = false
+                                expanded = true
+                            }
                         }
                     }
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-                contentAlignment = Alignment.Center,
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                if (ev.type == PointerEventType.Enter &&
+                                    ev.changes.any { it.type == PointerType.Mouse }
+                                ) {
+                                    val elapsed = SystemClock.uptimeMillis() - manualCollapseAtMs
+                                    if (elapsed >= FULLSCREEN_COLLAPSE_HOVER_GUARD_MS) {
+                                        initialReveal = false
+                                        expanded = true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(top = 4.dp),
+                contentAlignment = Alignment.TopCenter,
             ) {
-                OpalText(
-                    text = "退出全屏",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color.White.copy(alpha = 0.76f),
-                    maxLines = 1,
-                )
+                // High-contrast translucent grab capsule: visible on both pure-white and pure-black apps
+                Box(
+                    modifier = Modifier
+                        .width(48.dp)
+                        .height(7.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.34f))
+                        .border(0.6.dp, Color.White.copy(alpha = 0.34f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(26.dp)
+                            .height(2.5.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.82f)),
+                    )
+                }
             }
         } else {
             Row(
                 modifier = Modifier
-                    .padding(top = 10.dp, start = 12.dp, end = 12.dp)
+                    .padding(top = 8.dp, start = 12.dp, end = 12.dp)
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                if (ev.changes.any { it.type == PointerType.Mouse }) {
+                                    when (ev.type) {
+                                        PointerEventType.Enter -> isPointerHovering = true
+                                        PointerEventType.Exit -> isPointerHovering = false
+                                    }
+                                }
+                            }
+                        }
+                    }
                     .liquidGlassSurface(
                         shape = CircleShape,
-                        fill = OpalPalette.LiquidPopoverFill,
+                        fill = OpalPalette.LiquidDockFill,
                         rim = OpalPalette.LiquidGlassRim,
-                        elevation = 22.dp,
+                        elevation = 20.dp,
                     )
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 11.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 OpalText(
                     text = windowTitle,
@@ -2481,43 +2542,52 @@ fun FullscreenExitOverlay(
                     fontWeight = FontWeight.SemiBold,
                     color = OpalPalette.TextPrimary,
                     maxLines = 1,
+                    modifier = Modifier.widthIn(max = 128.dp),
                 )
-                OpalButton(
+                OpalTopPillDivider()
+                OpalTopPillChip(
                     label = "退出全屏",
-                    compact = true,
+                    glyph = ChromeGlyph.EXIT_FULLSCREEN,
+                    filled = true,
+                    activeColor = OpalPalette.AccentBlue,
                     onClick = {
+                        isPointerHovering = false
                         expanded = false
                         onExitFullscreen()
                     },
                 )
-                OpalButton(
-                    label = "显示桌面",
-                    compact = true,
-                    filled = false,
-                    accent = OpalPalette.AccentCyan,
+                OpalTopPillChip(
+                    label = "桌面",
+                    glyph = ChromeGlyph.HOME_HOUSE,
+                    tint = OpalPalette.AccentCyan,
+                    active = true,
+                    activeColor = OpalPalette.AccentCyan,
                     onClick = {
+                        isPointerHovering = false
                         expanded = false
                         onReturnToDesktop()
                     },
                 )
-                OpalButton(
-                    label = "控制中心",
-                    compact = true,
-                    filled = false,
+                OpalTopPillIconButton(
+                    glyph = ChromeGlyph.CONTROL_CENTER,
+                    contentDescription = "控制中心",
                     onClick = {
+                        isPointerHovering = false
                         expanded = false
                         onOpenControlCenter()
                     },
                 )
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(OpalPalette.ChipFill)
-                        .clickable { expanded = false }
-                        .padding(horizontal = 9.dp, vertical = 5.dp),
-                ) {
-                    OpalText(text = "隐藏", fontSize = 11.sp, color = OpalPalette.TextSecondary)
-                }
+                OpalTopPillIconButton(
+                    glyph = ChromeGlyph.CHEVRON_UP,
+                    contentDescription = "收起",
+                    tint = OpalPalette.TextSecondary,
+                    onClick = {
+                        isPointerHovering = false
+                        initialReveal = false
+                        manualCollapseAtMs = SystemClock.uptimeMillis()
+                        expanded = false
+                    },
+                )
             }
         }
     }

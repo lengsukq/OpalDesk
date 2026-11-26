@@ -96,82 +96,107 @@ public struct DisplayWindowView: View {
     private var topHoverControlBar: some View {
         VStack(spacing: 0) {
             VStack(spacing: 4) {
-                Color.clear
-                    .frame(height: 18)
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
+                ZStack(alignment: .top) {
+                    Color.clear
+                        .frame(height: 18)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+
+                    if !isHoveringTopEdge {
+                        Capsule()
+                            .fill(.white.opacity(0.36))
+                            .overlay(Capsule().strokeBorder(.black.opacity(0.28), lineWidth: 0.6))
+                            .frame(width: 42, height: 4)
+                            .padding(.top, 5)
+                            .transition(.opacity)
+                    }
+                }
 
                 if isHoveringTopEdge {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         if let conn = model.activeConnection {
                             Text(conn.deviceName)
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.85))
+                                .foregroundStyle(.white.opacity(0.88))
                                 .lineLimit(1)
+                            topBarDivider
                         }
+
+                        Button {
+                            model.toggleMicrophone()
+                        } label: {
+                            Image(systemName: model.isMicEnabled ? "mic.fill" : "mic.slash")
+                                .font(.system(size: 11.5, weight: .medium))
+                                .frame(width: 16, height: 14)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(model.isMicEnabled ? .green : nil)
+                        .controlSize(.small)
+                        .help(model.isMicEnabled ? "关闭麦克风" : "开启麦克风")
+
+                        Button {
+                            model.toggleCamera()
+                        } label: {
+                            Image(systemName: model.isCameraEnabled ? "video.fill" : "video.slash")
+                                .font(.system(size: 11.5, weight: .medium))
+                                .frame(width: 16, height: 14)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(model.isCameraEnabled ? .green : nil)
+                        .controlSize(.small)
+                        .help(model.isCameraEnabled ? "关闭摄像头" : "开启摄像头")
+
+                        topBarDivider
 
                         Button {
                             model.toggleDisplayMode()
                         } label: {
                             Label(
-                                model.displayMode == .dex ? "切融合镜像" : "切电脑桌面",
+                                model.displayMode == .dex ? "融合镜像" : "电脑桌面",
                                 systemImage: model.displayMode == .dex ? "rectangle.on.rectangle" : "macwindow.on.rectangle"
                             )
                             .font(.system(size: 11, weight: .medium))
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
+                        .help(model.displayMode == .dex ? "切换为融合镜像" : "切换为电脑桌面")
 
                         Button {
                             model.toggleBlackout()
                         } label: {
-                            Label(model.isBlackoutActive ? "亮屏" : "黑屏", systemImage: model.isBlackoutActive ? "sun.max.fill" : "moon.fill")
+                            Text(model.isBlackoutActive ? "亮屏" : "黑屏")
                                 .font(.system(size: 11, weight: .medium))
                         }
                         .buttonStyle(.bordered)
+                        .tint(model.isBlackoutActive ? .blue : nil)
                         .controlSize(.small)
+                        .help(model.isBlackoutActive ? "点亮手机屏幕" : "熄灭手机屏幕")
 
-                        Button {
-                            model.toggleMicrophone()
-                        } label: {
-                            Label(model.isMicEnabled ? "麦已开" : "麦克风", systemImage: model.isMicEnabled ? "mic.fill" : "mic.slash")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(model.isMicEnabled ? .green : nil)
-                        .controlSize(.small)
-
-                        Button {
-                            model.toggleCamera()
-                        } label: {
-                            Label(model.isCameraEnabled ? "镜头已开" : "摄像头", systemImage: model.isCameraEnabled ? "video.fill" : "video.slash")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(model.isCameraEnabled ? .green : nil)
-                        .controlSize(.small)
+                        topBarDivider
 
                         Button {
                             model.forceDisconnectAndReturnHome()
                         } label: {
-                            Label("断开连接", systemImage: "rectangle.portrait.and.arrow.right")
+                            Text("断开")
                                 .font(.system(size: 11, weight: .medium))
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
+                        .help("断开连接并返回主界面")
 
                         Button(role: .destructive) {
                             model.forceTerminateApp()
                         } label: {
-                            Label("强制退出", systemImage: "power")
+                            Text("强制退出")
                                 .font(.system(size: 11, weight: .semibold))
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.red.opacity(0.85))
                         .controlSize(.small)
+                        .help("强制退出 OpalDesk")
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
                     .floatingCapsuleChrome(shadowRadius: 10, shadowY: 4, shadowOpacity: 0.38)
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
@@ -180,6 +205,12 @@ public struct DisplayWindowView: View {
 
             Spacer()
         }
+    }
+
+    private var topBarDivider: some View {
+        Rectangle()
+            .fill(.white.opacity(0.18))
+            .frame(width: 1, height: 14)
     }
 
     // MARK: - Optional Top-Right Performance HUD

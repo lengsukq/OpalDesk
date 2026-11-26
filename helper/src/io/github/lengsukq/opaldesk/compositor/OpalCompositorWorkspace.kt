@@ -666,8 +666,7 @@ fun OpalCompositorWorkspace(
                         showControlCenter = next
                     },
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 6.dp, end = 12.dp)
+                        .align(Alignment.TopCenter)
                         .zIndex(10_040f),
                 )
             }
@@ -956,8 +955,12 @@ fun OpalCompositorWorkspace(
                         showExitSlotModal = true
                     },
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = (CompositorGeometry.TOP_BAR_DP + 8f).dp, start = 12.dp, end = 12.dp)
+                        .align(if (fullscreenWin != null) Alignment.TopCenter else Alignment.TopEnd)
+                        .padding(
+                            top = if (fullscreenWin != null) 48.dp else (CompositorGeometry.TOP_BAR_DP + 8f).dp,
+                            start = 12.dp,
+                            end = 12.dp,
+                        )
                         .zIndex(10_020f),
                 )
             }
