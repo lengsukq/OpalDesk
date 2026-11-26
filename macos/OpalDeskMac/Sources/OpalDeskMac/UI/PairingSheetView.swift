@@ -1,27 +1,23 @@
 import OpalDeskCore
 import SwiftUI
 
-/// Secure TOFU pairing dialog displaying the Android host's SHA-256 certificate fingerprint
-/// alongside a 6-digit one-time PIN input field.
+/// Secure TOFU certificate verification and interactive host-consent pairing dialog.
+/// Displays the Android host's SHA-256 certificate fingerprint and sends a pairing request
+/// that the user approves directly on the phone ("永久允许" / "仅本次允许").
 public struct PairingSheetView: View {
     public let context: PairingPromptContext
-    public let onSubmit: (String) -> Void
+    public let onRequestPairing: () -> Void
     public let onCancel: () -> Void
-
-    @State private var pinCode: String = ""
-    @FocusState private var isPinFocused: Bool
 
     public init(
         context: PairingPromptContext,
-        onSubmit: @escaping (String) -> Void,
+        onRequestPairing: @escaping () -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.context = context
-        self.onSubmit = onSubmit
+        self.onRequestPairing = onRequestPairing
         self.onCancel = onCancel
     }
-
-    private var pinLength: Int { DisplayPresets.pairingPinLength }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -30,7 +26,7 @@ public struct PairingSheetView: View {
                     .font(.system(size: 30))
                     .foregroundStyle(Color.accentColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("安全无线配对")
+                    Text("请求与手机配对")
                         .font(.title3.weight(.semibold))
                     Text("\(context.displayName)\(context.model.isEmpty ? "" : " · \(context.model)")")
                         .font(.callout)
@@ -60,32 +56,28 @@ public struct PairingSheetView: View {
                 .padding(.vertical, 10)
                 .opalDeskCardContainer(cornerRadius: 16, borderOpacity: 0.18)
 
-                Text("确认与 Android 端「Mac / 无线大屏」页面上的证书指纹一致后，输入下方 \(pinLength) 位一次性配对码。")
+                Text("确认与 Android 端「共享本机」页面上的证书指纹一致后，点击下方按钮向手机发送连接请求，并在手机弹窗中点击「永久允许」或「仅本次允许」。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            // One-time PIN field
-            VStack(alignment: .leading, spacing: 6) {
-                Text("\(pinLength) 位一次性配对 PIN 码")
-                    .font(.subheadline.weight(.medium))
-
-                TextField(String(repeating: "0", count: pinLength), text: $pinCode)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 22, weight: .semibold, design: .monospaced))
-                    .multilineTextAlignment(.center)
-                    .focused($isPinFocused)
-                    .onChange(of: pinCode) { _, newValue in
-                        let digitsOnly = String(newValue.filter(\.isNumber).prefix(pinLength))
-                        if digitsOnly != newValue {
-                            pinCode = digitsOnly
-                        }
+            if context.isSubmitting {
+                HStack(alignment: .top, spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("已发送配对请求，等待手机端确认…")
+                            .font(.callout.weight(.semibold))
+                        Text("请在手机通知栏或 OpalDesk 弹窗中点击「永久允许」或「仅本次允许」。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .onSubmit {
-                        if pinCode.count == pinLength && !context.isSubmitting {
-                            onSubmit(pinCode)
-                        }
-                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
 
             if let errorMessage = context.errorMessage {
@@ -102,31 +94,22 @@ public struct PairingSheetView: View {
             }
 
             HStack {
-                Button("取消", role: .cancel) {
+                Button(context.isSubmitting ? "取消请求" : "取消", role: .cancel) {
                     onCancel()
                 }
                 .keyboardShortcut(.cancelAction)
 
                 Spacer()
 
-                if context.isSubmitting {
-                    ProgressView()
-                        .controlSize(.small)
-                        .padding(.trailing, 4)
-                }
-
-                Button("信任并连接") {
-                    onSubmit(pinCode)
+                Button(context.isSubmitting ? "等待手机确认…" : (context.errorMessage == nil ? "信任指纹并请求配对" : "重新发送配对请求")) {
+                    onRequestPairing()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(pinCode.count != pinLength || context.isSubmitting)
+                .disabled(context.isSubmitting)
                 .keyboardShortcut(.defaultAction)
             }
         }
         .padding(22)
-        .frame(width: 410)
-        .onAppear {
-            isPinFocused = true
-        }
+        .frame(width: 430)
     }
 }

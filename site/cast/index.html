@@ -72,12 +72,15 @@
 
       <!-- Primary Glass Card -->
       <section class="lobby-card glass-surface">
-        <div class="segmented-bar" role="tablist">
+        <div class="segmented-bar three-tabs" role="tablist">
           <button id="tabCastBtn" type="button" class="seg-btn active" role="tab" aria-selected="true">
             无线 / USB 投屏
           </button>
           <button id="tabActivateBtn" type="button" class="seg-btn" role="tab" aria-selected="false">
             局域网激活引擎
+          </button>
+          <button id="tabLogsBtn" type="button" class="seg-btn" role="tab" aria-selected="false">
+            日志与反馈
           </button>
         </div>
 
@@ -196,6 +199,24 @@
             <button id="connectCastBtn" type="button" class="primary-btn full">开始 Web 投屏</button>
           </div>
 
+          <!-- Recent Standalone Floating App Windows Bar -->
+          <div id="standaloneHistorySection" class="info-box standalone-history-box">
+            <div class="info-box-head">
+              <div class="standalone-history-title-group">
+                <strong>历史 APP 小窗</strong>
+                <span id="standaloneQuotaPill" class="status-pill mono">已开 0/3</span>
+              </div>
+              <div class="standalone-history-actions">
+                <button id="closeAllStandaloneBtn" type="button" class="mini-btn" hidden>关闭全部小窗</button>
+                <button id="clearStandaloneHistoryBtn" type="button" class="text-btn" hidden>清空历史</button>
+              </div>
+            </div>
+            <p class="hint-text">最多同时开启 3 个单应用悬浮小窗；点击历史应用可免开桌面一键打开，已开启时可选择重载或聚焦。</p>
+            <div id="standaloneHistoryList" class="standalone-history-grid">
+              <span class="hint-text">暂无历史小窗记录：点击下方设备卡片的「应用小窗」或在投屏控制栏打开独立小窗后将自动记录。</span>
+            </div>
+          </div>
+
           <!-- Saved recent devices -->
           <div id="recentDevicesWrap" class="recent-wrap" hidden>
             <div class="recent-head">
@@ -296,6 +317,86 @@
             </details>
           </div>
         </div>
+
+        <!-- ===== TAB 3: DIAGNOSTICS LOGS & FEEDBACK ===== -->
+        <div id="paneLogs" class="tab-pane" hidden>
+          <div class="diag-hero-card">
+            <div class="diag-hero-top">
+              <div>
+                <h2 class="diag-title">运行日志与问题 / 需求反馈</h2>
+                <div id="diagDeviceMeta" class="small-muted mono">OpalDesk Client</div>
+              </div>
+              <div class="diag-hero-cta">
+                <button id="openBugReportBtn" type="button" class="primary-btn compact">上报问题与日志</button>
+                <button id="openFeatureReportBtn" type="button" class="ghost-btn compact">提功能需求</button>
+              </div>
+            </div>
+
+            <div class="diag-metrics-row">
+              <div class="diag-metric-pill">
+                <span>日志条数</span>
+                <strong id="diagMetricTotal" class="mono">0</strong>
+              </div>
+              <div class="diag-metric-pill warn">
+                <span>警告 / 错误</span>
+                <strong id="diagMetricWarn" class="mono">0</strong>
+              </div>
+              <div class="diag-metric-pill accent">
+                <span>今日上报配额</span>
+                <strong id="diagMetricQuota" class="mono">5/5</strong>
+              </div>
+            </div>
+
+            <div class="qq-group-banner">
+              <span>交流反馈 QQ 群：<strong class="mono">1042317917</strong>（问题排查 / 功能建议 / 版本通知）</span>
+              <button id="copyQqGroupBtn" type="button" class="mini-btn">复制群号</button>
+            </div>
+
+            <div class="diag-toolbar-row">
+              <button id="refreshLogsBtn" type="button" class="mini-btn">刷新日志</button>
+              <button id="copyLogsBtn" type="button" class="mini-btn">复制诊断报告</button>
+              <button id="exportLogsBtn" type="button" class="mini-btn">导出 .txt</button>
+              <button id="clearLogsBtn" type="button" class="mini-btn danger-outline">清空日志</button>
+            </div>
+          </div>
+
+          <!-- Feedback Tracking Section -->
+          <div id="feedbackTrackingSection" class="info-box diag-card">
+            <div class="info-box-head">
+              <div class="standalone-history-title-group">
+                <strong>我的反馈追踪</strong>
+                <span id="feedbackSyncMeta" class="small-muted"></span>
+              </div>
+              <div class="standalone-history-actions">
+                <button id="lookupFeedbackBtn" type="button" class="mini-btn">查反馈码</button>
+                <button id="refreshFeedbackBtn" type="button" class="mini-btn">刷新状态</button>
+              </div>
+            </div>
+
+            <div id="feedbackLookupBar" class="feedback-lookup-bar" hidden>
+              <input id="feedbackLookupInput" type="text" maxlength="9" placeholder="输入 8 位反馈码（如 A1B2C3D4）" autocomplete="off" />
+              <button id="submitFeedbackLookupBtn" type="button" class="primary-btn compact">查询</button>
+              <button id="cancelFeedbackLookupBtn" type="button" class="mini-btn">收起</button>
+            </div>
+            <div id="feedbackLookupStatus" class="hint-text" hidden></div>
+            <div id="feedbackRecordsList" class="feedback-records-list">
+              <span class="hint-text">暂无本地反馈记录。提交问题或功能建议后，可在此实时追踪开发者处理进度与回复。</span>
+            </div>
+          </div>
+
+          <!-- Live Log Stream -->
+          <div class="info-box diag-card">
+            <div class="info-box-head">
+              <strong>实时运行日志</strong>
+              <div class="diag-filter-chips">
+                <button id="logWarnOnlyBtn" type="button" class="chip-btn compact-chip">仅警告/错误</button>
+                <button id="logOrderBtn" type="button" class="chip-btn compact-chip active">最新在前</button>
+              </div>
+            </div>
+            <input id="logSearchInput" type="search" class="diag-search-input" placeholder="按标签或关键词过滤日志…" autocomplete="off" />
+            <div id="diagLogConsole" class="diag-log-console mono"></div>
+          </div>
+        </div>
       </section>
     </main>
   </div>
@@ -321,7 +422,9 @@
         <button id="tbHomeBtn" type="button" class="tb-btn tb-icon-btn" title="显示桌面" aria-label="显示桌面">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.2 7.8L8 2.6l5.8 5.2M4 7.2v5.8h8V7.2" /></svg>
         </button>
+        <button id="tbExitAppFsBtn" type="button" class="tb-btn active" title="退出远程应用全屏" hidden>退出全屏</button>
         <span class="tb-sep" aria-hidden="true"></span>
+        <button id="tbPinBtn" type="button" class="tb-btn" title="切换悬浮窗置顶 (Alt+Shift+T)" hidden>置顶</button>
         <button id="tbBlackoutBtn" type="button" class="tb-btn" title="一键熄灭 / 点亮手机主屏 (Alt+Shift+B)">黑屏</button>
         <button id="tbAppsBtn" type="button" class="tb-btn" title="打开手机应用或独立小窗">应用</button>
         <button id="tbInputModeBtn" type="button" class="tb-btn active" title="切换左键拖拽模式：触控滑动（推荐） / 鼠标指针">触控</button>
@@ -416,8 +519,18 @@
     <!-- Remote App Launcher Popover -->
     <div id="appsPopover" class="stage-popover apps-popover glass-surface" hidden>
       <div class="pop-head">
-        <strong>远程应用启动器</strong>
-        <button id="closeAppsPopBtn" type="button" class="mini-btn">关闭</button>
+        <div class="standalone-history-title-group">
+          <strong>远程应用启动器</strong>
+          <span id="appsPopQuotaBadge" class="status-pill mono">小窗 0/3</span>
+        </div>
+        <div class="standalone-history-actions">
+          <button id="appsSortToggleBtn" type="button" class="mini-btn">常用排序</button>
+          <button id="closeAppsPopBtn" type="button" class="mini-btn">关闭</button>
+        </div>
+      </div>
+      <div id="appsPopHistoryWrap" class="pop-history-wrap" hidden>
+        <div class="pop-history-head">历史 APP 小窗</div>
+        <div id="appsPopHistoryList" class="pop-history-chips"></div>
       </div>
       <input id="appSearchInput" type="search" placeholder="搜索手机应用…" autocomplete="off" />
       <div id="appsList" class="apps-list"></div>
@@ -438,6 +551,89 @@
       <div class="cta-row tofu-actions">
         <button id="tofuApproveBtn" type="button" class="primary-btn">信任证书并连接</button>
         <button id="tofuRejectBtn" type="button" class="ghost-btn">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lobby Remote App Picker Modal (Lightweight app_catalog, no full desktop needed) -->
+  <div id="lobbyAppsModalOverlay" class="stage-overlay" hidden>
+    <div class="overlay-card glass-surface modal-wide">
+      <div class="pop-head">
+        <div class="standalone-history-title-group">
+          <strong id="lobbyAppsModalTitle">选择应用悬浮小窗</strong>
+          <span id="lobbyAppsQuotaBadge" class="status-pill mono">已开 0/3</span>
+        </div>
+        <div class="standalone-history-actions">
+          <button id="lobbyAppsSortBtn" type="button" class="mini-btn">常用排序</button>
+          <button id="closeLobbyAppsModalBtn" type="button" class="mini-btn">关闭</button>
+        </div>
+      </div>
+      <p id="lobbyAppsStatusText" class="hint-text modal-status-line">正在连接手机获取应用列表…</p>
+      <div id="lobbyAppsHistoryWrap" class="pop-history-wrap" hidden>
+        <div class="pop-history-head">历史 APP 小窗</div>
+        <div id="lobbyAppsHistoryList" class="pop-history-chips"></div>
+      </div>
+      <input id="lobbyAppSearchInput" type="search" class="diag-search-input" placeholder="搜索手机应用名称或包名…" autocomplete="off" />
+      <div id="lobbyAppsList" class="apps-list modal-apps-list"></div>
+    </div>
+  </div>
+
+  <!-- Secondary Confirmation Modal when Standalone App Window is Already Open -->
+  <div id="reloadStandaloneModalOverlay" class="stage-overlay" hidden>
+    <div class="overlay-card glass-surface reload-card">
+      <h2 id="reloadModalTitle">应用悬浮小窗已打开</h2>
+      <p id="reloadModalDesc">该应用的独立小窗正在运行。你可以重载小窗并重启远端应用，或仅聚焦到已打开的窗口。</p>
+      <div class="reload-actions">
+        <button id="reloadConfirmBtn" type="button" class="primary-btn full">重载小窗 + 应用</button>
+        <button id="reloadFocusBtn" type="button" class="ghost-btn full">仅聚焦现有窗口</button>
+        <button id="reloadCancelBtn" type="button" class="text-btn">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manual Issue / Feature Request Feedback Modal -->
+  <div id="feedbackModalOverlay" class="stage-overlay" hidden>
+    <div class="overlay-card glass-surface modal-wide feedback-modal-card">
+      <div class="pop-head">
+        <strong id="fbModalTitle">问题与需求反馈</strong>
+        <span id="fbModalQuotaPill" class="status-pill mono">今日剩余 5/5 次</span>
+      </div>
+
+      <div class="segmented-bar compact-seg" role="tablist">
+        <button id="fbKindBugBtn" type="button" class="seg-btn active" role="tab" aria-selected="true">问题反馈</button>
+        <button id="fbKindFeatureBtn" type="button" class="seg-btn" role="tab" aria-selected="false">功能建议</button>
+      </div>
+
+      <div id="fbConfigWarnBox" class="alert-banner warn" hidden></div>
+
+      <div class="fb-form-fields">
+        <label class="field">
+          <span>称呼 / 联系昵称（选填）</span>
+          <input id="fbReporterInput" type="text" maxlength="64" placeholder="例如：群昵称或称呼，方便定位回复" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span id="fbDescLabel">问题描述（必填）</span>
+          <textarea id="fbDescInput" rows="4" maxlength="2000" placeholder="请描述遇到的问题、触发步骤、设备型号或期望效果…"></textarea>
+        </label>
+        <label class="switch-row">
+          <input id="fbIncludeLogsCheck" type="checkbox" checked />
+          <span id="fbIncludeLogsLabel">附带脱敏后的客户端运行日志（GZIP 压缩，不附带截屏；取消勾选不会清空本地日志）</span>
+        </label>
+      </div>
+
+      <div id="fbModalErrorBox" class="alert-banner danger" hidden></div>
+
+      <div id="fbSuccessBox" class="alert-banner info fb-success-box" hidden>
+        <div class="banner-body">
+          <strong id="fbSuccessTitle">反馈提交成功</strong>
+          <p id="fbSuccessDetail"></p>
+        </div>
+        <button id="fbCopyCodeBtn" type="button" class="primary-btn compact">复制反馈码</button>
+      </div>
+
+      <div class="cta-row modal-footer-actions">
+        <button id="fbCancelBtn" type="button" class="ghost-btn">关闭</button>
+        <button id="fbSubmitBtn" type="button" class="primary-btn">提交反馈</button>
       </div>
     </div>
   </div>

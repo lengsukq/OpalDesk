@@ -770,7 +770,9 @@ private fun handleGenericMotionForWindow(
         if (masked == MotionEvent.ACTION_BUTTON_PRESS) {
             if (!win.focused) onFocusRequested()
             if (ev.actionButton == MotionEvent.BUTTON_BACK && win.isLive && win.displayId > 0) {
-                BridgeClient.sendWindowActionAsync(win.windowId, BridgeProtocol.WinAction.SEND_BACK)
+                if (io.github.lengsukq.opaldesk.ui.WorkstationKeyDispatcher.tryClaimMouseSideBack()) {
+                    BridgeClient.sendWindowActionAsync(win.windowId, BridgeProtocol.WinAction.SEND_BACK)
+                }
                 return true
             }
         }

@@ -220,6 +220,31 @@ impl AdbManager {
 
         ensure_daemon_running(&adb, clean_serial).await?;
 
+        // Reuse an already-active forward for the same serial when no explicit port is requested,
+        // so desktop + up to 3 standalone floating windows + app catalog cleanly share one tunnel.
+        if preferred_port.is_none() {
+            let existing_port = self
+                .state
+                .lock()
+                .ok()
+                .and_then(|s| {
+                    s.active_forwards
+                        .iter()
+                        .rev()
+                        .find(|(ser, _)| ser == clean_serial)
+                        .map(|(_, p)| *p)
+                });
+            if let Some(port) = existing_port {
+                if is_forward_listed(&adb, clean_serial, port).await {
+                    return Ok(AdbForwardResult {
+                        serial: clean_serial.to_string(),
+                        local_port: port,
+                        local_ws_url: format!("ws://127.0.0.1:{port}/ws"),
+                    });
+                }
+            }
+        }
+
         let local_spec = preferred_port
             .filter(|&p| p > 0)
             .map(|p| format!("tcp:{p}"))
@@ -349,6 +374,19 @@ async fn is_daemon_running(adb: &Path, serial: &str) -> Result<bool, String> {
     );
     let res = run_adb_command(adb, &["-s", serial, "shell", &check_cmd], QUICK_TIMEOUT).await?;
     Ok(res.exit_code == 0 && !res.stdout.trim().is_empty())
+}
+
+async fn is_forward_listed(adb: &Path, serial: &str, local_port: u16) -> bool {
+    let Ok(out) = run_adb_command(adb, &["-s", serial, "forward", "--list"], QUICK_TIMEOUT).await else {
+        return false;
+    };
+    if out.exit_code != 0 {
+        return false;
+    }
+    let needle = format!("tcp:{local_port}");
+    out.stdout
+        .lines()
+        .any(|line| line.contains(&needle) && line.contains(ABSTRACT_SOCKET_NAME))
 }
 
 async fn is_helper_installed(adb: &Path, serial: &str) -> Result<bool, String> {

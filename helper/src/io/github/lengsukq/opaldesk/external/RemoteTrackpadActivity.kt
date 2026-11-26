@@ -209,6 +209,7 @@ class RemoteTrackpadActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
+        if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
         if (OpalImeFocusTracker.localComposeTextFieldFocused && super.dispatchKeyEvent(event)) return true
         val forwardImeSwitch = WorkstationKeyDispatcher.shouldForwardImeSwitchToWindow(

@@ -113,4 +113,52 @@ class FloatingOverlayGeometryTest {
         assertEquals(0, bubble.x)
         assertEquals(72, bubble.y)
     }
+
+    @Test
+    fun mirrorFloatingWindowMatchesPortraitAndLandscapePhoneAspectWithoutStretch() {
+        val chromeH = 110 // ~40dp header + divider + border at density 2.5
+        // Portrait 1080x2400 phone mirrored onto 2944x1840 tablet (density=2.5)
+        val portraitWin = FloatingOverlayGeometry.computeAspectMatchedWindowSize(
+            videoW = 1080,
+            videoH = 2400,
+            chromeHeightPx = chromeH,
+            screenW = 2944,
+            screenH = 1840,
+            density = 2.5f,
+        )
+        val portraitContentH = portraitWin.height - chromeH
+        val portraitRatio = portraitWin.width.toFloat() / portraitContentH.toFloat()
+        assertEquals(1080f / 2400f, portraitRatio, 0.015f)
+        assertTrue(portraitWin.height <= (1840 * 0.85f).toInt())
+
+        // Landscape rotated 2400x1080 phone mirrored onto same tablet
+        val landscapeWin = FloatingOverlayGeometry.computeAspectMatchedWindowSize(
+            videoW = 2400,
+            videoH = 1080,
+            chromeHeightPx = chromeH,
+            screenW = 2944,
+            screenH = 1840,
+            density = 2.5f,
+        )
+        val landscapeContentH = landscapeWin.height - chromeH
+        val landscapeRatio = landscapeWin.width.toFloat() / landscapeContentH.toFloat()
+        assertEquals(2400f / 1080f, landscapeRatio, 0.015f)
+        assertTrue(landscapeWin.width <= (2944 * 0.90f).toInt())
+
+        // Corner drag resize strictly preserves portrait mirror aspect ratio
+        val resized = FloatingOverlayGeometry.clampAspectLockedResizeSize(
+            targetW = 900,
+            targetH = 1500,
+            videoW = 1080,
+            videoH = 2400,
+            chromeHeightPx = chromeH,
+            screenW = 2944,
+            screenH = 1840,
+            density = 2.5f,
+        )
+        val resizedRatio = resized.width.toFloat() / (resized.height - chromeH).toFloat()
+        assertEquals(1080f / 2400f, resizedRatio, 0.015f)
+        assertTrue(resized.width in 500..2708)
+        assertTrue(resized.height in 600..1583)
+    }
 }

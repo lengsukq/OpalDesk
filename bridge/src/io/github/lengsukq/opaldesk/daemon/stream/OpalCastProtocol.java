@@ -210,13 +210,26 @@ public final class OpalCastProtocol {
             byte[] payload,
             int offset,
             int length) throws IOException {
+        writeFrame(out, new byte[HEADER_SIZE], type, flags, timestampUs, payload, offset, length);
+    }
+
+    public static void writeFrame(
+            OutputStream out,
+            byte[] headerBuf,
+            int type,
+            int flags,
+            long timestampUs,
+            byte[] payload,
+            int offset,
+            int length) throws IOException {
         if (length < 0 || length > MAX_PAYLOAD_LEN) {
             throw new ProtocolException("Invalid payload length: " + length);
         }
         if (length > 0 && (payload == null || offset < 0 || offset + length > payload.length)) {
             throw new ProtocolException("Payload bounds out of range");
         }
-        byte[] header = new byte[HEADER_SIZE];
+        byte[] header = (headerBuf != null && headerBuf.length >= HEADER_SIZE)
+                ? headerBuf : new byte[HEADER_SIZE];
         encodeHeader(header, type, flags, length, timestampUs);
         out.write(header, 0, HEADER_SIZE);
         if (length > 0) {
@@ -432,6 +445,7 @@ public final class OpalCastProtocol {
         public final String topAppLabel;
         public final List<String> tilingSlots;
         public final List<Integer> tilingRatios;
+        public final String fullscreenWindowTitle;
 
         public DeviceState(
                 String deviceName, int sinkType, int displayMode,
@@ -452,7 +466,7 @@ public final class OpalCastProtocol {
                     bitrateKbps, batteryPct, blackout, audioEnabled,
                     injectStatus, adaptiveSingleEnabled, defaultSingleWidthDp,
                     activeLayoutMode, topAppPackage, topAppLabel,
-                    Collections.emptyList(), Collections.emptyList());
+                    Collections.emptyList(), Collections.emptyList(), "");
         }
 
         public DeviceState(
@@ -462,6 +476,21 @@ public final class OpalCastProtocol {
                 int injectStatus, boolean adaptiveSingleEnabled, int defaultSingleWidthDp,
                 String activeLayoutMode, String topAppPackage, String topAppLabel,
                 List<String> tilingSlots, List<Integer> tilingRatios) {
+            this(deviceName, sinkType, displayMode, width, height, dpi, fps, rotation,
+                    bitrateKbps, batteryPct, blackout, audioEnabled,
+                    injectStatus, adaptiveSingleEnabled, defaultSingleWidthDp,
+                    activeLayoutMode, topAppPackage, topAppLabel,
+                    tilingSlots, tilingRatios, "");
+        }
+
+        public DeviceState(
+                String deviceName, int sinkType, int displayMode,
+                int width, int height, int dpi, double fps, int rotation,
+                int bitrateKbps, int batteryPct, boolean blackout, boolean audioEnabled,
+                int injectStatus, boolean adaptiveSingleEnabled, int defaultSingleWidthDp,
+                String activeLayoutMode, String topAppPackage, String topAppLabel,
+                List<String> tilingSlots, List<Integer> tilingRatios,
+                String fullscreenWindowTitle) {
             this.deviceName = (deviceName != null) ? deviceName : "Android";
             this.sinkType = sinkType;
             this.displayMode = displayMode;
@@ -499,6 +528,7 @@ public final class OpalCastProtocol {
             } else {
                 this.tilingRatios = Collections.emptyList();
             }
+            this.fullscreenWindowTitle = (fullscreenWindowTitle != null) ? fullscreenWindowTitle : "";
         }
     }
 
@@ -530,6 +560,7 @@ public final class OpalCastProtocol {
                 .put("activeLayoutMode", s.activeLayoutMode)
                 .put("topAppPackage", s.topAppPackage)
                 .put("topAppLabel", s.topAppLabel)
+                .put("fullscreenWindowTitle", s.fullscreenWindowTitle)
                 .putRaw("tilingSlots", slotsArr.build())
                 .putRaw("tilingRatios", ratiosArr.build())
                 .build();

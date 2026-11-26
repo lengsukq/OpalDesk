@@ -236,6 +236,30 @@ fun RemoteAppPickerModal(
                         )
                     }
                     Spacer(Modifier.width(8.dp))
+                    OpalButton(
+                        label = "主屏镜像",
+                        accent = OpalPalette.AccentCyan,
+                        compact = true,
+                        onClick = {
+                            if (!Settings.canDrawOverlays(ctx)) {
+                                hasOverlayPerm = false
+                                openOverlayPermissionSettings()
+                                return@OpalButton
+                            }
+                            val started = PeerFloatingAppService.startMirror(
+                                ctx = ctx,
+                                host = host,
+                                port = port,
+                                peerLabel = resolvedPeerName,
+                                handoverToken = handoverToken,
+                            )
+                            if (started) {
+                                Toast.makeText(ctx, "正在以悬浮窗打开「$resolvedPeerName」主屏镜像", Toast.LENGTH_SHORT).show()
+                                onFloatingLaunched()
+                            }
+                        },
+                    )
+                    Spacer(Modifier.width(6.dp))
                     OpalButton(label = "关闭", compact = true, filled = false, onClick = onDismiss)
                 }
             },

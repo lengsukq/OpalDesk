@@ -8,6 +8,7 @@ public struct RemoteAppInfo: Decodable, Sendable, Equatable, Identifiable, Hasha
     public var runningOnExt: Bool
     public var taskId: Int
     public let iconBase64: String?
+    public var openCount: Int
 
     public var id: String {
         cls.isEmpty ? pkg : "\(pkg)/\(cls)"
@@ -23,7 +24,8 @@ public struct RemoteAppInfo: Decodable, Sendable, Equatable, Identifiable, Hasha
         label: String = "",
         runningOnExt: Bool = false,
         taskId: Int = -1,
-        iconBase64: String? = nil
+        iconBase64: String? = nil,
+        openCount: Int = 0
     ) {
         self.pkg = pkg
         self.cls = cls
@@ -31,10 +33,11 @@ public struct RemoteAppInfo: Decodable, Sendable, Equatable, Identifiable, Hasha
         self.runningOnExt = runningOnExt
         self.taskId = taskId
         self.iconBase64 = iconBase64
+        self.openCount = openCount
     }
 
     private enum CodingKeys: String, CodingKey {
-        case pkg, cls, label, runningOnExt, taskId
+        case pkg, cls, label, runningOnExt, taskId, openCount
         case iconBase64 = "icon"
     }
 
@@ -46,6 +49,7 @@ public struct RemoteAppInfo: Decodable, Sendable, Equatable, Identifiable, Hasha
         runningOnExt = try c.decodeIfPresent(Bool.self, forKey: .runningOnExt) ?? false
         taskId = try c.decodeIfPresent(Int.self, forKey: .taskId) ?? -1
         iconBase64 = try c.decodeIfPresent(String.self, forKey: .iconBase64)
+        openCount = try c.decodeIfPresent(Int.self, forKey: .openCount) ?? 0
     }
 }
 

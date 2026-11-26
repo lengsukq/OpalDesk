@@ -402,16 +402,16 @@ public final class PerDisplayInputRouter {
         return down || up;
     }
 
-    /** Direct display-targeted motion injection for remote Mac OpalCast sessions. */
+    /** Direct display-targeted motion injection for remote OpalCast sessions (supports Display 0 for Mirror mode). */
     public boolean injectRawEventToDisplay(InputEvent ev, int displayId, String vdUniqueId, int dispW, int dispH) {
-        if (ev == null || displayId <= 0) return false;
+        if (ev == null || displayId < 0) return false;
         return dispatchToDisplay(ev, displayId, vdUniqueId, dispW, dispH);
     }
 
-    /** Direct display-targeted key injection for remote Mac OpalCast sessions. */
+    /** Direct display-targeted key injection for remote OpalCast sessions (supports Display 0 for Mirror mode). */
     public boolean injectRawKeyToDisplay(
             int displayId, String vdUniqueId, int dispW, int dispH, int action, int keyCode, int metaState) {
-        if (displayId <= 0) return false;
+        if (displayId < 0) return false;
         services.focusDisplay(displayId);
         long now = SystemClock.uptimeMillis();
         KeyEvent ev = new KeyEvent(

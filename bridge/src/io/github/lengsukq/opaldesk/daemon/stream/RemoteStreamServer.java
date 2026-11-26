@@ -53,7 +53,9 @@ public final class RemoteStreamServer {
 
     private static final int HANDSHAKE_TIMEOUT_MS = 10_000;
     private static final int SOCKET_IO_BUFFER_BYTES = 131_072;
-    private static final int SOCKET_SEND_BUF_BYTES = 512 * 1024;
+    private static final int USB_SOCKET_SEND_BUF_BYTES = 512 * 1024;
+    // Cap Wi-Fi TCP send buffer to halve worst-case bufferbloat while sustaining up to 40 Mbps @ 50ms RTT.
+    private static final int WIFI_SOCKET_SEND_BUF_BYTES = 256 * 1024;
 
     public interface SessionListener {
         void onSessionConnected(
@@ -678,7 +680,7 @@ public final class RemoteStreamServer {
 
     private void handleUsbClient(LocalSocket sock) {
         try {
-            try { sock.setSendBufferSize(SOCKET_SEND_BUF_BYTES); } catch (IOException ignored) {}
+            try { sock.setSendBufferSize(USB_SOCKET_SEND_BUF_BYTES); } catch (IOException ignored) {}
             try { sock.setReceiveBufferSize(SOCKET_IO_BUFFER_BYTES); } catch (IOException ignored) {}
             sock.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
 
@@ -728,7 +730,7 @@ public final class RemoteStreamServer {
 
             sock.setTcpNoDelay(true);
             sock.setKeepAlive(true);
-            try { sock.setSendBufferSize(SOCKET_SEND_BUF_BYTES); } catch (SocketException ignored) {}
+            try { sock.setSendBufferSize(WIFI_SOCKET_SEND_BUF_BYTES); } catch (SocketException ignored) {}
             try { sock.setReceiveBufferSize(SOCKET_IO_BUFFER_BYTES); } catch (SocketException ignored) {}
             sock.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
             applySecureTlsProtocols(sock.getSupportedProtocols(), sock::setEnabledProtocols);

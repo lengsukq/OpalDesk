@@ -31,7 +31,8 @@ let package = Package(
                 .linkedFramework("CoreGraphics"),
                 .linkedFramework("CoreImage"),
                 .linkedFramework("ImageIO"),
-                .linkedFramework("AppKit")
+                .linkedFramework("AppKit"),
+                .linkedLibrary("z")
             ]
         ),
         .executableTarget(

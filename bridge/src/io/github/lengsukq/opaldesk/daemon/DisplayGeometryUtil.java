@@ -253,11 +253,195 @@ public final class DisplayGeometryUtil {
         return ((rot % 4) + 4) % 4;
     }
 
+    public static final int DISPLAY_MODE_DEX = 0;
+    public static final int DISPLAY_MODE_MIRROR = 1;
+    public static final int DISPLAY_MODE_UNCHANGED = 0xFF;
+    public static final int MIN_MIRROR_LONG_EDGE = 1280;
+    public static final int MAX_MIRROR_LONG_EDGE = 2400;
+
+    /**
+     * Resolves the target OpalCast display mode for {@code SYS_TOGGLE_DISPLAY_MODE}.
+     * Explicit {@code 0} ({@link #DISPLAY_MODE_DEX}) and {@code 1} ({@link #DISPLAY_MODE_MIRROR})
+     * select that mode idempotently; negative values or {@code 0xFF} toggle the current mode.
+     */
+    public static int resolveTargetDisplayMode(int currentMode, int actionArg) {
+        if (actionArg == DISPLAY_MODE_DEX) return DISPLAY_MODE_DEX;
+        if (actionArg == DISPLAY_MODE_MIRROR) return DISPLAY_MODE_MIRROR;
+        return (currentMode == DISPLAY_MODE_MIRROR) ? DISPLAY_MODE_DEX : DISPLAY_MODE_MIRROR;
+    }
+
+    /**
+     * Computes encoder-aligned {@code [mirrorW, mirrorH, mirrorDpi]} matching Display 0's live
+     * orientation and aspect ratio while scaling the long edge to fit inside {@code maxLongEdge}
+     * (clamped to {@code [1280, 2400]}) so hardware encoders sustain smooth high-FPS mirroring
+     * without letterboxing or distortion.
+     */
+    public static int[] computeMirrorStreamSpec(
+            int primaryW,
+            int primaryH,
+            int primaryDpi,
+            int maxLongEdge,
+            int alignment) {
+        int srcW = primaryW > 0 ? primaryW : 1080;
+        int srcH = primaryH > 0 ? primaryH : 1920;
+        int srcDpi = clampDpi(primaryDpi, srcW, srcH);
+        int align = Math.max(2, alignment);
+        if ((align & 1) != 0) align += 1;
+
+        int capLong = (maxLongEdge > 0)
+                ? Math.max(MIN_MIRROR_LONG_EDGE, Math.min(MAX_MIRROR_LONG_EDGE, maxLongEdge))
+                : MAX_MIRROR_LONG_EDGE;
+        int srcLong = Math.max(srcW, srcH);
+        double scale = (srcLong > capLong) ? ((double) capLong / (double) srcLong) : 1.0;
+
+        int rawW = (int) Math.round(srcW * scale);
+        int rawH = (int) Math.round(srcH * scale);
+        int[] aligned = alignForEncoder(rawW, rawH, align, align);
+        double actualScale = (double) Math.max(aligned[0], aligned[1]) / (double) Math.max(1, srcLong);
+        int mirrorDpi = clampDpi((int) Math.round(srcDpi * actualScale), aligned[0], aligned[1]);
+        return new int[]{aligned[0], aligned[1], mirrorDpi};
+    }
+
+    /**
+     * Maps a remote pointer coordinate {@code (x, y)} from encoded stream space
+     * {@code [0, streamW) x [0, streamH)} into the target display's logical coordinate space
+     * {@code [0, targetW) x [0, targetH)}.
+     */
+    public static float[] mapRemotePointToTargetDisplay(
+            float x,
+            float y,
+            int streamW,
+            int streamH,
+            int targetW,
+            int targetH) {
+        int sw = Math.max(2, streamW);
+        int sh = Math.max(2, streamH);
+        int tw = Math.max(2, targetW);
+        int th = Math.max(2, targetH);
+        float clampedX = Math.max(0f, Math.min(sw - 1f, x));
+        float clampedY = Math.max(0f, Math.min(sh - 1f, y));
+        float mappedX = (sw == tw) ? clampedX : (clampedX * ((float) tw / (float) sw));
+        float mappedY = (sh == th) ? clampedY : (clampedY * ((float) th / (float) sh));
+        return new float[]{
+                Math.max(0f, Math.min(tw - 1f, mappedX)),
+                Math.max(0f, Math.min(th - 1f, mappedY))
+        };
+    }
+
+    public static final int MIN_SESSION_BITRATE_KBPS = 2_500;
+    public static final int HEVC_BITRATE_SCALE_PCT = 75;
+    public static final int MIN_STATUS_BAR_INSET_SDK = 34;
+
+    /**
+     * Only attach shell-owned {@code TYPE_STATUS_BAR} inset windows on Android 14+ (API 34+),
+     * avoiding asynchronous main-Looper {@code ViewRootImpl} crashes on Android 11-13 ROMs.
+     */
+    public static boolean isVirtualDisplayStatusBarInsetSupported(int sdkInt) {
+        return sdkInt >= MIN_STATUS_BAR_INSET_SDK;
+    }
+
     public static int clampBitrateKbps(int bitrateKbps, int minKbps, int maxKbps) {
         int lo = Math.max(500, minKbps);
         int hi = Math.max(lo, maxKbps);
         if (bitrateKbps <= 0) return Math.min(hi, Math.max(lo, 12_000));
         return Math.max(lo, Math.min(hi, bitrateKbps));
+    }
+
+    /**
+     * Resolves the effective OpalCast session bitrate: honors any explicit positive client bitrate
+     * request (so power-saving or standalone-window caps are never overridden upward) and falls back
+     * to codec-aware recommendations only when the client passes {@code <= 0} (auto).
+     */
+    public static int resolveSessionBitrateKbps(
+            int requestedBitrateKbps,
+            int w,
+            int h,
+            float fps,
+            boolean preferHevc,
+            int maxBitrateKbps) {
+        int raw = (requestedBitrateKbps > 0)
+                ? requestedBitrateKbps
+                : computeRecommendedBitrateKbps(w, h, fps, preferHevc, maxBitrateKbps);
+        return clampBitrateKbps(raw, MIN_SESSION_BITRATE_KBPS, maxBitrateKbps);
+    }
+
+    public static int computeRecommendedBitrateKbps(
+            int w,
+            int h,
+            float fps,
+            boolean preferHevc,
+            int maxBitrateKbps) {
+        long pixels = (long) Math.max(640, w) * Math.max(480, h);
+        boolean uhd = pixels >= 5_500_000L; // >= 4K / super-ultrawide
+        boolean highRes = pixels >= 2_800_000L; // >= 2560x1100
+        boolean highFps = fps >= 85f;
+        int baseKbps;
+        if (uhd && highFps) baseKbps = maxBitrateKbps;
+        else if (uhd) baseKbps = 24_000;
+        else if (highRes && highFps) baseKbps = 22_000;
+        else if (highRes) baseKbps = 16_000;
+        else if (highFps) baseKbps = 15_000;
+        else baseKbps = 11_000;
+        if (preferHevc) {
+            return Math.max(MIN_SESSION_BITRATE_KBPS, (baseKbps * HEVC_BITRATE_SCALE_PCT) / 100);
+        }
+        return baseKbps;
+    }
+
+    /**
+     * Scales {@code (reqW, reqH)} proportionally to fit inside an encoder's maximum supported
+     * {@code (maxW, maxH)} bounds while preserving aspect ratio and aligning down to
+     * {@code (alignW, alignH)} so neither edge exceeds the hardware limit.
+     */
+    public static int[] fitDimensionsToMaxBounds(
+            int reqW,
+            int reqH,
+            int maxW,
+            int maxH,
+            int alignW,
+            int alignH) {
+        int aw = Math.max(2, alignW);
+        int ah = Math.max(2, alignH);
+        int[] base = alignForEncoder(reqW, reqH, aw, ah);
+        int w = base[0];
+        int h = base[1];
+        if (maxW <= 0 || maxH <= 0 || (w <= maxW && h <= maxH)) {
+            return new int[]{w, h};
+        }
+        double scale = Math.min((double) maxW / (double) w, (double) maxH / (double) h);
+        int capW = (maxW / aw) * aw;
+        int capH = (maxH / ah) * ah;
+        int scaledW = ((int) Math.floor(w * scale) / aw) * aw;
+        int scaledH = ((int) Math.floor(h * scale) / ah) * ah;
+        int minW = Math.min(capW, Math.max(aw, (320 / aw) * aw));
+        int minH = Math.min(capH, Math.max(ah, (320 / ah) * ah));
+        scaledW = Math.max(minW, Math.min(capW, scaledW));
+        scaledH = Math.max(minH, Math.min(capH, scaledH));
+        return new int[]{Math.max(aw, scaledW), Math.max(ah, scaledH)};
+    }
+
+    /**
+     * Builds a deduplicated descending list of FPS candidates starting from
+     * {@code min(requestedFps, maxSupportedFps)} with safe {@code 60f} / {@code 30f} fallbacks for
+     * encoders whose hardware rate ceiling rejects high-refresh requests (e.g. 120fps on mid-tier SoCs).
+     */
+    public static float[] buildEncoderFpsCandidates(float requestedFps, float maxSupportedFps) {
+        float req = clampFps(requestedFps, 60f);
+        float primary = (Float.isFinite(maxSupportedFps) && maxSupportedFps >= 15f)
+                ? Math.max(15f, Math.min(req, maxSupportedFps))
+                : req;
+        float[] buf = new float[3];
+        int count = 0;
+        buf[count++] = primary;
+        if (primary > 60.5f) {
+            buf[count++] = 60f;
+        }
+        if (primary > 30.5f) {
+            buf[count++] = 30f;
+        }
+        float[] out = new float[count];
+        System.arraycopy(buf, 0, out, 0, count);
+        return out;
     }
 
     public static int alignDimension(int value, int alignment, int minVal, int maxVal) {

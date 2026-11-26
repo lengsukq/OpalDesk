@@ -35,6 +35,7 @@ public interface OpalCastFrameTransport {
     final class RawTransport implements OpalCastFrameTransport {
         private final InputStream in;
         private final OutputStream out;
+        private final byte[] headerBuf = new byte[OpalCastProtocol.HEADER_SIZE];
 
         RawTransport(InputStream in, OutputStream out) {
             this.in = in;
@@ -57,7 +58,7 @@ public interface OpalCastFrameTransport {
                 byte[] payload,
                 int offset,
                 int length) throws IOException {
-            OpalCastProtocol.writeFrame(out, type, flags, timestampUs, payload, offset, length);
+            OpalCastProtocol.writeFrame(out, headerBuf, type, flags, timestampUs, payload, offset, length);
         }
 
         @Override

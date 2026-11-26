@@ -29,6 +29,35 @@ public struct DisplayWindowView: View {
             .animation(.easeOut(duration: 0.2), value: model.toastNotice)
             .animation(.easeOut(duration: 0.2), value: model.injectStatus)
             .animation(.easeOut(duration: 0.16), value: isHoveringTopEdge)
+            .sheet(item: $model.remoteAppPickerContext) { ctx in
+                RemoteAppPickerSheet(model: model, context: ctx) {
+                    model.closeRemoteAppPicker()
+                }
+            }
+            .confirmationDialog(
+                "应用「\(model.pendingPopoutReloadPrompt?.appLabel ?? "")」的小窗已打开",
+                isPresented: Binding(
+                    get: { model.pendingPopoutReloadPrompt != nil },
+                    set: { if !$0 { model.pendingPopoutReloadPrompt = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let prompt = model.pendingPopoutReloadPrompt {
+                    Button("重载小窗+应用") {
+                        model.pendingPopoutReloadPrompt = nil
+                        prompt.onReloadWindowAndApp()
+                    }
+                    Button("仅聚焦现有窗口") {
+                        model.pendingPopoutReloadPrompt = nil
+                        prompt.onFocusExisting()
+                    }
+                    Button("取消", role: .cancel) {
+                        model.pendingPopoutReloadPrompt = nil
+                    }
+                }
+            } message: {
+                Text("该应用当前已有运行中的独立悬浮小窗。选择「重载小窗+应用」将断开并重新拉起全新悬浮窗与应用实例。")
+            }
     }
 
     // MARK: - Canvas Stage
@@ -147,6 +176,36 @@ public struct DisplayWindowView: View {
                         .help(model.isCameraEnabled ? "关闭摄像头" : "开启摄像头")
 
                         topBarDivider
+
+                        if model.displayMode == .dex && !model.deviceState.fullscreenWindowTitle.isEmpty {
+                            Button {
+                                model.sendAndroidHome()
+                            } label: {
+                                Label("退出全屏", systemImage: "arrow.down.right.and.arrow.up.left")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.blue)
+                            .controlSize(.small)
+                            .help("退出远程应用全屏（\(model.deviceState.fullscreenWindowTitle)）")
+                        }
+
+                        Button {
+                            model.openRemoteAppPicker(for: .activeDesktop)
+                        } label: {
+                            Label(
+                                model.activePopoutCount > 0
+                                    ? "小窗 \(model.activePopoutCount)/\(PopoutWindowManager.maxConcurrentWindows)"
+                                    : "应用小窗",
+                                systemImage: "macwindow.on.rectangle"
+                            )
+                            .font(.system(size: 11, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(model.activePopoutCount > 0 ? .cyan : nil)
+                        .controlSize(.small)
+                        .disabled(!model.isAuthenticated)
+                        .help("打开手机应用或弹出独立悬浮小窗（最多 3 个）")
 
                         Button {
                             model.toggleDisplayMode()
@@ -330,7 +389,7 @@ public struct DisplayWindowView: View {
         switch model.sessionState {
         case .connecting: return "正在建立低延迟连接..."
         case .reconnecting(let attempt): return "投屏连接已中断，正在尝试第 \(attempt)/5 次重连..."
-        case .connected: return model.isAuthenticated ? "正在等待 Android 首个关键帧..." : "正在进行握手与身份校验..."
+        case .connected: return model.isAuthenticated ? "正在等待 Android 首个关键帧..." : "正在等待手机端确认连接..."
         case .failed(let msg): return "连接失败：\(msg)"
         case .disconnected: return "投屏连接已断开"
         default: return "准备显示画面..."

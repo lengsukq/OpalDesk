@@ -95,7 +95,7 @@ extension AppModel {
             displayMode: Int(displayMode.rawValue),
             audioEnabled: !isAudioMuted,
             authToken: pendingAuth.authToken,
-            pinCode: pendingAuth.pinCode,
+            pinCode: "",
             transportHint: (activeConnection?.transport.transportHint ?? .usb).rawValue,
             sessionRole: OpalCastSessionRole.desktop.rawValue
         ))
@@ -153,6 +153,13 @@ extension AppModel {
                 handleWifiUpgradeReady(ready)
             }
 
+        case .appList:
+            if let list = StreamSessionBridge.decodePayload("APP_LIST", logger: OpalDeskLog.app, {
+                try AppListPayload.decode(from: frame.payload)
+            }) {
+                handleMainSessionAppList(list.apps)
+            }
+
         case .micState:
             if let st = StreamSessionBridge.decodePayload("MIC_STATE", logger: OpalDeskLog.audio, {
                 try MicStatePayload.decode(from: frame.payload)
@@ -195,9 +202,12 @@ extension AppModel {
             return
         }
 
+        let wasInteractivePairing = pairingContext != nil
         isAuthenticated = true
         pairingContext = nil
         bannerError = nil
+        popoutManager.updateCanReturnToDesktop(true)
+        OpalDeskLog.info("session", "Authenticated desktop session with \(auth.deviceName.isEmpty ? pendingAuth.deviceName : auth.deviceName) permanent=\(auth.permanent)")
 
         let resolvedName = auth.deviceName.isEmpty ? pendingAuth.deviceName : auth.deviceName
         if !resolvedName.isEmpty { activeConnection?.deviceName = resolvedName }
@@ -205,23 +215,26 @@ extension AppModel {
         let resolvedFp = FingerprintUtil.normalize(
             session.verifiedPeerFingerprint ?? (auth.certFingerprint.isEmpty ? (activeConnection?.fingerprint ?? "") : auth.certFingerprint)
         )
-        discovery.upsertTrustedDevice(
-            deviceName: resolvedName,
-            model: pendingAuth.deviceModel,
-            certFingerprint: resolvedFp,
-            authToken: auth.authToken,
-            lastHost: pendingAuth.hostForTrust,
-            lastPort: pendingAuth.portForTrust
-        )
-
-        pendingAuth.pinCode = ""
-        if !auth.authToken.isEmpty { pendingAuth.authToken = auth.authToken }
+        if !auth.authToken.isEmpty {
+            discovery.upsertTrustedDevice(
+                deviceName: resolvedName,
+                model: pendingAuth.deviceModel,
+                certFingerprint: resolvedFp,
+                authToken: auth.authToken,
+                lastHost: pendingAuth.hostForTrust,
+                lastPort: pendingAuth.portForTrust
+            )
+            pendingAuth.authToken = auth.authToken
+        }
 
         if wifiUpgrade.finalizeUpgradeIfInProgress(adbManager: discovery.adbManager) {
             activeAdbForward = nil
             showToast("已自动无缝切换至原生 Wi-Fi TLS 直连")
         } else {
             wifiUpgrade.requestUpgradeIfEligible(transport: activeConnection?.transport, session: session)
+            if wasInteractivePairing {
+                showToast(auth.permanent ? "已获手机端永久信任并建立连接" : "已获手机端本次临时允许")
+            }
         }
 
         applyPostAuthBootstrap()
@@ -240,7 +253,7 @@ extension AppModel {
         }
 
         isAuthenticated = false
-        let failureText = auth.message.isEmpty ? "身份认证被手机端拒绝，请核对 PIN 码后重试" : auth.message
+        let failureText = auth.message.isEmpty ? "配对请求被手机端拒绝或已超时，请重试" : auth.message
 
         if var ctx = pairingContext {
             ctx.isSubmitting = false
@@ -256,7 +269,7 @@ extension AppModel {
                 displayName: pendingAuth.deviceName,
                 model: pendingAuth.deviceModel,
                 expectedFingerprint: fp,
-                errorMessage: "原有授权已失效，请输入手机端新显示的 \(DisplayPresets.pairingPinLength) 位配对 PIN 码"
+                errorMessage: "原有授权已失效或已在手机端撤销，请重新向手机发起配对请求"
             )
         } else {
             bannerError = failureText
@@ -279,12 +292,12 @@ extension AppModel {
             onStageHandoff: { [weak self] host, port, verifiedFp, authToken, tlsEndpoint in
                 guard let self else { return }
                 self.pendingAuth.authToken = authToken
-                self.pendingAuth.pinCode = ""
                 self.pendingAuth.hostForTrust = host
                 self.pendingAuth.portForTrust = port
                 self.activeConnection?.transport = .wirelessWiFi(displayTarget: "\(host):\(port)", host: host, port: port)
                 self.activeConnection?.fingerprint = verifiedFp
                 self.connectSession(to: tlsEndpoint)
+                self.migratePopoutsAfterWifiUpgrade(endpoint: tlsEndpoint, authToken: authToken)
             }
         )
     }
@@ -347,13 +360,21 @@ extension AppModel {
 
         var forwards = wifiUpgrade.reset()
         if let active = activeAdbForward {
-            forwards.append(active)
+            if popoutManager.hasActiveController(usingLocalPort: active.localPort) {
+                popoutAdbForwards[active.serial] = active
+            } else {
+                forwards.append(active)
+            }
             activeAdbForward = nil
         }
         for forward in Self.uniqueForwards(forwards) {
-            await discovery.adbManager.removeForward(forward)
+            if !popoutManager.hasActiveController(usingLocalPort: forward.localPort) {
+                await discovery.adbManager.removeForward(forward)
+            }
         }
 
+        popoutManager.updateCanReturnToDesktop(false)
+        cachedDesktopApps = []
         activeSessionEndpoint = nil
         isConnectingFlow = false
         isAuthenticated = false

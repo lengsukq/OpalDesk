@@ -158,7 +158,11 @@ export function buildStandaloneWindowQuery({
   usbLocalPort = 0,
   pkg,
   cls = '',
+  label = '',
+  deviceKey = '',
+  deviceName = '',
   certFingerprint = '',
+  alwaysOnTop = false,
 }) {
   const params = new URLSearchParams();
   if (transport === 'usb') {
@@ -177,6 +181,18 @@ export function buildStandaloneWindowQuery({
   params.set('pkg', String(pkg || '').trim());
   if (cls) {
     params.set('cls', String(cls).trim());
+  }
+  if (label) {
+    params.set('appLabel', String(label).trim());
+  }
+  if (deviceKey) {
+    params.set('deviceKey', String(deviceKey).trim());
+  }
+  if (deviceName) {
+    params.set('deviceName', String(deviceName).trim());
+  }
+  if (alwaysOnTop) {
+    params.set('pin', '1');
   }
   return params.toString();
 }
@@ -325,7 +341,13 @@ export class OpalDesktopBridge {
     port,
     transport = 'wifi',
     usbLocalPort = 0,
+    deviceKey = '',
+    deviceName = '',
     certFingerprint = '',
+    alwaysOnTop = false,
+    forceReload = false,
+    width = 440,
+    height = 880,
   }) {
     const query = buildStandaloneWindowQuery({
       host,
@@ -334,14 +356,136 @@ export class OpalDesktopBridge {
       usbLocalPort,
       pkg,
       cls,
+      label,
+      deviceKey,
+      deviceName,
       certFingerprint,
+      alwaysOnTop,
     });
     return this.invoke('open_standalone_window', {
       pkg,
       title: label || pkg,
       query,
-      width: 440,
-      height: 880,
+      width,
+      height,
+      alwaysOnTop: Boolean(alwaysOnTop),
+      forceReload: Boolean(forceReload),
     });
+  }
+
+  async listStandaloneWindows() {
+    if (!this.enabled) return [];
+    const list = await this.invoke('list_standalone_windows');
+    return Array.isArray(list) ? list : [];
+  }
+
+  async focusStandaloneWindow(pkgOrLabel) {
+    if (!this.enabled) return false;
+    return this.invoke('focus_standalone_window', { pkgOrLabel: String(pkgOrLabel || '') });
+  }
+
+  async closeStandaloneWindow(pkgOrLabel) {
+    if (!this.enabled) return;
+    return this.invoke('close_standalone_window', { pkgOrLabel: String(pkgOrLabel || '') });
+  }
+
+  async closeAllStandaloneWindows() {
+    if (!this.enabled) return;
+    return this.invoke('close_all_standalone_windows');
+  }
+
+  async setCurrentWindowAlwaysOnTop(alwaysOnTop) {
+    if (!this.enabled) return false;
+    return this.invoke('set_current_window_always_on_top', { alwaysOnTop: Boolean(alwaysOnTop) });
+  }
+
+  async getCurrentWindowAlwaysOnTop() {
+    if (!this.enabled) return false;
+    return this.invoke('get_current_window_always_on_top');
+  }
+
+  async setStandaloneWindowAlwaysOnTop(pkgOrLabel, alwaysOnTop) {
+    if (!this.enabled) return false;
+    return this.invoke('set_standalone_window_always_on_top', {
+      pkgOrLabel: String(pkgOrLabel || ''),
+      alwaysOnTop: Boolean(alwaysOnTop),
+    });
+  }
+
+  async closeCurrentWindow() {
+    if (!this.enabled) return;
+    return this.invoke('close_current_window');
+  }
+
+  async appendClientLog(level, tag, message) {
+    if (!this.enabled) return null;
+    try {
+      return await this.invoke('append_client_log', {
+        level: String(level || 'I'),
+        tag: String(tag || 'Web'),
+        message: String(message || ''),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async getClientLogs() {
+    if (!this.enabled) return [];
+    const list = await this.invoke('get_client_logs');
+    return Array.isArray(list) ? list : [];
+  }
+
+  async clearClientLogs() {
+    if (!this.enabled) return;
+    return this.invoke('clear_client_logs');
+  }
+
+  async buildDiagnosticReport({ contextSummary = '', warningsOnly = false, query = '' } = {}) {
+    return this.invoke('build_diagnostic_report', {
+      contextSummary: String(contextSummary || ''),
+      warningsOnly: Boolean(warningsOnly),
+      query: String(query || ''),
+    });
+  }
+
+  async exportDiagnosticReport(content) {
+    return this.invoke('export_diagnostic_report', { content: String(content || '') });
+  }
+
+  async getFeedbackState() {
+    return this.invoke('get_feedback_state');
+  }
+
+  async submitFeedbackReport({
+    reporterName = '',
+    problemDescription = '',
+    kind = 'bug',
+    includeLogs = true,
+    contextSummary = '',
+  }) {
+    return this.invoke('submit_feedback_report', {
+      reporterName: String(reporterName || ''),
+      problemDescription: String(problemDescription || ''),
+      kind: String(kind || 'bug'),
+      includeLogs: Boolean(includeLogs),
+      contextSummary: String(contextSummary || ''),
+    });
+  }
+
+  async refreshFeedbackStatuses(force = false) {
+    return this.invoke('refresh_feedback_statuses', { force: Boolean(force) });
+  }
+
+  async lookupFeedbackByCode(code) {
+    return this.invoke('lookup_feedback_by_code', { code: String(code || '') });
+  }
+
+  async removeFeedbackRecord(eventId) {
+    return this.invoke('remove_feedback_record', { eventId: String(eventId || '') });
+  }
+
+  async clearFeedbackHistory() {
+    return this.invoke('clear_feedback_history');
   }
 }

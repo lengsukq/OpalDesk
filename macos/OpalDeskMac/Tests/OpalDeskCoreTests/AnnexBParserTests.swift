@@ -175,4 +175,70 @@ struct AnnexBParserTests {
             #expect(hvcc.dropFirst(4) == keyUnit.data)
         }
     }
+
+    @Test("Zero-copy range scan & direct writeLengthPrefixed match legacy conversion byte-for-byte")
+    func zeroCopyRangeScanAndDirectWriteParity() {
+        // H.264 mixed 4-byte/3-byte start codes + SPS + PPS + AUD + trailing zero padding + IDR
+        var h264Stream = Data()
+        h264Stream.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+        h264Stream.append(sampleH264SPS)
+        h264Stream.append(contentsOf: [0x00, 0x00, 0x01])
+        h264Stream.append(sampleH264PPS)
+        h264Stream.append(contentsOf: [0x00, 0x00, 0x00, 0x01, 0x09, 0x10, 0x00]) // AUD + trailing zero
+        h264Stream.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+        let idr = Data([0x65, 0x88, 0x84, 0x21, 0xA0, 0xBB])
+        h264Stream.append(idr)
+
+        let h264Ranges = AnnexBParser.splitNALRanges(from: h264Stream, codec: .h264)
+        #expect(h264Ranges.count == 4)
+        #expect(AnnexBParser.hasParameterSetNAL(in: h264Ranges, codec: .h264) == true)
+
+        let extractedH264 = AnnexBParser.extractParameterSets(from: h264Stream, ranges: h264Ranges, codec: .h264)
+        #expect(extractedH264.sps == [sampleH264SPS])
+        #expect(extractedH264.pps == [sampleH264PPS])
+
+        let h264Info = AnnexBParser.inspectLengthPrefixed(ranges: h264Ranges, codec: .h264)
+        let legacyH264 = AnnexBParser.convertToLengthPrefixed(
+            units: AnnexBParser.splitNALUnits(from: h264Stream, codec: .h264),
+            codec: .h264
+        )
+        #expect(h264Info.byteCount == legacyH264.data.count)
+        #expect(h264Info.containsKeyframe == legacyH264.containsKeyframe)
+
+        var directH264 = Data(count: h264Info.byteCount)
+        let writtenH264 = directH264.withUnsafeMutableBytes { rawBuf -> Int in
+            guard let ptr = rawBuf.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            return AnnexBParser.writeLengthPrefixed(from: h264Stream, ranges: h264Ranges, codec: .h264, into: ptr)
+        }
+        #expect(writtenH264 == legacyH264.data.count)
+        #expect(directH264 == legacyH264.data)
+
+        // Non-config HEVC P-frame should report hasParameterSetNAL == false and write identically.
+        var hevcPStream = Data([0x00, 0x00, 0x00, 0x01])
+        let pSlice1 = Data([0x02, 0x01, 0x11, 0x22, 0x33]) // TRAIL_R (type 1)
+        let pSlice2 = Data([0x02, 0x01, 0x44, 0x55])
+        hevcPStream.append(pSlice1)
+        hevcPStream.append(contentsOf: [0x00, 0x00, 0x01])
+        hevcPStream.append(pSlice2)
+
+        let hevcRanges = AnnexBParser.splitNALRanges(from: hevcPStream, codec: .hevc)
+        #expect(hevcRanges.count == 2)
+        #expect(AnnexBParser.hasParameterSetNAL(in: hevcRanges, codec: .hevc) == false)
+
+        let hevcInfo = AnnexBParser.inspectLengthPrefixed(ranges: hevcRanges, codec: .hevc)
+        let legacyHEVC = AnnexBParser.convertToLengthPrefixed(
+            units: AnnexBParser.splitNALUnits(from: hevcPStream, codec: .hevc),
+            codec: .hevc
+        )
+        #expect(hevcInfo.byteCount == legacyHEVC.data.count)
+        #expect(hevcInfo.containsKeyframe == false)
+
+        var directHEVC = Data(count: hevcInfo.byteCount)
+        let writtenHEVC = directHEVC.withUnsafeMutableBytes { rawBuf -> Int in
+            guard let ptr = rawBuf.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            return AnnexBParser.writeLengthPrefixed(from: hevcPStream, ranges: hevcRanges, codec: .hevc, into: ptr)
+        }
+        #expect(writtenHEVC == legacyHEVC.data.count)
+        #expect(directHEVC == legacyHEVC.data)
+    }
 }

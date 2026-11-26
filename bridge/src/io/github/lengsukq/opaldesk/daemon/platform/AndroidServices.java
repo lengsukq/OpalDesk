@@ -910,11 +910,21 @@ public final class AndroidServices {
      * Resolves physical Display 0 dimensions and density DPI ({@code [widthPx, heightPx, densityDpi]})
      * for host-adapted DPI scaling of remote standalone floating app displays.
      */
-    @SuppressWarnings("deprecation")
     public int[] getPrimaryDisplayMetrics() {
+        int[] state = getPrimaryDisplayState();
+        return new int[]{state[0], state[1], state[2]};
+    }
+
+    /**
+     * Resolves physical Display 0 live rotated dimensions, density DPI, and surface rotation
+     * ({@code [widthPx, heightPx, densityDpi, rotation 0..3]}).
+     */
+    @SuppressWarnings("deprecation")
+    public int[] getPrimaryDisplayState() {
         int w = 0;
         int h = 0;
         int dpi = 0;
+        int rotation = 0;
         try {
             Display d0 = (displayManager != null) ? displayManager.getDisplay(Display.DEFAULT_DISPLAY) : null;
             if (d0 != null) {
@@ -923,6 +933,7 @@ public final class AndroidServices {
                 w = dm.widthPixels;
                 h = dm.heightPixels;
                 dpi = dm.densityDpi;
+                rotation = DisplayGeometryUtil.normalizeRotation(d0.getRotation());
                 if (w <= 0 || h <= 0) {
                     Display.Mode m = d0.getMode();
                     if (m != null) {
@@ -942,7 +953,7 @@ public final class AndroidServices {
             } catch (RuntimeException ignored) {
             }
         }
-        return new int[]{w, h, dpi};
+        return new int[]{w, h, dpi, rotation};
     }
 
     /** Resolves AOSP Display uniqueId (e.g. {@code local:4622403537125514005}) across Android 11–17. */

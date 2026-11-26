@@ -40,7 +40,7 @@ public struct ActiveConnectionInfo: Sendable, Equatable {
     public var connectedAt: Date
 }
 
-/// Context driving the TOFU certificate fingerprint + 6-digit PIN pairing sheet.
+/// Context driving the TOFU certificate fingerprint verification and host-consent pairing request sheet.
 public struct PairingPromptContext: Identifiable, Sendable, Equatable {
     public enum Source: Sendable, Equatable {
         case bonjour(DiscoveredBonjourDevice)

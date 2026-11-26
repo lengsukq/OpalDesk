@@ -209,10 +209,39 @@ public final class OpalDeskDaemon implements Runnable {
                     },
                     () -> daemon.helperBridge.enqueuePushBinder(false));
             daemon.start();
-            Looper.loop();
+            runResilientMainLooper(daemon.config);
         } catch (Throwable t) {
             t.printStackTrace();
             System.exit(1);
+        }
+    }
+
+    private static void runResilientMainLooper(DaemonConfig cfg) {
+        final long windowMs = 5_000L;
+        final int maxRapidRecoveries = 8;
+        long windowStartMs = 0L;
+        int rapidCount = 0;
+        while (cfg == null || !cfg.shuttingDown) {
+            try {
+                Looper.loop();
+                return;
+            } catch (RuntimeException re) {
+                long now = SystemClock.uptimeMillis();
+                if (windowStartMs == 0L || now - windowStartMs > windowMs) {
+                    windowStartMs = now;
+                    rapidCount = 1;
+                } else {
+                    rapidCount++;
+                }
+                System.err.println("OPALDESK_MAIN_LOOPER_RECOVERED count=" + rapidCount + ": " + re);
+                re.printStackTrace(System.err);
+                System.err.flush();
+                if (rapidCount >= maxRapidRecoveries) {
+                    System.err.println("OPALDESK_MAIN_LOOPER_ABORT too many rapid failures (" + rapidCount + ")");
+                    System.err.flush();
+                    throw re;
+                }
+            }
         }
     }
 

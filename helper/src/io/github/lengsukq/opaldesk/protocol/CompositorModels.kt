@@ -844,4 +844,73 @@ object CompositorGeometry {
             isSuppressing = false
         }
     }
+
+    const val KEYCODE_BACK = 4
+    const val KEY_ACTION_DOWN = 0
+    const val KEY_ACTION_UP = 1
+    const val SIDE_BACK_KEY_DEDUP_WINDOW_MS = 220L
+    const val SIDE_BACK_BUTTON_DEDUP_WINDOW_MS = 80L
+
+    /**
+     * Pure-JVM bidirectional deduplicator preventing double-Back when a Bluetooth/USB mouse side
+     * button emits both `MotionEvent.ACTION_BUTTON_PRESS(BUTTON_BACK)` and a companion
+     * `KeyEvent.KEYCODE_BACK` (Android 16 / ColorOS / HID combo mice), while preserving
+     * back-key-only mice and normal physical keyboard Back/Esc presses.
+     */
+    class SideBackKeyDeduplicator(
+        private val keyAfterButtonWindowMs: Long = SIDE_BACK_KEY_DEDUP_WINDOW_MS,
+        private val buttonAfterKeyWindowMs: Long = SIDE_BACK_BUTTON_DEDUP_WINDOW_MS,
+    ) {
+        private var lastSideButtonUptimeMs: Long = -1L
+        private var lastBackKeyUptimeMs: Long = -1L
+        private var suppressingBackKeyUp: Boolean = false
+
+        @Synchronized
+        fun tryClaimSideButtonBack(uptimeMs: Long): Boolean {
+            if (lastBackKeyUptimeMs >= 0L && (uptimeMs - lastBackKeyUptimeMs) in 0L..buttonAfterKeyWindowMs) {
+                return false
+            }
+            lastSideButtonUptimeMs = uptimeMs
+            return true
+        }
+
+        @Synchronized
+        fun shouldSuppressDuplicateBackKey(keyCode: Int, action: Int, uptimeMs: Long): Boolean {
+            if (keyCode != KEYCODE_BACK) return false
+            val withinWindow = lastSideButtonUptimeMs >= 0L &&
+                (uptimeMs - lastSideButtonUptimeMs) in 0L..keyAfterButtonWindowMs
+            return when (action) {
+                KEY_ACTION_DOWN -> {
+                    if (withinWindow) {
+                        suppressingBackKeyUp = true
+                        true
+                    } else {
+                        suppressingBackKeyUp = false
+                        false
+                    }
+                }
+                KEY_ACTION_UP -> {
+                    if (suppressingBackKeyUp || withinWindow) {
+                        suppressingBackKeyUp = false
+                        true
+                    } else {
+                        false
+                    }
+                }
+                else -> false
+            }
+        }
+
+        @Synchronized
+        fun recordBackKeyForwarded(uptimeMs: Long) {
+            lastBackKeyUptimeMs = uptimeMs
+        }
+
+        @Synchronized
+        fun reset() {
+            lastSideButtonUptimeMs = -1L
+            lastBackKeyUptimeMs = -1L
+            suppressingBackKeyUp = false
+        }
+    }
 }

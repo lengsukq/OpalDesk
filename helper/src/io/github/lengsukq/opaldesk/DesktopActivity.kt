@@ -284,6 +284,7 @@ class DesktopActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
+        if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
 
         val isPhysicalKey = WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)

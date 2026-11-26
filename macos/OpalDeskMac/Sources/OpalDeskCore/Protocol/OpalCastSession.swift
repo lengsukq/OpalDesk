@@ -25,6 +25,7 @@ public enum OpalCastSessionEvent: Sendable {
 public final class OpalCastSession: Sendable {
     private static let heartbeatIntervalNs: UInt64 = 2_000_000_000 // 2 seconds
     private static let heartbeatTimeoutNs: UInt64 = 8_000_000_000 // 8 seconds
+    private static let preAuthTimeoutNs: UInt64 = 75_000_000_000 // 75 seconds while awaiting phone consent
     private static let stalePingCutoffNs: UInt64 = 15_000_000_000 // 15 seconds
     private static let receiveChunkSize: Int = 256 * 1024 // 256 KiB
     private static let maxDroppableInFlightBytes: Int = 4 * 1024 * 1024 // 4 MiB
@@ -50,6 +51,7 @@ public final class OpalCastSession: Sendable {
         var nextPingId: UInt64 = 1
         var pendingPings: [UInt64: UInt64] = [:]
         var lastInboundActivityNs: UInt64 = 0
+        var hasReceivedAuthResult: Bool = false
         var verifiedFingerprint: String?
         var tlsVerificationError: OpalCastSessionError?
         var reconnectAttempt: Int = 0
@@ -265,6 +267,7 @@ public final class OpalCastSession: Sendable {
         case .ready:
             state.withLock {
                 $0.reconnectAttempt = 0
+                $0.hasReceivedAuthResult = false
                 $0.lastInboundActivityNs = DispatchTime.now().uptimeNanoseconds
             }
             transition(to: .connected)
@@ -336,6 +339,12 @@ public final class OpalCastSession: Sendable {
         switch result {
         case .success(let frames):
             for frame in frames {
+                if frame.type == .authResult {
+                    state.withLock {
+                        $0.hasReceivedAuthResult = true
+                        $0.lastInboundActivityNs = DispatchTime.now().uptimeNanoseconds
+                    }
+                }
                 if frame.type == .pong {
                     handlePongFrame(frame)
                 }
@@ -387,11 +396,14 @@ public final class OpalCastSession: Sendable {
                 }
                 let decision: HeartbeatDecision = self.state.withLock { s in
                     guard s.sessionState == .connected else { return .skip }
+                    let timeoutLimit = s.hasReceivedAuthResult ? Self.heartbeatTimeoutNs : Self.preAuthTimeoutNs
                     if s.lastInboundActivityNs > 0,
                        nowNs >= s.lastInboundActivityNs,
-                       nowNs - s.lastInboundActivityNs > Self.heartbeatTimeoutNs {
+                       nowNs - s.lastInboundActivityNs > timeoutLimit {
                         return .timedOut(s.connection)
                     }
+                    // Do not send PINGs while awaiting interactive phone-side pairing approval.
+                    guard s.hasReceivedAuthResult else { return .skip }
                     let id = s.nextPingId
                     s.nextPingId &+= 1
                     s.pendingPings[id] = nowNs
@@ -532,6 +544,7 @@ public final class OpalCastSession: Sendable {
             s.heartbeatTask = nil
             s.inFlightBytes = 0
             s.pendingPings.removeAll()
+            s.hasReceivedAuthResult = false
             s.decoder.reset()
             if explicitDisconnect {
                 s.isExplicitDisconnect = true

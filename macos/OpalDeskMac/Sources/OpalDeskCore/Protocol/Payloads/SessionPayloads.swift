@@ -24,6 +24,7 @@ public struct DeviceStatePayload: Decodable, Sendable, Equatable {
     public var topAppLabel: String
     public var tilingSlots: [String]
     public var tilingRatios: [Int]
+    public var fullscreenWindowTitle: String
 
     public var layoutMode: OpalCastLayoutMode? {
         OpalCastLayoutMode(rawValue: activeLayoutMode)
@@ -49,7 +50,8 @@ public struct DeviceStatePayload: Decodable, Sendable, Equatable {
         topAppPackage: String = "",
         topAppLabel: String = "",
         tilingSlots: [String] = [],
-        tilingRatios: [Int] = []
+        tilingRatios: [Int] = [],
+        fullscreenWindowTitle: String = ""
     ) {
         self.deviceName = deviceName
         self.sinkType = sinkType
@@ -71,13 +73,14 @@ public struct DeviceStatePayload: Decodable, Sendable, Equatable {
         self.topAppLabel = topAppLabel
         self.tilingSlots = tilingSlots
         self.tilingRatios = tilingRatios
+        self.fullscreenWindowTitle = fullscreenWindowTitle
     }
 
     private enum CodingKeys: String, CodingKey {
         case deviceName, sinkType, displayMode, width, height, dpi, fps, rotation
         case bitrateKbps, batteryPct, blackout, audioEnabled, injectStatus
         case adaptiveSingleEnabled, defaultSingleWidthDp, activeLayoutMode
-        case topAppPackage, topAppLabel, tilingSlots, tilingRatios
+        case topAppPackage, topAppLabel, tilingSlots, tilingRatios, fullscreenWindowTitle
     }
 
     public init(from decoder: Decoder) throws {
@@ -104,7 +107,8 @@ public struct DeviceStatePayload: Decodable, Sendable, Equatable {
             topAppPackage: try c.decodeIfPresent(String.self, forKey: .topAppPackage) ?? "",
             topAppLabel: try c.decodeIfPresent(String.self, forKey: .topAppLabel) ?? "",
             tilingSlots: try c.decodeIfPresent([String].self, forKey: .tilingSlots) ?? [],
-            tilingRatios: try c.decodeIfPresent([Int].self, forKey: .tilingRatios) ?? []
+            tilingRatios: try c.decodeIfPresent([Int].self, forKey: .tilingRatios) ?? [],
+            fullscreenWindowTitle: try c.decodeIfPresent(String.self, forKey: .fullscreenWindowTitle) ?? ""
         )
     }
 
@@ -117,6 +121,7 @@ public struct DeviceStatePayload: Decodable, Sendable, Equatable {
 public struct AuthResultPayload: Decodable, Sendable, Equatable {
     public var ok: Bool
     public var authToken: String
+    public var permanent: Bool
     public var message: String
     public var deviceName: String
     public var certFingerprint: String
@@ -124,25 +129,28 @@ public struct AuthResultPayload: Decodable, Sendable, Equatable {
     public init(
         ok: Bool,
         authToken: String = "",
+        permanent: Bool = false,
         message: String = "",
         deviceName: String = "",
         certFingerprint: String = ""
     ) {
         self.ok = ok
         self.authToken = authToken
+        self.permanent = permanent
         self.message = message
         self.deviceName = deviceName
         self.certFingerprint = certFingerprint
     }
 
     private enum CodingKeys: String, CodingKey {
-        case ok, authToken, message, deviceName, certFingerprint
+        case ok, authToken, permanent, message, deviceName, certFingerprint
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         ok = try c.decodeIfPresent(Bool.self, forKey: .ok) ?? false
         authToken = try c.decodeIfPresent(String.self, forKey: .authToken) ?? ""
+        permanent = try c.decodeIfPresent(Bool.self, forKey: .permanent) ?? false
         message = try c.decodeIfPresent(String.self, forKey: .message) ?? ""
         deviceName = try c.decodeIfPresent(String.self, forKey: .deviceName) ?? ""
         certFingerprint = try c.decodeIfPresent(String.self, forKey: .certFingerprint) ?? ""

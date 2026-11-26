@@ -14,7 +14,9 @@ import {
   isTauriDesktop,
   OpalDesktopBridge,
 } from './desktop_bridge.js';
+import { OpalDiagnosticsController } from './diagnostics_controller.js';
 import { DEFAULT_MIC_CHANNELS, DEFAULT_MIC_SAMPLE_RATE, OpalMicCapturer } from './mic_capturer.js';
+import { OpalStandaloneController } from './standalone_controller.js';
 import {
   decodeAppList,
   decodeAuthResult,
@@ -180,6 +182,9 @@ class OpalCastWebApp {
     this.sessionRole = SESSION_ROLE_DESKTOP;
     this.standaloneAppPkg = '';
     this.standaloneAppCls = '';
+    this.standaloneAppLabel = '';
+    this.standaloneDeviceKey = '';
+    this.standaloneDeviceName = '';
     this.explicitCertPin = '';
     this.activeVerifiedFingerprint = '';
     this.activeUsbLocalPort = 0;
@@ -206,6 +211,7 @@ class OpalCastWebApp {
     this.activePort = 19878;
     this.lastWifiHost = '';
     this.blackoutActive = false;
+    this.remoteFullscreenTitle = '';
     this.remoteCodecId = 1;
     this.injectStatus = 0;
     this.inputBlockedWarned = false;
@@ -225,7 +231,10 @@ class OpalCastWebApp {
         this.remoteFps = st.fps;
         this.updateTelemetry();
       },
-      onError: (msg) => this.showToast(msg),
+      onError: (msg) => {
+        this.diagnostics?.log('W', 'Video', msg);
+        this.showToast(msg);
+      },
     });
 
     this.audio = new OpalAudioPlayer({
@@ -333,6 +342,14 @@ class OpalCastWebApp {
       },
     });
 
+    this.diagnostics = new OpalDiagnosticsController({
+      desktop: this.desktop,
+      showToast: (text, label, fn) => this.showToast(text, label, fn),
+      copyText: (text, msg) => this.copyText(text, msg),
+      getContextSummary: () => this.buildClientContextSummary(),
+    });
+    this.standalone = new OpalStandaloneController(this);
+
     this.init();
   }
 
@@ -342,6 +359,7 @@ class OpalCastWebApp {
     if (this.desktop.enabled) {
       await this.initDesktopMode();
     }
+    await Promise.all([this.diagnostics.initialize(), this.standalone.initialize()]);
     this.renderRecentDevices();
     this.installTrustPopupListener();
     this.installResizeObserver();
@@ -419,6 +437,10 @@ class OpalCastWebApp {
     const role = params.get('role') || '';
     const pkg = params.get('pkg') || '';
     const cls = params.get('cls') || '';
+    const appLabel = params.get('appLabel') || '';
+    const deviceKey = params.get('deviceKey') || '';
+    const deviceName = params.get('deviceName') || '';
+    const pin = params.get('pin') || '';
     const fp = params.get('fp') || '';
     const sessionCode = hashParams.get('code') || '';
     if (fp) {
@@ -455,6 +477,11 @@ class OpalCastWebApp {
       this.sessionRole = SESSION_ROLE_STANDALONE_APP;
       this.standaloneAppPkg = pkg;
       this.standaloneAppCls = cls;
+      this.standaloneAppLabel = appLabel || pkg;
+      this.standaloneDeviceKey = deviceKey;
+      this.standaloneDeviceName = deviceName;
+      document.title = `OpalDesk · ${this.standaloneAppLabel}`;
+      this.standalone.applyInitialStandalonePin(pin === '1');
       if (host) {
         setTimeout(() => this.startCastConnection(), 200);
         return;
@@ -479,6 +506,9 @@ class OpalCastWebApp {
 
     $('tabCastBtn').addEventListener('click', () => this.selectLobbyTab('cast'));
     $('tabActivateBtn').addEventListener('click', () => this.selectLobbyTab('activate'));
+    $('tabLogsBtn')?.addEventListener('click', () => this.selectLobbyTab('logs'));
+    this.diagnostics.bindEvents();
+    this.standalone.bindEvents();
     $('modeWifiBtn').addEventListener('click', () => this.selectTransportMode('wifi'));
     $('modeUsbBtn').addEventListener('click', () => this.selectTransportMode('usb'));
 
@@ -585,8 +615,22 @@ class OpalCastWebApp {
     });
 
     // Stage toolbar actions
-    $('cancelConnectBtn').addEventListener('click', () => this.disconnectCast('已取消连接'));
-    $('tbDisconnectBtn').addEventListener('click', () => this.disconnectCast('已断开投屏'));
+    $('cancelConnectBtn').addEventListener('click', () => {
+      if (this.sessionRole === SESSION_ROLE_STANDALONE_APP && this.desktop.enabled) {
+        this.disconnectCast('');
+        this.desktop.closeCurrentWindow().catch(() => {});
+        return;
+      }
+      this.disconnectCast('已取消连接');
+    });
+    $('tbDisconnectBtn').addEventListener('click', () => {
+      if (this.sessionRole === SESSION_ROLE_STANDALONE_APP && this.desktop.enabled) {
+        this.disconnectCast('');
+        this.desktop.closeCurrentWindow().catch(() => {});
+        return;
+      }
+      this.disconnectCast('已断开投屏');
+    });
     $('tbBackBtn').addEventListener('click', () => {
       this.sendOpalFrame(TYPE_SYSTEM_ACTION, 0, encodeSystemAction(SYS_BACK));
       this.input.focusIme();
@@ -598,6 +642,13 @@ class OpalCastWebApp {
       } else {
         this.input.focusIme();
       }
+    });
+    $('tbExitAppFsBtn')?.addEventListener('click', () => {
+      this.remoteFullscreenTitle = '';
+      this.syncRemoteFullscreenUi();
+      this.sendOpalFrame(TYPE_SYSTEM_ACTION, 0, encodeSystemAction(SYS_HOME));
+      this.bumpToolbarVisibility();
+      this.input.focusIme();
     });
     $('tbBlackoutBtn')?.addEventListener('click', () => {
       this.toggleBlackout();
@@ -716,7 +767,10 @@ class OpalCastWebApp {
 
     window.addEventListener('keydown', (e) => {
       if (!this.authenticated || !e.shiftKey || !(e.altKey || e.metaKey)) return;
-      if (e.code === 'KeyB' && this.sessionRole !== SESSION_ROLE_STANDALONE_APP) {
+      if (e.code === 'KeyT' && this.desktop.enabled) {
+        e.preventDefault();
+        this.standalone.toggleCurrentWindowAlwaysOnTop();
+      } else if (e.code === 'KeyB' && this.sessionRole !== SESSION_ROLE_STANDALONE_APP) {
         e.preventDefault();
         this.toggleBlackout();
       } else if (e.code === 'KeyM' && this.sessionRole !== SESSION_ROLE_STANDALONE_APP) {
@@ -774,13 +828,23 @@ class OpalCastWebApp {
   }
 
   selectLobbyTab(tab) {
-    const isCast = tab === 'cast';
-    $('tabCastBtn').classList.toggle('active', isCast);
-    $('tabActivateBtn').classList.toggle('active', !isCast);
-    $('tabCastBtn').setAttribute('aria-selected', String(isCast));
-    $('tabActivateBtn').setAttribute('aria-selected', String(!isCast));
-    $('paneCast').hidden = !isCast;
-    $('paneActivate').hidden = isCast;
+    const activeTab = tab === 'activate' ? 'activate' : tab === 'logs' ? 'logs' : 'cast';
+    const tabs = [
+      { key: 'cast', btn: $('tabCastBtn'), pane: $('paneCast') },
+      { key: 'activate', btn: $('tabActivateBtn'), pane: $('paneActivate') },
+      { key: 'logs', btn: $('tabLogsBtn'), pane: $('paneLogs') },
+    ];
+    for (const item of tabs) {
+      const isSelected = item.key === activeTab;
+      item.btn?.classList.toggle('active', isSelected);
+      item.btn?.setAttribute('aria-selected', String(isSelected));
+      if (item.pane) item.pane.hidden = !isSelected;
+    }
+    if (activeTab === 'logs') {
+      this.diagnostics?.onTabActivated();
+    } else if (activeTab === 'cast') {
+      this.standalone?.refreshActiveWindows();
+    }
   }
 
   selectTransportMode(mode) {
@@ -845,6 +909,24 @@ class OpalCastWebApp {
       sub.textContent = `${dev.host}:${dev.port}${dev.shortFingerprint ? ` · 指纹 ${dev.shortFingerprint}` : ''}`;
       meta.append(title, sub);
 
+      const actions = document.createElement('div');
+      actions.className = 'device-card-actions';
+
+      const appBtn = document.createElement('button');
+      appBtn.type = 'button';
+      appBtn.className = 'mini-btn';
+      appBtn.textContent = '应用小窗';
+      appBtn.addEventListener('click', () => {
+        this.standalone.openLobbyAppPicker({
+          transport: 'wifi',
+          host: dev.host,
+          port: dev.port || 19878,
+          deviceKey: `${dev.host}:${dev.port || 19878}`,
+          deviceName: dev.displayName || dev.host,
+          certFingerprint: dev.fingerprint || '',
+        });
+      });
+
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'primary-btn compact';
@@ -856,7 +938,8 @@ class OpalCastWebApp {
         this.startCastConnection();
       });
 
-      row.append(meta, btn);
+      actions.append(appBtn, btn);
+      row.append(meta, actions);
       listEl.appendChild(row);
     }
   }
@@ -895,6 +978,24 @@ class OpalCastWebApp {
       sub.textContent = `${dev.host}:${dev.port} · ${nicLabel}${dev.shortFingerprint ? ` · 指纹 ${dev.shortFingerprint}` : ''}`;
       meta.append(title, sub);
 
+      const actions = document.createElement('div');
+      actions.className = 'device-card-actions';
+
+      const appBtn = document.createElement('button');
+      appBtn.type = 'button';
+      appBtn.className = 'mini-btn';
+      appBtn.textContent = '应用小窗';
+      appBtn.addEventListener('click', () => {
+        this.standalone.openLobbyAppPicker({
+          transport: 'wifi',
+          host: dev.host,
+          port: dev.port || 19878,
+          deviceKey: `${dev.host}:${dev.port || 19878}`,
+          deviceName: dev.displayName || dev.host,
+          certFingerprint: dev.fingerprint || '',
+        });
+      });
+
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'primary-btn compact';
@@ -907,7 +1008,8 @@ class OpalCastWebApp {
         this.startCastConnection();
       });
 
-      row.append(meta, btn);
+      actions.append(appBtn, btn);
+      row.append(meta, actions);
       listEl.appendChild(row);
     }
   }
@@ -979,6 +1081,26 @@ class OpalCastWebApp {
             : `状态：${dev.state}（请在手机弹窗勾选「始终允许调试」）`;
         meta.append(title, sub);
 
+        const actions = document.createElement('div');
+        actions.className = 'device-card-actions';
+
+        const appBtn = document.createElement('button');
+        appBtn.type = 'button';
+        appBtn.className = 'mini-btn';
+        appBtn.disabled = dev.state !== 'device';
+        appBtn.textContent = '应用小窗';
+        appBtn.addEventListener('click', () => {
+          this.selectedAdbSerial = dev.serial;
+          this.standalone.openLobbyAppPicker({
+            transport: 'usb',
+            host: '127.0.0.1',
+            port: 19878,
+            adbSerial: dev.serial,
+            deviceKey: `usb:${dev.serial}`,
+            deviceName: dev.displayName || dev.serial,
+          });
+        });
+
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'primary-btn compact';
@@ -988,7 +1110,8 @@ class OpalCastWebApp {
           this.selectedAdbSerial = dev.serial;
           this.startCastConnection();
         });
-        row.append(meta, btn);
+        actions.append(appBtn, btn);
+        row.append(meta, actions);
         listEl.appendChild(row);
       }
     } catch (err) {
@@ -1255,10 +1378,18 @@ class OpalCastWebApp {
         }
         this.authenticated = true;
         $('approvalOverlay').hidden = true;
-        $('stagePeerName').textContent = auth.deviceName || this.activeHost;
+        $('stagePeerName').textContent =
+          this.sessionRole === SESSION_ROLE_STANDALONE_APP && this.standaloneAppLabel
+            ? this.standaloneAppLabel
+            : (auth.deviceName || this.activeHost);
         this.input.setEnabled(true);
         this.startHeartbeat();
         this.bumpToolbarVisibility();
+        this.diagnostics?.log(
+          'I',
+          'Session',
+          `连接认证通过 role=${this.sessionRole} peer=${auth.deviceName || this.activeHost} transport=${this.transportMode}`
+        );
 
         if (this.transportMode !== 'usb') {
           const prevToken =
@@ -1322,6 +1453,13 @@ class OpalCastWebApp {
           if (typeof st.blackout === 'boolean') {
             this.blackoutActive = st.blackout;
             this.syncBlackoutUi();
+          }
+          if (typeof st.fullscreenWindowTitle === 'string') {
+            const nextFsTitle = st.fullscreenWindowTitle.trim();
+            const enteredFs = !this.remoteFullscreenTitle && Boolean(nextFsTitle);
+            this.remoteFullscreenTitle = nextFsTitle;
+            this.syncRemoteFullscreenUi();
+            if (enteredFs) this.bumpToolbarVisibility();
           }
           if (typeof st.injectStatus === 'number') {
             this.injectStatus = st.injectStatus;
@@ -1547,85 +1685,11 @@ class OpalCastWebApp {
   }
 
   renderAppList() {
-    const q = ($('appSearchInput').value || '').trim().toLowerCase();
-    const listEl = $('appsList');
-    listEl.innerHTML = '';
-    const filtered = this.currentApps.filter(
-      (a) => !q || (a.label || '').toLowerCase().includes(q) || (a.pkg || '').toLowerCase().includes(q)
-    );
-    if (!filtered.length) {
-      listEl.innerHTML = '<div class="hint-text" style="padding:10px;text-align:center">未找到匹配应用</div>';
-      return;
-    }
-    for (const app of filtered.slice(0, 80)) {
-      const row = document.createElement('div');
-      row.className = 'app-row';
-
-      const info = document.createElement('div');
-      info.className = 'app-info';
-      if (app.icon) {
-        const img = document.createElement('img');
-        img.src = `data:image/png;base64,${app.icon}`;
-        img.alt = '';
-        info.appendChild(img);
-      }
-      const lbl = document.createElement('span');
-      lbl.className = 'app-label';
-      lbl.textContent = app.label || app.pkg;
-      info.appendChild(lbl);
-
-      const btns = document.createElement('div');
-      btns.className = 'app-btns';
-
-      const openBtn = document.createElement('button');
-      openBtn.type = 'button';
-      openBtn.className = 'mini-btn';
-      openBtn.textContent = '打开';
-      openBtn.addEventListener('click', () => {
-        this.sendOpalFrame(TYPE_WINDOW_ACTION, 0, encodeWindowAction({ action: 'launch', pkg: app.pkg, cls: app.cls || '' }));
-        $('appsPopover').hidden = true;
-      });
-      btns.appendChild(openBtn);
-
-      const popBtn = document.createElement('button');
-      popBtn.type = 'button';
-      popBtn.className = 'mini-btn';
-      popBtn.textContent = '独立小窗';
-      popBtn.addEventListener('click', () => this.openStandaloneAppWindow(app));
-      btns.appendChild(popBtn);
-
-      row.append(info, btns);
-      listEl.appendChild(row);
-    }
+    this.standalone.renderInCastAppList();
   }
 
   openStandaloneAppWindow(app) {
-    if (this.desktop.enabled) {
-      this.desktop
-        .openStandaloneWindow({
-          pkg: app.pkg,
-          cls: app.cls || '',
-          label: app.label || app.pkg,
-          host: this.activeHost,
-          port: this.activePort,
-          transport: this.transportMode,
-          usbLocalPort: this.activeUsbLocalPort || this.activePort,
-          certFingerprint: this.activeVerifiedFingerprint,
-        })
-        .catch((err) => this.showToast(`打开独立窗口失败: ${err?.message || err}`));
-      $('appsPopover').hidden = true;
-      return;
-    }
-    const u = new URL(window.location.href);
-    u.search = '';
-    u.hash = '';
-    u.searchParams.set('host', this.activeHost);
-    u.searchParams.set('port', String(this.activePort));
-    if (this.transportMode === 'usb') u.searchParams.set('transport', 'usb');
-    u.searchParams.set('role', SESSION_ROLE_STANDALONE_APP);
-    u.searchParams.set('pkg', app.pkg);
-    if (app.cls) u.searchParams.set('cls', app.cls);
-    window.open(u.toString(), `opal_app_${app.pkg}`, 'width=440,height=880');
+    this.standalone.requestLaunchStandaloneApp(app, this.standalone.currentCastTarget());
     $('appsPopover').hidden = true;
   }
 
@@ -1633,12 +1697,17 @@ class OpalCastWebApp {
     const isStandalone = this.sessionRole === SESSION_ROLE_STANDALONE_APP;
     $('lobbyView').hidden = true;
     $('stageView').hidden = false;
-    $('stagePeerName').textContent = peerLabel;
+    $('stagePeerName').textContent = isStandalone && this.standaloneAppLabel ? this.standaloneAppLabel : peerLabel;
     $('approvalOverlay').hidden = !showApprovalWait;
     $('tbHomeBtn').hidden = isStandalone;
     if ($('tbBlackoutBtn')) $('tbBlackoutBtn').hidden = isStandalone;
     $('tbAppsBtn').hidden = isStandalone;
     $('tbAudioBtn').hidden = isStandalone;
+    if ($('tbDisconnectBtn')) {
+      $('tbDisconnectBtn').textContent = isStandalone && this.desktop.enabled ? '关闭' : '断开';
+      $('tbDisconnectBtn').title = isStandalone && this.desktop.enabled ? '关闭此悬浮小窗' : '断开投屏';
+    }
+    this.standalone.syncPinButtonUi();
     $('liveFpsSelect').value = $('castFpsSelect').value;
     $('liveBitrateSelect').value = $('castBitrateSelect').value;
     $('connectCastBtn').disabled = false;
@@ -1660,9 +1729,11 @@ class OpalCastWebApp {
     this.cameraEnabled = false;
     this.syncCameraUi();
     this.blackoutActive = false;
+    this.remoteFullscreenTitle = '';
     this.injectStatus = 0;
     this.inputBlockedWarned = false;
     this.syncBlackoutUi();
+    this.syncRemoteFullscreenUi();
     this.teardownCastSocket();
     this.input.setEnabled(false);
     this.video.reset();
@@ -1892,6 +1963,16 @@ class OpalCastWebApp {
     btn.setAttribute('aria-label', isFs ? '退出全屏' : '全屏显示');
   }
 
+  syncRemoteFullscreenUi() {
+    const btn = $('tbExitAppFsBtn');
+    if (!btn) return;
+    const active = Boolean(this.remoteFullscreenTitle) && this.sessionRole !== SESSION_ROLE_STANDALONE_APP;
+    btn.hidden = !active;
+    if (active) {
+      btn.title = `退出应用全屏（${this.remoteFullscreenTitle}）`;
+    }
+  }
+
   bumpToolbarVisibility() {
     const tb = $('stageToolbar');
     tb.classList.remove('dimmed');
@@ -2036,6 +2117,22 @@ class OpalCastWebApp {
           this.startCastConnection();
         });
 
+        const appBtn = document.createElement('button');
+        appBtn.type = 'button';
+        appBtn.className = 'recent-revoke-btn';
+        appBtn.title = '免开全屏桌面，直接选择应用以悬浮小窗打开';
+        appBtn.textContent = '小窗';
+        appBtn.addEventListener('click', () => {
+          this.standalone.openLobbyAppPicker({
+            transport: 'wifi',
+            host: dev.host,
+            port: dev.port || 19878,
+            deviceKey: `${dev.host}:${dev.port || 19878}`,
+            deviceName: dev.displayName || dev.host,
+            certFingerprint: dev.certFingerprint || '',
+          });
+        });
+
         const revokeBtn = document.createElement('button');
         revokeBtn.type = 'button';
         revokeBtn.className = 'recent-revoke-btn';
@@ -2047,7 +2144,7 @@ class OpalCastWebApp {
           this.showToast(`已移除信任设备 ${dev.displayName || dev.host}`);
         });
 
-        group.append(btn, revokeBtn);
+        group.append(btn, appBtn, revokeBtn);
         container.appendChild(group);
       }
       return;
@@ -2076,10 +2173,25 @@ class OpalCastWebApp {
     }
   }
 
+  buildClientContextSummary() {
+    const parts = [
+      `Mode: ${this.desktop.enabled ? 'Tauri Desktop' : 'Web Browser'}`,
+      `Transport: ${this.transportMode}`,
+      `Role: ${this.sessionRole}`,
+      `Connected: ${this.authenticated ? 'yes' : 'no'}`,
+      `ActiveStandaloneWindows: ${this.standalone?.getActiveCount() || 0}/3`,
+    ];
+    if (this.activeHost) {
+      parts.push(`Peer: ${this.activeHost}:${this.activePort}`);
+    }
+    return parts.join(' | ');
+  }
+
   setCastError(msg) {
     const box = $('castErrorBox');
     box.hidden = !msg;
     box.textContent = msg || '';
+    if (msg) this.diagnostics?.log('W', 'Cast', msg);
   }
 
   setActError(msg) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { OpalDesktopBridge } from '../js/desktop_bridge.js';
+import { buildStandaloneWindowQuery, OpalDesktopBridge } from '../js/desktop_bridge.js';
 
 test('scanUsbTetherDevices stays no-op outside Tauri desktop environment', async () => {
   const bridge = new OpalDesktopBridge({});
@@ -40,4 +40,77 @@ test('scanUsbTetherDevices invokes native Tauri command in desktop environment',
   assert.deepEqual(calls[0].args, { port: 19878 });
   assert.equal(list.length, 1);
   assert.equal(list[0].host, '192.168.42.129');
+});
+
+test('buildStandaloneWindowQuery encodes appLabel, deviceKey, and pin flag', () => {
+  const q = buildStandaloneWindowQuery({
+    host: '192.168.1.99',
+    port: 19878,
+    transport: 'wifi',
+    pkg: 'com.tencent.mm',
+    cls: '.ui.LauncherUI',
+    label: '微信',
+    deviceKey: '192.168.1.99:19878',
+    alwaysOnTop: true,
+    certFingerprint: 'a'.repeat(64),
+  });
+  const params = new URLSearchParams(q);
+  assert.equal(params.get('role'), 'standalone_app');
+  assert.equal(params.get('pkg'), 'com.tencent.mm');
+  assert.equal(params.get('appLabel'), '微信');
+  assert.equal(params.get('deviceKey'), '192.168.1.99:19878');
+  assert.equal(params.get('pin'), '1');
+});
+
+test('desktop bridge forwards standalone pin, reload, and feedback Tauri commands', async () => {
+  const calls = [];
+  const fakeWin = {
+    __TAURI__: {
+      core: {
+        async invoke(cmd, args) {
+          calls.push({ cmd, args });
+          if (cmd === 'open_standalone_window') {
+            return { status: 'already_open', label: 'standalone-com-demo', existingTitle: 'Demo', activeCount: 1, maxCount: 3 };
+          }
+          if (cmd === 'set_current_window_always_on_top') {
+            return Boolean(args.alwaysOnTop);
+          }
+          if (cmd === 'submit_feedback_report') {
+            return { success: true, eventId: 'a'.repeat(32), shortCode: 'AAAAAAAA', errorMessage: '' };
+          }
+          return [];
+        },
+      },
+    },
+  };
+
+  const bridge = new OpalDesktopBridge(fakeWin);
+  const openRes = await bridge.openStandaloneWindow({
+    pkg: 'com.demo',
+    label: 'Demo',
+    host: '192.168.1.10',
+    port: 19878,
+    alwaysOnTop: true,
+    forceReload: true,
+  });
+  assert.equal(openRes.status, 'already_open');
+  assert.equal(calls[0].cmd, 'open_standalone_window');
+  assert.equal(calls[0].args.alwaysOnTop, true);
+  assert.equal(calls[0].args.forceReload, true);
+
+  const pinned = await bridge.setCurrentWindowAlwaysOnTop(true);
+  assert.equal(pinned, true);
+  assert.equal(calls[1].cmd, 'set_current_window_always_on_top');
+  assert.deepEqual(calls[1].args, { alwaysOnTop: true });
+
+  const fb = await bridge.submitFeedbackReport({
+    reporterName: 'Leo',
+    problemDescription: '希望支持置顶',
+    kind: 'feature',
+    includeLogs: false,
+  });
+  assert.equal(fb.success, true);
+  assert.equal(calls[2].cmd, 'submit_feedback_report');
+  assert.equal(calls[2].args.kind, 'feature');
+  assert.equal(calls[2].args.includeLogs, false);
 });

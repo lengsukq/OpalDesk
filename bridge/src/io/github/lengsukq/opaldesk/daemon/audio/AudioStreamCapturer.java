@@ -63,9 +63,12 @@ public final class AudioStreamCapturer {
     private final Context ctx;
     private final AudioListener listener;
     private final Object lock = new Object();
+    private final Object dtxWakeLock = new Object();
+    private final AudioSilenceGate silenceGate = new AudioSilenceGate();
 
     private volatile boolean running = false;
     private volatile boolean active = false;
+    private volatile boolean dtxSuppressed = false;
     private volatile boolean splitModeRequested = false;
     private volatile boolean splitPolicyActive = false;
     private volatile List<Integer> appliedSplitUids =
@@ -213,6 +216,8 @@ public final class AudioStreamCapturer {
             this.audioRecord = rec;
             this.encoder = enc;
             this.splitPolicyActive = usingSplitPolicy;
+            this.silenceGate.reset();
+            this.dtxSuppressed = false;
             this.running = true;
             this.active = true;
 
@@ -265,7 +270,11 @@ public final class AudioStreamCapturer {
         boolean wasActive = this.active;
         this.running = false;
         this.active = false;
+        this.dtxSuppressed = false;
         this.splitPolicyActive = false;
+        synchronized (dtxWakeLock) {
+            dtxWakeLock.notifyAll();
+        }
 
         AudioRecord rec = this.audioRecord;
         MediaCodec enc = this.encoder;
@@ -555,6 +564,18 @@ public final class AudioStreamCapturer {
                 consecutiveErrors = 0;
                 if (read == 0) continue;
 
+                // Silence DTX: avoid burning CPU software AAC encoding & 47 Hz Wi-Fi TX wakeups during silence.
+                if (!silenceGate.shouldTransmit(pcm, read)) {
+                    dtxSuppressed = true;
+                    continue;
+                }
+                if (dtxSuppressed) {
+                    dtxSuppressed = false;
+                    synchronized (dtxWakeLock) {
+                        dtxWakeLock.notifyAll();
+                    }
+                }
+
                 int inIdx = enc.dequeueInputBuffer(20_000L);
                 if (inIdx >= 0) {
                     ByteBuffer inBuf = enc.getInputBuffer(inIdx);
@@ -590,6 +611,18 @@ public final class AudioStreamCapturer {
             try {
                 int outIdx = enc.dequeueOutputBuffer(info, 25_000L);
                 if (outIdx == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    if (dtxSuppressed && running) {
+                        synchronized (dtxWakeLock) {
+                            if (dtxSuppressed && running) {
+                                try {
+                                    dtxWakeLock.wait(250L);
+                                } catch (InterruptedException ie) {
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     continue;
                 }
                 if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {

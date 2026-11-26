@@ -195,12 +195,29 @@ object WorkstationKeyDispatcher {
         else -> true
     }
 
+    private val sideBackDeduplicator = io.github.lengsukq.opaldesk.protocol.CompositorGeometry.SideBackKeyDeduplicator()
+
+    fun tryClaimMouseSideBack(uptimeMs: Long = android.os.SystemClock.uptimeMillis()): Boolean =
+        sideBackDeduplicator.tryClaimSideButtonBack(uptimeMs)
+
+    fun consumeDuplicateMouseBackKey(
+        event: KeyEvent,
+        uptimeMs: Long = android.os.SystemClock.uptimeMillis(),
+    ): Boolean = sideBackDeduplicator.shouldSuppressDuplicateBackKey(event.keyCode, event.action, uptimeMs)
+
+    fun recordBackKeyForwarded(uptimeMs: Long = android.os.SystemClock.uptimeMillis()) {
+        sideBackDeduplicator.recordBackKeyForwarded(uptimeMs)
+    }
+
     fun forwardToFocusedWindow(event: KeyEvent, forwardImeSwitch: Boolean = false): Boolean {
         if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) return false
         if (!isForwardableKey(event.keyCode)) return false
         if (!forwardImeSwitch && isImeSwitchShortcut(event.keyCode, event.metaState)) return false
         val focused = BridgeClient.sceneFlow.value.focusedWindow ?: return false
         if (focused.isMinimized) return false
+        if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN) {
+            sideBackDeduplicator.recordBackKeyForwarded(android.os.SystemClock.uptimeMillis())
+        }
         val effDeviceId = if (isPhysicalKeyboardEvent(event)) {
             event.deviceId
         } else {

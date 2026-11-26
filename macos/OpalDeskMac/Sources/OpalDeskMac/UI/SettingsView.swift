@@ -199,7 +199,7 @@ public struct SettingsView: View {
             Button("全部撤销", role: .destructive) { model.revokeAllTrustedDevices() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("撤销后再次无线连接需要重新核对证书指纹并输入 \(DisplayPresets.pairingPinLength) 位配对 PIN 码。")
+            Text("撤销后再次无线连接需要重新核对证书指纹，并在手机端确认同意配对请求。")
         }
     }
 

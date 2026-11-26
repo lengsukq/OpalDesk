@@ -156,4 +156,117 @@ object FloatingOverlayGeometry {
             y = safeCoerceRangeFloor(targetY, minY, max(1, screenH) - dpToPx(64, safeDensity)),
         )
     }
+
+    /**
+     * Computes a floating overlay window size whose content area (`width x (height - chromeHeightPx)`)
+     * matches the mirrored phone stream's exact aspect ratio (`videoW / videoH`) without stretching or
+     * clipping on portrait or landscape rotations.
+     */
+    fun computeAspectMatchedWindowSize(
+        videoW: Int,
+        videoH: Int,
+        chromeHeightPx: Int,
+        screenW: Int,
+        screenH: Int,
+        density: Float,
+    ): Bounds {
+        val safeScreenW = max(1, screenW)
+        val safeScreenH = max(1, screenH)
+        val safeDensity = density.coerceAtLeast(0.5f)
+        val safeChrome = max(0, chromeHeightPx)
+        val aspect = (max(2, videoW).toFloat() / max(2, videoH).toFloat()).coerceIn(0.35f, 3.0f)
+
+        val maxW = max(1, (safeScreenW * 0.90f).roundToInt())
+        val maxContentH = max(1, (safeScreenH * 0.84f).roundToInt() - safeChrome)
+        val minScreenDp = min(safeScreenW, safeScreenH) / safeDensity
+
+        val desiredContentH: Int
+        val desiredContentW: Int
+        if (aspect < 1f) {
+            val capH = if (minScreenDp >= TABLET_MIN_SCREEN_DP) {
+                min(dpToPx(660, safeDensity), maxContentH)
+            } else {
+                min(dpToPx(540, safeDensity), maxContentH)
+            }
+            desiredContentH = max(1, capH)
+            desiredContentW = max(1, (desiredContentH * aspect).roundToInt())
+        } else {
+            val capW = if (minScreenDp >= TABLET_MIN_SCREEN_DP) {
+                min(dpToPx(680, safeDensity), maxW)
+            } else {
+                min(dpToPx(560, safeDensity), maxW)
+            }
+            desiredContentW = max(1, capW)
+            desiredContentH = max(1, (desiredContentW / aspect).roundToInt())
+        }
+
+        return fitAspectIntoBounds(desiredContentW, desiredContentH, aspect, safeChrome, maxW, maxContentH)
+    }
+
+    /**
+     * Aspect-ratio-locked resize clamping for floating Mirror windows so dragging the corner grip
+     * scales the mirrored phone screen smoothly with zero distortion.
+     */
+    fun clampAspectLockedResizeSize(
+        targetW: Int,
+        targetH: Int,
+        videoW: Int,
+        videoH: Int,
+        chromeHeightPx: Int,
+        screenW: Int,
+        screenH: Int,
+        density: Float,
+    ): Bounds {
+        val safeScreenW = max(1, screenW)
+        val safeScreenH = max(1, screenH)
+        val safeDensity = density.coerceAtLeast(0.5f)
+        val safeChrome = max(0, chromeHeightPx)
+        val aspect = (max(2, videoW).toFloat() / max(2, videoH).toFloat()).coerceIn(0.35f, 3.0f)
+
+        val maxW = max(1, (safeScreenW * 0.92f).roundToInt())
+        val maxContentH = max(1, (safeScreenH * 0.86f).roundToInt() - safeChrome)
+        val minW = min(dpToPx(200, safeDensity), maxW)
+        val minContentH = min(dpToPx(200, safeDensity), maxContentH)
+
+        val desiredW = max(minW, targetW)
+        val desiredContentH = max(minContentH, targetH - safeChrome)
+        val fromW = fitAspectIntoBounds(desiredW, max(1, (desiredW / aspect).roundToInt()), aspect, safeChrome, maxW, maxContentH)
+        val fromH = fitAspectIntoBounds(max(1, (desiredContentH * aspect).roundToInt()), desiredContentH, aspect, safeChrome, maxW, maxContentH)
+
+        // Pick whichever projection tracks the user's drag direction more closely while staying within bounds.
+        val errW = absDiff(fromW.width, targetW) + absDiff(fromW.height, targetH)
+        val errH = absDiff(fromH.width, targetW) + absDiff(fromH.height, targetH)
+        val chosen = if (errW <= errH) fromW else fromH
+        val clampedW = max(minW, min(maxW, chosen.width))
+        val lockedContentH = max(1, (clampedW / aspect).roundToInt()).coerceAtMost(maxContentH)
+        val lockedW = max(1, (lockedContentH * aspect).roundToInt()).coerceAtMost(maxW)
+        return Bounds(width = lockedW, height = lockedContentH + safeChrome)
+    }
+
+    private fun fitAspectIntoBounds(
+        rawW: Int,
+        rawContentH: Int,
+        aspect: Float,
+        chromeHeightPx: Int,
+        maxW: Int,
+        maxContentH: Int,
+    ): Bounds {
+        var w = max(1, rawW)
+        var h = max(1, rawContentH)
+        if (w > maxW) {
+            w = maxW
+            h = max(1, (w / aspect).roundToInt())
+        }
+        if (h > maxContentH) {
+            h = maxContentH
+            w = max(1, (h * aspect).roundToInt())
+        }
+        if (w > maxW) {
+            w = maxW
+            h = max(1, (w / aspect).roundToInt())
+        }
+        return Bounds(width = max(1, w), height = max(1, h) + chromeHeightPx)
+    }
+
+    private fun absDiff(a: Int, b: Int): Int = if (a >= b) a - b else b - a
 }

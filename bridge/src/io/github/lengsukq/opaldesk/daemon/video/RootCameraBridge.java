@@ -318,11 +318,15 @@ public final class RootCameraBridge {
                 if (jpeg == null || jpeg.length == 0) continue;
                 long seq = frameSeq.incrementAndGet();
                 AospVirtualCameraHost vcam = this.aospCamHost;
-                if (vcam != null && vcam.isActive()) {
+                boolean deliveredToAosp = vcam != null && vcam.isActive();
+                if (deliveredToAosp) {
                     vcam.onJpegFrame(jpeg);
                 }
-                writeLatestFrameFile(jpeg);
-                writeMetaFileQuietly(true, seq);
+                // Avoid 30 atomic flash writes/sec when native AOSP VirtualCamera is already consuming frames.
+                if (!deliveredToAosp) {
+                    writeLatestFrameFile(jpeg);
+                    writeMetaFileQuietly(true, seq);
+                }
                 broadcastToSubscribers(jpeg);
             } catch (InterruptedException ie) {
                 break;

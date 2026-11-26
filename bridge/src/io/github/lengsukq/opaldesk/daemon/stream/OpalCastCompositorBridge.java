@@ -4,9 +4,12 @@ import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.view.Display;
 import android.view.InputDevice;
@@ -134,6 +137,16 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         volatile int initialWidth = 1920;
         volatile int initialHeight = 1080;
         volatile int initialDpi = 220;
+        volatile int dexWidth = 1920;
+        volatile int dexHeight = 1080;
+        volatile int dexDpi = 220;
+        volatile int dexRequestedBitrateKbps = 0;
+        volatile int displayMode = OpalCastProtocol.DISPLAY_MODE_DEX;
+        volatile int mirrorSourceWidth = 1080;
+        volatile int mirrorSourceHeight = 1920;
+        volatile int mirrorSourceDpi = 420;
+        volatile int mirrorRotation = 0;
+        volatile String mirrorTargetUniqueId = "";
         volatile float fps = 60f;
         volatile float requestedNativeFps = 60f;
         volatile int bitrateKbps = 12_000;
@@ -149,6 +162,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         volatile int mouseButtons = 0;
         volatile int lastImeShowSeq = -1;
         volatile long imeProbeGen = 0L;
+        volatile String lastPushedFullscreenTitle = "";
         volatile boolean closed = false;
 
         ActiveRemoteSession(int sessionId, int sinkType, boolean standalone, String pkg, String cls) {
@@ -157,6 +171,26 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             this.standalone = standalone;
             this.appPackage = pkg != null ? pkg : "";
             this.appActivity = cls != null ? cls : "";
+        }
+
+        boolean isMirror() {
+            return !standalone && displayMode == OpalCastProtocol.DISPLAY_MODE_MIRROR;
+        }
+
+        int inputTargetDisplayId() {
+            return isMirror() ? Display.DEFAULT_DISPLAY : displayId;
+        }
+
+        String inputTargetUniqueId() {
+            return isMirror() ? mirrorTargetUniqueId : vdUniqueId;
+        }
+
+        int inputTargetWidth() {
+            return isMirror() ? Math.max(2, mirrorSourceWidth) : Math.max(2, width);
+        }
+
+        int inputTargetHeight() {
+            return isMirror() ? Math.max(2, mirrorSourceHeight) : Math.max(2, height);
         }
     }
 
@@ -184,6 +218,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     private final Object cameraLock = new Object();
     private RootCameraBridge cameraBridge;
     private volatile int cameraOwnerSessionId = -1;
+    private final Object mirrorListenerLock = new Object();
+    private DisplayManager.DisplayListener mirrorDisplayListener;
     private volatile Runnable remoteStateChangeListener;
 
     public OpalCastCompositorBridge(
@@ -260,6 +296,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     }
 
     public void shutdown() {
+        unregisterMirrorDisplayListener();
         stopAudio();
         stopRemoteMic(false);
         stopRemoteCamera(false, true);
@@ -360,7 +397,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     public int getActiveDesktopDisplayId() {
         int sid = desktopSessionId;
         ActiveRemoteSession s = (sid > 0) ? sessions.get(sid) : null;
-        return (s != null && !s.closed) ? s.displayId : -1;
+        return (s != null && !s.closed && !s.isMirror()) ? s.displayId : -1;
     }
 
     /** Forwards a soft-keyboard show/hide request to the active remote desktop receiver (e.g. Tablet). */
@@ -499,6 +536,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         if (sessionId == desktopSessionId) {
             desktopSessionId = -1;
             localHostTextFieldFocused = false;
+            unregisterMirrorDisplayListener();
             stopAudio();
             if (mouseRouter != null) {
                 mouseRouter.releaseToLocal();
@@ -534,17 +572,24 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     @Override
     public void onMouseEvent(int sessionId, OpalCastProtocol.MouseEventMsg msg) {
         ActiveRemoteSession s = sessions.get(sessionId);
-        if (s == null || msg == null || s.displayId <= 0) return;
-        float x = Math.max(0f, Math.min(s.width - 1f, msg.x));
-        float y = Math.max(0f, Math.min(s.height - 1f, msg.y));
+        if (s == null || msg == null) return;
+        int targetDisplayId = s.inputTargetDisplayId();
+        if (targetDisplayId < 0) return;
+        int targetW = s.inputTargetWidth();
+        int targetH = s.inputTargetHeight();
+        String targetUid = s.inputTargetUniqueId();
+        float[] mapped = DisplayGeometryUtil.mapRemotePointToTargetDisplay(
+                msg.x, msg.y, s.width, s.height, targetW, targetH);
+        float x = mapped[0];
+        float y = mapped[1];
         long now = SystemClock.uptimeMillis();
 
         if (msg.action == OpalCastProtocol.MOUSE_BUTTON_DOWN
                 && (msg.actionButton == OpalCastProtocol.BUTTON_SECONDARY
                 || msg.actionButton == OpalCastProtocol.BUTTON_BACK)) {
-            inputRouter.injectRawKeyToDisplay(s.displayId, s.vdUniqueId, s.width, s.height,
+            inputRouter.injectRawKeyToDisplay(targetDisplayId, targetUid, targetW, targetH,
                     KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK, 0);
-            inputRouter.injectRawKeyToDisplay(s.displayId, s.vdUniqueId, s.width, s.height,
+            inputRouter.injectRawKeyToDisplay(targetDisplayId, targetUid, targetW, targetH,
                     KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK, 0);
             return;
         }
@@ -585,7 +630,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 now, androidAction, 1, props, coords,
                 0, s.mouseButtons, 1f, 1f, 0, 0, source, 0);
         try {
-            inputRouter.injectRawEventToDisplay(ev, s.displayId, s.vdUniqueId, s.width, s.height);
+            inputRouter.injectRawEventToDisplay(ev, targetDisplayId, targetUid, targetW, targetH);
         } finally {
             ev.recycle();
         }
@@ -597,7 +642,12 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     @Override
     public void onTouchEvent(int sessionId, OpalCastProtocol.TouchEventMsg msg) {
         ActiveRemoteSession s = sessions.get(sessionId);
-        if (s == null || msg == null || msg.pointers.length == 0 || s.displayId <= 0) return;
+        if (s == null || msg == null || msg.pointers.length == 0) return;
+        int targetDisplayId = s.inputTargetDisplayId();
+        if (targetDisplayId < 0) return;
+        int targetW = s.inputTargetWidth();
+        int targetH = s.inputTargetHeight();
+        String targetUid = s.inputTargetUniqueId();
         int count = Math.min(10, msg.pointers.length);
         MotionEvent.PointerProperties[] props = new MotionEvent.PointerProperties[count];
         MotionEvent.PointerCoords[] coords = new MotionEvent.PointerCoords[count];
@@ -606,8 +656,10 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             props[i].id = msg.pointers[i].pointerId;
             props[i].toolType = MotionEvent.TOOL_TYPE_FINGER;
             coords[i] = new MotionEvent.PointerCoords();
-            coords[i].x = Math.max(0f, Math.min(s.width - 1f, msg.pointers[i].x));
-            coords[i].y = Math.max(0f, Math.min(s.height - 1f, msg.pointers[i].y));
+            float[] mapped = DisplayGeometryUtil.mapRemotePointToTargetDisplay(
+                    msg.pointers[i].x, msg.pointers[i].y, s.width, s.height, targetW, targetH);
+            coords[i].x = mapped[0];
+            coords[i].y = mapped[1];
             coords[i].pressure = msg.pointers[i].pressure > 0f ? msg.pointers[i].pressure : 1f;
             coords[i].size = 1f;
         }
@@ -624,7 +676,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 now, action, count, props, coords,
                 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0);
         try {
-            inputRouter.injectRawEventToDisplay(ev, s.displayId, s.vdUniqueId, s.width, s.height);
+            inputRouter.injectRawEventToDisplay(ev, targetDisplayId, targetUid, targetW, targetH);
         } finally {
             ev.recycle();
         }
@@ -636,9 +688,11 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     @Override
     public void onKeyEvent(int sessionId, OpalCastProtocol.KeyEventMsg msg) {
         ActiveRemoteSession s = sessions.get(sessionId);
-        if (s == null || msg == null || s.displayId <= 0) return;
+        if (s == null || msg == null) return;
+        int targetDisplayId = s.inputTargetDisplayId();
+        if (targetDisplayId < 0) return;
         int action = (msg.action == OpalCastProtocol.KEY_DOWN) ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP;
-        if (!s.standalone && !localHostTextFieldFocused && !isWorkstationShortcut(msg.androidKeyCode, msg.metaState)) {
+        if (!s.standalone && !s.isMirror() && !localHostTextFieldFocused && !isWorkstationShortcut(msg.androidKeyCode, msg.metaState)) {
             WindowSession focused = compositor.getFocusedLiveWindow();
             if (focused != null) {
                 inputRouter.injectWindowKey(focused, action, msg.androidKeyCode, msg.metaState);
@@ -646,7 +700,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             }
         }
         inputRouter.injectRawKeyToDisplay(
-                s.displayId, s.vdUniqueId, s.width, s.height, action, msg.androidKeyCode, msg.metaState);
+                targetDisplayId, s.inputTargetUniqueId(), s.inputTargetWidth(), s.inputTargetHeight(),
+                action, msg.androidKeyCode, msg.metaState);
     }
 
     private static boolean isWorkstationShortcut(int keyCode, int metaState) {
@@ -680,7 +735,16 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         if (s == null || msg == null) return;
         switch (msg.action) {
             case OpalCastProtocol.SYS_BACK:
-                if (!s.standalone) {
+                if (s.isMirror()) {
+                    inputRouter.injectRawKeyToDisplay(
+                            Display.DEFAULT_DISPLAY, s.mirrorTargetUniqueId,
+                            s.inputTargetWidth(), s.inputTargetHeight(),
+                            KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK, 0);
+                    inputRouter.injectRawKeyToDisplay(
+                            Display.DEFAULT_DISPLAY, s.mirrorTargetUniqueId,
+                            s.inputTargetWidth(), s.inputTargetHeight(),
+                            KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK, 0);
+                } else if (!s.standalone) {
                     // Forward Back exclusively to the focused live OpalWin window (never exit ExternalDesktopActivity
                     // onto a blank remote display when no app window is open!).
                     WindowSession focused = compositor.getFocusedLiveWindow();
@@ -711,10 +775,37 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 }
                 break;
             case OpalCastProtocol.SYS_HOME:
-                if (!s.standalone) {
+                if (s.isMirror()) {
+                    inputRouter.injectRawKeyToDisplay(
+                            Display.DEFAULT_DISPLAY, s.mirrorTargetUniqueId,
+                            s.inputTargetWidth(), s.inputTargetHeight(),
+                            KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_HOME, 0);
+                    inputRouter.injectRawKeyToDisplay(
+                            Display.DEFAULT_DISPLAY, s.mirrorTargetUniqueId,
+                            s.inputTargetWidth(), s.inputTargetHeight(),
+                            KeyEvent.ACTION_UP, KeyEvent.KEYCODE_HOME, 0);
+                } else if (!s.standalone) {
                     if (!compositor.exitFullscreenIfActive()) {
                         compositor.minimizeAllWindows();
                     }
+                }
+                break;
+            case OpalCastProtocol.SYS_RECENTS:
+                if (s.isMirror()) {
+                    inputRouter.injectRawKeyToDisplay(
+                            Display.DEFAULT_DISPLAY, s.mirrorTargetUniqueId,
+                            s.inputTargetWidth(), s.inputTargetHeight(),
+                            KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_APP_SWITCH, 0);
+                    inputRouter.injectRawKeyToDisplay(
+                            Display.DEFAULT_DISPLAY, s.mirrorTargetUniqueId,
+                            s.inputTargetWidth(), s.inputTargetHeight(),
+                            KeyEvent.ACTION_UP, KeyEvent.KEYCODE_APP_SWITCH, 0);
+                }
+                break;
+            case OpalCastProtocol.SYS_TOGGLE_DISPLAY_MODE:
+                if (!s.standalone) {
+                    int targetMode = DisplayGeometryUtil.resolveTargetDisplayMode(s.displayMode, msg.arg);
+                    worker.execute(() -> switchDesktopDisplayMode(s, targetMode));
                 }
                 break;
             case OpalCastProtocol.SYS_TOGGLE_BLACKOUT:
@@ -726,7 +817,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 break;
             case OpalCastProtocol.SYS_SET_AUDIO_ENABLED:
                 if (!s.standalone) {
-                    if (msg.arg != 0) startAudioForDesktop(sessionId); else stopAudio();
+                    if (msg.arg != 0) startAudioForDesktop(sessionId, s.isMirror()); else stopAudio();
                 }
                 break;
             case OpalCastProtocol.SYS_DISCONNECT:
@@ -815,6 +906,80 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
 
     // ---- Internal lifecycle ----
 
+    private static int[] desktopVdCandidates() {
+        int dcor = BridgeProtocol.VD_FLAG_DESTROY_CONTENT_ON_REMOVAL;
+        return new int[]{
+                BridgeProtocol.VD_FLAGS_TRUSTED_FOCUS | dcor,
+                BridgeProtocol.VD_FLAGS_TRUSTED_FOCUS,
+                BridgeProtocol.VD_FLAGS_BASE_PUBLIC | dcor,
+                BridgeProtocol.VD_FLAGS_BASE_PUBLIC
+        };
+    }
+
+    private static int[] standaloneVdCandidates() {
+        int dcor = BridgeProtocol.VD_FLAG_DESTROY_CONTENT_ON_REMOVAL;
+        return new int[]{
+                BridgeProtocol.VD_FLAGS_TRUSTED_IME | dcor,
+                BridgeProtocol.VD_FLAGS_TRUSTED_IME,
+                BridgeProtocol.VD_FLAGS_TRUSTED_FOCUS | dcor,
+                BridgeProtocol.VD_FLAGS_BASE_PUBLIC | dcor,
+                BridgeProtocol.VD_FLAGS_BASE_PUBLIC
+        };
+    }
+
+    private void releaseSessionVirtualDisplayLocked(ActiveRemoteSession s, boolean removeTasks) {
+        if (s.vd == null) return;
+        int oldId = s.displayId;
+        if (removeTasks && oldId > 0) {
+            List<Integer> allTids = displayDriver.findAllTaskIdsOnDisplay(oldId);
+            if (allTids != null && !allTids.isEmpty()) {
+                for (Integer tid : allTids) {
+                    if (tid != null && tid > 0) {
+                        displayDriver.removeTask(tid);
+                    }
+                }
+            } else {
+                String expectedPkg = s.standalone ? s.appPackage : BridgeBuildConfig.HELPER_PACKAGE;
+                int topTid = displayDriver.findTopTaskIdOnDisplay(oldId, expectedPkg);
+                if (topTid > 0) {
+                    displayDriver.removeTask(topTid);
+                }
+            }
+        }
+        try { s.vd.setSurface(null); } catch (RuntimeException ignored) {}
+        try { s.vd.release(); } catch (RuntimeException ignored) {}
+        s.vd = null;
+        s.displayId = -1;
+        s.vdUniqueId = "";
+        if (oldId > 0) {
+            inputRouter.releaseDisplayResources(oldId);
+        }
+    }
+
+    private void bindVirtualDisplayMetadataLocked(ActiveRemoteSession s, VirtualDisplay vd) {
+        Display disp = vd.getDisplay();
+        s.vd = vd;
+        s.displayId = disp.getDisplayId();
+        String uid = VirtualDisplayFactory.getUniqueId(disp);
+        if (uid == null || uid.isEmpty()) {
+            uid = services.getDisplayUniqueId(s.displayId);
+        }
+        s.vdUniqueId = uid != null ? uid : "";
+    }
+
+    private void populatePrimaryMirrorStateLocked(ActiveRemoteSession s, int[] d0State) {
+        int d0W = (d0State != null && d0State.length >= 4 && d0State[0] > 0) ? d0State[0] : 1080;
+        int d0H = (d0State != null && d0State.length >= 4 && d0State[1] > 0) ? d0State[1] : 1920;
+        int d0Dpi = (d0State != null && d0State.length >= 4 && d0State[2] > 0) ? d0State[2] : 420;
+        int d0Rot = (d0State != null && d0State.length >= 4) ? DisplayGeometryUtil.normalizeRotation(d0State[3]) : 0;
+        s.mirrorSourceWidth = d0W;
+        s.mirrorSourceHeight = d0H;
+        s.mirrorSourceDpi = d0Dpi;
+        s.mirrorRotation = d0Rot;
+        String d0Uid = services.getDisplayUniqueId(Display.DEFAULT_DISPLAY);
+        s.mirrorTargetUniqueId = (d0Uid != null) ? d0Uid : "";
+    }
+
     private void setupSession(int sessionId, int sinkType, OpalCastProtocol.HelloMsg hello) {
         if (hello != null && hello.isAppCatalog()) {
             // Lightweight app-catalog probe session: no VirtualDisplay or encoder needed.
@@ -830,21 +995,43 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 s.width = spec[0];
                 s.height = spec[1];
                 s.dpi = spec[2];
+                s.displayMode = OpalCastProtocol.DISPLAY_MODE_DEX;
             } else {
                 int[] aligned = DisplayGeometryUtil.alignForEncoder(hello.width, hello.height, 8);
-                s.width = aligned[0];
-                s.height = aligned[1];
-                s.dpi = DisplayGeometryUtil.clampDpi(hello.dpi, s.width, s.height);
+                s.dexWidth = aligned[0];
+                s.dexHeight = aligned[1];
+                s.dexDpi = DisplayGeometryUtil.clampDpi(hello.dpi, s.dexWidth, s.dexHeight);
+                s.dexRequestedBitrateKbps = hello.bitrateKbps;
+                s.initialWidth = s.dexWidth;
+                s.initialHeight = s.dexHeight;
+                s.initialDpi = s.dexDpi;
+                boolean wantMirror = (hello.displayMode == OpalCastProtocol.DISPLAY_MODE_MIRROR);
+                if (wantMirror) {
+                    int[] d0 = services.getPrimaryDisplayState();
+                    populatePrimaryMirrorStateLocked(s, d0);
+                    int[] mSpec = DisplayGeometryUtil.computeMirrorStreamSpec(
+                            s.mirrorSourceWidth, s.mirrorSourceHeight, s.mirrorSourceDpi,
+                            Math.max(s.dexWidth, s.dexHeight), 8);
+                    s.width = mSpec[0];
+                    s.height = mSpec[1];
+                    s.dpi = mSpec[2];
+                    s.displayMode = OpalCastProtocol.DISPLAY_MODE_MIRROR;
+                } else {
+                    s.width = s.dexWidth;
+                    s.height = s.dexHeight;
+                    s.dpi = s.dexDpi;
+                    s.displayMode = OpalCastProtocol.DISPLAY_MODE_DEX;
+                }
             }
             float nativeFps = DisplayGeometryUtil.clampFps(hello.fps > 0 ? hello.fps : 60f, 60f);
             s.requestedNativeFps = nativeFps;
             int cfgFps = config.getTargetFps();
             s.fps = DisplayGeometryUtil.clampFps(cfgFps > 0 ? cfgFps : nativeFps, nativeFps);
-            int recommendedBitrate = computeRecommendedBitrateKbps(s.width, s.height, s.fps);
-            s.bitrateKbps = DisplayGeometryUtil.clampBitrateKbps(
-                    Math.max(hello.bitrateKbps, recommendedBitrate), 2500, DEFAULT_MAX_BITRATE_KBPS);
             s.codecPref = "h264".equalsIgnoreCase(hello.preferredCodec)
                     ? RemoteStreamSink.CODEC_PREF_H264 : RemoteStreamSink.CODEC_PREF_AUTO_HEVC;
+            int reqBitrate = s.isMirror() ? 0 : hello.bitrateKbps;
+            s.bitrateKbps = resolveSessionBitrateKbps(
+                    reqBitrate, s.width, s.height, s.fps, s.codecPref);
 
             RemoteStreamSink sink = new RemoteStreamSink(sinkType, new RemoteStreamSink.FrameListener() {
                 @Override
@@ -863,9 +1050,10 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 }
             });
             sink.setMaxBitrateKbps(DEFAULT_MAX_BITRATE_KBPS);
+            int startRot = s.isMirror() ? s.mirrorRotation : 0;
             Surface codecSurf = sink.startOrReconfigure(
                     s.width, s.height, s.dpi, s.fps, s.bitrateKbps,
-                    s.codecPref, OpalCastProtocol.DISPLAY_MODE_DEX, 0);
+                    s.codecPref, s.displayMode, startRot);
             if (codecSurf == null) {
                 server.disconnectSession(sessionId, "encoder_start_failed");
                 return;
@@ -874,62 +1062,84 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             s.width = sink.getWidth();
             s.height = sink.getHeight();
             s.dpi = sink.getDpi();
-            s.initialWidth = s.width;
-            s.initialHeight = s.height;
-            s.initialDpi = s.dpi;
-
-            String vdName = standalone ? ("OpalDesk-App-" + s.appPackage) : "OpalDesk-Remote";
-            int dcor = BridgeProtocol.VD_FLAG_DESTROY_CONTENT_ON_REMOVAL;
-            int[] candidates = standalone
-                    ? new int[]{
-                            BridgeProtocol.VD_FLAGS_TRUSTED_IME | dcor,
-                            BridgeProtocol.VD_FLAGS_TRUSTED_IME,
-                            BridgeProtocol.VD_FLAGS_TRUSTED_FOCUS | dcor,
-                            BridgeProtocol.VD_FLAGS_BASE_PUBLIC | dcor,
-                            BridgeProtocol.VD_FLAGS_BASE_PUBLIC
-                    }
-                    : new int[]{
-                            BridgeProtocol.VD_FLAGS_TRUSTED_FOCUS | dcor,
-                            BridgeProtocol.VD_FLAGS_TRUSTED_FOCUS,
-                            BridgeProtocol.VD_FLAGS_BASE_PUBLIC | dcor,
-                            BridgeProtocol.VD_FLAGS_BASE_PUBLIC
-                    };
-            // Always omit requestedRefreshRate (0f) on the remote VirtualDisplay: on Android 14-16
-            // pinning 60Hz causes SurfaceFlinger to stall output to 0 FPS during 120Hz Display 0
-            // Touch Boost, while pinning 120Hz causes jitter when Display 0 idles at 60Hz. Leaving
-            // it 0f lets SurfaceFlinger pace smoothly across every pacesetter refresh transition.
-            VirtualDisplay vd = null;
+            s.fps = sink.getFps();
             if (standalone) {
-                RootCameraBridge cam = this.cameraBridge;
-                if (cam != null && cam.hasAospVirtualCamera()) {
-                    for (int candFlags : candidates) {
-                        VirtualDisplay customVd = cam.createVirtualDisplay(
-                                vdName, s.width, s.height, s.dpi, candFlags, 0f, codecSurf);
-                        if (customVd != null && customVd.getDisplay() != null) {
-                            vd = customVd;
-                            break;
+                s.initialWidth = s.width;
+                s.initialHeight = s.height;
+                s.initialDpi = s.dpi;
+            } else if (!s.isMirror()) {
+                s.dexWidth = s.width;
+                s.dexHeight = s.height;
+                s.dexDpi = s.dpi;
+                s.initialWidth = s.width;
+                s.initialHeight = s.height;
+                s.initialDpi = s.dpi;
+            }
+
+            VirtualDisplay vd = null;
+            if (s.isMirror()) {
+                vd = VirtualDisplayFactory.createMirrorDisplay(
+                        services.displayManager, "OpalDesk-Mirror",
+                        s.width, s.height, s.dpi, Display.DEFAULT_DISPLAY, codecSurf);
+                if (vd == null || vd.getDisplay() == null) {
+                    // Graceful fallback to DeX if ROM rejects AUTO_MIRROR at session start
+                    System.err.println("OPALDESK_REMOTE_MIRROR_START_FALLBACK_DEX sid=" + sessionId);
+                    s.displayMode = OpalCastProtocol.DISPLAY_MODE_DEX;
+                    s.width = s.dexWidth;
+                    s.height = s.dexHeight;
+                    s.dpi = s.dexDpi;
+                    s.bitrateKbps = resolveSessionBitrateKbps(
+                            s.dexRequestedBitrateKbps, s.width, s.height, s.fps, s.codecPref);
+                    codecSurf = sink.startOrReconfigure(
+                            s.width, s.height, s.dpi, s.fps, s.bitrateKbps,
+                            s.codecPref, OpalCastProtocol.DISPLAY_MODE_DEX, 0);
+                    if (codecSurf == null) {
+                        sink.stop();
+                        server.disconnectSession(sessionId, "encoder_start_failed");
+                        return;
+                    }
+                    s.width = sink.getWidth();
+                    s.height = sink.getHeight();
+                    s.dpi = sink.getDpi();
+                    s.dexWidth = s.width;
+                    s.dexHeight = s.height;
+                    s.dexDpi = s.dpi;
+                }
+            }
+            if (!s.isMirror()) {
+                String vdName = standalone ? ("OpalDesk-App-" + s.appPackage) : "OpalDesk-Remote";
+                int[] candidates = standalone ? standaloneVdCandidates() : desktopVdCandidates();
+                // Always omit requestedRefreshRate (0f) on the remote VirtualDisplay: on Android 14-16
+                // pinning 60Hz causes SurfaceFlinger to stall output to 0 FPS during 120Hz Display 0
+                // Touch Boost, while pinning 120Hz causes jitter when Display 0 idles at 60Hz. Leaving
+                // it 0f lets SurfaceFlinger pace smoothly across every pacesetter refresh transition.
+                if (standalone) {
+                    RootCameraBridge cam = this.cameraBridge;
+                    if (cam != null && cam.hasAospVirtualCamera()) {
+                        for (int candFlags : candidates) {
+                            VirtualDisplay customVd = cam.createVirtualDisplay(
+                                    vdName, s.width, s.height, s.dpi, candFlags, 0f, codecSurf);
+                            if (customVd != null && customVd.getDisplay() != null) {
+                                vd = customVd;
+                                break;
+                            }
                         }
                     }
                 }
-            }
-            if (vd == null) {
-                vd = VirtualDisplayFactory.createWithFlagFallback(
-                        services.displayManager, vdName, s.width, s.height, s.dpi, candidates, 0f, codecSurf, null);
+                if (vd == null) {
+                    vd = VirtualDisplayFactory.createWithFlagFallback(
+                            services.displayManager, vdName, s.width, s.height, s.dpi, candidates, 0f, codecSurf, null);
+                }
             }
             if (vd == null || vd.getDisplay() == null) {
                 sink.stop();
                 server.disconnectSession(sessionId, "virtual_display_failed");
                 return;
             }
-            Display disp = vd.getDisplay();
-            s.vd = vd;
-            s.displayId = disp.getDisplayId();
-            String uid = VirtualDisplayFactory.getUniqueId(disp);
-            if (uid == null || uid.isEmpty()) {
-                uid = services.getDisplayUniqueId(s.displayId);
+            bindVirtualDisplayMetadataLocked(s, vd);
+            if (!s.isMirror()) {
+                services.configureVirtualDisplayWindowing(s.displayId, BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY);
             }
-            s.vdUniqueId = uid != null ? uid : "";
-            services.configureVirtualDisplayWindowing(s.displayId, BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY);
 
             s.clipboard = new ClipboardSyncService(new ClipboardSyncService.ClipboardHost() {
                 @Override public void sendClipboardPush(long seq, String text) {
@@ -940,7 +1150,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 }
                 @Override public void triggerPasteKey() {
                     int ctrl = KeyEvent.META_CTRL_ON | KeyEvent.META_CTRL_LEFT_ON;
-                    if (!s.standalone && !localHostTextFieldFocused) {
+                    if (!s.standalone && !s.isMirror() && !localHostTextFieldFocused) {
                         WindowSession focused = compositor.getFocusedLiveWindow();
                         if (focused != null) {
                             inputRouter.injectWindowKey(focused, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_V, ctrl);
@@ -948,9 +1158,13 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                             return;
                         }
                     }
-                    inputRouter.injectRawKeyToDisplay(s.displayId, s.vdUniqueId, s.width, s.height,
+                    int targetDisplayId = s.inputTargetDisplayId();
+                    if (targetDisplayId < 0) return;
+                    inputRouter.injectRawKeyToDisplay(
+                            targetDisplayId, s.inputTargetUniqueId(), s.inputTargetWidth(), s.inputTargetHeight(),
                             KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_V, ctrl);
-                    inputRouter.injectRawKeyToDisplay(s.displayId, s.vdUniqueId, s.width, s.height,
+                    inputRouter.injectRawKeyToDisplay(
+                            targetDisplayId, s.inputTargetUniqueId(), s.inputTargetWidth(), s.inputTargetHeight(),
                             KeyEvent.ACTION_UP, KeyEvent.KEYCODE_V, ctrl);
                 }
             }, null, !standalone);
@@ -960,12 +1174,19 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             sessions.put(sessionId, s);
             if (!standalone) {
                 desktopSessionId = sessionId;
-                launchRemoteDesktopHost(s.displayId);
-                if (mouseRouter != null) {
-                    mouseRouter.setMouseTarget(config.getMouseTargetMode(), s.displayId);
+                if (s.isMirror()) {
+                    if (mouseRouter != null) {
+                        mouseRouter.releaseToLocal();
+                    }
+                    registerMirrorDisplayListener();
+                } else {
+                    launchRemoteDesktopHost(s.displayId);
+                    if (mouseRouter != null) {
+                        mouseRouter.setMouseTarget(config.getMouseTargetMode(), s.displayId);
+                    }
                 }
                 if (hello.audioEnabled) {
-                    startAudioForDesktop(sessionId);
+                    startAudioForDesktop(sessionId, s.isMirror());
                 }
             } else if (!s.appPackage.isEmpty()) {
                 config.recordAppLaunch(s.appPackage);
@@ -977,47 +1198,307 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             pushDeviceState(s);
             notifyRemoteStateChanged();
             System.out.println("OPALDESK_REMOTE_SESSION_READY sid=" + sessionId
-                    + " role=" + (standalone ? "standalone" : "desktop")
+                    + " role=" + (standalone ? "standalone" : (s.isMirror() ? "mirror" : "desktop"))
                     + " displayId=" + s.displayId + " " + s.width + "x" + s.height + "@" + s.fps
                     + " vdUid=" + s.vdUniqueId);
+        }
+    }
+
+    private void switchDesktopDisplayMode(ActiveRemoteSession s, int targetMode) {
+        if (s == null || s.standalone) return;
+        int normalized = (targetMode == OpalCastProtocol.DISPLAY_MODE_MIRROR)
+                ? OpalCastProtocol.DISPLAY_MODE_MIRROR
+                : OpalCastProtocol.DISPLAY_MODE_DEX;
+        synchronized (s.lock) {
+            if (s.closed || s.sink == null) return;
+            if (s.displayMode == normalized) {
+                pushDeviceState(s);
+                return;
+            }
+            if (normalized == OpalCastProtocol.DISPLAY_MODE_MIRROR) {
+                switchToMirrorModeLocked(s);
+            } else {
+                switchToDexModeLocked(s);
+            }
+        }
+    }
+
+    private void switchToMirrorModeLocked(ActiveRemoteSession s) {
+        int[] d0 = services.getPrimaryDisplayState();
+        populatePrimaryMirrorStateLocked(s, d0);
+        int[] mSpec = DisplayGeometryUtil.computeMirrorStreamSpec(
+                s.mirrorSourceWidth, s.mirrorSourceHeight, s.mirrorSourceDpi,
+                Math.max(s.dexWidth, s.dexHeight), 8);
+        int mirrorBitrate = resolveSessionBitrateKbps(0, mSpec[0], mSpec[1], s.fps, s.codecPref);
+        final boolean[] vdSwapped = new boolean[]{false};
+
+        boolean ok = s.sink.reconfigureAndSwap(
+                mSpec[0], mSpec[1], mSpec[2], s.fps, mirrorBitrate,
+                s.codecPref, OpalCastProtocol.DISPLAY_MODE_MIRROR, s.mirrorRotation,
+                (newSurface, alignedW, alignedH, alignedDpi) -> {
+                    releaseSessionVirtualDisplayLocked(s, true);
+                    VirtualDisplay mirrorVd = VirtualDisplayFactory.createMirrorDisplay(
+                            services.displayManager, "OpalDesk-Mirror",
+                            alignedW, alignedH, alignedDpi, Display.DEFAULT_DISPLAY, newSurface);
+                    if (mirrorVd != null && mirrorVd.getDisplay() != null) {
+                        bindVirtualDisplayMetadataLocked(s, mirrorVd);
+                        s.displayMode = OpalCastProtocol.DISPLAY_MODE_MIRROR;
+                        s.width = alignedW;
+                        s.height = alignedH;
+                        s.dpi = alignedDpi;
+                        s.bitrateKbps = mirrorBitrate;
+                        vdSwapped[0] = true;
+                    }
+                });
+
+        if (!ok || !vdSwapped[0]) {
+            System.err.println("OPALDESK_REMOTE_MODE_SWITCH_FAILED sid=" + s.sessionId + " target=MIRROR");
+            if (s.vd == null) {
+                restoreDexDisplayLocked(s);
+            }
+            pushDeviceState(s);
+            notifyRemoteStateChanged();
+            return;
+        }
+
+        if (mouseRouter != null) {
+            mouseRouter.releaseToLocal();
+        }
+        services.focusDisplay(Display.DEFAULT_DISPLAY);
+        syncAudioRoutingForMode(true);
+        registerMirrorDisplayListener();
+        pushDeviceState(s);
+        notifyRemoteStateChanged();
+        System.out.println("OPALDESK_REMOTE_MODE_SWITCH sid=" + s.sessionId
+                + " mode=MIRROR stream=" + s.width + "x" + s.height + "@" + s.dpi
+                + " d0=" + s.mirrorSourceWidth + "x" + s.mirrorSourceHeight + " rot=" + s.mirrorRotation
+                + " vdDisplayId=" + s.displayId);
+    }
+
+    private void switchToDexModeLocked(ActiveRemoteSession s) {
+        unregisterMirrorDisplayListener();
+        restoreDexDisplayLocked(s);
+        pushDeviceState(s);
+        notifyRemoteStateChanged();
+    }
+
+    private void restoreDexDisplayLocked(ActiveRemoteSession s) {
+        int targetW = s.dexWidth > 0 ? s.dexWidth : s.initialWidth;
+        int targetH = s.dexHeight > 0 ? s.dexHeight : s.initialHeight;
+        int targetDpi = s.dexDpi > 0 ? s.dexDpi : s.initialDpi;
+        int dexBitrate = resolveSessionBitrateKbps(
+                s.dexRequestedBitrateKbps, targetW, targetH, s.fps, s.codecPref);
+        final boolean[] vdSwapped = new boolean[]{false};
+
+        boolean ok = s.sink.reconfigureAndSwap(
+                targetW, targetH, targetDpi, s.fps, dexBitrate,
+                s.codecPref, OpalCastProtocol.DISPLAY_MODE_DEX, 0,
+                (newSurface, alignedW, alignedH, alignedDpi) -> {
+                    boolean wasDex = !s.isMirror();
+                    releaseSessionVirtualDisplayLocked(s, wasDex);
+                    VirtualDisplay dexVd = VirtualDisplayFactory.createWithFlagFallback(
+                            services.displayManager, "OpalDesk-Remote",
+                            alignedW, alignedH, alignedDpi, desktopVdCandidates(), 0f, newSurface, null);
+                    if (dexVd != null && dexVd.getDisplay() != null) {
+                        bindVirtualDisplayMetadataLocked(s, dexVd);
+                        services.configureVirtualDisplayWindowing(
+                                s.displayId, BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY);
+                        s.displayMode = OpalCastProtocol.DISPLAY_MODE_DEX;
+                        s.width = alignedW;
+                        s.height = alignedH;
+                        s.dpi = alignedDpi;
+                        s.dexWidth = alignedW;
+                        s.dexHeight = alignedH;
+                        s.dexDpi = alignedDpi;
+                        s.bitrateKbps = dexBitrate;
+                        vdSwapped[0] = true;
+                    }
+                });
+
+        if (!ok || !vdSwapped[0]) {
+            System.err.println("OPALDESK_REMOTE_MODE_SWITCH_FAILED sid=" + s.sessionId + " target=DEX");
+            return;
+        }
+        launchRemoteDesktopHost(s.displayId);
+        if (mouseRouter != null) {
+            mouseRouter.setMouseTarget(config.getMouseTargetMode(), s.displayId);
+        }
+        syncAudioRoutingForMode(false);
+        System.out.println("OPALDESK_REMOTE_MODE_SWITCH sid=" + s.sessionId
+                + " mode=DEX size=" + s.width + "x" + s.height + "@" + s.dpi
+                + " displayId=" + s.displayId);
+    }
+
+    private void registerMirrorDisplayListener() {
+        if (services.displayManager == null) return;
+        synchronized (mirrorListenerLock) {
+            if (mirrorDisplayListener != null) return;
+            DisplayManager.DisplayListener listener = new DisplayManager.DisplayListener() {
+                @Override public void onDisplayAdded(int displayId) {}
+                @Override public void onDisplayRemoved(int displayId) {}
+                @Override public void onDisplayChanged(int displayId) {
+                    if (displayId != Display.DEFAULT_DISPLAY) return;
+                    int sid = desktopSessionId;
+                    ActiveRemoteSession s = (sid > 0) ? sessions.get(sid) : null;
+                    if (s != null && !s.closed && s.isMirror()) {
+                        worker.execute(() -> syncMirrorOrientationIfChanged(s));
+                    }
+                }
+            };
+            try {
+                Looper mainLooper = Looper.getMainLooper();
+                Handler handler = (mainLooper != null) ? new Handler(mainLooper) : null;
+                services.displayManager.registerDisplayListener(listener, handler);
+                mirrorDisplayListener = listener;
+            } catch (RuntimeException e) {
+                System.err.println("OPALDESK_MIRROR_LISTENER_WARN: " + e.getMessage());
+            }
+        }
+    }
+
+    private void unregisterMirrorDisplayListener() {
+        DisplayManager.DisplayListener old;
+        synchronized (mirrorListenerLock) {
+            old = mirrorDisplayListener;
+            mirrorDisplayListener = null;
+        }
+        if (old != null && services.displayManager != null) {
+            try {
+                services.displayManager.unregisterDisplayListener(old);
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    private void syncMirrorOrientationIfChanged(ActiveRemoteSession s) {
+        synchronized (s.lock) {
+            if (s.closed || !s.isMirror() || s.sink == null || s.vd == null) return;
+            int[] d0 = services.getPrimaryDisplayState();
+            int d0W = (d0.length >= 4 && d0[0] > 0) ? d0[0] : s.mirrorSourceWidth;
+            int d0H = (d0.length >= 4 && d0[1] > 0) ? d0[1] : s.mirrorSourceHeight;
+            int d0Dpi = (d0.length >= 4 && d0[2] > 0) ? d0[2] : s.mirrorSourceDpi;
+            int d0Rot = (d0.length >= 4) ? DisplayGeometryUtil.normalizeRotation(d0[3]) : s.mirrorRotation;
+            if (d0W == s.mirrorSourceWidth && d0H == s.mirrorSourceHeight && d0Rot == s.mirrorRotation) {
+                return;
+            }
+            s.mirrorSourceWidth = d0W;
+            s.mirrorSourceHeight = d0H;
+            s.mirrorSourceDpi = d0Dpi;
+            s.mirrorRotation = d0Rot;
+            int[] mSpec = DisplayGeometryUtil.computeMirrorStreamSpec(
+                    d0W, d0H, d0Dpi, Math.max(s.dexWidth, s.dexHeight), 8);
+            if (mSpec[0] == s.width && mSpec[1] == s.height) {
+                pushDeviceState(s);
+                return;
+            }
+            int mirrorBitrate = resolveSessionBitrateKbps(0, mSpec[0], mSpec[1], s.fps, s.codecPref);
+            boolean ok = s.sink.reconfigureAndSwap(
+                    mSpec[0], mSpec[1], mSpec[2], s.fps, mirrorBitrate,
+                    s.codecPref, OpalCastProtocol.DISPLAY_MODE_MIRROR, d0Rot,
+                    (newSurface, alignedW, alignedH, alignedDpi) -> {
+                        s.width = alignedW;
+                        s.height = alignedH;
+                        s.dpi = alignedDpi;
+                        s.bitrateKbps = mirrorBitrate;
+                        try {
+                            s.vd.resize(alignedW, alignedH, alignedDpi);
+                            s.vd.setSurface(newSurface);
+                        } catch (RuntimeException e) {
+                            System.err.println("OPALDESK_MIRROR_ROTATE_WARN: " + e.getMessage());
+                        }
+                    });
+            if (!ok) return;
+            pushDeviceState(s);
+            notifyRemoteStateChanged();
+            System.out.println("OPALDESK_REMOTE_MIRROR_ROTATED sid=" + s.sessionId
+                    + " d0=" + d0W + "x" + d0H + " rot=" + d0Rot
+                    + " stream=" + s.width + "x" + s.height + "@" + s.dpi);
         }
     }
 
     private void reconfigureSession(ActiveRemoteSession s, OpalCastProtocol.ResizeConfig cfg) {
         synchronized (s.lock) {
             if (s.closed || s.sink == null || s.vd == null) return;
-            int reqW = cfg.width > 0 ? cfg.width : s.width;
-            int reqH = cfg.height > 0 ? cfg.height : s.height;
+            float nextFps = (cfg.fpsX100 > 0) ? DisplayGeometryUtil.clampFps(cfg.fpsX100 / 100f, s.fps) : s.fps;
+
+            if (!s.standalone) {
+                if (cfg.width > 0 && cfg.height > 0) {
+                    int[] alignedDex = DisplayGeometryUtil.alignForEncoder(cfg.width, cfg.height, 8);
+                    s.dexWidth = alignedDex[0];
+                    s.dexHeight = alignedDex[1];
+                    if (cfg.dpi > 0) {
+                        s.dexDpi = DisplayGeometryUtil.clampDpi(cfg.dpi, s.dexWidth, s.dexHeight);
+                    }
+                } else if (cfg.dpi > 0) {
+                    s.dexDpi = DisplayGeometryUtil.clampDpi(cfg.dpi, s.dexWidth, s.dexHeight);
+                }
+                if (cfg.bitrateKbps > 0) {
+                    s.dexRequestedBitrateKbps = cfg.bitrateKbps;
+                }
+                s.fps = nextFps;
+
+                if ((cfg.displayMode == OpalCastProtocol.DISPLAY_MODE_DEX
+                        || cfg.displayMode == OpalCastProtocol.DISPLAY_MODE_MIRROR)
+                        && cfg.displayMode != s.displayMode) {
+                    if (cfg.displayMode == OpalCastProtocol.DISPLAY_MODE_MIRROR) {
+                        switchToMirrorModeLocked(s);
+                    } else {
+                        switchToDexModeLocked(s);
+                    }
+                    return;
+                }
+            }
+
             int nextW;
             int nextH;
             int nextDpi;
+            int nextBitrate;
+            int nextMode = s.displayMode;
+            int nextRot = 0;
+
             if (s.standalone) {
+                int reqW = cfg.width > 0 ? cfg.width : s.width;
+                int reqH = cfg.height > 0 ? cfg.height : s.height;
                 int[] spec = resolveStandaloneStreamSpec(s.appPackage, reqW, reqH, cfg.dpi);
                 nextW = spec[0];
                 nextH = spec[1];
                 nextDpi = spec[2];
+                nextBitrate = resolveSessionBitrateKbps(cfg.bitrateKbps, nextW, nextH, nextFps, s.codecPref);
+                nextMode = OpalCastProtocol.DISPLAY_MODE_DEX;
+            } else if (s.isMirror()) {
+                int[] d0 = services.getPrimaryDisplayState();
+                populatePrimaryMirrorStateLocked(s, d0);
+                int[] mSpec = DisplayGeometryUtil.computeMirrorStreamSpec(
+                        s.mirrorSourceWidth, s.mirrorSourceHeight, s.mirrorSourceDpi,
+                        Math.max(s.dexWidth, s.dexHeight), 8);
+                nextW = mSpec[0];
+                nextH = mSpec[1];
+                nextDpi = mSpec[2];
+                nextBitrate = resolveSessionBitrateKbps(cfg.bitrateKbps, nextW, nextH, nextFps, s.codecPref);
+                nextMode = OpalCastProtocol.DISPLAY_MODE_MIRROR;
+                nextRot = s.mirrorRotation;
             } else {
-                int[] aligned = DisplayGeometryUtil.alignForEncoder(reqW, reqH, 8);
-                nextW = aligned[0];
-                nextH = aligned[1];
-                nextDpi = (cfg.dpi > 0) ? DisplayGeometryUtil.clampDpi(cfg.dpi, nextW, nextH) : s.dpi;
+                nextW = s.dexWidth;
+                nextH = s.dexHeight;
+                nextDpi = s.dexDpi;
+                nextBitrate = resolveSessionBitrateKbps(cfg.bitrateKbps, nextW, nextH, nextFps, s.codecPref);
+                nextMode = OpalCastProtocol.DISPLAY_MODE_DEX;
             }
-            float nextFps = (cfg.fpsX100 > 0) ? DisplayGeometryUtil.clampFps(cfg.fpsX100 / 100f, s.fps) : s.fps;
-            int nextBitrate = (cfg.bitrateKbps > 0)
-                    ? DisplayGeometryUtil.clampBitrateKbps(
-                            Math.max(cfg.bitrateKbps, computeRecommendedBitrateKbps(nextW, nextH, nextFps)),
-                            2500, DEFAULT_MAX_BITRATE_KBPS)
-                    : computeRecommendedBitrateKbps(nextW, nextH, nextFps);
 
             boolean ok = s.sink.reconfigureAndSwap(
                     nextW, nextH, nextDpi, nextFps, nextBitrate,
-                    s.codecPref, OpalCastProtocol.DISPLAY_MODE_DEX, 0,
+                    s.codecPref, nextMode, nextRot,
                     (newSurface, alignedW, alignedH, alignedDpi) -> {
                         s.width = alignedW;
                         s.height = alignedH;
                         s.dpi = alignedDpi;
                         s.fps = nextFps;
                         s.bitrateKbps = nextBitrate;
+                        if (!s.standalone && !s.isMirror()) {
+                            s.dexWidth = alignedW;
+                            s.dexHeight = alignedH;
+                            s.dexDpi = alignedDpi;
+                        }
                         try {
                             s.vd.resize(alignedW, alignedH, alignedDpi);
                             s.vd.setSurface(newSurface);
@@ -1048,17 +1529,15 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 reqW, reqH, requestedDpi, hostW, hostH, hostDpi, config.getWindowDpiScalePct());
     }
 
-    private static int computeRecommendedBitrateKbps(int w, int h, float fps) {
-        long pixels = (long) Math.max(640, w) * Math.max(480, h);
-        boolean uhd = pixels >= 5_500_000L; // >= 4K / super-ultrawide
-        boolean highRes = pixels >= 2_800_000L; // >= 2560x1100
-        boolean highFps = fps >= 85f;
-        if (uhd && highFps) return DEFAULT_MAX_BITRATE_KBPS;
-        if (uhd) return 24_000;
-        if (highRes && highFps) return 22_000;
-        if (highRes) return 16_000;
-        if (highFps) return 15_000;
-        return 11_000;
+    public static int resolveSessionBitrateKbps(
+            int requestedBitrateKbps, int w, int h, float fps, int codecPref) {
+        return DisplayGeometryUtil.resolveSessionBitrateKbps(
+                requestedBitrateKbps,
+                w,
+                h,
+                fps,
+                codecPref != RemoteStreamSink.CODEC_PREF_H264,
+                DEFAULT_MAX_BITRATE_KBPS);
     }
 
     private void launchRemoteDesktopHost(int displayId) {
@@ -1076,9 +1555,9 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         System.out.println("OPALDESK_REMOTE_HOST_LAUNCH displayId=" + displayId + " ok=" + ok);
     }
 
-    private void startAudioForDesktop(int sessionId) {
+    private void startAudioForDesktop(int sessionId, boolean mirrorMode) {
         stopAudio();
-        boolean splitByApp = config.getAudioRouteMode() == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP;
+        boolean splitByApp = !mirrorMode && (config.getAudioRouteMode() == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP);
         List<Integer> initialUids = splitByApp ? collectDexAppUids() : Collections.emptyList();
         AudioStreamCapturer cap = new AudioStreamCapturer(services.context, new AudioStreamCapturer.AudioListener() {
             @Override
@@ -1101,17 +1580,44 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         }
     }
 
-    public void onCompositorWindowsChanged() {
+    private boolean isActiveDesktopInMirrorMode() {
+        int sid = desktopSessionId;
+        ActiveRemoteSession s = (sid > 0) ? sessions.get(sid) : null;
+        return s != null && !s.closed && s.isMirror();
+    }
+
+    private void syncAudioRoutingForMode(boolean mirrorMode) {
         AudioStreamCapturer cap = audioCapturer;
         if (cap == null || !cap.isActive()) return;
-        if (config.getAudioRouteMode() != BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP) return;
-        cap.updateTargetUids(collectDexAppUids());
+        boolean splitByApp = !mirrorMode && (config.getAudioRouteMode() == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP);
+        List<Integer> uids = splitByApp ? collectDexAppUids() : Collections.emptyList();
+        cap.setSplitMode(splitByApp, uids);
+    }
+
+    public void onCompositorWindowsChanged() {
+        AudioStreamCapturer cap = audioCapturer;
+        if (cap != null && cap.isActive()
+                && !isActiveDesktopInMirrorMode()
+                && config.getAudioRouteMode() == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP) {
+            cap.updateTargetUids(collectDexAppUids());
+        }
+        int deskSid = desktopSessionId;
+        if (deskSid > 0) {
+            ActiveRemoteSession s = sessions.get(deskSid);
+            if (s != null && !s.closed && !s.standalone && !s.isMirror()) {
+                String fsTitle = compositor.getFullscreenWindowTitle();
+                if (!fsTitle.equals(s.lastPushedFullscreenTitle)) {
+                    pushDeviceState(s);
+                }
+            }
+        }
     }
 
     public void applyAudioRouteMode(int mode) {
         final AudioStreamCapturer cap = audioCapturer;
         if (cap == null || !cap.isActive()) return;
-        final boolean splitByApp = (mode == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP);
+        final boolean splitByApp = !isActiveDesktopInMirrorMode()
+                && (mode == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP);
         worker.execute(() -> {
             List<Integer> uids = splitByApp ? collectDexAppUids() : Collections.emptyList();
             cap.setSplitMode(splitByApp, uids);
@@ -1342,15 +1848,18 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     }
 
     private void pushDeviceState(ActiveRemoteSession s) {
+        boolean mirror = s.isMirror();
+        String fsTitle = (s.standalone || mirror) ? "" : compositor.getFullscreenWindowTitle();
+        s.lastPushedFullscreenTitle = fsTitle;
         OpalCastProtocol.DeviceState state = new OpalCastProtocol.DeviceState(
                 server.getDeviceName(),
                 s.sinkType,
-                OpalCastProtocol.DISPLAY_MODE_DEX,
+                s.displayMode,
                 s.width,
                 s.height,
                 s.dpi,
                 s.fps,
-                0,
+                mirror ? s.mirrorRotation : 0,
                 s.bitrateKbps,
                 100,
                 services.isHostScreenOff(),
@@ -1358,9 +1867,12 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 inputRouter.getLastInjectStatus(),
                 false,
                 0,
-                "DEX",
+                mirror ? "MIRROR" : "DEX",
                 "",
-                "");
+                "",
+                Collections.emptyList(),
+                Collections.emptyList(),
+                fsTitle);
         server.sendDeviceState(s.sessionId, state);
     }
 
@@ -1368,6 +1880,9 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         synchronized (s.lock) {
             if (s.closed) return;
             s.closed = true;
+            if (!s.standalone && (desktopSessionId == s.sessionId || desktopSessionId < 0)) {
+                unregisterMirrorDisplayListener();
+            }
             if (s.clipboard != null) {
                 try { s.clipboard.onSessionEnded(); } catch (RuntimeException ignored) {}
                 s.clipboard = null;
@@ -1376,29 +1891,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 try { s.fileReceiver.abortAllTransfers(); } catch (RuntimeException ignored) {}
                 s.fileReceiver = null;
             }
-            if (s.vd != null) {
-                int oldId = s.displayId;
-                if (oldId > 0) {
-                    List<Integer> allTids = displayDriver.findAllTaskIdsOnDisplay(oldId);
-                    if (allTids != null && !allTids.isEmpty()) {
-                        for (Integer tid : allTids) {
-                            if (tid != null && tid > 0) {
-                                displayDriver.removeTask(tid);
-                            }
-                        }
-                    } else {
-                        String expectedPkg = s.standalone ? s.appPackage : BridgeBuildConfig.HELPER_PACKAGE;
-                        int topTid = displayDriver.findTopTaskIdOnDisplay(oldId, expectedPkg);
-                        if (topTid > 0) {
-                            displayDriver.removeTask(topTid);
-                        }
-                    }
-                }
-                try { s.vd.setSurface(null); } catch (RuntimeException ignored) {}
-                try { s.vd.release(); } catch (RuntimeException ignored) {}
-                s.vd = null;
-                if (oldId > 0) inputRouter.releaseDisplayResources(oldId);
-            }
+            releaseSessionVirtualDisplayLocked(s, !s.isMirror());
             if (s.sink != null) {
                 try { s.sink.stop(); } catch (RuntimeException ignored) {}
                 s.sink = null;

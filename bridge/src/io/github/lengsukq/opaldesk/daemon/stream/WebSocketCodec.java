@@ -217,19 +217,25 @@ public final class WebSocketCodec {
     }
 
     private static void writeServerFrameHeader(OutputStream out, int opcode, long payloadLen) throws IOException {
-        out.write(0x80 | (opcode & 0x0F));
+        byte[] hdr = new byte[10];
+        hdr[0] = (byte) (0x80 | (opcode & 0x0F));
+        int hdrLen;
         if (payloadLen <= MAX_LEN_7BIT) {
-            out.write((int) payloadLen);
+            hdr[1] = (byte) payloadLen;
+            hdrLen = 2;
         } else if (payloadLen <= MAX_LEN_16BIT) {
-            out.write(EXTENDED_LEN_16_MARKER);
-            out.write((int) ((payloadLen >>> 8) & 0xFF));
-            out.write((int) (payloadLen & 0xFF));
+            hdr[1] = (byte) EXTENDED_LEN_16_MARKER;
+            hdr[2] = (byte) ((payloadLen >>> 8) & 0xFF);
+            hdr[3] = (byte) (payloadLen & 0xFF);
+            hdrLen = 4;
         } else {
-            out.write(EXTENDED_LEN_64_MARKER);
-            for (int shift = 56; shift >= 0; shift -= 8) {
-                out.write((int) ((payloadLen >>> shift) & 0xFF));
+            hdr[1] = (byte) EXTENDED_LEN_64_MARKER;
+            for (int i = 0; i < 8; i++) {
+                hdr[2 + i] = (byte) ((payloadLen >>> (56 - i * 8)) & 0xFF);
             }
+            hdrLen = 10;
         }
+        out.write(hdr, 0, hdrLen);
     }
 
     private static long readPayloadLength(InputStream in, int len7) throws IOException {

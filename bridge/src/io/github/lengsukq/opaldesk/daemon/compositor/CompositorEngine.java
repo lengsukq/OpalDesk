@@ -1105,6 +1105,22 @@ public final class CompositorEngine {
     }
 
     /**
+     * Returns the display title of the active visible fullscreen window, or an empty string when
+     * no window is currently in true fullscreen mode.
+     */
+    public String getFullscreenWindowTitle() {
+        synchronized (lock) {
+            for (WindowSession ws : sessionsById.values()) {
+                if (ws.isMinimized() || !BridgeProtocol.PRES_FULLSCREEN.equals(ws.presentation)) continue;
+                if (ws.title != null && !ws.title.isEmpty()) return ws.title;
+                if (ws.pkg != null && !ws.pkg.isEmpty()) return ws.pkg;
+                return "Fullscreen";
+            }
+            return "";
+        }
+    }
+
+    /**
      * If any visible window is currently in true fullscreen, exits fullscreen and restores it
      * to its exact pre-fullscreen frame & presentation on the desktop (keeping the app LIVE and
      * visible rather than hiding or closing it). Returns {@code true} if a fullscreen window was restored.

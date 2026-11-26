@@ -2,9 +2,12 @@ package io.github.lengsukq.opaldesk.cast
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color as AndroidColor
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -82,6 +85,7 @@ class PeerCastViewerActivity : ComponentActivity() {
         const val EXTRA_HOST = "peer_host"
         const val EXTRA_PORT = "peer_port"
         const val EXTRA_LABEL = "peer_label"
+        const val EXTRA_INITIAL_DISPLAY_MODE = "initial_display_mode"
     }
 
     private var client: OpalCastPeerClient? = null
@@ -91,6 +95,7 @@ class PeerCastViewerActivity : ComponentActivity() {
     private var targetHost: String = ""
     private var targetPort: Int = 19878
     private var targetLabel: String = ""
+    private var initialDisplayMode: Int = OpalCastPeerClient.DISPLAY_MODE_DEX
     private var reqWidth: Int = 1920
     private var reqHeight: Int = 1080
     private var reqDpi: Int = 240
@@ -103,6 +108,9 @@ class PeerCastViewerActivity : ComponentActivity() {
     private var videoH by mutableIntStateOf(1080)
     private var videoFps by mutableIntStateOf(60)
     private var toolbarExpanded by mutableStateOf(true)
+    private var displayMode by mutableIntStateOf(OpalCastPeerClient.DISPLAY_MODE_DEX)
+    private var remoteBlackout by mutableStateOf(false)
+    private var remoteFullscreenTitle by mutableStateOf("")
     private var toolbarInteractTick by mutableIntStateOf(0)
     private var micEnabled by mutableStateOf(false)
     private var cameraEnabled by mutableStateOf(false)
@@ -145,9 +153,16 @@ class PeerCastViewerActivity : ComponentActivity() {
         val host = intent.getStringExtra(EXTRA_HOST).orEmpty().trim()
         val port = intent.getIntExtra(EXTRA_PORT, 19878).coerceIn(1, 65535)
         val label = intent.getStringExtra(EXTRA_LABEL).orEmpty().ifBlank { host }
+        val initMode = intent.getIntExtra(EXTRA_INITIAL_DISPLAY_MODE, OpalCastPeerClient.DISPLAY_MODE_DEX)
         targetHost = host
         targetPort = port
         targetLabel = label
+        initialDisplayMode = if (initMode == OpalCastPeerClient.DISPLAY_MODE_MIRROR) {
+            OpalCastPeerClient.DISPLAY_MODE_MIRROR
+        } else {
+            OpalCastPeerClient.DISPLAY_MODE_DEX
+        }
+        displayMode = initialDisplayMode
         peerName = label
 
         // Strict one-way guard: refuse if currently sending out or targeting self
@@ -230,6 +245,9 @@ class PeerCastViewerActivity : ComponentActivity() {
                         videoW = videoW,
                         videoH = videoH,
                         toolbarExpanded = toolbarExpanded,
+                        isMirrorMode = (displayMode == OpalCastPeerClient.DISPLAY_MODE_MIRROR),
+                        remoteBlackout = remoteBlackout,
+                        remoteFullscreenTitle = remoteFullscreenTitle,
                         micEnabled = micEnabled,
                         cameraEnabled = cameraEnabled,
                         cameraFacing = cameraFacing,
@@ -297,9 +315,38 @@ class PeerCastViewerActivity : ComponentActivity() {
                             toolbarInteractTick += 1
                             client?.sendSystemAction(OpalCastPeerClient.SYS_HOME)
                         },
-                        onToggleMode = {
+                        onExitRemoteFullscreen = {
                             toolbarInteractTick += 1
-                            client?.sendSystemAction(OpalCastPeerClient.SYS_TOGGLE_DISPLAY_MODE)
+                            remoteFullscreenTitle = ""
+                            client?.sendSystemAction(OpalCastPeerClient.SYS_HOME)
+                        },
+                        onToggleDisplayMode = {
+                            toolbarInteractTick += 1
+                            val nextMode = if (displayMode == OpalCastPeerClient.DISPLAY_MODE_MIRROR) {
+                                OpalCastPeerClient.DISPLAY_MODE_DEX
+                            } else {
+                                OpalCastPeerClient.DISPLAY_MODE_MIRROR
+                            }
+                            displayMode = nextMode
+                            statusText = if (nextMode == OpalCastPeerClient.DISPLAY_MODE_MIRROR) {
+                                "正在切换为主屏镜像…"
+                            } else {
+                                "正在切换回 DeX 桌面…"
+                            }
+                            client?.sendSystemAction(OpalCastPeerClient.SYS_TOGGLE_DISPLAY_MODE, nextMode)
+                        },
+                        onPopOutMirrorFloating = {
+                            toolbarInteractTick += 1
+                            popOutMirrorToFloating()
+                        },
+                        onToggleBlackout = {
+                            toolbarInteractTick += 1
+                            val nextBlackout = !remoteBlackout
+                            remoteBlackout = nextBlackout
+                            client?.sendSystemAction(
+                                OpalCastPeerClient.SYS_TOGGLE_BLACKOUT,
+                                if (nextBlackout) 1 else 0,
+                            )
                         },
                         onRequestIdr = {
                             toolbarInteractTick += 1
@@ -328,6 +375,8 @@ class PeerCastViewerActivity : ComponentActivity() {
         client?.stop()
         client = null
         connected = false
+        displayMode = initialDisplayMode
+        remoteBlackout = false
         errorText = ""
         statusText = "正在建立 TLS 加密连接…"
 
@@ -347,6 +396,7 @@ class PeerCastViewerActivity : ComponentActivity() {
             reqFps = reqFps,
             sessionRole = OpalCastPeerClient.SESSION_ROLE_DESKTOP,
             audioEnabled = true,
+            initialDisplayMode = initialDisplayMode,
             targetNetwork = boundNet,
             listener = object : OpalCastPeerClient.Listener {
                 override fun onWaitingForApproval() {
@@ -430,12 +480,40 @@ class PeerCastViewerActivity : ComponentActivity() {
                     }
                 }
 
+                override fun onRemoteBlackoutChanged(blackout: Boolean) {
+                    runOnUiThread {
+                        remoteBlackout = blackout
+                    }
+                }
+
+                override fun onRemoteFullscreenChanged(windowTitle: String) {
+                    runOnUiThread {
+                        val enteredFullscreen = remoteFullscreenTitle.isEmpty() && windowTitle.isNotEmpty()
+                        remoteFullscreenTitle = windowTitle
+                        if (enteredFullscreen && connected && !showAppPicker) {
+                            toolbarInteractTick = 0
+                            toolbarExpanded = true
+                        }
+                    }
+                }
+
+                override fun onDisplayModeChanged(displayMode: Int) {
+                    runOnUiThread {
+                        this@PeerCastViewerActivity.displayMode = displayMode
+                        if (connected) {
+                            val modePrefix = if (displayMode == OpalCastPeerClient.DISPLAY_MODE_MIRROR) "镜像 · " else ""
+                            statusText = "${modePrefix}${videoW}×${videoH} @ ${videoFps}Hz"
+                        }
+                    }
+                }
+
                 override fun onVideoSizeChanged(width: Int, height: Int, fps: Int) {
                     runOnUiThread {
                         videoW = width.coerceAtLeast(2)
                         videoH = height.coerceAtLeast(2)
                         videoFps = fps
-                        statusText = "${videoW}×${videoH} @ ${videoFps}Hz"
+                        val modePrefix = if (displayMode == OpalCastPeerClient.DISPLAY_MODE_MIRROR) "镜像 · " else ""
+                        statusText = "${modePrefix}${videoW}×${videoH} @ ${videoFps}Hz"
                     }
                 }
 
@@ -449,6 +527,7 @@ class PeerCastViewerActivity : ComponentActivity() {
                 override fun onDisconnected(reason: String) {
                     runOnUiThread {
                         connected = false
+                        remoteFullscreenTitle = ""
                         stopLocalMicCaptureOnly()
                         micEnabled = false
                         stopLocalCameraCaptureOnly()
@@ -463,6 +542,39 @@ class PeerCastViewerActivity : ComponentActivity() {
             if (s.isValid) peerClient.attachSurface(s)
         }
         peerClient.start()
+    }
+
+    private fun popOutMirrorToFloating() {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "请先授予 OpalDesk 悬浮窗权限，授权后再点击「悬浮小窗」", Toast.LENGTH_LONG).show()
+            try {
+                val permIntent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName"),
+                ).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(permIntent)
+            } catch (_: Throwable) {
+            }
+            return
+        }
+        stopLocalMicCaptureOnly()
+        stopLocalCameraCaptureOnly()
+        client?.stop()
+        client = null
+        val ok = PeerFloatingAppService.startMirror(
+            ctx = this,
+            host = targetHost,
+            port = targetPort,
+            peerLabel = peerName.ifBlank { targetLabel },
+        )
+        if (ok) {
+            finish()
+        } else {
+            Toast.makeText(this, "无法启动主屏镜像悬浮窗，请检查悬浮窗权限", Toast.LENGTH_SHORT).show()
+            startPeerSession()
+        }
     }
 
     private fun toggleRemoteMic() {
@@ -585,6 +697,7 @@ class PeerCastViewerActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
         if (connected && (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP)) {
             if (!WorkstationKeyDispatcher.isForwardableKey(event.keyCode)) {
                 return super.dispatchKeyEvent(event)
@@ -594,6 +707,9 @@ class PeerCastViewerActivity : ComponentActivity() {
             val isDirectShortcut = event.isAltPressed || event.isCtrlPressed || event.keyCode == KeyEvent.KEYCODE_ESCAPE
             if (imeVisible && !isDirectShortcut && super.dispatchKeyEvent(event)) {
                 return true
+            }
+            if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN) {
+                WorkstationKeyDispatcher.recordBackKeyForwarded()
             }
             client?.sendKeyEvent(event.action, event.keyCode, event.metaState, event.repeatCount)
             return true
@@ -636,6 +752,9 @@ private fun PeerCastViewerContent(
     videoW: Int,
     videoH: Int,
     toolbarExpanded: Boolean,
+    isMirrorMode: Boolean,
+    remoteBlackout: Boolean,
+    remoteFullscreenTitle: String,
     micEnabled: Boolean,
     cameraEnabled: Boolean,
     cameraFacing: String,
@@ -659,11 +778,14 @@ private fun PeerCastViewerContent(
     onRetryConnect: () -> Unit,
     onSendBack: () -> Unit,
     onSendHome: () -> Unit,
-    onToggleMode: () -> Unit,
+    onExitRemoteFullscreen: () -> Unit,
+    onToggleDisplayMode: () -> Unit,
+    onPopOutMirrorFloating: () -> Unit,
+    onToggleBlackout: () -> Unit,
     onRequestIdr: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
-    val ratio = (videoW.toFloat() / videoH.coerceAtLeast(1).toFloat()).coerceIn(0.42f, 3.0f)
+    val ratio = (videoW.toFloat() / videoH.coerceAtLeast(1).toFloat()).coerceIn(0.38f, 3.0f)
 
     BoxWithConstraints(
         modifier = Modifier
@@ -839,6 +961,15 @@ private fun PeerCastViewerContent(
                     onClick = onToggleIme,
                 )
                 OpalTopPillDivider()
+                if (remoteFullscreenTitle.isNotEmpty() && !isMirrorMode) {
+                    OpalTopPillChip(
+                        label = "退出全屏",
+                        glyph = ChromeGlyph.EXIT_FULLSCREEN,
+                        filled = true,
+                        activeColor = OpalPalette.AccentBlue,
+                        onClick = onExitRemoteFullscreen,
+                    )
+                }
                 OpalTopPillChip(
                     label = "悬浮窗",
                     tint = OpalPalette.AccentBlue,
@@ -847,8 +978,26 @@ private fun PeerCastViewerContent(
                     onClick = onOpenFloatingPicker,
                 )
                 OpalTopPillChip(
-                    label = "镜像/桌面",
-                    onClick = onToggleMode,
+                    label = if (isMirrorMode) "切回桌面" else "主屏镜像",
+                    tint = if (isMirrorMode) OpalPalette.AccentCyan else OpalPalette.TextPrimary,
+                    active = isMirrorMode,
+                    activeColor = OpalPalette.AccentCyan,
+                    onClick = onToggleDisplayMode,
+                )
+                if (isMirrorMode) {
+                    OpalTopPillChip(
+                        label = "悬浮小窗",
+                        tint = OpalPalette.AccentBlue,
+                        active = true,
+                        activeColor = OpalPalette.AccentBlue,
+                        onClick = onPopOutMirrorFloating,
+                    )
+                }
+                OpalTopPillChip(
+                    label = if (remoteBlackout) "亮屏" else "熄屏",
+                    active = remoteBlackout,
+                    activeColor = OpalPalette.AccentAmber,
+                    onClick = onToggleBlackout,
                 )
                 OpalTopPillDivider()
                 OpalTopPillIconButton(
@@ -923,6 +1072,15 @@ private fun PeerCastViewerContent(
                         active = true,
                         activeColor = OpalPalette.AccentCyan,
                         onClick = onFlipCamera,
+                    )
+                }
+                if (remoteFullscreenTitle.isNotEmpty() && !isMirrorMode) {
+                    OpalTopPillIconButton(
+                        glyph = ChromeGlyph.EXIT_FULLSCREEN,
+                        contentDescription = "退出全屏",
+                        active = true,
+                        activeColor = OpalPalette.AccentBlue,
+                        onClick = onExitRemoteFullscreen,
                     )
                 }
                 OpalTopPillIconButton(

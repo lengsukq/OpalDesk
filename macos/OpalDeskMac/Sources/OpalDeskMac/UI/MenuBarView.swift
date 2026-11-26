@@ -20,6 +20,43 @@ public struct MenuBarView: View {
                 disconnectedDevicesSection
             }
 
+            if !model.popoutManager.controllers.isEmpty {
+                Divider()
+                Text("已开悬浮小窗 (\(model.activePopoutCount)/\(PopoutWindowManager.maxConcurrentWindows))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(model.popoutManager.controllers) { ctrl in
+                    HStack(spacing: 6) {
+                        Button(ctrl.appLabel, systemImage: ctrl.isPinnedOnTop ? "pin.fill" : "macwindow") {
+                            model.popoutManager.focusWindow(id: ctrl.id)
+                        }
+                        Spacer()
+                        Button {
+                            ctrl.togglePinnedOnTop()
+                        } label: {
+                            Image(systemName: ctrl.isPinnedOnTop ? "pin.slash" : "pin")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(ctrl.isPinnedOnTop ? "取消置顶" : "窗口置顶")
+                        Button {
+                            model.popoutManager.closeWindow(id: ctrl.id, sendDisconnect: true)
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("关闭小窗")
+                    }
+                }
+            } else if !model.popoutHistory.isEmpty {
+                Divider()
+                Text("历史 APP 小窗").font(.caption).foregroundStyle(.secondary)
+                ForEach(model.popoutHistory.prefix(4)) { entry in
+                    Button("\(entry.displayLabel) · \(entry.deviceName)", systemImage: entry.pinnedOnTop ? "pin.fill" : "clock") {
+                        model.openPopoutFromHistory(entry)
+                    }
+                }
+            }
+
             Divider()
             Button("显示主窗口", systemImage: "macwindow") { openMainWindow() }
             SettingsLink { Label("偏好设置...", systemImage: "gearshape") }

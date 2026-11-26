@@ -576,6 +576,7 @@ class ExternalDesktopActivity : ComponentActivity() {
                             OpalCompositorWorkspace(
                                 isExternalMonitor = true,
                                 externalMonitorSummary = directDisplaySummary,
+                                suppressFullscreenExitOverlay = curExtSession.isRemoteCastDisplay,
                                 imeActive = directImeVisible,
                                 onToggleSoftKeyboard = { imeController.toggleKeyboard(directImeVisible) },
                                 virtualCursorPx = directCursor ?: remoteCursor,
@@ -783,6 +784,7 @@ class ExternalDesktopActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
+        if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
 
         val hostSoftImeVisible = directImeVisible || (presentation?.isImeActive == true)

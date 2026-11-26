@@ -2,11 +2,20 @@ import AppKit
 import OpalDeskCore
 import SwiftUI
 
-/// Native macOS light/dark adaptive connection hub for launching the Samsung DeX desktop experience
-/// over USB/wireless ADB or automatic local-network discovery.
+private enum HubTab: String, CaseIterable, Identifiable {
+    case devices = "设备连接"
+    case logs = "日志与反馈"
+
+    var id: String { rawValue }
+}
+
+/// Native macOS light/dark adaptive connection hub for launching the OpalDesk desktop experience,
+/// independent standalone floating app windows (up to 3 concurrent with always-on-top + history),
+/// and the in-app diagnostic logs & feature feedback console.
 public struct DeviceHubView: View {
     @Bindable public var model: AppModel
 
+    @State private var activeTab: HubTab = .devices
     @State private var manualHost: String = ""
     @State private var manualPortText: String = String(OpalCastProtocol.defaultWifiPort)
     @State private var showManualConnect: Bool = false
@@ -16,28 +25,42 @@ public struct DeviceHubView: View {
     }
 
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                headerSection
+        ZStack(alignment: .bottom) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    headerSection
 
-                if let status = model.statusMessage {
-                    infoBanner(icon: "hourglass", text: status, tint: .accentColor, isLoading: true)
-                }
-                if let error = model.bannerError {
-                    errorBanner(error)
-                }
+                    if let status = model.statusMessage {
+                        infoBanner(icon: "hourglass", text: status, tint: .accentColor, isLoading: true)
+                    }
+                    if let error = model.bannerError {
+                        errorBanner(error)
+                    }
 
-                adbDevicesSection
-                if model.preferences.usbTetherDiscoveryEnabled {
-                    usbTetherSection
+                    if activeTab == .devices {
+                        standaloneHistorySection
+                        adbDevicesSection
+                        if model.preferences.usbTetherDiscoveryEnabled {
+                            usbTetherSection
+                        }
+                        wirelessLANSection
+                        manualConnectSection
+                    } else {
+                        DiagnosticsLogView(model: model)
+                    }
                 }
-                wirelessLANSection
-                manualConnectSection
+                .padding(24)
+                .frame(maxWidth: 860, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
-            .padding(24)
-            .frame(maxWidth: 820, alignment: .leading)
-            .frame(maxWidth: .infinity)
+
+            if let toast = model.toastNotice {
+                ToastPillView(message: toast)
+                    .padding(.bottom, 18)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.easeOut(duration: 0.2), value: model.toastNotice)
         .background(
             ZStack {
                 Color(nsColor: .windowBackgroundColor)
@@ -59,9 +82,38 @@ public struct DeviceHubView: View {
         .sheet(item: $model.pairingContext) { ctx in
             PairingSheetView(
                 context: ctx,
-                onSubmit: { model.submitPairing(pinCode: $0) },
+                onRequestPairing: { model.requestPairing() },
                 onCancel: { model.cancelPairing() }
             )
+        }
+        .sheet(item: $model.remoteAppPickerContext) { ctx in
+            RemoteAppPickerSheet(model: model, context: ctx) {
+                model.closeRemoteAppPicker()
+            }
+        }
+        .confirmationDialog(
+            "应用「\(model.pendingPopoutReloadPrompt?.appLabel ?? "")」的小窗已打开",
+            isPresented: Binding(
+                get: { model.pendingPopoutReloadPrompt != nil },
+                set: { if !$0 { model.pendingPopoutReloadPrompt = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let prompt = model.pendingPopoutReloadPrompt {
+                Button("重载小窗+应用") {
+                    model.pendingPopoutReloadPrompt = nil
+                    prompt.onReloadWindowAndApp()
+                }
+                Button("仅聚焦现有窗口") {
+                    model.pendingPopoutReloadPrompt = nil
+                    prompt.onFocusExisting()
+                }
+                Button("取消", role: .cancel) {
+                    model.pendingPopoutReloadPrompt = nil
+                }
+            }
+        } message: {
+            Text("该应用当前已有运行中的独立悬浮小窗。选择「重载小窗+应用」将断开并重新拉起全新悬浮窗与应用实例。")
         }
     }
 
@@ -70,43 +122,205 @@ public struct DeviceHubView: View {
     private var headerSection: some View {
         @Bindable var prefs = model.preferences
 
-        return HStack(alignment: .center, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.14))
-                    .frame(width: 46, height: 46)
-                Image(systemName: "macbook.and.iphone")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.14))
+                        .frame(width: 46, height: 46)
+                    Image(systemName: "macbook.and.iphone")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("OpalDesk 桌面中心")
+                        .font(.title2.weight(.semibold))
+                    Text("连接 Android 设备，体验电脑多窗口、独立置顶小窗与融合镜像")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                HStack(spacing: 8) {
+                    if activeTab == .devices {
+                        Picker("模式", selection: $prefs.defaultDisplayMode) {
+                            Text("电脑桌面").tag(OpalCastDisplayMode.dex)
+                            Text("融合镜像").tag(OpalCastDisplayMode.mirror)
+                        }
+                        .onChange(of: prefs.defaultDisplayMode) { _, mode in model.displayMode = mode }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 164)
+                        .help("选择连接后默认进入电脑多窗口桌面或融合边栏镜像")
+                    }
+
+                    SettingsLink {
+                        Image(systemName: "gearshape").font(.system(size: 14))
+                    }
+                    .buttonStyle(.bordered)
+                    .help("打开偏好设置 (⌘,)")
+                }
             }
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text("OpalDesk 桌面中心")
-                    .font(.title2.weight(.semibold))
-                Text("连接 Android 设备，体验与 USB 显示器一致的电脑多窗口与融合镜像")
-                    .font(.callout)
+            Picker("视图", selection: $activeTab) {
+                ForEach(HubTab.allCases) { tab in
+                    Text(tab.rawValue).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 320)
+        }
+    }
+
+    // MARK: - Recent / Active Standalone Floating Apps Section
+
+    private var standaloneHistorySection: some View {
+        let activeControllers = model.popoutManager.controllers
+        let history = model.popoutHistory
+        let maxCount = PopoutWindowManager.maxConcurrentWindows
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label("历史 APP 小窗", systemImage: "macwindow.on.rectangle")
+                    .font(.headline)
+                StatusBadgeView(
+                    text: "已开 \(activeControllers.count)/\(maxCount)",
+                    color: activeControllers.count >= maxCount ? .orange : .accentColor
+                )
+                Spacer()
+                if !activeControllers.isEmpty {
+                    Button("关闭全部小窗") {
+                        model.popoutManager.closeAll(sendDisconnect: true)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                }
+                if !history.isEmpty {
+                    Button("清空历史") {
+                        model.clearPopoutHistory()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                }
             }
 
-            Spacer()
-
-            HStack(spacing: 8) {
-                Picker("模式", selection: $prefs.defaultDisplayMode) {
-                    Text("电脑桌面").tag(OpalCastDisplayMode.dex)
-                    Text("融合镜像").tag(OpalCastDisplayMode.mirror)
+            VStack(alignment: .leading, spacing: 10) {
+                if history.isEmpty && activeControllers.isEmpty {
+                    emptyStateRow(
+                        icon: "rectangle.stack.badge.plus",
+                        title: "暂无历史 APP 小窗记录",
+                        subtitle: "点击下方任意设备的「应用小窗」，即可免开全屏桌面直接弹出独立悬浮窗（最多同时开启 \(maxCount) 个，支持窗口置顶）。"
+                    )
+                } else {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 10)],
+                        spacing: 10
+                    ) {
+                        ForEach(history) { entry in
+                            historyAppCard(entry)
+                        }
+                    }
+                    .padding(14)
                 }
-                .onChange(of: prefs.defaultDisplayMode) { _, mode in model.displayMode = mode }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 164)
-                .help("选择连接后默认进入电脑多窗口桌面或融合边栏镜像")
-
-                SettingsLink {
-                    Image(systemName: "gearshape").font(.system(size: 14))
-                }
-                .buttonStyle(.bordered)
-                .help("打开偏好设置 (⌘,)")
             }
+            .opalDeskCardContainer()
+        }
+    }
+
+    private func historyAppCard(_ entry: PopoutHistoryEntry) -> some View {
+        let activeCtrl = model.popoutManager.existingController(for: entry.appPackage)
+        let isRunning = activeCtrl != nil
+        let isPinned = activeCtrl?.isPinnedOnTop ?? entry.pinnedOnTop
+
+        return HStack(spacing: 10) {
+            ZStack(alignment: .topTrailing) {
+                let palette: [Color] = [.blue, .green, .indigo, .orange, .cyan, .pink, .purple]
+                let tint = palette[abs(entry.appPackage.hashValue) % palette.count]
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(tint.opacity(0.16))
+                    .frame(width: 36, height: 36)
+                    .overlay {
+                        Text(String(entry.displayLabel.prefix(1)))
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(tint)
+                    }
+                if isRunning {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 8, height: 8)
+                        .offset(x: 2, y: -2)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(entry.displayLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    if isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Text("\(entry.deviceName) · \(isRunning ? "运行中（点击重载/聚焦）" : "打开 \(entry.openCount) 次")")
+                    .font(.caption2)
+                    .foregroundStyle(isRunning ? .green : .secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 4)
+
+            if let ctrl = activeCtrl {
+                Button {
+                    ctrl.togglePinnedOnTop()
+                } label: {
+                    Image(systemName: ctrl.isPinnedOnTop ? "pin.fill" : "pin")
+                        .font(.system(size: 11))
+                        .foregroundStyle(ctrl.isPinnedOnTop ? .orange : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(ctrl.isPinnedOnTop ? "取消置顶" : "置顶该悬浮窗")
+
+                Button {
+                    model.popoutManager.closeWindow(id: ctrl.id, sendDisconnect: true)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("关闭此小窗")
+            } else {
+                Button {
+                    model.removePopoutHistoryEntry(entry)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("移除此历史记录")
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .background(
+            (isRunning ? Color.green.opacity(0.09) : Color.primary.opacity(0.04)),
+            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(isRunning ? Color.green.opacity(0.32) : Color.primary.opacity(0.08), lineWidth: 0.9)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .onTapGesture {
+            model.openPopoutFromHistory(entry)
         }
     }
 
@@ -149,7 +363,7 @@ public struct DeviceHubView: View {
                     emptyStateRow(
                         icon: "cable.connector.horizontal",
                         title: "等待 USB 或无线调试设备接入",
-                        subtitle: "使用数据线连接手机并开启「USB 调试」，即可一键启动大屏桌面。"
+                        subtitle: "使用数据线连接手机并开启「USB 调试」，即可一键启动大屏桌面或单应用悬浮窗。"
                     )
                 } else {
                     ForEach(Array(discovery.usbDevices.enumerated()), id: \.element.id) { index, device in
@@ -187,6 +401,12 @@ public struct DeviceHubView: View {
             }
 
             Spacer()
+
+            Button("应用小窗") {
+                model.openRemoteAppPicker(for: .adb(device))
+            }
+            .buttonStyle(.bordered)
+            .disabled(!device.isReady || model.isConnectingFlow)
 
             Button("进入桌面") { Task { await model.connectWiredUSB(device) } }
                 .buttonStyle(.borderedProminent)
@@ -262,7 +482,13 @@ public struct DeviceHubView: View {
 
             Spacer()
 
-            Button(isTrusted ? "进入桌面" : "配对并连接") { model.connectUsbTetherDevice(device) }
+            Button("应用小窗") {
+                model.openRemoteAppPicker(for: .usbTether(device))
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.isConnectingFlow || model.isProbingManualHost)
+
+            Button(isTrusted ? "进入桌面" : "请求配对") { model.connectUsbTetherDevice(device) }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.isConnectingFlow || model.isProbingManualHost)
         }
@@ -331,7 +557,13 @@ public struct DeviceHubView: View {
 
             Spacer()
 
-            Button(isTrusted ? "进入桌面" : "配对并连接") { model.connectBonjourDevice(device) }
+            Button("应用小窗") {
+                model.openRemoteAppPicker(for: .bonjour(device))
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.isConnectingFlow || model.isProbingManualHost)
+
+            Button(isTrusted ? "进入桌面" : "请求配对") { model.connectBonjourDevice(device) }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.isConnectingFlow || model.isProbingManualHost)
         }

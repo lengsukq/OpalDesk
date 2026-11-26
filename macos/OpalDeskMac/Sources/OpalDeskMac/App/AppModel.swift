@@ -7,7 +7,6 @@ import os
 
 struct PendingConnectionAuth {
     var authToken: String = ""
-    var pinCode: String = ""
     var hostForTrust: String?
     var portForTrust: UInt16?
     var deviceName: String = ""
@@ -46,6 +45,13 @@ public final class AppModel {
     public let cameraCapturer: CameraStreamCapturer
     public let clipboardSync: ClipboardSyncManager
     public let fileSender: FileSender
+    public let popoutManager: PopoutWindowManager
+    public let popoutHistoryStore: PopoutHistoryStore
+    public let remoteAppCatalogFetcher: RemoteAppCatalogFetcher
+    public let feedbackConfig: FeedbackBuildConfig
+    public let feedbackHistoryStore: FeedbackHistoryStore
+    public let feedbackQuotaStorage: UserDefaultsFeedbackQuotaStorage
+    public let feedbackRateLimiter: FeedbackRateLimiter
 
     // Active connection & stream state
     public var activeConnection: ActiveConnectionInfo?
@@ -63,6 +69,19 @@ public final class AppModel {
     public var selectedPreset: DisplayResolutionPreset = .matchWindow
     public var selectedDPI: Int = DisplayPresets.defaultDPI
 
+    // Standalone floating app windows & history
+    public var popoutHistory: [PopoutHistoryEntry] = []
+    public var remoteAppPickerContext: RemoteAppPickerContext?
+    public var pendingPopoutReloadPrompt: PendingPopoutReloadPrompt?
+    public var cachedDesktopApps: [RemoteAppInfo] = []
+
+    // Diagnostics logs & feedback tracking
+    public var logEntries: [OpalLogEntry] = []
+    public var feedbackRecords: [FeedbackRecord] = []
+    public var feedbackQuota: FeedbackQuotaSnapshot
+    public var lastFeedbackSyncAtMs: Int64 = 0
+    public var savedFeedbackReporterName: String = ""
+
     // Transfers & notifications
     public var pairingContext: PairingPromptContext?
     public var isProbingManualHost: Bool = false
@@ -76,6 +95,7 @@ public final class AppModel {
     @ObservationIgnored var activeSessionGeneration: UInt64 = 0
 
     @ObservationIgnored var activeAdbForward: AdbForwardHandle?
+    @ObservationIgnored var popoutAdbForwards: [String: AdbForwardHandle] = [:]
     @ObservationIgnored var activeSessionEndpoint: OpalCastEndpoint?
     @ObservationIgnored var pendingAuth = PendingConnectionAuth()
     @ObservationIgnored var resizeDebounceTask: Task<Void, Never>?
@@ -90,6 +110,13 @@ public final class AppModel {
         let prefs = PreferencesStore()
         let discoveryCoord = DiscoveryCoordinator(customAdbPath: prefs.customAdbPath)
         let extSession = OpalCastSession(trustStore: discoveryCoord.trustStore)
+        let popoutMgr = PopoutWindowManager()
+        let popoutStore = PopoutHistoryStore()
+        let catalogFetcher = RemoteAppCatalogFetcher()
+        let fbConfig = FeedbackBuildConfig.current()
+        let fbHistoryStore = FeedbackHistoryStore()
+        let fbQuotaStorage = UserDefaultsFeedbackQuotaStorage()
+        let fbLimiter = FeedbackRateLimiter(storage: fbQuotaStorage)
 
         self.preferences = prefs
         self.discovery = discoveryCoord
@@ -102,10 +129,32 @@ public final class AppModel {
         self.cameraCapturer = CameraStreamCapturer()
         self.clipboardSync = ClipboardSyncManager()
         self.fileSender = FileSender()
+        self.popoutManager = popoutMgr
+        self.popoutHistoryStore = popoutStore
+        self.remoteAppCatalogFetcher = catalogFetcher
+        self.feedbackConfig = fbConfig
+        self.feedbackHistoryStore = fbHistoryStore
+        self.feedbackQuotaStorage = fbQuotaStorage
+        self.feedbackRateLimiter = fbLimiter
         self.deviceState = DeviceStatePayload()
+        self.popoutHistory = popoutStore.snapshot()
+        self.logEntries = OpalLogStore.shared.snapshot()
+        self.feedbackRecords = fbHistoryStore.snapshot()
+        self.feedbackQuota = fbLimiter.currentQuota()
+        self.lastFeedbackSyncAtMs = fbHistoryStore.lastCheckedAtMs
+        self.savedFeedbackReporterName = fbQuotaStorage.getReporterName()
 
         applyInitialSessionPreferences()
         configureCallbacks()
+        OpalLogStore.shared.setEntriesObserver { [weak self] entries in
+            Task { @MainActor [weak self] in
+                self?.logEntries = entries
+            }
+        }
+        popoutMgr.onControllersChanged = { [weak self] in
+            self?.cleanupUnusedPopoutAdbForwards()
+        }
+        OpalDeskLog.info("app", "OpalDesk macOS v\(fbConfig.appVersion) initialized")
         discoveryCoord.start(
             customAdbPath: { [weak self] in self?.preferences.customAdbPath ?? "" },
             isCanvasActive: { [weak self] in self?.isShowingDisplayCanvas ?? false },
@@ -114,7 +163,8 @@ public final class AppModel {
     }
 
     public var isShowingDisplayCanvas: Bool {
-        activeConnection != nil
+        pairingContext == nil
+            && activeConnection != nil
             && (sessionState == .connected || sessionState == .connecting || isReconnecting || wifiUpgrade.isUpgradingToWifiTls)
     }
 
@@ -212,8 +262,7 @@ public final class AppModel {
                 displayName: device.displayName,
                 model: device.model,
                 expectedFingerprint: trusted.certFingerprint,
-                authToken: trusted.authToken,
-                pinCode: ""
+                authToken: trusted.authToken
             )
             return
         }
@@ -285,14 +334,10 @@ public final class AppModel {
         }
     }
 
-    public func submitPairing(pinCode: String) {
-        guard var context = pairingContext else { return }
-        let cleanedPin = pinCode.filter(\.isNumber)
-        guard cleanedPin.count == DisplayPresets.pairingPinLength else {
-            context.errorMessage = "请输入手机端显示的 \(DisplayPresets.pairingPinLength) 位数字配对 PIN 码"
-            pairingContext = context
-            return
-        }
+    /// Sends an interactive pairing / connection consent request to the Android host
+    /// after the user verifies the TOFU TLS certificate fingerprint.
+    public func requestPairing() {
+        guard var context = pairingContext, !context.isSubmitting else { return }
         context.errorMessage = nil
         context.isSubmitting = true
         pairingContext = context
@@ -301,8 +346,7 @@ public final class AppModel {
             displayName: context.displayName,
             model: context.model,
             expectedFingerprint: context.expectedFingerprint,
-            authToken: "",
-            pinCode: cleanedPin
+            authToken: ""
         )
     }
 
@@ -342,6 +386,8 @@ public final class AppModel {
 
         resizeDebounceTask?.cancel()
         toastClearTask?.cancel()
+        remoteAppCatalogFetcher.cancel()
+        popoutManager.closeAll(sendDisconnect: true)
         discovery.stop()
         clipboardSync.stop()
         micCapturer.stop()
@@ -357,6 +403,8 @@ public final class AppModel {
             forwardsToClean.append(active)
             activeAdbForward = nil
         }
+        forwardsToClean.append(contentsOf: popoutAdbForwards.values)
+        popoutAdbForwards.removeAll()
         Self.detachAdbForwardRemoval(forwardsToClean, adbPath: discovery.adbManager.locateAdb())
     }
 
@@ -406,8 +454,7 @@ public final class AppModel {
             displayName: trusted.deviceName,
             model: trusted.model,
             expectedFingerprint: trusted.certFingerprint,
-            authToken: trusted.authToken,
-            pinCode: ""
+            authToken: trusted.authToken
         )
     }
 
@@ -437,8 +484,7 @@ public final class AppModel {
         displayName: String,
         model: String,
         expectedFingerprint: String,
-        authToken: String,
-        pinCode: String
+        authToken: String
     ) {
         Task { [weak self] in
             guard let self else { return }
@@ -464,7 +510,6 @@ public final class AppModel {
 
             self.pendingAuth = PendingConnectionAuth(
                 authToken: authToken,
-                pinCode: pinCode,
                 hostForTrust: hostForTrust,
                 portForTrust: portForTrust,
                 deviceName: displayName,
@@ -482,7 +527,7 @@ public final class AppModel {
             self.connectSession(to: OpalCastEndpoint(
                 target: target,
                 security: .tlsPinned(expectedFingerprint: expectedFingerprint),
-                autoReconnect: pinCode.isEmpty
+                autoReconnect: !authToken.isEmpty
             ))
         }
     }

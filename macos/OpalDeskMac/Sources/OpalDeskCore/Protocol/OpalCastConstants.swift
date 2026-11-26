@@ -124,6 +124,7 @@ public enum OpalCastTransportHint: String, Codable, Sendable, CaseIterable {
 public enum OpalCastSessionRole: String, Codable, Sendable, CaseIterable {
     case desktop = "desktop"
     case standaloneApp = "standalone_app"
+    case appCatalog = "app_catalog"
 }
 
 public enum OpalCastInjectStatus: Int, Sendable, Equatable {

@@ -12,6 +12,17 @@ public struct AnnexBNALUnit: Sendable, Equatable {
     }
 }
 
+/// Zero-copy byte-range descriptor for a NAL unit inside an Annex-B `Data` buffer.
+public struct AnnexBNALRange: Sendable, Equatable {
+    public let range: Range<Int>
+    public let nalType: UInt8
+
+    public init(range: Range<Int>, nalType: UInt8) {
+        self.range = range
+        self.nalType = nalType
+    }
+}
+
 public struct ExtractedParameterSets: Sendable, Equatable {
     public var vps: [Data] = []
     public var sps: [Data] = []
@@ -69,16 +80,15 @@ public enum AnnexBParser {
     public static let hevcPPS: UInt8 = 34
     public static let hevcAUD: UInt8 = 35
 
-    /// Splits an Annex-B byte buffer into individual NAL units (supporting both 3-byte and 4-byte start codes)
-    /// using a zero-copy raw buffer scan to minimize per-frame allocations at 60/120fps.
-    public static func splitNALUnits(from data: Data, codec: OpalCastVideoCodec) -> [AnnexBNALUnit] {
+    /// Zero-copy Annex-B start-code scanner returning byte ranges inside `data` (relative to `0..<data.count`).
+    public static func splitNALRanges(from data: Data, codec: OpalCastVideoCodec) -> [AnnexBNALRange] {
         let count = data.count
         guard count >= 4 else { return [] }
 
-        return data.withUnsafeBytes { rawBuf -> [AnnexBNALUnit] in
+        return data.withUnsafeBytes { rawBuf -> [AnnexBNALRange] in
             guard let base = rawBuf.bindMemory(to: UInt8.self).baseAddress else { return [] }
-            var units: [AnnexBNALUnit] = []
-            units.reserveCapacity(6)
+            var ranges: [AnnexBNALRange] = []
+            ranges.reserveCapacity(6)
             var cursor = 0
             var nalStart: Int?
 
@@ -94,7 +104,7 @@ public enum AnnexBParser {
                     }
                     if startCodeLen > 0 {
                         if let currentStart = nalStart, currentStart < cursor {
-                            appendNAL(base: base, start: currentStart, endExclusive: cursor, codec: codec, into: &units)
+                            appendNALRange(base: base, start: currentStart, endExclusive: cursor, codec: codec, into: &ranges)
                         }
                         cursor += startCodeLen
                         nalStart = cursor
@@ -105,11 +115,69 @@ public enum AnnexBParser {
             }
 
             if let currentStart = nalStart, currentStart < count {
-                appendNAL(base: base, start: currentStart, endExclusive: count, codec: codec, into: &units)
+                appendNALRange(base: base, start: currentStart, endExclusive: count, codec: codec, into: &ranges)
             }
 
+            return ranges
+        }
+    }
+
+    /// Splits an Annex-B byte buffer into individual NAL units (supporting both 3-byte and 4-byte start codes).
+    public static func splitNALUnits(from data: Data, codec: OpalCastVideoCodec) -> [AnnexBNALUnit] {
+        let ranges = splitNALRanges(from: data, codec: codec)
+        guard !ranges.isEmpty else { return [] }
+        return data.withUnsafeBytes { rawBuf -> [AnnexBNALUnit] in
+            guard let base = rawBuf.bindMemory(to: UInt8.self).baseAddress else { return [] }
+            var units: [AnnexBNALUnit] = []
+            units.reserveCapacity(ranges.count)
+            for r in ranges {
+                let slice = Data(bytes: base.advanced(by: r.range.lowerBound), count: r.range.count)
+                units.append(AnnexBNALUnit(data: slice, nalType: r.nalType))
+            }
             return units
         }
+    }
+
+    public static func hasParameterSetNAL(in ranges: [AnnexBNALRange], codec: OpalCastVideoCodec) -> Bool {
+        for r in ranges {
+            switch codec {
+            case .h264:
+                if r.nalType == h264SPS || r.nalType == h264PPS { return true }
+            case .hevc:
+                if r.nalType == hevcVPS || r.nalType == hevcSPS || r.nalType == hevcPPS { return true }
+            }
+        }
+        return false
+    }
+
+    public static func extractParameterSets(
+        from data: Data,
+        ranges: [AnnexBNALRange],
+        codec: OpalCastVideoCodec
+    ) -> ExtractedParameterSets {
+        var result = ExtractedParameterSets()
+        data.withUnsafeBytes { rawBuf in
+            guard let base = rawBuf.bindMemory(to: UInt8.self).baseAddress else { return }
+            for r in ranges {
+                switch codec {
+                case .h264:
+                    if r.nalType == h264SPS {
+                        result.sps.append(Data(bytes: base.advanced(by: r.range.lowerBound), count: r.range.count))
+                    } else if r.nalType == h264PPS {
+                        result.pps.append(Data(bytes: base.advanced(by: r.range.lowerBound), count: r.range.count))
+                    }
+                case .hevc:
+                    if r.nalType == hevcVPS {
+                        result.vps.append(Data(bytes: base.advanced(by: r.range.lowerBound), count: r.range.count))
+                    } else if r.nalType == hevcSPS {
+                        result.sps.append(Data(bytes: base.advanced(by: r.range.lowerBound), count: r.range.count))
+                    } else if r.nalType == hevcPPS {
+                        result.pps.append(Data(bytes: base.advanced(by: r.range.lowerBound), count: r.range.count))
+                    }
+                }
+            }
+        }
+        return result
     }
 
     public static func extractParameterSets(
@@ -138,21 +206,77 @@ public enum AnnexBParser {
         return result
     }
 
-    public static func isParameterSetOrDelimiter(_ unit: AnnexBNALUnit, codec: OpalCastVideoCodec) -> Bool {
+    public static func isParameterSetOrDelimiter(nalType: UInt8, codec: OpalCastVideoCodec) -> Bool {
         switch codec {
         case .h264:
-            return unit.nalType == h264SPS || unit.nalType == h264PPS || unit.nalType == h264AUD
+            return nalType == h264SPS || nalType == h264PPS || nalType == h264AUD
         case .hevc:
-            return unit.nalType == hevcVPS || unit.nalType == hevcSPS || unit.nalType == hevcPPS || unit.nalType == hevcAUD
+            return nalType == hevcVPS || nalType == hevcSPS || nalType == hevcPPS || nalType == hevcAUD
+        }
+    }
+
+    public static func isParameterSetOrDelimiter(_ unit: AnnexBNALUnit, codec: OpalCastVideoCodec) -> Bool {
+        isParameterSetOrDelimiter(nalType: unit.nalType, codec: codec)
+    }
+
+    public static func isKeyframeNAL(nalType: UInt8, codec: OpalCastVideoCodec) -> Bool {
+        switch codec {
+        case .h264:
+            return nalType == h264IDR
+        case .hevc:
+            return nalType == hevcIDRW || nalType == hevcIDRN || nalType == hevcCRA
         }
     }
 
     public static func isKeyframeNAL(_ unit: AnnexBNALUnit, codec: OpalCastVideoCodec) -> Bool {
-        switch codec {
-        case .h264:
-            return unit.nalType == h264IDR
-        case .hevc:
-            return unit.nalType == hevcIDRW || unit.nalType == hevcIDRN || unit.nalType == hevcCRA
+        isKeyframeNAL(nalType: unit.nalType, codec: codec)
+    }
+
+    /// Computes exact AVCC/HVCC 4-byte length-prefixed output size and keyframe status without allocating.
+    public static func inspectLengthPrefixed(
+        ranges: [AnnexBNALRange],
+        codec: OpalCastVideoCodec
+    ) -> (byteCount: Int, containsKeyframe: Bool) {
+        var total = 0
+        var hasKey = false
+        for r in ranges {
+            if isParameterSetOrDelimiter(nalType: r.nalType, codec: codec) {
+                continue
+            }
+            if isKeyframeNAL(nalType: r.nalType, codec: codec) {
+                hasKey = true
+            }
+            total += 4 + r.range.count
+        }
+        return (total, hasKey)
+    }
+
+    /// Writes VCL NAL slices directly into `destination` (e.g., `CMBlockBuffer`) with 4-byte Big-Endian
+    /// length prefixes, avoiding intermediate per-NAL and per-frame `Data` allocations.
+    public static func writeLengthPrefixed(
+        from source: Data,
+        ranges: [AnnexBNALRange],
+        codec: OpalCastVideoCodec,
+        into destination: UnsafeMutablePointer<UInt8>
+    ) -> Int {
+        source.withUnsafeBytes { rawBuf -> Int in
+            guard let srcBase = rawBuf.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            var offset = 0
+            for r in ranges {
+                if isParameterSetOrDelimiter(nalType: r.nalType, codec: codec) {
+                    continue
+                }
+                let nalLen = r.range.count
+                guard nalLen > 0 else { continue }
+                let uLen = UInt32(nalLen)
+                destination[offset] = UInt8((uLen >> 24) & 0xFF)
+                destination[offset + 1] = UInt8((uLen >> 16) & 0xFF)
+                destination[offset + 2] = UInt8((uLen >> 8) & 0xFF)
+                destination[offset + 3] = UInt8(uLen & 0xFF)
+                memcpy(destination.advanced(by: offset + 4), srcBase.advanced(by: r.range.lowerBound), nalLen)
+                offset += 4 + nalLen
+            }
+            return offset
         }
     }
 
@@ -245,12 +369,12 @@ public enum AnnexBParser {
 
     // MARK: - Private Helpers
 
-    private static func appendNAL(
+    private static func appendNALRange(
         base: UnsafePointer<UInt8>,
         start: Int,
         endExclusive: Int,
         codec: OpalCastVideoCodec,
-        into units: inout [AnnexBNALUnit]
+        into ranges: inout [AnnexBNALRange]
     ) {
         // Trim any trailing zero padding immediately preceding the next 4-byte start code.
         var end = endExclusive
@@ -267,7 +391,7 @@ public enum AnnexBParser {
         case .hevc:
             nalType = (headerByte >> 1) & 0x3F
         }
-        units.append(AnnexBNALUnit(data: Data(bytes: base.advanced(by: start), count: end - start), nalType: nalType))
+        ranges.append(AnnexBNALRange(range: start..<end, nalType: nalType))
     }
 
     /// Recursively pins each non-empty `Data` buffer so every base pointer remains valid for the duration of `body`.

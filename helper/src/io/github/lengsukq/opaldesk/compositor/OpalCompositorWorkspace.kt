@@ -148,6 +148,7 @@ fun applyWindowTilingLayout(
 fun OpalCompositorWorkspace(
     isExternalMonitor: Boolean,
     externalMonitorSummary: String = "",
+    suppressFullscreenExitOverlay: Boolean = false,
     virtualCursorPx: Offset? = null,
     imeActive: Boolean = false,
     onToggleSoftKeyboard: (() -> Unit)? = null,
@@ -637,8 +638,9 @@ fun OpalCompositorWorkspace(
                         .align(Alignment.TopCenter)
                         .zIndex(10_000f),
                 )
-            } else {
+            } else if (!suppressFullscreenExitOverlay) {
                 // Unobtrusive top-center pull-down handle to exit fullscreen or return to desktop
+                // (suppressed on remote cast displays where the outer receiver already owns the single top-center pill).
                 FullscreenExitOverlay(
                     windowTitle = fullscreenWin.title,
                     onExitFullscreen = {

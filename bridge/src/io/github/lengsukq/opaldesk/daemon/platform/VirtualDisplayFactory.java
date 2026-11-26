@@ -47,11 +47,17 @@ public final class VirtualDisplayFactory {
     private static Constructor<?> sBuilderCtor;
     private static Method sSetFlags;
     private static Method sSetHomeSupported;
+    private static Method sSetDisplayIdToMirror;
     private static Method sSetRequestedRefreshRate;
     private static Method sSetSurface;
     private static Method sBuild;
     private static ResolvedCreateMethod sResolvedCreate;
     private static Method sGetUniqueId;
+
+    private static final int[] MIRROR_CANDIDATE_FLAGS = new int[]{
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC | DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR
+    };
 
     private VirtualDisplayFactory() {}
 
@@ -102,6 +108,7 @@ public final class VirtualDisplayFactory {
                     sBuilderCtor = ctor;
                     sSetFlags = setFlags;
                     sSetHomeSupported = findOptionalMethod(builderCls, "setHomeSupported", boolean.class);
+                    sSetDisplayIdToMirror = findOptionalMethod(builderCls, "setDisplayIdToMirror", int.class);
                     sSetRequestedRefreshRate = findOptionalMethod(builderCls, "setRequestedRefreshRate", float.class);
                     sSetSurface = setSurface;
                     sBuild = build;
@@ -206,6 +213,84 @@ public final class VirtualDisplayFactory {
                     chosenFlagsOut[0] = flags;
                 }
                 return vd;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Creates a rootless AOSP mirror {@link VirtualDisplay} capturing {@code displayIdToMirror}
+     * (normally {@link Display#DEFAULT_DISPLAY}) onto {@code surface} via
+     * {@link DisplayManager#VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR}, without polluting the DeX flag cache.
+     */
+    public static VirtualDisplay createMirrorDisplay(
+            DisplayManager dm,
+            String name,
+            int width,
+            int height,
+            int dpi,
+            int displayIdToMirror,
+            Surface surface) {
+        if (dm == null || surface == null) {
+            return null;
+        }
+        ensureInitialized();
+        ResolvedCreateMethod resolved = sResolvedCreate;
+        for (int flags : MIRROR_CANDIDATE_FLAGS) {
+            // 1. Prefer VirtualDisplayConfig.Builder with explicit setDisplayIdToMirror (API 34+)
+            if (resolved != null && resolved.mode != CreateMode.LEGACY_6_ARG && resolved.method != null) {
+                try {
+                    Object builder = sBuilderCtor.newInstance(name, width, height, dpi);
+                    sSetFlags.invoke(builder, flags);
+                    if (sSetDisplayIdToMirror != null && displayIdToMirror >= 0) {
+                        try {
+                            sSetDisplayIdToMirror.invoke(builder, displayIdToMirror);
+                        } catch (ReflectiveOperationException | RuntimeException e) {
+                            System.err.println("OPALDESK_VD_MIRROR_ID_WARN: " + e.getMessage());
+                        }
+                    }
+                    sSetSurface.invoke(builder, surface);
+                    Object config = sBuild.invoke(builder);
+                    VirtualDisplay vd;
+                    switch (resolved.mode) {
+                        case CONFIG_1_ARG:
+                            vd = (VirtualDisplay) resolved.method.invoke(dm, config);
+                            break;
+                        case CONFIG_3_ARG:
+                            vd = (VirtualDisplay) resolved.method.invoke(dm, config, null, null);
+                            break;
+                        case CONFIG_4_ARG:
+                            vd = (VirtualDisplay) resolved.method.invoke(dm, null, config, null, null);
+                            break;
+                        default:
+                            vd = null;
+                            break;
+                    }
+                    if (vd != null && vd.getDisplay() != null) {
+                        return vd;
+                    }
+                    if (vd != null) {
+                        vd.release();
+                    }
+                } catch (ReflectiveOperationException | RuntimeException e) {
+                    Throwable root = (e instanceof InvocationTargetException && e.getCause() != null)
+                            ? e.getCause() : e;
+                    System.err.println("OPALDESK_VD_MIRROR_CONFIG_RETRY flags=0x"
+                            + Integer.toHexString(flags) + ": " + root);
+                }
+            }
+            // 2. Universal API 19+ DisplayManager.createVirtualDisplay 6-arg fallback
+            try {
+                VirtualDisplay vd = dm.createVirtualDisplay(name, width, height, dpi, surface, flags);
+                if (vd != null && vd.getDisplay() != null) {
+                    return vd;
+                }
+                if (vd != null) {
+                    vd.release();
+                }
+            } catch (RuntimeException e) {
+                System.err.println("OPALDESK_VD_MIRROR_LEGACY_RETRY flags=0x"
+                        + Integer.toHexString(flags) + ": " + e);
             }
         }
         return null;

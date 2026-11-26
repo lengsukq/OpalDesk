@@ -162,17 +162,19 @@ public final class VideoDisplayRenderer: @unchecked Sendable {
         }
 
         let codec = state.withLock { $0.codec }
-        let units = AnnexBParser.splitNALUnits(from: payload, codec: codec)
-        guard !units.isEmpty else { return }
+        let ranges = AnnexBParser.splitNALRanges(from: payload, codec: codec)
+        guard !ranges.isEmpty else { return }
 
-        // Handle inline SPS/PPS/VPS updates (dynamic resolution switch or periodic keyframe headers).
-        let inlineParams = AnnexBParser.extractParameterSets(from: units, codec: codec)
-        if flags.contains(.configInline) || !inlineParams.sps.isEmpty || !inlineParams.pps.isEmpty || !inlineParams.vps.isEmpty {
-            updateParameterSetsIfChanged(inlineParams, codec: codec)
+        // Handle inline SPS/PPS/VPS updates only when parameter-set NALs are actually present.
+        if flags.contains(.configInline) || AnnexBParser.hasParameterSetNAL(in: ranges, codec: codec) {
+            let inlineParams = AnnexBParser.extractParameterSets(from: payload, ranges: ranges, codec: codec)
+            if !inlineParams.sps.isEmpty || !inlineParams.pps.isEmpty || !inlineParams.vps.isEmpty {
+                updateParameterSetsIfChanged(inlineParams, codec: codec)
+            }
         }
 
-        let (avccData, containsKeyframeNAL) = AnnexBParser.convertToLengthPrefixed(units: units, codec: codec)
-        guard !avccData.isEmpty else { return }
+        let (vclByteCount, containsKeyframeNAL) = AnnexBParser.inspectLengthPrefixed(ranges: ranges, codec: codec)
+        guard vclByteCount > 0 else { return }
 
         let isKeyframe = flags.contains(.keyframe) || containsKeyframeNAL
 
@@ -196,24 +198,26 @@ public final class VideoDisplayRenderer: @unchecked Sendable {
             return
         }
 
-        guard let sampleBuffer = makeSampleBuffer(
-            avccData: avccData,
-            formatDescription: formatDescription,
-            timestampUs: timestampUs,
-            isKeyframe: isKeyframe
-        ) else {
-            state.withLock { $0.metrics.droppedFrames += 1 }
-            return
-        }
-
-        // If display layer is temporarily saturated on a non-keyframe, drop cleanly and request IDR
-        // so subsequent P-frames never decode against a broken reference chain.
+        // Check renderer readiness BEFORE allocating CMBlockBuffer so dropped frames do zero memory copies.
         if !renderer.isReadyForMoreMediaData && !isKeyframe {
             state.withLock { s in
                 s.metrics.droppedFrames += 1
                 s.awaitingKeyframe = true
             }
             requestIDRThrottled()
+            return
+        }
+
+        guard let sampleBuffer = makeSampleBuffer(
+            sourcePayload: payload,
+            ranges: ranges,
+            vclByteCount: vclByteCount,
+            codec: codec,
+            formatDescription: formatDescription,
+            timestampUs: timestampUs,
+            isKeyframe: isKeyframe
+        ) else {
+            state.withLock { $0.metrics.droppedFrames += 1 }
             return
         }
 
@@ -261,12 +265,15 @@ public final class VideoDisplayRenderer: @unchecked Sendable {
     }
 
     private func makeSampleBuffer(
-        avccData: Data,
+        sourcePayload: Data,
+        ranges: [AnnexBNALRange],
+        vclByteCount: Int,
+        codec: OpalCastVideoCodec,
         formatDescription: CMVideoFormatDescription,
         timestampUs: Int64,
         isKeyframe: Bool
     ) -> CMSampleBuffer? {
-        let dataLength = avccData.count
+        let dataLength = vclByteCount
         var blockBuffer: CMBlockBuffer?
 
         let allocStatus = CMBlockBufferCreateWithMemoryBlock(
@@ -285,17 +292,35 @@ public final class VideoDisplayRenderer: @unchecked Sendable {
             return nil
         }
 
-        let copyStatus = avccData.withUnsafeBytes { rawBuffer -> OSStatus in
-            guard let baseAddress = rawBuffer.baseAddress else { return kCMBlockBufferBadLengthParameterErr }
-            return CMBlockBufferReplaceDataBytes(
-                with: baseAddress,
-                blockBuffer: blockBuffer,
-                offsetIntoDestination: 0,
-                dataLength: dataLength
-            )
+        let assureStatus = CMBlockBufferAssureBlockMemory(blockBuffer)
+        guard assureStatus == kCMBlockBufferNoErr else {
+            OpalDeskLog.video.warning("CMBlockBufferAssureBlockMemory failed: status=\(assureStatus)")
+            return nil
         }
-        guard copyStatus == kCMBlockBufferNoErr else {
-            OpalDeskLog.video.warning("CMBlockBufferReplaceDataBytes failed: status=\(copyStatus)")
+
+        var totalLength: Int = 0
+        var dataPointer: UnsafeMutablePointer<Int8>?
+        let ptrStatus = CMBlockBufferGetDataPointer(
+            blockBuffer,
+            atOffset: 0,
+            lengthAtOffsetOut: nil,
+            totalLengthOut: &totalLength,
+            dataPointerOut: &dataPointer
+        )
+        guard ptrStatus == kCMBlockBufferNoErr, let dataPointer, totalLength >= dataLength else {
+            OpalDeskLog.video.warning("CMBlockBufferGetDataPointer failed: status=\(ptrStatus)")
+            return nil
+        }
+
+        let destBytes = UnsafeMutableRawPointer(dataPointer).assumingMemoryBound(to: UInt8.self)
+        let written = AnnexBParser.writeLengthPrefixed(
+            from: sourcePayload,
+            ranges: ranges,
+            codec: codec,
+            into: destBytes
+        )
+        guard written == dataLength else {
+            OpalDeskLog.video.warning("Length-prefixed write mismatch: expected=\(dataLength) written=\(written)")
             return nil
         }
 

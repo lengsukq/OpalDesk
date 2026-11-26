@@ -24,6 +24,10 @@ jobs:
       - name: Build, Test & Package OpalDesk Windows Installers
         id: package_windows
         shell: bash
+        env:
+          OPALDESK_SENTRY_DSN: ${{ secrets.OPALDESK_SENTRY_DSN }}
+          OPALDESK_SENTRY_TUNNEL_URL: ${{ secrets.OPALDESK_SENTRY_TUNNEL_URL }}
+          OPALDESK_FEEDBACK_STATUS_URL: ${{ secrets.OPALDESK_FEEDBACK_STATUS_URL }}
         run: |
           VER="$(sed -nE 's/.*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' helper/build.gradle.kts | head -n 1)"
           VER="${VER:-0.0.1}"

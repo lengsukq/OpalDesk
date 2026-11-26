@@ -130,6 +130,27 @@ else
     echo "WARNING: iconutil or swift not found; skipping AppIcon.icns generation." >&2
 fi
 
+xml_escape() {
+    local s="$1"
+    s="${s//&/&amp;}"
+    s="${s//</&lt;}"
+    s="${s//>/&gt;}"
+    s="${s//\"/&quot;}"
+    s="${s//\'/&apos;}"
+    printf '%s' "$s"
+}
+
+FEEDBACK_PLIST_XML=""
+if [[ -n "${OPALDESK_SENTRY_DSN:-}" ]]; then
+    FEEDBACK_PLIST_XML+=$'    <key>OpalDeskSentryDSN</key>\n    <string>'"$(xml_escape "$OPALDESK_SENTRY_DSN")"$'</string>\n'
+fi
+if [[ -n "${OPALDESK_SENTRY_TUNNEL_URL:-}" ]]; then
+    FEEDBACK_PLIST_XML+=$'    <key>OpalDeskSentryTunnelURL</key>\n    <string>'"$(xml_escape "$OPALDESK_SENTRY_TUNNEL_URL")"$'</string>\n'
+fi
+if [[ -n "${OPALDESK_FEEDBACK_STATUS_URL:-}" ]]; then
+    FEEDBACK_PLIST_XML+=$'    <key>OpalDeskFeedbackStatusURL</key>\n    <string>'"$(xml_escape "$OPALDESK_FEEDBACK_STATUS_URL")"$'</string>\n'
+fi
+
 cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -172,7 +193,7 @@ ${ICON_KEY_XML}
     <string>OpalDesk 需要访问摄像头以在 Root 模式下将 Mac 摄像头画面映射至投屏中的 Android 设备。</string>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
-</dict>
+${FEEDBACK_PLIST_XML}</dict>
 </plist>
 EOF
 

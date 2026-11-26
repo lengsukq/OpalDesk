@@ -307,6 +307,7 @@ class ExternalMonitorPresentation(
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
         val isPhysicalKey = WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)
         val forwardImeSwitch = WorkstationKeyDispatcher.shouldForwardImeSwitchToWindow(

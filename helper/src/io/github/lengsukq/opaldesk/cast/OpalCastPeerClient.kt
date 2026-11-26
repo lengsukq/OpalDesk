@@ -24,6 +24,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
+import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
@@ -33,8 +34,10 @@ import java.security.cert.X509Certificate
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import javax.net.SocketFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
@@ -60,6 +63,7 @@ class OpalCastPeerClient(
     private val appPackage: String = "",
     private val appActivity: String = "",
     private val audioEnabled: Boolean = (sessionRole == SESSION_ROLE_DESKTOP),
+    private val initialDisplayMode: Int = DISPLAY_MODE_DEX,
     private val targetNetwork: Network? = null,
     private val listener: Listener,
 ) {
@@ -83,6 +87,9 @@ class OpalCastPeerClient(
             message: String,
             facing: String = "",
         ) {}
+        fun onRemoteBlackoutChanged(blackout: Boolean) {}
+        fun onRemoteFullscreenChanged(windowTitle: String) {}
+        fun onDisplayModeChanged(displayMode: Int) {}
         fun onVideoSizeChanged(width: Int, height: Int, fps: Int)
         fun onError(message: String)
         fun onDisconnected(reason: String)
@@ -101,11 +108,16 @@ class OpalCastPeerClient(
         private const val TYPE_VIDEO_FRAME = 0x02
         private const val TYPE_AUDIO_CONFIG = 0x03
         private const val TYPE_AUDIO_FRAME = 0x04
+        private const val TYPE_DEVICE_STATE = 0x10
         private const val TYPE_AUTH_RESULT = 0x12
         private const val TYPE_APP_LIST = 0x15
         private const val TYPE_IME_REQUEST = 0x16
         private const val TYPE_MIC_STATE = 0x17
         private const val TYPE_CAMERA_STATE = 0x18
+        private const val TYPE_PONG = 0x1F
+        private const val MAX_TX_BATCH = 32
+        private const val IDR_THROTTLE_MS = 500L
+        private const val DECODER_RETRY_COOLDOWN_MS = 1_000L
 
         private const val TYPE_HELLO = 0x20
         private const val TYPE_RESIZE_CONFIG = 0x21
@@ -126,22 +138,69 @@ class OpalCastPeerClient(
         private const val CODEC_HEVC = 2
         private const val FLAG_VIDEO_KEYFRAME = 0x01
 
+        const val DISPLAY_MODE_DEX = 0
+        const val DISPLAY_MODE_MIRROR = 1
+
         const val SYS_HOME = 1
         const val SYS_BACK = 2
         const val SYS_RECENTS = 3
         const val SYS_TOGGLE_DISPLAY_MODE = 4
+        const val SYS_TOGGLE_BLACKOUT = 5
         const val SYS_DISCONNECT = 8
-    }
 
-    private data class OutPacket(val type: Int, val flags: Int, val tsUs: Long, val payload: ByteArray)
+        private const val SOCKET_CONNECT_TIMEOUT_MS = 6_000
+        private const val SOCKET_RECV_BUF_BYTES = 512 * 1024
+        private const val SOCKET_SEND_BUF_BYTES = 256 * 1024
+
+        internal fun openConnectedTlsSocket(
+            sslSocketFactory: SSLSocketFactory,
+            targetHost: String,
+            targetPort: Int,
+            boundSocketFactory: SocketFactory? = null,
+            connectTimeoutMs: Int = SOCKET_CONNECT_TIMEOUT_MS,
+        ): SSLSocket {
+            return if (boundSocketFactory != null) {
+                // Bind via explicit Network.socketFactory so Android netd fwmark routes via USB Ethernet
+                // even when Wi-Fi is simultaneously active as the default network.
+                val raw = boundSocketFactory.createSocket()
+                try {
+                    configureTransportSocket(raw)
+                    raw.connect(InetSocketAddress(targetHost, targetPort), connectTimeoutMs)
+                    sslSocketFactory.createSocket(raw, targetHost, targetPort, true) as SSLSocket
+                } catch (t: Throwable) {
+                    try { raw.close() } catch (_: Throwable) {}
+                    throw t
+                }
+            } else {
+                val ssl = sslSocketFactory.createSocket() as SSLSocket
+                try {
+                    configureTransportSocket(ssl)
+                    ssl.connect(InetSocketAddress(targetHost, targetPort), connectTimeoutMs)
+                    ssl
+                } catch (t: Throwable) {
+                    try { ssl.close() } catch (_: Throwable) {}
+                    throw t
+                }
+            }
+        }
+
+        private fun configureTransportSocket(sock: Socket) {
+            sock.tcpNoDelay = true
+            try { sock.receiveBufferSize = SOCKET_RECV_BUF_BYTES } catch (_: Throwable) {}
+            try { sock.sendBufferSize = SOCKET_SEND_BUF_BYTES } catch (_: Throwable) {}
+        }
+    }
 
     private val running = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
     private val authCompleted = AtomicBoolean(false)
-    private val outQueue = LinkedBlockingQueue<OutPacket>(256)
+    private val outQueue = LinkedBlockingQueue<OpalPeerUplinkFrame>(256)
     private val audioQueue = LinkedBlockingQueue<Pair<ByteArray, Long>>(8)
     private val textSeq = AtomicLong(1L)
+    private val lastIdrRequestMs = AtomicLong(0L)
     private val sideNavTouchFilter = CompositorGeometry.SideNavigationTouchFilter()
+    private val txHeaderBuf = ByteArray(HEADER_SIZE)
+    private val rxHeaderBuf = ByteArray(HEADER_SIZE)
 
     @Volatile
     private var outputSurface: Surface? = null
@@ -170,6 +229,9 @@ class OpalCastPeerClient(
     private var configuredVideoH: Int = 0
     private var videoConfigured = false
     @Volatile
+    private var awaitingInitialKeyFrame = true
+    private var lastDecoderConfigureFailMs: Long = 0L
+    @Volatile
     private var videoDrainThread: Thread? = null
 
     private val audioLock = Any()
@@ -182,6 +244,7 @@ class OpalCastPeerClient(
         synchronized(videoLock) {
             val previous = outputSurface
             outputSurface = surface
+            lastDecoderConfigureFailMs = 0L
             if (surface == null || !surface.isValid) {
                 releaseVideoDecoderLocked()
                 return
@@ -244,7 +307,7 @@ class OpalCastPeerClient(
         if (closed.get() || pcm.isEmpty()) return
         // Reserve headroom in outQueue for control/input frames; drop media frames under backpressure.
         if (outQueue.remainingCapacity() <= 32) return
-        outQueue.offer(OutPacket(TYPE_MIC_FRAME, 0, SystemClock.elapsedRealtimeNanos() / 1000L, pcm))
+        outQueue.offer(OpalPeerUplinkFrame(TYPE_MIC_FRAME, 0, SystemClock.elapsedRealtimeNanos() / 1000L, pcm))
     }
 
     fun sendCameraConfig(
@@ -269,7 +332,7 @@ class OpalCastPeerClient(
         if (closed.get() || jpeg.isEmpty()) return
         // Reserve headroom in outQueue for control/input frames; drop stale video frames under backpressure.
         if (outQueue.remainingCapacity() <= 32) return
-        outQueue.offer(OutPacket(TYPE_CAMERA_FRAME, 0, SystemClock.elapsedRealtimeNanos() / 1000L, jpeg))
+        outQueue.offer(OpalPeerUplinkFrame(TYPE_CAMERA_FRAME, 0, SystemClock.elapsedRealtimeNanos() / 1000L, jpeg))
     }
 
     fun sendResizeConfig(width: Int, height: Int, dpi: Int, fps: Int = reqFps, bitrateKbps: Int = 9_000) {
@@ -339,7 +402,9 @@ class OpalCastPeerClient(
         return when (ev.actionMasked) {
             MotionEvent.ACTION_BUTTON_PRESS -> {
                 if (ev.actionButton == MotionEvent.BUTTON_BACK) {
-                    sendSystemAction(SYS_BACK)
+                    if (io.github.lengsukq.opaldesk.ui.WorkstationKeyDispatcher.tryClaimMouseSideBack()) {
+                        sendSystemAction(SYS_BACK)
+                    }
                 }
                 true
             }
@@ -408,7 +473,7 @@ class OpalCastPeerClient(
 
     private fun enqueue(type: Int, flags: Int, payload: ByteArray) {
         if (closed.get()) return
-        outQueue.offer(OutPacket(type, flags, SystemClock.elapsedRealtimeNanos() / 1000L, payload))
+        outQueue.offer(OpalPeerUplinkFrame(type, flags, SystemClock.elapsedRealtimeNanos() / 1000L, payload))
     }
 
     @SuppressLint("CustomX509TrustManager", "TrustAllX509TrustManager")
@@ -422,30 +487,24 @@ class OpalCastPeerClient(
         )
         val ctx = SSLContext.getInstance("TLS")
         ctx.init(null, trustAll, SecureRandom())
-        val ssl: SSLSocket = if (targetNetwork != null) {
-            // Bind via explicit Network.socketFactory so Android netd fwmark routes via USB Ethernet
-            // even when Wi-Fi is simultaneously active as the default network.
-            val raw = targetNetwork.socketFactory.createSocket()
-            raw.tcpNoDelay = true
-            try { raw.receiveBufferSize = 512 * 1024 } catch (_: Throwable) {}
-            try { raw.sendBufferSize = 256 * 1024 } catch (_: Throwable) {}
-            raw.connect(InetSocketAddress(host, port), 6_000)
-            ctx.socketFactory.createSocket(raw, host, port, true) as SSLSocket
-        } else {
-            (ctx.socketFactory.createSocket() as SSLSocket).apply {
-                tcpNoDelay = true
-                try { receiveBufferSize = 512 * 1024 } catch (_: Throwable) {}
-                try { sendBufferSize = 256 * 1024 } catch (_: Throwable) {}
-                connect(InetSocketAddress(host, port), 6_000)
-            }
+        val ssl = openConnectedTlsSocket(
+            sslSocketFactory = ctx.socketFactory,
+            targetHost = host,
+            targetPort = port,
+            boundSocketFactory = targetNetwork?.socketFactory,
+        )
+        try {
+            ssl.soTimeout = 10_000
+            ssl.startHandshake()
+            val peerCert = ssl.session.peerCertificates.firstOrNull() as? X509Certificate
+            val fp = if (peerCert != null) sha256Hex(peerCert.encoded) else ""
+            // Allow up to 70s for interactive host-side approval before clearing socket timeout on AUTH_RESULT.
+            ssl.soTimeout = 70_000
+            return ssl to fp
+        } catch (t: Throwable) {
+            try { ssl.close() } catch (_: Throwable) {}
+            throw t
         }
-        ssl.soTimeout = 10_000
-        ssl.startHandshake()
-        val peerCert = ssl.session.peerCertificates.firstOrNull() as? X509Certificate
-        val fp = if (peerCert != null) sha256Hex(peerCert.encoded) else ""
-        // Allow up to 70s for interactive host-side approval before clearing socket timeout on AUTH_RESULT.
-        ssl.soTimeout = 70_000
-        return ssl to fp
     }
 
     private val lastVideoDecodeErrLogMs = AtomicLong(0L)
@@ -455,7 +514,7 @@ class OpalCastPeerClient(
         try {
             OpalLogStore.i(
                 TAG,
-                "Connecting role=$sessionRole port=$port ${reqWidth}x${reqHeight}@${reqFps}fps " +
+                "Connecting role=$sessionRole mode=$initialDisplayMode port=$port ${reqWidth}x${reqHeight}@${reqFps}fps " +
                     "audio=$audioEnabled pkg=${appPackage.ifBlank { "-" }}",
             )
             val (ssl, peerFp) = openTlsSocket()
@@ -474,7 +533,7 @@ class OpalCastPeerClient(
                 put("dpi", reqDpi)
                 put("fps", reqFps)
                 put("bitrateKbps", if (sessionRole == SESSION_ROLE_STANDALONE_APP) 9_000 else 16_000)
-                put("displayMode", 0)
+                put("displayMode", initialDisplayMode)
                 put("audioEnabled", audioEnabled)
                 put("authToken", savedAuthToken)
                 put("pinCode", "")
@@ -545,18 +604,41 @@ class OpalCastPeerClient(
     private fun sendLoop(out: OutputStream) {
         var lastPingMs = SystemClock.uptimeMillis()
         var pingSeq = 1L
+        val rawBatch = ArrayList<OpalPeerUplinkFrame>(MAX_TX_BATCH)
+        val coalescedBatch = ArrayList<OpalPeerUplinkFrame>(MAX_TX_BATCH)
+        val pingPayload = ByteArray(8)
         try {
             while (running.get() && !closed.get()) {
-                val pkt = outQueue.poll(1000L, java.util.concurrent.TimeUnit.MILLISECONDS)
-                if (pkt != null) {
-                    writeFrame(out, pkt.type, pkt.flags, pkt.tsUs, pkt.payload)
-                    out.flush()
+                val first = outQueue.poll(1000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                var wroteAny = false
+                if (first != null) {
+                    rawBatch.clear()
+                    rawBatch.add(first)
+                    outQueue.drainTo(rawBatch, MAX_TX_BATCH - 1)
+                    coalescedBatch.clear()
+                    OpalPeerUplinkCoalescer.coalesceBatch(rawBatch, coalescedBatch)
+                    for (i in 0 until coalescedBatch.size) {
+                        val pkt = coalescedBatch[i]
+                        writeFrame(out, pkt.type, pkt.flags, pkt.tsUs, pkt.payload)
+                    }
+                    wroteAny = true
                 }
                 val now = SystemClock.uptimeMillis()
                 if (now - lastPingMs >= 4_000L) {
                     lastPingMs = now
-                    val bb = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(pingSeq++)
-                    writeFrame(out, TYPE_PING, 0, now * 1000L, bb.array())
+                    val id = pingSeq++
+                    pingPayload[0] = ((id ushr 56) and 0xFF).toByte()
+                    pingPayload[1] = ((id ushr 48) and 0xFF).toByte()
+                    pingPayload[2] = ((id ushr 40) and 0xFF).toByte()
+                    pingPayload[3] = ((id ushr 32) and 0xFF).toByte()
+                    pingPayload[4] = ((id ushr 24) and 0xFF).toByte()
+                    pingPayload[5] = ((id ushr 16) and 0xFF).toByte()
+                    pingPayload[6] = ((id ushr 8) and 0xFF).toByte()
+                    pingPayload[7] = (id and 0xFF).toByte()
+                    writeFrame(out, TYPE_PING, 0, now * 1000L, pingPayload)
+                    wroteAny = true
+                }
+                if (wroteAny) {
                     out.flush()
                 }
             }
@@ -591,6 +673,7 @@ class OpalCastPeerClient(
                     stop()
                 }
             }
+            TYPE_DEVICE_STATE -> handleDeviceState(frame.payload)
             TYPE_APP_LIST -> handleAppList(frame.payload)
             TYPE_IME_REQUEST -> handleImeRequest(frame.payload)
             TYPE_MIC_STATE -> handleMicState(frame.payload)
@@ -599,6 +682,27 @@ class OpalCastPeerClient(
             TYPE_VIDEO_FRAME -> handleVideoFrame(frame.payload, frame.flags, frame.timestampUs)
             TYPE_AUDIO_CONFIG -> handleAudioConfig(frame.payload)
             TYPE_AUDIO_FRAME -> enqueueAudioFrame(frame.payload, frame.timestampUs)
+            TYPE_PONG -> Unit
+        }
+    }
+
+    private fun handleDeviceState(payload: ByteArray) {
+        if (payload.isEmpty()) return
+        try {
+            val obj = JSONObject(String(payload, StandardCharsets.UTF_8))
+            if (obj.has("blackout")) {
+                listener.onRemoteBlackoutChanged(obj.optBoolean("blackout", false))
+            }
+            if (obj.has("fullscreenWindowTitle")) {
+                listener.onRemoteFullscreenChanged(obj.optString("fullscreenWindowTitle", "").trim())
+            }
+            if (obj.has("displayMode")) {
+                val mode = obj.optInt("displayMode", DISPLAY_MODE_DEX)
+                if (mode == DISPLAY_MODE_DEX || mode == DISPLAY_MODE_MIRROR) {
+                    listener.onDisplayModeChanged(mode)
+                }
+            }
+        } catch (_: Throwable) {
         }
     }
 
@@ -701,7 +805,7 @@ class OpalCastPeerClient(
         bb.short // dpi
         bb.get() // rotation
         val fpsX100 = bb.short.toInt() and 0xFFFF
-        bb.get() // displayMode
+        val displayMode = bb.get().toInt() and 0xFF
         val csd = if (payload.size > 11) payload.copyOfRange(11, payload.size) else ByteArray(0)
         val mime = if (codecId == CODEC_HEVC) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
 
@@ -709,6 +813,9 @@ class OpalCastPeerClient(
         remoteWidth = w.coerceAtLeast(2)
         remoteHeight = h.coerceAtLeast(2)
         remoteFps = fps
+        if (displayMode == DISPLAY_MODE_DEX || displayMode == DISPLAY_MODE_MIRROR) {
+            listener.onDisplayModeChanged(displayMode)
+        }
         listener.onVideoSizeChanged(remoteWidth, remoteHeight, fps)
 
         synchronized(videoLock) {
@@ -722,6 +829,7 @@ class OpalCastPeerClient(
             }
             videoMime = mime
             pendingCsd = csd
+            lastDecoderConfigureFailMs = 0L
             configureVideoDecoderLocked(mime, remoteWidth, remoteHeight, csd)
         }
     }
@@ -739,14 +847,21 @@ class OpalCastPeerClient(
             } catch (_: Throwable) {
             }
         }
-        // Prefer a hardware low-latency decoder (AOSP FEATURE_LowLatency, e.g. c2.*.decoder.low_latency)
-        // before falling back to the platform default decoder.
-        val preferredName = selectPreferredDecoderName(mime)
-        val codecCandidates: List<String?> = if (preferredName != null) listOf(preferredName, null) else listOf(null)
-        val opRates = intArrayOf(Short.MAX_VALUE.toInt(), maxOf(120, remoteFps), 0)
+        // Prefer a hardware low-latency decoder (AOSP FEATURE_LowLatency) before falling back to
+        // non-low-latency minimal config, platform default decoder, and finally software decoder
+        // so mid-tier SoC decoders (e.g. Lenovo TB331FC HEVC) never stall on a black screen.
+        val preferred = selectPreferredDecoder(mime)
+        val candidates = ArrayList<Pair<String?, Boolean>>(3).apply {
+            if (preferred.hwName != null) add(preferred.hwName to preferred.supportsLowLatency)
+            add(null to false)
+            if (preferred.swName != null && preferred.swName != preferred.hwName) {
+                add(preferred.swName to false)
+            }
+        }
         var lastErr: Throwable? = null
-        for (codecName in codecCandidates) {
-            for (opRate in opRates) {
+        for ((codecName, supportsLowLatency) in candidates) {
+            val plans = OpalPeerUplinkCoalescer.buildDecoderConfigPlans(remoteFps, supportsLowLatency)
+            for (plan in plans) {
                 var codec: MediaCodec? = null
                 try {
                     codec = if (codecName != null) {
@@ -755,12 +870,14 @@ class OpalCastPeerClient(
                         MediaCodec.createDecoderByType(mime)
                     }
                     val fmt = MediaFormat.createVideoFormat(mime, width, height)
-                    fmt.setInteger(MediaFormat.KEY_PRIORITY, 0)
-                    if (Build.VERSION.SDK_INT >= 30) {
+                    if (plan.priorityRealtime) {
+                        fmt.setInteger(MediaFormat.KEY_PRIORITY, 0)
+                    }
+                    if (plan.lowLatency && Build.VERSION.SDK_INT >= 30) {
                         fmt.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
                     }
-                    if (opRate > 0) {
-                        fmt.setInteger(MediaFormat.KEY_OPERATING_RATE, opRate)
+                    if (plan.operatingRate > 0) {
+                        fmt.setInteger(MediaFormat.KEY_OPERATING_RATE, plan.operatingRate)
                     }
                     if (csd.isNotEmpty()) {
                         fmt.setByteBuffer("csd-0", ByteBuffer.wrap(csd))
@@ -771,7 +888,13 @@ class OpalCastPeerClient(
                     configuredVideoW = width
                     configuredVideoH = height
                     videoConfigured = true
+                    awaitingInitialKeyFrame = true
+                    lastDecoderConfigureFailMs = 0L
                     startVideoDrainThreadLocked(codec)
+                    OpalLogStore.i(
+                        TAG,
+                        "Video decoder started codec=${codecName ?: "default"} mime=$mime ${width}x${height} lowLat=${plan.lowLatency} opRate=${plan.operatingRate}",
+                    )
                     return
                 } catch (t: Throwable) {
                     lastErr = t
@@ -779,40 +902,61 @@ class OpalCastPeerClient(
                 }
             }
         }
-        OpalLogStore.w(TAG, "Video decoder configure failed ($mime ${width}x${height})", lastErr)
+        lastDecoderConfigureFailMs = SystemClock.uptimeMillis()
+        val detail = if (lastErr is MediaCodec.CodecException) {
+            "errCode=${lastErr.errorCode} diag=${lastErr.diagnosticInfo}"
+        } else {
+            lastErr?.message ?: ""
+        }
+        OpalLogStore.w(TAG, "Video decoder configure failed ($mime ${width}x${height} $detail)", lastErr)
         releaseVideoDecoderLocked()
     }
 
-    private fun selectPreferredDecoderName(mime: String): String? {
-        if (Build.VERSION.SDK_INT < 30) return null
+    private data class PreferredDecoder(
+        val hwName: String?,
+        val supportsLowLatency: Boolean,
+        val swName: String?,
+    )
+
+    private fun selectPreferredDecoder(mime: String): PreferredDecoder {
+        if (Build.VERSION.SDK_INT < 30) return PreferredDecoder(null, false, null)
         return try {
             val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
             var hwLowLatency: String? = null
             var hwFirst: String? = null
+            var swFirst: String? = null
             for (info in list.codecInfos) {
                 if (info.isEncoder) continue
+                val matchedType = info.supportedTypes.firstOrNull { it.equals(mime, ignoreCase = true) } ?: continue
                 val isSw = try {
                     info.isSoftwareOnly
                 } catch (_: Throwable) {
                     val lower = info.name.lowercase()
                     lower.startsWith("omx.google.") || lower.startsWith("c2.android.")
                 }
-                if (isSw) continue
-                val matchedType = info.supportedTypes.firstOrNull { it.equals(mime, ignoreCase = true) } ?: continue
-                if (hwFirst == null) hwFirst = info.name
-                val caps = try {
-                    info.getCapabilitiesForType(matchedType)
-                } catch (_: Throwable) {
-                    null
+                if (isSw) {
+                    if (swFirst == null) swFirst = info.name
+                    continue
                 }
-                if (caps != null && caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)) {
-                    hwLowLatency = info.name
-                    break
+                if (hwFirst == null) hwFirst = info.name
+                if (hwLowLatency == null) {
+                    val caps = try {
+                        info.getCapabilitiesForType(matchedType)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                    if (caps != null && caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)) {
+                        hwLowLatency = info.name
+                    }
                 }
             }
-            hwLowLatency ?: hwFirst
+            if (hwLowLatency != null) {
+                PreferredDecoder(hwLowLatency, true, swFirst)
+            } else {
+                PreferredDecoder(hwFirst, false, swFirst)
+            }
         } catch (_: Throwable) {
-            null
+            PreferredDecoder(null, false, null)
         }
     }
 
@@ -842,10 +986,22 @@ class OpalCastPeerClient(
         if (payload.isEmpty()) return
         val codec = synchronized(videoLock) {
             if (!videoConfigured && pendingCsd != null) {
-                configureVideoDecoderLocked(videoMime, remoteWidth, remoteHeight, pendingCsd!!)
+                val now = SystemClock.uptimeMillis()
+                if (lastDecoderConfigureFailMs == 0L || now - lastDecoderConfigureFailMs >= DECODER_RETRY_COOLDOWN_MS) {
+                    configureVideoDecoderLocked(videoMime, remoteWidth, remoteHeight, pendingCsd!!)
+                }
             }
             videoCodec
         } ?: return
+
+        val isKey = (flags and FLAG_VIDEO_KEYFRAME) != 0
+        if (awaitingInitialKeyFrame) {
+            if (!isKey) {
+                requestKeyFrameThrottled()
+                return
+            }
+            awaitingInitialKeyFrame = false
+        }
 
         try {
             val inIdx = codec.dequeueInputBuffer(12_000L)
@@ -854,11 +1010,14 @@ class OpalCastPeerClient(
                 if (buf != null && buf.capacity() >= payload.size) {
                     buf.clear()
                     buf.put(payload)
-                    val mcFlags = if ((flags and FLAG_VIDEO_KEYFRAME) != 0) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
+                    val mcFlags = if (isKey) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
                     codec.queueInputBuffer(inIdx, 0, payload.size, tsUs, mcFlags)
                 } else {
                     codec.queueInputBuffer(inIdx, 0, 0, tsUs, 0)
                 }
+            } else {
+                // Input buffer timed out and dropped a slice: request a throttled IDR so long-GOP streams recover immediately.
+                requestKeyFrameThrottled()
             }
         } catch (t: Throwable) {
             val nowMs = SystemClock.uptimeMillis()
@@ -998,8 +1157,18 @@ class OpalCastPeerClient(
 
     private data class RxFrame(val type: Int, val flags: Int, val timestampUs: Long, val payload: ByteArray)
 
+    private fun requestKeyFrameThrottled() {
+        val nowMs = SystemClock.uptimeMillis()
+        val prev = lastIdrRequestMs.get()
+        if (prev == 0L || nowMs - prev >= IDR_THROTTLE_MS) {
+            if (lastIdrRequestMs.compareAndSet(prev, nowMs)) {
+                requestKeyFrame()
+            }
+        }
+    }
+
     private fun writeFrame(out: OutputStream, type: Int, flags: Int, tsUs: Long, payload: ByteArray) {
-        val hdr = ByteArray(HEADER_SIZE)
+        val hdr = txHeaderBuf
         hdr[0] = 0x4F // 'O'
         hdr[1] = 0x50 // 'P'
         hdr[2] = 0x44 // 'D'
@@ -1024,7 +1193,7 @@ class OpalCastPeerClient(
     }
 
     private fun readFrame(input: InputStream): RxFrame? {
-        val hdr = ByteArray(HEADER_SIZE)
+        val hdr = rxHeaderBuf
         val first = input.read()
         if (first < 0) return null
         hdr[0] = first.toByte()

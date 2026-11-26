@@ -14,10 +14,13 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -25,7 +28,9 @@ import android.os.Looper
 import android.provider.Settings
 import android.text.TextUtils
 import android.util.TypedValue
+import android.view.Display
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
@@ -69,6 +74,7 @@ class PeerFloatingAppService : Service() {
         val peerName: String,
         val appPackage: String,
         val appLabel: String,
+        val isMirror: Boolean = false,
     )
 
     companion object {
@@ -76,6 +82,7 @@ class PeerFloatingAppService : Service() {
         private const val CHANNEL_ID = "opaldesk_floating_app"
         private const val NOTIF_ID = 3930
         private const val MUTEX_TAG = "floating_app"
+        const val MIRROR_SENTINEL_PKG = "__opaldesk_mirror__"
 
         const val ACTION_START = "io.github.lengsukq.opaldesk.FLOATING_APP_START"
         const val ACTION_STOP = "io.github.lengsukq.opaldesk.FLOATING_APP_STOP"
@@ -87,6 +94,7 @@ class PeerFloatingAppService : Service() {
         const val EXTRA_APP_ACTIVITY = "app_cls"
         const val EXTRA_APP_LABEL = "app_label"
         const val EXTRA_HANDOVER_TOKEN = "handover_token"
+        const val EXTRA_IS_MIRROR = "is_mirror"
 
         private val _activeFlow = MutableStateFlow<ActiveFloatingInfo?>(null)
         val activeFlow: StateFlow<ActiveFloatingInfo?> = _activeFlow.asStateFlow()
@@ -111,6 +119,35 @@ class PeerFloatingAppService : Service() {
                 putExtra(EXTRA_APP_ACTIVITY, appActivity)
                 putExtra(EXTRA_APP_LABEL, appLabel)
                 putExtra(EXTRA_HANDOVER_TOKEN, handoverToken)
+                putExtra(EXTRA_IS_MIRROR, false)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ctx.applicationContext.startForegroundService(intent)
+            } else {
+                ctx.applicationContext.startService(intent)
+            }
+            return true
+        }
+
+        fun startMirror(
+            ctx: Context,
+            host: String,
+            port: Int,
+            peerLabel: String,
+            handoverToken: String = "",
+        ): Boolean {
+            if (!Settings.canDrawOverlays(ctx)) return false
+            val displayPeer = peerLabel.ifBlank { host }
+            val intent = Intent(ctx.applicationContext, PeerFloatingAppService::class.java).apply {
+                action = ACTION_START
+                putExtra(EXTRA_HOST, host)
+                putExtra(EXTRA_PORT, port)
+                putExtra(EXTRA_PEER_LABEL, displayPeer)
+                putExtra(EXTRA_APP_PACKAGE, MIRROR_SENTINEL_PKG)
+                putExtra(EXTRA_APP_ACTIVITY, "")
+                putExtra(EXTRA_APP_LABEL, "$displayPeer · 主屏镜像")
+                putExtra(EXTRA_HANDOVER_TOKEN, handoverToken)
+                putExtra(EXTRA_IS_MIRROR, true)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ctx.applicationContext.startForegroundService(intent)
@@ -139,6 +176,10 @@ class PeerFloatingAppService : Service() {
     private var activeSurface: Surface? = null
     private var statusDotView: View? = null
     private var titleTextView: TextView? = null
+    private var blackoutBtnContainer: FrameLayout? = null
+    private var blackoutIconView: MirrorGlyphIconView? = null
+    private var imeBtnContainer: FrameLayout? = null
+    private var imeIconView: MirrorGlyphIconView? = null
     private var overlayBanner: LinearLayout? = null
     private var overlayBannerText: TextView? = null
     private var overlayRetryBtn: TextView? = null
@@ -153,6 +194,13 @@ class PeerFloatingAppService : Service() {
     private var appActivity: String = ""
     private var appLabel: String = ""
     private var handoverToken: String = ""
+    private var isMirrorMode = false
+    private var attachedMirrorMode: Boolean? = null
+    private var remoteBlackout = false
+    private var mirrorVideoW = 1080
+    private var mirrorVideoH = 2400
+    private var lastSnappedMirrorW = 0
+    private var lastSnappedMirrorH = 0
     private var isLandscape = false
     private var isCollapsed = false
     private var isImeBarVisible = false
@@ -177,14 +225,22 @@ class PeerFloatingAppService : Service() {
 
         val nextHost = intent?.getStringExtra(EXTRA_HOST).orEmpty().trim()
         val nextPort = (intent?.getIntExtra(EXTRA_PORT, 19878) ?: 19878).coerceIn(1, 65535)
+        val nextIsMirror = intent?.getBooleanExtra(EXTRA_IS_MIRROR, false) == true
         val nextPkg = intent?.getStringExtra(EXTRA_APP_PACKAGE).orEmpty().trim()
-        val nextCls = intent?.getStringExtra(EXTRA_APP_ACTIVITY).orEmpty().trim()
-        val nextAppLabel = intent?.getStringExtra(EXTRA_APP_LABEL).orEmpty().ifBlank { nextPkg }
+            .ifBlank { if (nextIsMirror) MIRROR_SENTINEL_PKG else "" }
+        val nextCls = if (nextIsMirror) "" else intent?.getStringExtra(EXTRA_APP_ACTIVITY).orEmpty().trim()
         val nextPeerLabel = intent?.getStringExtra(EXTRA_PEER_LABEL).orEmpty().ifBlank { nextHost }
+        val nextAppLabel = intent?.getStringExtra(EXTRA_APP_LABEL).orEmpty().ifBlank {
+            if (nextIsMirror) "$nextPeerLabel · 主屏镜像" else nextPkg
+        }
         val nextHandover = intent?.getStringExtra(EXTRA_HANDOVER_TOKEN).orEmpty().trim()
 
         // Always satisfy startForegroundService() contract before any early validation stopSelf().
-        startForegroundNotification(nextAppLabel.ifBlank { "远程应用" }, nextPeerLabel.ifBlank { "远端设备" })
+        startForegroundNotification(
+            nextAppLabel.ifBlank { if (nextIsMirror) "主屏镜像" else "远程应用" },
+            nextPeerLabel.ifBlank { "远端设备" },
+            nextIsMirror,
+        )
 
         if (!Settings.canDrawOverlays(this)) {
             OpalLogStore.w(TAG, "Aborting start: SYSTEM_ALERT_WINDOW permission not granted")
@@ -193,8 +249,8 @@ class PeerFloatingAppService : Service() {
             return START_NOT_STICKY
         }
 
-        if (nextHost.isEmpty() || nextPkg.isEmpty()) {
-            OpalLogStore.w(TAG, "Aborting start: missing host or appPackage (pkg='$nextPkg')")
+        if (nextHost.isEmpty() || (!nextIsMirror && nextPkg.isEmpty())) {
+            OpalLogStore.w(TAG, "Aborting start: missing host or appPackage (mirror=$nextIsMirror pkg='$nextPkg')")
             stopForegroundAndSelf()
             return START_NOT_STICKY
         }
@@ -219,6 +275,7 @@ class PeerFloatingAppService : Service() {
             BridgeClient.setWifiStreamEnabledAsync(false)
         }
 
+        val modeChanged = (attachedMirrorMode != null && attachedMirrorMode != nextIsMirror)
         host = nextHost
         port = nextPort
         peerLabel = nextPeerLabel
@@ -226,19 +283,30 @@ class PeerFloatingAppService : Service() {
         appActivity = nextCls
         appLabel = nextAppLabel
         handoverToken = nextHandover
+        isMirrorMode = nextIsMirror
+        remoteBlackout = false
+        lastSnappedMirrorW = 0
+        lastSnappedMirrorH = 0
 
-        _activeFlow.value = ActiveFloatingInfo(host, port, peerLabel, appPackage, appLabel)
-        AppPrefs.recordAppLaunch(this, nextPkg)
+        _activeFlow.value = ActiveFloatingInfo(host, port, peerLabel, appPackage, appLabel, isMirror = isMirrorMode)
+        if (!isMirrorMode) {
+            AppPrefs.recordAppLaunch(this, nextPkg)
+        }
 
         tearDownSessionOnly()
+        if (modeChanged) {
+            removeAllOverlayViews()
+            attachedMirrorMode = null
+        }
         ensureFloatingWindowAttached()
-        connectRemoteStandaloneApp()
+        connectRemoteSession()
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         tearDownSessionOnly()
         removeAllOverlayViews()
+        attachedMirrorMode = null
         _activeFlow.value = null
         OpalPeerCastMutex.endReceiving(MUTEX_TAG)
         super.onDestroy()
@@ -249,9 +317,15 @@ class PeerFloatingAppService : Service() {
         client = null
     }
 
-    private fun connectRemoteStandaloneApp() {
+    private fun connectRemoteSession() {
         updateOverlayStatus("正在连接 $peerLabel…", dotColor = 0xFFF59E0B.toInt(), showRetry = false)
-        val (streamW, streamH, reqDpi) = computeStreamSpecForView(expandedW, expandedH)
+        val dm = resources.displayMetrics
+        val (streamW, streamH, reqDpi) = if (isMirrorMode) {
+            val maxEdge = max(dm.widthPixels, dm.heightPixels).coerceIn(1280, 2400)
+            Triple(maxEdge, (maxEdge * 10 / 16).coerceAtLeast(720), dm.densityDpi.coerceIn(160, 480))
+        } else {
+            computeStreamSpecForView(expandedW, expandedH)
+        }
         val savedTok = AppPrefs.getPeerAuthToken(this, host)
         val tokenToUse = savedTok.ifBlank { handoverToken }
         handoverToken = "" // single-use in memory only
@@ -269,12 +343,21 @@ class PeerFloatingAppService : Service() {
             reqWidth = streamW,
             reqHeight = streamH,
             reqDpi = reqDpi,
-            reqFps = 60,
-            sessionRole = OpalCastPeerClient.SESSION_ROLE_STANDALONE_APP,
-            appPackage = appPackage,
-            appActivity = appActivity,
+            reqFps = if (isMirrorMode) resolveDefaultDisplayRefreshRate() else 60,
+            sessionRole = if (isMirrorMode) {
+                OpalCastPeerClient.SESSION_ROLE_DESKTOP
+            } else {
+                OpalCastPeerClient.SESSION_ROLE_STANDALONE_APP
+            },
+            appPackage = if (isMirrorMode) "" else appPackage,
+            appActivity = if (isMirrorMode) "" else appActivity,
             targetNetwork = boundNet,
-            audioEnabled = false,
+            audioEnabled = isMirrorMode,
+            initialDisplayMode = if (isMirrorMode) {
+                OpalCastPeerClient.DISPLAY_MODE_MIRROR
+            } else {
+                OpalCastPeerClient.DISPLAY_MODE_DEX
+            },
             listener = object : OpalCastPeerClient.Listener {
                 override fun onWaitingForApproval() {
                     mainHandler.post {
@@ -294,19 +377,42 @@ class PeerFloatingAppService : Service() {
                     OpalPeerCastMutex.updateReceivingPeerName(peerName)
                     mainHandler.post {
                         peerLabel = peerName.ifBlank { peerLabel }
-                        _activeFlow.value = ActiveFloatingInfo(host, port, peerLabel, appPackage, appLabel)
-                        updateOverlayStatus("正在启动 $appLabel…", dotColor = 0xFF10B981.toInt(), showRetry = false)
+                        if (isMirrorMode) {
+                            appLabel = "$peerLabel · 主屏镜像"
+                            titleTextView?.text = peerLabel
+                        }
+                        _activeFlow.value = ActiveFloatingInfo(
+                            host, port, peerLabel, appPackage, appLabel, isMirror = isMirrorMode,
+                        )
+                        val startHint = if (isMirrorMode) "正在镜像 $peerLabel 主屏…" else "正在启动 $appLabel…"
+                        updateOverlayStatus(startHint, dotColor = 0xFF10B981.toInt(), showRetry = false)
+                    }
+                }
+
+                override fun onRemoteBlackoutChanged(blackout: Boolean) {
+                    if (!isMirrorMode) return
+                    mainHandler.post {
+                        remoteBlackout = blackout
+                        refreshBlackoutPillAppearance()
                     }
                 }
 
                 override fun onVideoSizeChanged(width: Int, height: Int, fps: Int) {
                     mainHandler.post {
+                        val safeW = width.coerceAtLeast(2)
+                        val safeH = height.coerceAtLeast(2)
                         try {
-                            textureView?.surfaceTexture?.setDefaultBufferSize(
-                                width.coerceAtLeast(2),
-                                height.coerceAtLeast(2),
-                            )
+                            textureView?.surfaceTexture?.setDefaultBufferSize(safeW, safeH)
                         } catch (_: Throwable) {
+                        }
+                        if (isMirrorMode) {
+                            mirrorVideoW = safeW
+                            mirrorVideoH = safeH
+                            if (safeW != lastSnappedMirrorW || safeH != lastSnappedMirrorH) {
+                                lastSnappedMirrorW = safeW
+                                lastSnappedMirrorH = safeH
+                                snapWindowToMirrorAspect(safeW, safeH)
+                            }
                         }
                         statusDotView?.background = circleDrawable(0xFF28C840.toInt())
                         overlayBanner?.visibility = View.GONE
@@ -324,16 +430,16 @@ class PeerFloatingAppService : Service() {
                 }
 
                 override fun onError(message: String) {
-                    OpalLogStore.w(TAG, "Remote standalone app error (pkg=$appPackage): $message")
+                    OpalLogStore.w(TAG, "Remote floating session error (mirror=$isMirrorMode pkg=$appPackage): $message")
                     mainHandler.post {
                         updateOverlayStatus(message, dotColor = 0xFFEF4444.toInt(), showRetry = true)
                     }
                 }
 
                 override fun onDisconnected(reason: String) {
-                    OpalLogStore.i(TAG, "Remote standalone app disconnected (pkg=$appPackage): $reason")
+                    OpalLogStore.i(TAG, "Remote floating session disconnected (mirror=$isMirrorMode pkg=$appPackage): $reason")
                     mainHandler.post {
-                        if (reason == "app_exited" || reason == "Session closed") {
+                        if (reason == "app_exited" || reason == "Session closed" || reason == "Replaced by new session") {
                             stopSelf()
                             return@post
                         }
@@ -354,18 +460,29 @@ class PeerFloatingAppService : Service() {
     @SuppressLint("ClickableViewAccessibility")
     private fun ensureFloatingWindowAttached() {
         if (rootView != null) {
-            titleTextView?.text = appLabel
+            titleTextView?.text = if (isMirrorMode) peerLabel else appLabel
             if (isCollapsed) expandFromBubble()
             return
         }
         val windowManager = wm ?: return
         val dm = resources.displayMetrics
-        val initialSize = FloatingOverlayGeometry.computeWindowSize(
-            screenW = dm.widthPixels,
-            screenH = dm.heightPixels,
-            density = dm.density,
-            isLandscape = isLandscape,
-        )
+        val initialSize = if (isMirrorMode) {
+            FloatingOverlayGeometry.computeAspectMatchedWindowSize(
+                videoW = mirrorVideoW,
+                videoH = mirrorVideoH,
+                chromeHeightPx = floatingChromeHeightPx(),
+                screenW = dm.widthPixels,
+                screenH = dm.heightPixels,
+                density = dm.density,
+            )
+        } else {
+            FloatingOverlayGeometry.computeWindowSize(
+                screenW = dm.widthPixels,
+                screenH = dm.heightPixels,
+                density = dm.density,
+                isLandscape = isLandscape,
+            )
+        }
         expandedW = initialSize.width
         expandedH = initialSize.height
         val initialPos = FloatingOverlayGeometry.clampVisiblePosition(
@@ -421,25 +538,32 @@ class PeerFloatingAppService : Service() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(headerBg)
-            setPadding(dp(12), dp(6), dp(10), dp(6))
+            val padStart = if (isMirrorMode) dp(10) else dp(12)
+            val padEnd = if (isMirrorMode) dp(8) else dp(10)
+            setPadding(padStart, dp(6), padEnd, dp(6))
         }
 
-        // macOS Traffic Lights: Red = Close, Yellow = Collapse to Bubble, Green = Rotate Orientation
+        // macOS Traffic Lights: Red = Close, Yellow = Collapse to Bubble, Green = Expand / Rotate
         val lightsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        val lightPx = if (isMirrorMode) dp(12) else dp(13)
+        val lightGap = if (isMirrorMode) dp(6) else dp(7)
+        val lightTail = if (isMirrorMode) dp(8) else dp(10)
         lightsRow.addView(
             buildTrafficLightDot(0xFFFF5F57.toInt(), 0xFFE0443E.toInt()) { stopSelf() },
-            LinearLayout.LayoutParams(dp(13), dp(13)).apply { rightMargin = dp(7) },
+            LinearLayout.LayoutParams(lightPx, lightPx).apply { rightMargin = lightGap },
         )
         lightsRow.addView(
             buildTrafficLightDot(0xFFFEBC2E.toInt(), 0xFFD89E24.toInt()) { collapseToBubble() },
-            LinearLayout.LayoutParams(dp(13), dp(13)).apply { rightMargin = dp(7) },
+            LinearLayout.LayoutParams(lightPx, lightPx).apply { rightMargin = lightGap },
         )
         lightsRow.addView(
-            buildTrafficLightDot(0xFF28C840.toInt(), 0xFF1AAB29.toInt()) { toggleOrientation() },
-            LinearLayout.LayoutParams(dp(13), dp(13)).apply { rightMargin = dp(10) },
+            buildTrafficLightDot(0xFF28C840.toInt(), 0xFF1AAB29.toInt()) {
+                if (isMirrorMode) expandMirrorToFullscreen() else toggleOrientation()
+            },
+            LinearLayout.LayoutParams(lightPx, lightPx).apply { rightMargin = lightTail },
         )
         header.addView(lightsRow)
 
@@ -447,34 +571,76 @@ class PeerFloatingAppService : Service() {
             background = circleDrawable(0xFFF59E0B.toInt())
         }
         statusDotView = dot
-        header.addView(dot, LinearLayout.LayoutParams(dp(6), dp(6)).apply { rightMargin = dp(6) })
+        header.addView(dot, LinearLayout.LayoutParams(dp(6), dp(6)).apply {
+            rightMargin = if (isMirrorMode) dp(4) else dp(6)
+        })
 
         val titleTv = TextView(this).apply {
-            text = appLabel
+            text = if (isMirrorMode) peerLabel else appLabel
             setTextColor(titleInk)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, if (isMirrorMode) 12f else 12.5f)
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
         titleTextView = titleTv
         header.addView(titleTv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-            rightMargin = dp(8)
+            rightMargin = dp(4)
         })
 
-        header.addView(
-            buildHeaderPill("返回", pillBg, pillBorder, pillInk) {
-                client?.sendSystemAction(OpalCastPeerClient.SYS_BACK)
-            },
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                rightMargin = dp(5)
-            },
-        )
-        header.addView(
-            buildHeaderPill("键盘", pillBg, pillBorder, pillInk) {
+        if (isMirrorMode) {
+            val (blackoutBtn, blackoutGlyph) = buildChromeIconButton(
+                glyph = MirrorGlyph.SCREEN_OFF,
+                contentDesc = if (remoteBlackout) "亮屏" else "熄屏",
+                iconSizeDp = 13.5f,
+                isDark = isDark,
+            ) {
+                val next = !remoteBlackout
+                remoteBlackout = next
+                refreshBlackoutPillAppearance()
+                client?.sendSystemAction(OpalCastPeerClient.SYS_TOGGLE_BLACKOUT, if (next) 1 else 0)
+            }
+            blackoutBtnContainer = blackoutBtn
+            blackoutIconView = blackoutGlyph
+            refreshBlackoutPillAppearance()
+            header.addView(
+                blackoutBtn,
+                LinearLayout.LayoutParams(dp(30), dp(26)).apply {
+                    rightMargin = dp(5)
+                },
+            )
+
+            val (imeBtn, imeGlyph) = buildChromeIconButton(
+                glyph = MirrorGlyph.KEYBOARD,
+                contentDesc = "键盘",
+                iconSizeDp = 14f,
+                isDark = isDark,
+            ) {
                 toggleImeBar()
-            },
-        )
+            }
+            imeBtnContainer = imeBtn
+            imeIconView = imeGlyph
+            refreshImeButtonAppearance()
+            header.addView(imeBtn, LinearLayout.LayoutParams(dp(30), dp(26)))
+        } else {
+            blackoutBtnContainer = null
+            blackoutIconView = null
+            imeBtnContainer = null
+            imeIconView = null
+            header.addView(
+                buildHeaderPill("返回", pillBg, pillBorder, pillInk) {
+                    client?.sendSystemAction(OpalCastPeerClient.SYS_BACK)
+                },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    rightMargin = dp(5)
+                },
+            )
+            header.addView(
+                buildHeaderPill("键盘", pillBg, pillBorder, pillInk) {
+                    toggleImeBar()
+                },
+            )
+        }
 
         installDragMoveListener(header)
         container.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)))
@@ -622,7 +788,7 @@ class PeerFloatingAppService : Service() {
             visibility = View.GONE
             setOnClickListener {
                 tearDownSessionOnly()
-                connectRemoteStandaloneApp()
+                connectRemoteSession()
             }
         }
         overlayBanner = banner
@@ -635,30 +801,102 @@ class PeerFloatingAppService : Service() {
         body.addView(banner, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         // Sleek macOS 2-line diagonal bottom-right resize grip matching CompositorWindowNode
-        val gripTint = if (isDark) 0x99CBD5E1.toInt() else 0x88475569.toInt()
+        val gripTint = if (isDark) 0x77CBD5E1.toInt() else 0x66475569.toInt()
         val resizeGrip = object : View(this) {
             private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = gripTint
-                strokeWidth = dp(2).toFloat().coerceAtLeast(2.2f)
+                strokeWidth = (1.65f * resources.displayMetrics.density).coerceAtLeast(2.0f)
                 strokeCap = Paint.Cap.ROUND
             }
             override fun onDraw(canvas: Canvas) {
                 super.onDraw(canvas)
-                val pad = dp(6).toFloat()
+                val pad = dp(7).toFloat()
                 val w = width.toFloat() - pad
                 val h = height.toFloat() - pad
-                val span = dp(10).toFloat()
+                val span = dp(9).toFloat()
                 canvas.drawLine(w - span, h, w, h - span, paint)
-                canvas.drawLine(w - span * 0.52f, h, w, h - span * 0.52f, paint)
+                canvas.drawLine(w - span * 0.50f, h, w, h - span * 0.50f, paint)
             }
         }
         installResizeListener(resizeGrip)
-        body.addView(
-            resizeGrip,
-            FrameLayout.LayoutParams(dp(34), dp(34), Gravity.BOTTOM or Gravity.END),
-        )
+        if (!isMirrorMode) {
+            body.addView(
+                resizeGrip,
+                FrameLayout.LayoutParams(dp(34), dp(34), Gravity.BOTTOM or Gravity.END),
+            )
+        }
 
         container.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        if (isMirrorMode) {
+            // Refined symmetric macOS/Liquid-Glass bottom navigation bezel with vector icons (Back / Home / Recents)
+            container.addView(
+                View(this).apply { setBackgroundColor(dividerColor) },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, max(1, dp(1))),
+            )
+            val bottomFrame = FrameLayout(this).apply {
+                setBackgroundColor(headerBg)
+            }
+            val capsuleBg = if (isDark) 0x16FFFFFF else 0xCCECF1F9.toInt()
+            val capsuleRim = if (isDark) 0x26FFFFFF else 0x200F172A
+            val sepColor = if (isDark) 0x1FFFFFFF else 0x1A0F172A
+
+            val navCapsule = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = GradientDrawable().apply {
+                    setColor(capsuleBg)
+                    cornerRadius = dp(15).toFloat()
+                    setStroke(max(1, (0.8f * resources.displayMetrics.density).roundToInt()), capsuleRim)
+                }
+                setPadding(dp(4), dp(2), dp(4), dp(2))
+            }
+
+            fun addNavDivider() {
+                navCapsule.addView(
+                    View(this).apply { setBackgroundColor(sepColor) },
+                    LinearLayout.LayoutParams(max(1, (0.8f * resources.displayMetrics.density).roundToInt()), dp(12)),
+                )
+            }
+
+            navCapsule.addView(
+                buildDockNavIconButton(MirrorGlyph.BACK, "返回", isDark) {
+                    client?.sendSystemAction(OpalCastPeerClient.SYS_BACK)
+                },
+                LinearLayout.LayoutParams(dp(46), dp(26)),
+            )
+            addNavDivider()
+            navCapsule.addView(
+                buildDockNavIconButton(MirrorGlyph.HOME, "主页", isDark) {
+                    client?.sendSystemAction(OpalCastPeerClient.SYS_HOME)
+                },
+                LinearLayout.LayoutParams(dp(46), dp(26)),
+            )
+            addNavDivider()
+            navCapsule.addView(
+                buildDockNavIconButton(MirrorGlyph.RECENTS, "多任务", isDark) {
+                    client?.sendSystemAction(OpalCastPeerClient.SYS_RECENTS)
+                },
+                LinearLayout.LayoutParams(dp(46), dp(26)),
+            )
+
+            bottomFrame.addView(
+                navCapsule,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    dp(30),
+                    Gravity.CENTER,
+                ),
+            )
+            bottomFrame.addView(
+                resizeGrip,
+                FrameLayout.LayoutParams(dp(34), dp(34), Gravity.BOTTOM or Gravity.END),
+            )
+            container.addView(
+                bottomFrame,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)),
+            )
+        }
 
         val lp = WindowManager.LayoutParams(
             expandedW,
@@ -679,11 +917,12 @@ class PeerFloatingAppService : Service() {
             windowManager.addView(container, lp)
             rootView = container
             layoutParams = lp
+            attachedMirrorMode = isMirrorMode
             OpalLogStore.i(
                 TAG,
                 "Attached overlay ${expandedW}x${expandedH} at ($savedX,$savedY) " +
                     "screen=${resources.displayMetrics.widthPixels}x${resources.displayMetrics.heightPixels} " +
-                    "density=${resources.displayMetrics.density} landscape=$isLandscape pkg=$appPackage",
+                    "density=${resources.displayMetrics.density} mirror=$isMirrorMode landscape=$isLandscape pkg=$appPackage",
             )
         } catch (t: Throwable) {
             OpalLogStore.e(TAG, "Failed to attach floating overlay", t)
@@ -788,13 +1027,26 @@ class PeerFloatingAppService : Service() {
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dm = resources.displayMetrics
-                    val clamped = FloatingOverlayGeometry.clampResizeSize(
-                        targetW = startW + (ev.rawX - downRawX).roundToInt(),
-                        targetH = startH + (ev.rawY - downRawY).roundToInt(),
-                        screenW = dm.widthPixels,
-                        screenH = dm.heightPixels,
-                        density = dm.density,
-                    )
+                    val clamped = if (isMirrorMode) {
+                        FloatingOverlayGeometry.clampAspectLockedResizeSize(
+                            targetW = startW + (ev.rawX - downRawX).roundToInt(),
+                            targetH = startH + (ev.rawY - downRawY).roundToInt(),
+                            videoW = mirrorVideoW,
+                            videoH = mirrorVideoH,
+                            chromeHeightPx = floatingChromeHeightPx(),
+                            screenW = dm.widthPixels,
+                            screenH = dm.heightPixels,
+                            density = dm.density,
+                        )
+                    } else {
+                        FloatingOverlayGeometry.clampResizeSize(
+                            targetW = startW + (ev.rawX - downRawX).roundToInt(),
+                            targetH = startH + (ev.rawY - downRawY).roundToInt(),
+                            screenW = dm.widthPixels,
+                            screenH = dm.heightPixels,
+                            density = dm.density,
+                        )
+                    }
                     lp.width = clamped.width
                     lp.height = clamped.height
                     expandedW = lp.width
@@ -803,10 +1055,323 @@ class PeerFloatingAppService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    commitRemoteResize()
+                    if (!isMirrorMode) {
+                        commitRemoteResize()
+                    }
                     true
                 }
                 else -> false
+            }
+        }
+    }
+
+    private fun resolveDefaultDisplayRefreshRate(): Int {
+        return try {
+            val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+            val defaultDisplay = dm?.getDisplay(Display.DEFAULT_DISPLAY)
+            (defaultDisplay?.mode?.refreshRate?.roundToInt() ?: 60).coerceIn(60, 120)
+        } catch (_: Throwable) {
+            60
+        }
+    }
+
+    private fun floatingChromeHeightPx(): Int {
+        val strokePx = max(2, (1.25f * resources.displayMetrics.density).roundToInt())
+        val topChrome = dp(40) + max(1, dp(1))
+        val bottomChrome = if (isMirrorMode) dp(40) + max(1, dp(1)) else 0
+        return topChrome + bottomChrome + strokePx * 2
+    }
+
+    private fun snapWindowToMirrorAspect(videoW: Int, videoH: Int) {
+        val lp = layoutParams ?: return
+        val rv = rootView ?: return
+        val dm = resources.displayMetrics
+        val matched = FloatingOverlayGeometry.computeAspectMatchedWindowSize(
+            videoW = videoW,
+            videoH = videoH,
+            chromeHeightPx = floatingChromeHeightPx(),
+            screenW = dm.widthPixels,
+            screenH = dm.heightPixels,
+            density = dm.density,
+        )
+        expandedW = matched.width
+        expandedH = matched.height
+        lp.width = expandedW
+        lp.height = expandedH
+        val clampedPos = FloatingOverlayGeometry.clampVisiblePosition(
+            x = lp.x,
+            y = lp.y,
+            windowW = lp.width,
+            windowH = lp.height,
+            screenW = dm.widthPixels,
+            screenH = dm.heightPixels,
+            density = dm.density,
+        )
+        lp.x = clampedPos.x
+        lp.y = clampedPos.y
+        savedX = lp.x
+        savedY = lp.y
+        safeUpdateViewLayout(rv, lp)
+    }
+
+    private fun expandMirrorToFullscreen() {
+        val targetHost = host
+        val targetPort = port
+        val label = peerLabel.ifBlank { host }
+        tearDownSessionOnly()
+        val intent = Intent(this, PeerCastViewerActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra(PeerCastViewerActivity.EXTRA_HOST, targetHost)
+            putExtra(PeerCastViewerActivity.EXTRA_PORT, targetPort)
+            putExtra(PeerCastViewerActivity.EXTRA_LABEL, label)
+            putExtra(PeerCastViewerActivity.EXTRA_INITIAL_DISPLAY_MODE, OpalCastPeerClient.DISPLAY_MODE_MIRROR)
+        }
+        try {
+            startActivity(intent)
+        } catch (t: Throwable) {
+            OpalLogStore.w(TAG, "Failed to expand mirror to fullscreen: ${t.message}")
+        }
+        stopSelf()
+    }
+
+    private fun refreshBlackoutPillAppearance() {
+        val btn = blackoutBtnContainer ?: return
+        val glyph = blackoutIconView ?: return
+        val isDark = resolveFloatingDarkTheme()
+        btn.contentDescription = if (remoteBlackout) "亮屏" else "熄屏"
+        if (remoteBlackout) {
+            val activeInk = if (isDark) 0xFFFBBF24.toInt() else 0xFFD97706.toInt()
+            glyph.setIconTint(activeInk)
+            btn.background = GradientDrawable().apply {
+                setColor(if (isDark) 0x30F59E0B else 0x24F59E0B)
+                cornerRadius = dp(13).toFloat()
+                setStroke(max(1, (0.85f * resources.displayMetrics.density).roundToInt()), 0x7AF59E0B)
+            }
+        } else {
+            val idleBg = if (isDark) 0x18FFFFFF else 0x0F0F172A
+            val idleRim = if (isDark) 0x26FFFFFF else 0x1A0F172A
+            val idleInk = if (isDark) 0xFFD8E1F0.toInt() else 0xFF334155.toInt()
+            glyph.setIconTint(idleInk)
+            btn.background = GradientDrawable().apply {
+                setColor(idleBg)
+                cornerRadius = dp(13).toFloat()
+                setStroke(max(1, (0.7f * resources.displayMetrics.density).roundToInt()), idleRim)
+            }
+        }
+    }
+
+    private fun refreshImeButtonAppearance() {
+        val btn = imeBtnContainer ?: return
+        val glyph = imeIconView ?: return
+        val isDark = resolveFloatingDarkTheme()
+        btn.contentDescription = if (isImeBarVisible) "收起键盘" else "键盘"
+        if (isImeBarVisible) {
+            val activeInk = if (isDark) 0xFF60A5FA.toInt() else 0xFF007AFF.toInt()
+            glyph.setIconTint(activeInk)
+            btn.background = GradientDrawable().apply {
+                setColor(if (isDark) 0x303B82F6 else 0x1E007AFF)
+                cornerRadius = dp(13).toFloat()
+                setStroke(max(1, (0.85f * resources.displayMetrics.density).roundToInt()), 0x6E007AFF)
+            }
+        } else {
+            val idleBg = if (isDark) 0x18FFFFFF else 0x0F0F172A
+            val idleRim = if (isDark) 0x26FFFFFF else 0x1A0F172A
+            val idleInk = if (isDark) 0xFFD8E1F0.toInt() else 0xFF334155.toInt()
+            glyph.setIconTint(idleInk)
+            btn.background = GradientDrawable().apply {
+                setColor(idleBg)
+                cornerRadius = dp(13).toFloat()
+                setStroke(max(1, (0.7f * resources.displayMetrics.density).roundToInt()), idleRim)
+            }
+        }
+    }
+
+    private enum class MirrorGlyph { BACK, HOME, RECENTS, SCREEN_OFF, KEYBOARD }
+
+    private inner class MirrorGlyphIconView(
+        context: Context,
+        private val glyph: MirrorGlyph,
+        initialTint: Int,
+    ) : View(context) {
+        private var tintColor: Int = initialTint
+        private val density = resources.displayMetrics.density
+        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            color = initialTint
+        }
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = initialTint
+        }
+        private val tmpPath = Path()
+        private val tmpRect = RectF()
+
+        fun setIconTint(color: Int) {
+            if (tintColor != color) {
+                tintColor = color
+                strokePaint.color = color
+                fillPaint.color = color
+                invalidate()
+            }
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 0f || h <= 0f) return
+            val sw = (1.65f * density).coerceAtLeast(1.8f)
+            strokePaint.color = tintColor
+            strokePaint.strokeWidth = sw
+            fillPaint.color = tintColor
+
+            when (glyph) {
+                MirrorGlyph.BACK -> {
+                    // Optically centered SF-style chevron (<)
+                    tmpPath.reset()
+                    tmpPath.moveTo(w * 0.63f, h * 0.17f)
+                    tmpPath.lineTo(w * 0.30f, h * 0.50f)
+                    tmpPath.lineTo(w * 0.63f, h * 0.83f)
+                    canvas.drawPath(tmpPath, strokePaint)
+                }
+                MirrorGlyph.HOME -> {
+                    // Refined minimal house silhouette matching OpalPrimitives ChromeGlyph.HOME_HOUSE
+                    tmpPath.reset()
+                    tmpPath.moveTo(w * 0.13f, h * 0.48f)
+                    tmpPath.lineTo(w * 0.50f, h * 0.15f)
+                    tmpPath.lineTo(w * 0.87f, h * 0.48f)
+                    canvas.drawPath(tmpPath, strokePaint)
+
+                    val r = 1.8f * density
+                    tmpPath.reset()
+                    tmpPath.moveTo(w * 0.24f, h * 0.44f)
+                    tmpPath.lineTo(w * 0.24f, h * 0.84f - r)
+                    tmpPath.quadTo(w * 0.24f, h * 0.84f, w * 0.24f + r, h * 0.84f)
+                    tmpPath.lineTo(w * 0.76f - r, h * 0.84f)
+                    tmpPath.quadTo(w * 0.76f, h * 0.84f, w * 0.76f, h * 0.84f - r)
+                    tmpPath.lineTo(w * 0.76f, h * 0.44f)
+                    canvas.drawPath(tmpPath, strokePaint)
+                }
+                MirrorGlyph.RECENTS -> {
+                    // Layered app-switcher cards (inspired by iPadOS Stage Manager / SF square.on.square)
+                    val cr = 2.4f * density
+                    // Trailing background card peek at muted alpha for depth
+                    val backAlpha = ((Color.alpha(tintColor) * 0.62f).roundToInt()).coerceIn(0, 255)
+                    strokePaint.color = Color.argb(backAlpha, Color.red(tintColor), Color.green(tintColor), Color.blue(tintColor))
+                    strokePaint.strokeWidth = sw * 0.90f
+                    tmpPath.reset()
+                    tmpPath.moveTo(w * 0.33f, h * 0.27f)
+                    tmpPath.lineTo(w * 0.33f, h * 0.14f + cr)
+                    tmpPath.quadTo(w * 0.33f, h * 0.14f, w * 0.33f + cr, h * 0.14f)
+                    tmpPath.lineTo(w * 0.86f - cr, h * 0.14f)
+                    tmpPath.quadTo(w * 0.86f, h * 0.14f, w * 0.86f, h * 0.14f + cr)
+                    tmpPath.lineTo(w * 0.86f, h * 0.67f - cr)
+                    tmpPath.quadTo(w * 0.86f, h * 0.67f, w * 0.86f - cr, h * 0.67f)
+                    tmpPath.lineTo(w * 0.72f, h * 0.67f)
+                    canvas.drawPath(tmpPath, strokePaint)
+
+                    // Foreground crisp card
+                    strokePaint.color = tintColor
+                    strokePaint.strokeWidth = sw
+                    tmpRect.set(w * 0.14f, h * 0.31f, w * 0.69f, h * 0.86f)
+                    canvas.drawRoundRect(tmpRect, cr, cr, strokePaint)
+                }
+                MirrorGlyph.SCREEN_OFF -> {
+                    // Universal power / screen-sleep glyph (open top arc + stem)
+                    tmpRect.set(w * 0.16f, h * 0.18f, w * 0.84f, h * 0.86f)
+                    canvas.drawArc(tmpRect, -52f, 284f, false, strokePaint)
+                    canvas.drawLine(w * 0.50f, h * 0.10f, w * 0.50f, h * 0.47f, strokePaint)
+                }
+                MirrorGlyph.KEYBOARD -> {
+                    val cr = 2.0f * density
+                    strokePaint.strokeWidth = sw * 0.90f
+                    tmpRect.set(w * 0.08f, h * 0.22f, w * 0.92f, h * 0.78f)
+                    canvas.drawRoundRect(tmpRect, cr, cr, strokePaint)
+                    canvas.drawLine(w * 0.28f, h * 0.62f, w * 0.72f, h * 0.62f, strokePaint)
+                    val dotR = (w * 0.052f).coerceAtLeast(1.1f * density)
+                    for (gx in floatArrayOf(0.26f, 0.42f, 0.58f, 0.74f)) {
+                        canvas.drawCircle(w * gx, h * 0.42f, dotR, fillPaint)
+                    }
+                }
+            }
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun buildChromeIconButton(
+        glyph: MirrorGlyph,
+        contentDesc: String,
+        iconSizeDp: Float,
+        isDark: Boolean,
+        onClick: () -> Unit,
+    ): Pair<FrameLayout, MirrorGlyphIconView> {
+        val idleInk = if (isDark) 0xFFD8E1F0.toInt() else 0xFF334155.toInt()
+        val iconPx = (iconSizeDp * resources.displayMetrics.density).roundToInt()
+        val icon = MirrorGlyphIconView(this, glyph, idleInk)
+        val btn = FrameLayout(this).apply {
+            contentDescription = contentDesc
+            isClickable = true
+            isFocusable = false
+            addView(icon, FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER))
+            setOnTouchListener { v, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v.animate().scaleX(0.88f).scaleY(0.88f).setDuration(75L).start()
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        v.animate().scaleX(1f).scaleY(1f).setDuration(120L).start()
+                    }
+                }
+                false
+            }
+            setOnClickListener {
+                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                onClick()
+            }
+        }
+        return btn to icon
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun buildDockNavIconButton(
+        glyph: MirrorGlyph,
+        contentDesc: String,
+        isDark: Boolean,
+        onClick: () -> Unit,
+    ): FrameLayout {
+        val idleInk = if (isDark) 0xFFE2E8F0.toInt() else 0xFF1E293B.toInt()
+        val pressedInk = if (isDark) 0xFF60A5FA.toInt() else 0xFF007AFF.toInt()
+        val pressedBg = GradientDrawable().apply {
+            setColor(if (isDark) 0x2660A5FA else 0x1C007AFF)
+            cornerRadius = dp(12).toFloat()
+        }
+        val iconPx = (15.5f * resources.displayMetrics.density).roundToInt()
+        val icon = MirrorGlyphIconView(this, glyph, idleInk)
+        return FrameLayout(this).apply {
+            contentDescription = contentDesc
+            isClickable = true
+            isFocusable = false
+            addView(icon, FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER))
+            setOnTouchListener { v, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v.background = pressedBg
+                        icon.setIconTint(pressedInk)
+                        icon.animate().scaleX(0.86f).scaleY(0.86f).setDuration(70L).start()
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        v.background = null
+                        icon.setIconTint(idleInk)
+                        icon.animate().scaleX(1f).scaleY(1f).setDuration(130L).start()
+                    }
+                }
+                false
+            }
+            setOnClickListener {
+                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                onClick()
             }
         }
     }
@@ -891,6 +1456,7 @@ class PeerFloatingAppService : Service() {
         val edit = imeEditText ?: return
         OpalLogStore.i(TAG, "Opening floating IME bar on receiver")
         isImeBarVisible = true
+        refreshImeButtonAppearance()
         bar.visibility = View.VISIBLE
         lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
         safeUpdateViewLayout(rv, lp)
@@ -912,6 +1478,7 @@ class PeerFloatingAppService : Service() {
 
     private fun hideImeBar() {
         isImeBarVisible = false
+        refreshImeButtonAppearance()
         val edit = imeEditText
         if (edit != null) {
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
@@ -943,7 +1510,7 @@ class PeerFloatingAppService : Service() {
         rootView?.visibility = View.GONE
 
         val windowManager = wm ?: return
-        val initial = appLabel.trim().take(1).ifEmpty { "浮" }
+        val initial = if (isMirrorMode) "镜" else appLabel.trim().take(1).ifEmpty { "浮" }
         val pill = TextView(this).apply {
             text = initial
             setTextColor(Color.WHITE)
@@ -952,7 +1519,7 @@ class PeerFloatingAppService : Service() {
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(0xEE1D4ED8.toInt())
+                setColor(if (isMirrorMode) 0xEE0891B2.toInt() else 0xEE1D4ED8.toInt())
                 setStroke(dp(2), 0xAAFFFFFF.toInt())
             }
             elevation = dp(12).toFloat()
@@ -1073,14 +1640,14 @@ class PeerFloatingAppService : Service() {
         stopSelf()
     }
 
-    private fun startForegroundNotification(appTitle: String, hostName: String) {
+    private fun startForegroundNotification(appTitle: String, hostName: String, mirror: Boolean = false) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         val ch = NotificationChannel(
             CHANNEL_ID,
             "远程应用悬浮窗",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "保持远程单应用悬浮窗在应用外运行"
+            description = "保持远程单应用与主屏镜像悬浮窗在应用外运行"
         }
         nm.createNotificationChannel(ch)
 
@@ -1099,10 +1666,15 @@ class PeerFloatingAppService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
+        val contentText = if (mirror) {
+            "正在以悬浮窗镜像显示 $hostName 主屏"
+        } else {
+            "正在流式运行来自 $hostName 的应用"
+        }
         val notif = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_opaldesk)
             .setContentTitle("悬浮窗：$appTitle")
-            .setContentText("正在流式运行来自 $hostName 的应用")
+            .setContentText(contentText)
             .setContentIntent(openPi)
             .addAction(Notification.Action.Builder(null, "关闭悬浮窗", stopPi).build())
             .setOngoing(true)

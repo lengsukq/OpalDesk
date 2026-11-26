@@ -14,9 +14,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * keyframe-aware congestion dropping, and lock-free atomic teardown.
  */
 final class ClientSession {
-    static final int MAX_QUEUED_VIDEO_FRAMES = 10;
+    static final int MAX_QUEUED_VIDEO_FRAMES = 14;
     static final int MAX_QUEUED_AUDIO_FRAMES = 12;
     static final int MAX_TOTAL_QUEUED_FRAMES = 64;
+    static final long AWAITING_KEYFRAME_RETRY_MS = 450L;
     private static final long HEALTHY_NOTIFY_INTERVAL_MS = 2000L;
 
     private static final class QueuedFrame {
@@ -56,7 +57,9 @@ final class ClientSession {
     private int queuedVideoFrames = 0;
     private int queuedAudioFrames = 0;
     private boolean awaitingKeyFrame = false;
+    private long lastKeyFrameRequestMs = 0L;
     private long lastHealthyNotifyMs = 0L;
+    private final java.util.function.LongSupplier monotonicClockMs;
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
     volatile String closeReason = "";
@@ -90,6 +93,24 @@ final class ClientSession {
             Closeable transport,
             OpalCastFrameTransport frameWriter,
             RemoteStreamServer.SessionListener listener) {
+        this(sessionId, sinkType, isAdbLocalSocket, permanentTrust, sessionRole, appPackage,
+                clientId, clientName, transport, frameWriter, listener,
+                () -> System.nanoTime() / 1_000_000L);
+    }
+
+    ClientSession(
+            int sessionId,
+            int sinkType,
+            boolean isAdbLocalSocket,
+            boolean permanentTrust,
+            String sessionRole,
+            String appPackage,
+            String clientId,
+            String clientName,
+            Closeable transport,
+            OpalCastFrameTransport frameWriter,
+            RemoteStreamServer.SessionListener listener,
+            java.util.function.LongSupplier monotonicClockMs) {
         this.sessionId = sessionId;
         this.sinkType = sinkType;
         this.isAdbLocalSocket = isAdbLocalSocket;
@@ -102,6 +123,8 @@ final class ClientSession {
         this.transport = transport;
         this.frameWriter = frameWriter;
         this.listener = listener;
+        this.monotonicClockMs = (monotonicClockMs != null)
+                ? monotonicClockMs : (() -> System.nanoTime() / 1_000_000L);
     }
 
     boolean isClosed() {
@@ -118,8 +141,10 @@ final class ClientSession {
         if (closed.get()) return;
         QueuedFrame qf = new QueuedFrame(type, flags, timestampUs, payload);
         boolean triggerCongestion = false;
+        boolean triggerIdrRetry = false;
         boolean triggerHealthy = false;
         boolean overflowClose = false;
+        long nowMs = monotonicClockMs.getAsLong();
 
         synchronized (queueLock) {
             if (closed.get()) return;
@@ -127,6 +152,7 @@ final class ClientSession {
             if (type == OpalCastProtocol.TYPE_VIDEO_CONFIG) {
                 dropAllQueuedVideoLocked(false);
                 awaitingKeyFrame = false;
+                lastKeyFrameRequestMs = 0L;
                 queue.addLast(qf);
                 queueLock.notifyAll();
                 return;
@@ -138,25 +164,30 @@ final class ClientSession {
                         dropAllQueuedVideoLocked(false);
                     }
                     awaitingKeyFrame = false;
+                    lastKeyFrameRequestMs = 0L;
                     queue.addLast(qf);
                     queuedVideoFrames++;
                     queueLock.notifyAll();
                     return;
                 }
                 if (awaitingKeyFrame) {
-                    return;
-                }
-                if (queuedVideoFrames >= MAX_QUEUED_VIDEO_FRAMES) {
+                    // Self-heal if an earlier congestion IDR was coalesced/cooled-down or dropped by HW encoder:
+                    // periodically request a sync frame without further crushing ABR bitrate.
+                    if (nowMs - lastKeyFrameRequestMs >= AWAITING_KEYFRAME_RETRY_MS) {
+                        lastKeyFrameRequestMs = nowMs;
+                        triggerIdrRetry = true;
+                    }
+                } else if (queuedVideoFrames >= MAX_QUEUED_VIDEO_FRAMES) {
                     dropAllQueuedVideoLocked(true);
                     awaitingKeyFrame = true;
+                    lastKeyFrameRequestMs = nowMs;
                     triggerCongestion = true;
                 } else {
                     queue.addLast(qf);
                     queuedVideoFrames++;
                     if (queuedVideoFrames <= 1) {
-                        long now = SystemClock.uptimeMillis();
-                        if (now - lastHealthyNotifyMs >= HEALTHY_NOTIFY_INTERVAL_MS) {
-                            lastHealthyNotifyMs = now;
+                        if (nowMs - lastHealthyNotifyMs >= HEALTHY_NOTIFY_INTERVAL_MS) {
+                            lastHealthyNotifyMs = nowMs;
                             triggerHealthy = true;
                         }
                     }
@@ -173,6 +204,7 @@ final class ClientSession {
                 if (queue.size() >= MAX_TOTAL_QUEUED_FRAMES) {
                     dropAllQueuedVideoLocked(false);
                     awaitingKeyFrame = true;
+                    lastKeyFrameRequestMs = nowMs;
                     triggerCongestion = true;
                 }
                 if (queue.size() >= MAX_TOTAL_QUEUED_FRAMES) {
@@ -190,6 +222,9 @@ final class ClientSession {
         }
         if (triggerCongestion && listener != null) {
             listener.onVideoCongestion(sessionId);
+        } else if (triggerIdrRetry && listener != null) {
+            System.out.println("OPALDESK_STREAM_IDR_RETRY sid=" + sessionId);
+            listener.onRequestIdr(sessionId);
         } else if (triggerHealthy && listener != null) {
             listener.onVideoQueueHealthy(sessionId);
         }

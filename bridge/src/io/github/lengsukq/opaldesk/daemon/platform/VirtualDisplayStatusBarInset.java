@@ -30,8 +30,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * (such as WeChat's duplicate ActionBar / TaskBar header when {@code insets.top == 0}).
  */
 public final class VirtualDisplayStatusBarInset {
+    /**
+     * Only attach shell-owned {@code TYPE_STATUS_BAR} inset windows on Android 14+ (API 34+),
+     * where {@code InsetsFrameProvider} is standard. On Android 11-13 (API 30-33, e.g. Lenovo ZUI
+     * Android 12), adding a {@code ViewRootImpl} inside headless shell {@code app_process} can
+     * crash asynchronously on the main Looper ~1s after VirtualDisplay creation.
+     */
+    public static final int MIN_SUPPORTED_SDK = 34;
     private static final int ITYPE_STATUS_BAR = 0;
     private static final long ATTACH_WAIT_MS = 800L;
+
+    public static boolean isSdkSupported(int sdkInt) {
+        return io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil.isVirtualDisplayStatusBarInsetSupported(sdkInt);
+    }
 
     private static final class Entry {
         final WindowManager wm;
@@ -60,7 +71,13 @@ public final class VirtualDisplayStatusBarInset {
      * Returns {@code true} if WindowManager accepted the inset window.
      */
     public boolean attach(Display display, int heightPx) {
-        if (windowAddUnsupported || baseContext == null || display == null || heightPx <= 0) return false;
+        if (!isSdkSupported(Build.VERSION.SDK_INT)
+                || windowAddUnsupported
+                || baseContext == null
+                || display == null
+                || heightPx <= 0) {
+            return false;
+        }
         int displayId = display.getDisplayId();
         if (displayId <= 0) return false;
         detach(displayId);
