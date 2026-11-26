@@ -136,6 +136,15 @@ public struct SettingsView: View {
                 Text("自动探测顺序：App 内置 → ANDROID_HOME → Homebrew → ~/Library/Android/sdk → 外接卷 Android SDK。")
                     .font(.caption).foregroundStyle(.secondary)
             }
+
+            Section("实验性：USB 网络共享自动识别 (Beta · 免 ADB)") {
+                Toggle("启用 USB 网络共享自动识别 (Beta)", isOn: $prefs.usbTetherDiscoveryEnabled)
+                    .onChange(of: prefs.usbTetherDiscoveryEnabled) { _, enabled in
+                        model.setUsbTetherDiscoveryEnabled(enabled)
+                    }
+                Text("Beta 测试功能（默认关闭，不影响主线 USB ADB 与 Wi-Fi 投屏，不保证所有设备均可正常使用）：开启后将自动识别通过 CDC-NCM 等 USB 网络共享接入的 Android 手机。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }

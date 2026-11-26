@@ -92,7 +92,24 @@ import { OpalVideoDecoder, probeVideoCodecs } from './video_decoder.js';
 const STORAGE_CLIENT_ID = 'opaldesk-web-client-id-v1';
 const STORAGE_DEVICES = 'opaldesk-web-devices-v1';
 const STORAGE_THEME = 'opaldesk-showcase-theme-v1';
+const STORAGE_USB_TETHER_BETA = 'opaldesk-usb-tether-beta-v1';
 const FILE_CHUNK_SIZE = 64 * 1024;
+
+function loadUsbTetherBetaPref() {
+  try {
+    return localStorage.getItem(STORAGE_USB_TETHER_BETA) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveUsbTetherBetaPref(enabled) {
+  try {
+    localStorage.setItem(STORAGE_USB_TETHER_BETA, enabled ? '1' : '0');
+  } catch {
+    // Ignore storage restriction
+  }
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -382,6 +399,10 @@ class OpalCastWebApp {
     }
 
     $('desktopMdnsSection').hidden = this.transportMode === 'usb';
+    this.usbTetherBetaEnabled = loadUsbTetherBetaPref();
+    const betaCheck = $('usbTetherBetaCheck');
+    if (betaCheck) betaCheck.checked = this.usbTetherBetaEnabled;
+    this.syncDesktopUsbTetherUi();
     this.renderDesktopMdnsDevices(this.desktop.mdnsDevices);
     this.desktop.startDiscoveryPolling((devices) => this.renderDesktopMdnsDevices(devices));
   }
@@ -489,6 +510,19 @@ class OpalCastWebApp {
       this.showToast('已刷新局域网 mDNS 设备扫描');
     });
     $('scanAdbDevicesBtn')?.addEventListener('click', () => this.refreshDesktopUsbPanel());
+    $('usbTetherBetaCheck')?.addEventListener('change', (e) => {
+      if (!this.desktop.enabled) return;
+      this.usbTetherBetaEnabled = Boolean(e.target.checked);
+      saveUsbTetherBetaPref(this.usbTetherBetaEnabled);
+      this.syncDesktopUsbTetherUi();
+      if (this.usbTetherBetaEnabled) {
+        this.refreshDesktopUsbTetherPanel();
+      } else {
+        this.desktop.usbTetherDevices = [];
+        this.renderDesktopUsbTetherDevices([]);
+      }
+    });
+    $('scanUsbTetherBtn')?.addEventListener('click', () => this.refreshDesktopUsbTetherPanel(true));
     $('saveAdbPathBtn')?.addEventListener('click', async () => {
       if (!this.desktop.enabled) return;
       const custom = $('customAdbPathInput').value.trim();
@@ -826,8 +860,88 @@ class OpalCastWebApp {
     }
   }
 
+  syncDesktopUsbTetherUi() {
+    const active = Boolean(this.desktop.enabled && this.usbTetherBetaEnabled);
+    const scanBtn = $('scanUsbTetherBtn');
+    const listEl = $('desktopUsbTetherList');
+    if (scanBtn) scanBtn.hidden = !active;
+    if (listEl) listEl.hidden = !active;
+  }
+
+  renderDesktopUsbTetherDevices(devices = []) {
+    const listEl = $('desktopUsbTetherList');
+    if (!listEl || !this.desktop.enabled || !this.usbTetherBetaEnabled) return;
+    listEl.innerHTML = '';
+    if (!devices.length) {
+      const hint = document.createElement('span');
+      hint.className = 'hint-text';
+      hint.textContent =
+        '未识别到 USB 网络共享手机：请连接数据线并在手机开启系统「USB 网络共享」及 OpalDesk 共享服务后点「刷新识别」（Beta 测试功能，不保证所有设备均可正常使用）。';
+      listEl.appendChild(hint);
+      return;
+    }
+    for (const dev of devices) {
+      const row = document.createElement('div');
+      row.className = 'mdns-device-card';
+
+      const meta = document.createElement('div');
+      meta.className = 'mdns-device-meta';
+      const title = document.createElement('strong');
+      title.textContent = `${dev.displayName || dev.host} · USB 网络共享 (Beta)`;
+      const nicLabel = dev.interfaceAlias || dev.interfaceDescription || 'USB';
+      const sub = document.createElement('span');
+      sub.className = 'mono';
+      sub.textContent = `${dev.host}:${dev.port} · ${nicLabel}${dev.shortFingerprint ? ` · 指纹 ${dev.shortFingerprint}` : ''}`;
+      meta.append(title, sub);
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'primary-btn compact';
+      btn.textContent = '连接投屏';
+      btn.addEventListener('click', () => {
+        this.explicitCertPin = '';
+        this.selectTransportMode('wifi');
+        $('castHostInput').value = dev.host;
+        $('castPortInput').value = String(dev.port || 19878);
+        this.startCastConnection();
+      });
+
+      row.append(meta, btn);
+      listEl.appendChild(row);
+    }
+  }
+
+  async refreshDesktopUsbTetherPanel(showToastOnDone = false) {
+    if (!this.desktop.enabled || !this.usbTetherBetaEnabled) return;
+    const listEl = $('desktopUsbTetherList');
+    if (listEl) {
+      listEl.hidden = false;
+      listEl.innerHTML = '<span class="hint-text">正在探测 Windows USB 网络共享网卡网关…</span>';
+    }
+    try {
+      const port = Number($('castPortInput')?.value) || 19878;
+      const list = await this.desktop.scanUsbTetherDevices(port);
+      this.renderDesktopUsbTetherDevices(list);
+      if (showToastOnDone) {
+        this.showToast(list.length ? `已识别 ${list.length} 台 USB 网络共享设备 (Beta)` : '暂未识别到 USB 网络共享设备');
+      }
+    } catch (err) {
+      if (listEl) {
+        listEl.innerHTML = '';
+        const errSpan = document.createElement('span');
+        errSpan.className = 'hint-text';
+        errSpan.textContent = `USB 网络共享识别失败：${String(err?.message || err || '未知错误')}`;
+        listEl.appendChild(errSpan);
+      }
+    }
+  }
+
   async refreshDesktopUsbPanel() {
     if (!this.desktop.enabled) return;
+    this.syncDesktopUsbTetherUi();
+    if (this.usbTetherBetaEnabled) {
+      this.refreshDesktopUsbTetherPanel();
+    }
     const hintEl = $('adbStatusHint');
     const listEl = $('desktopAdbList');
     listEl.innerHTML = '';

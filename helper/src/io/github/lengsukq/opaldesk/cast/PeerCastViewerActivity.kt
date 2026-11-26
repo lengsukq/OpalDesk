@@ -296,6 +296,11 @@ class PeerCastViewerActivity : ComponentActivity() {
         errorText = ""
         statusText = "正在建立 TLS 加密连接…"
 
+        val boundNet = if (AppPrefs.isUsbTetherCastEnabled(this)) {
+            UsbTetherPeerDetector.resolveBoundNetworkForHost(targetHost)
+        } else {
+            null
+        }
         val peerClient = OpalCastPeerClient(
             host = targetHost,
             port = targetPort,
@@ -307,6 +312,7 @@ class PeerCastViewerActivity : ComponentActivity() {
             reqFps = reqFps,
             sessionRole = OpalCastPeerClient.SESSION_ROLE_DESKTOP,
             audioEnabled = true,
+            targetNetwork = boundNet,
             listener = object : OpalCastPeerClient.Listener {
                 override fun onWaitingForApproval() {
                     runOnUiThread {

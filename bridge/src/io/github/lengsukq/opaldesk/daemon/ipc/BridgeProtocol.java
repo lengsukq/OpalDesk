@@ -83,6 +83,12 @@ public final class BridgeProtocol {
     /** Per-app split: phone Display 0 apps play on phone; DeX apps route exclusively to DeX receiver. */
     public static final int AUDIO_ROUTE_SPLIT_BY_APP = 1;
 
+    // ---- TLS Stream Listener Bind Scopes (TX_SET_WIFI_STREAM_ENABLED) ----
+    /** Default: bind wildcard 0.0.0.0 across Wi-Fi LAN and any active USB tethering interfaces. */
+    public static final int TLS_BIND_SCOPE_ALL = 0;
+    /** Beta opt-in: bind strictly to the active USB tethering IPv4 interface so Wi-Fi ports stay closed. */
+    public static final int TLS_BIND_SCOPE_USB_TETHER_ONLY = 1;
+
     // ---- Interactive Pairing Approval Decisions (TX_RESPOND_PAIRING) ----
     public static final int PAIRING_DECISION_REJECT = 0;
     public static final int PAIRING_DECISION_APPROVE_ONCE = 1;

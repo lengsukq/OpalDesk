@@ -8,6 +8,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio_rustls::TlsConnector;
@@ -19,6 +20,15 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 pub struct ProbedCertInfo {
     pub host: String,
     pub port: u16,
+    pub fingerprint: String,
+    pub short_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbedCastHealth {
+    pub host: String,
+    pub port: u16,
+    pub device_name: String,
     pub fingerprint: String,
     pub short_fingerprint: String,
 }
@@ -216,6 +226,164 @@ pub async fn probe_certificate_fingerprint(
     Ok(ProbedCertInfo {
         host: host.trim().to_string(),
         port,
+        short_fingerprint: fingerprint::format_short(&fp),
+        fingerprint: fp,
+    })
+}
+
+/// Captures the server leaf certificate SHA-256 fingerprint for read-only `/health` discovery
+/// probes ONLY (never used for actual OpalCast stream tunnels, which strictly use `PinnedCertVerifier`).
+#[derive(Debug)]
+struct HealthProbeCertVerifier {
+    captured_hex: Arc<Mutex<Option<String>>>,
+    provider: Arc<CryptoProvider>,
+}
+
+impl ServerCertVerifier for HealthProbeCertVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, RustlsError> {
+        let digest = fingerprint::sha256_hex(end_entity.as_ref());
+        if let Ok(mut slot) = self.captured_hex.lock() {
+            *slot = Some(digest);
+        }
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+pub fn parse_cast_health_http_response(raw_http: &str) -> Option<String> {
+    let (head, body) = raw_http
+        .split_once("\r\n\r\n")
+        .or_else(|| raw_http.split_once("\n\n"))?;
+    let status_line = head.lines().next()?;
+    if !status_line.contains(" 200") {
+        return None;
+    }
+    let val: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
+    if val.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    if val.get("role").and_then(|v| v.as_str()) != Some("cast") {
+        return None;
+    }
+    let name = val
+        .get("deviceName")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Android 设备");
+    Some(name.to_string())
+}
+
+/// Probes an OpalDesk TLS endpoint's `GET /health` metadata and captures its real leaf X.509
+/// SHA-256 fingerprint in a single short-timeout roundtrip.
+pub async fn probe_cast_health(
+    host: &str,
+    port: u16,
+    timeout_ms: u64,
+) -> Result<ProbedCastHealth, String> {
+    let clean_host = host.trim();
+    let addr = format_host_port(clean_host, port);
+    let server_name = parse_server_name(clean_host)?;
+    let captured = Arc::new(Mutex::new(None));
+    let verifier = Arc::new(HealthProbeCertVerifier {
+        captured_hex: captured.clone(),
+        provider: ring_provider(),
+    });
+    let tls_cfg = build_client_config(verifier)?;
+    let timeout_dur = Duration::from_millis(timeout_ms.clamp(400, 5_000));
+
+    let tcp = tokio::time::timeout(timeout_dur, TcpStream::connect(&addr))
+        .await
+        .map_err(|_| format!("探测 {addr} 超时"))?
+        .map_err(|e| format!("无法连接 {addr}: {e}"))?;
+    let _ = tcp.set_nodelay(true);
+
+    let mut tls = tokio::time::timeout(
+        timeout_dur,
+        TlsConnector::from(tls_cfg).connect(server_name, tcp),
+    )
+    .await
+    .map_err(|_| format!("TLS 探测 {addr} 超时"))?
+    .map_err(|e| format!("TLS 探测 {addr} 失败: {e}"))?;
+
+    let req = format!(
+        "GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+    );
+    tokio::time::timeout(timeout_dur, tls.write_all(req.as_bytes()))
+        .await
+        .map_err(|_| "写入 /health 请求超时".to_string())?
+        .map_err(|e| format!("写入 /health 请求失败: {e}"))?;
+    let _ = tls.flush().await;
+
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
+    let read_result = tokio::time::timeout(timeout_dur, async {
+        while buf.len() < 4096 {
+            let n = tls.read(&mut chunk).await?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        Ok::<(), std::io::Error>(())
+    })
+    .await;
+    let _ = read_result;
+
+    let raw_http = String::from_utf8_lossy(&buf);
+    let device_name = parse_cast_health_http_response(&raw_http)
+        .ok_or_else(|| format!("{addr} 未返回有效的 OpalDesk 投屏健康响应"))?;
+
+    let fp = captured
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take())
+        .ok_or_else(|| format!("未能读取 {addr} 的叶证书指纹"))?;
+
+    Ok(ProbedCastHealth {
+        host: clean_host.to_string(),
+        port,
+        device_name,
         short_fingerprint: fingerprint::format_short(&fp),
         fingerprint: fp,
     })

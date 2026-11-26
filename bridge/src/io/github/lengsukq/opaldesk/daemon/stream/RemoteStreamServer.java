@@ -6,6 +6,7 @@ import android.net.LocalSocket;
 import android.os.Build;
 import android.os.SystemClock;
 
+import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.security.PairingApprovalCoordinator;
 import io.github.lengsukq.opaldesk.daemon.security.SelfSignedCertGenerator;
 import io.github.lengsukq.opaldesk.daemon.security.TrustStoreManager;
@@ -18,18 +19,14 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.NetworkInterface;
 import java.net.Socket;
 import java.net.SocketException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -94,11 +91,19 @@ public final class RemoteStreamServer {
         public final boolean enabled;
         public final int port;
         public final String certFingerprint;
+        public final int bindScope;
 
         public WifiConfigStatus(boolean enabled, int port, String certFingerprint) {
+            this(enabled, port, certFingerprint, BridgeProtocol.TLS_BIND_SCOPE_ALL);
+        }
+
+        public WifiConfigStatus(boolean enabled, int port, String certFingerprint, int bindScope) {
             this.enabled = enabled;
             this.port = port;
             this.certFingerprint = (certFingerprint != null) ? certFingerprint : "";
+            this.bindScope = (bindScope == BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY)
+                    ? BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY
+                    : BridgeProtocol.TLS_BIND_SCOPE_ALL;
         }
     }
 
@@ -119,9 +124,11 @@ public final class RemoteStreamServer {
     private LocalServerSocket usbServerSocket;
     private Thread usbAcceptThread;
 
-    // Wireless TLS server (OFF by default!)
+    // Wireless / USB-tether TLS server (OFF by default!)
     private volatile boolean wifiEnabled = false;
     private volatile int wifiPort = DEFAULT_WIFI_PORT;
+    private volatile int wifiBindScope = BridgeProtocol.TLS_BIND_SCOPE_ALL;
+    private volatile String activeBindHost = "";
     private volatile SelfSignedCertGenerator.ServerIdentity tlsIdentity;
     private SSLServerSocket wifiServerSocket;
     private Thread wifiAcceptThread;
@@ -158,6 +165,14 @@ public final class RemoteStreamServer {
 
     public int getWifiPort() {
         return wifiPort;
+    }
+
+    public int getWifiBindScope() {
+        return wifiEnabled ? wifiBindScope : BridgeProtocol.TLS_BIND_SCOPE_ALL;
+    }
+
+    public String getActiveBindHost() {
+        return wifiEnabled ? activeBindHost : "";
     }
 
     public String getCertFingerprint() {
@@ -264,29 +279,63 @@ public final class RemoteStreamServer {
     }
 
     /**
-     * Configures the on-demand wireless TLS 1.2/1.3 server (Binder TX 24 or ADB Wi-Fi upgrade).
+     * Configures the on-demand TLS 1.2/1.3 server on wildcard {@code 0.0.0.0} (Binder TX 24 or ADB Wi-Fi upgrade).
      */
     public WifiConfigStatus configureWifi(boolean enable, int requestedPort) {
+        return configureWifi(enable, requestedPort, BridgeProtocol.TLS_BIND_SCOPE_ALL);
+    }
+
+    /**
+     * Configures the on-demand TLS 1.2/1.3 server with an explicit bind scope:
+     * {@link BridgeProtocol#TLS_BIND_SCOPE_ALL} (default wildcard) or
+     * {@link BridgeProtocol#TLS_BIND_SCOPE_USB_TETHER_ONLY} (Beta isolated USB tethering IP bind).
+     */
+    public WifiConfigStatus configureWifi(boolean enable, int requestedPort, int requestedBindScope) {
+        int effectiveScope = (requestedBindScope == BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY)
+                ? BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY
+                : BridgeProtocol.TLS_BIND_SCOPE_ALL;
         synchronized (lifecycleLock) {
             if (requestedPort >= 1024 && requestedPort <= 65535) {
                 wifiPort = requestedPort;
             }
             if (!enable) {
                 stopWifiListenerLocked();
-                disconnectMatchingSessions(s -> s.sinkType == DisplaySink.SINK_REMOTE_WIFI, "Wi-Fi server disabled");
-                return new WifiConfigStatus(false, wifiPort, getCertFingerprint());
+                disconnectMatchingSessions(s -> DisplaySink.isTlsNetworkSink(s.sinkType), "TLS stream server disabled");
+                return new WifiConfigStatus(false, wifiPort, getCertFingerprint(), BridgeProtocol.TLS_BIND_SCOPE_ALL);
             }
 
             if (stopped) {
-                return new WifiConfigStatus(false, wifiPort, getCertFingerprint());
+                return new WifiConfigStatus(false, wifiPort, getCertFingerprint(), BridgeProtocol.TLS_BIND_SCOPE_ALL);
+            }
+
+            String targetBindHost = "";
+            if (effectiveScope == BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY) {
+                NetworkInterfaceClassifier.Endpoint usbEp = detectUsbTetherEndpoint();
+                if (!usbEp.isPresent()) {
+                    // Fail closed: never fall back to 0.0.0.0 when user explicitly requested USB-only isolation.
+                    System.err.println("OPALDESK_USB_TETHER_BIND_ABORTED reason=no_active_usb_tether_interface");
+                    stopWifiListenerLocked();
+                    disconnectMatchingSessions(
+                            s -> DisplaySink.isTlsNetworkSink(s.sinkType),
+                            "No active USB tethering interface");
+                    return new WifiConfigStatus(false, wifiPort, getCertFingerprint(), BridgeProtocol.TLS_BIND_SCOPE_ALL);
+                }
+                targetBindHost = usbEp.ipv4;
             }
 
             if (wifiEnabled && wifiServerSocket != null && !wifiServerSocket.isClosed()
-                    && wifiServerSocket.getLocalPort() == wifiPort) {
-                return new WifiConfigStatus(true, wifiPort, getCertFingerprint());
+                    && wifiServerSocket.getLocalPort() == wifiPort
+                    && wifiBindScope == effectiveScope
+                    && targetBindHost.equals(activeBindHost)) {
+                return new WifiConfigStatus(true, wifiPort, getCertFingerprint(), wifiBindScope);
             }
 
             stopWifiListenerLocked();
+            if (effectiveScope == BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY) {
+                disconnectMatchingSessions(
+                        s -> s.sinkType == DisplaySink.SINK_REMOTE_WIFI,
+                        "Switched to USB tethering only mode");
+            }
             try {
                 if (tlsIdentity == null) {
                     String lanIp = detectLanIpv4Address();
@@ -298,28 +347,63 @@ public final class RemoteStreamServer {
                 SSLContext sslCtx = SelfSignedCertGenerator.createServerSSLContext(tlsIdentity);
                 SSLServerSocket ss = (SSLServerSocket) sslCtx.getServerSocketFactory().createServerSocket();
                 ss.setReuseAddress(true);
-                ss.bind(new InetSocketAddress(wifiPort), 8);
+                InetSocketAddress bindAddr = targetBindHost.isEmpty()
+                        ? new InetSocketAddress(wifiPort)
+                        : new InetSocketAddress(InetAddress.getByName(targetBindHost), wifiPort);
+                ss.bind(bindAddr, 8);
                 applySecureTlsProtocols(ss.getSupportedProtocols(), ss::setEnabledProtocols);
 
                 wifiServerSocket = ss;
+                wifiBindScope = effectiveScope;
+                activeBindHost = targetBindHost;
                 wifiEnabled = true;
                 wifiAcceptThread = new Thread(() -> wifiAcceptLoop(ss), "ExtWifiStreamAccept");
                 wifiAcceptThread.setDaemon(true);
                 wifiAcceptThread.start();
                 System.out.println("OPALDESK_WIFI_TLS_LISTENING port=" + wifiPort
+                        + " scope=" + (effectiveScope == BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY ? "usb_tether_only" : "all")
+                        + (targetBindHost.isEmpty() ? "" : " bind=" + targetBindHost)
                         + " fp=" + tlsIdentity.certFingerprintSha256.substring(0, 12));
             } catch (Throwable t) {
                 System.err.println("OPALDESK_WIFI_TLS_START_FAILED: " + t);
                 stopWifiListenerLocked();
             }
-            return new WifiConfigStatus(wifiEnabled, wifiPort, getCertFingerprint());
+            return new WifiConfigStatus(wifiEnabled, wifiPort, getCertFingerprint(), getWifiBindScope());
+        }
+    }
+
+    /**
+     * Reconciles a USB-tethering-only listener whenever Android re-randomizes the USB tethering IP
+     * on cable replug or tears down the interface on unplug. Strictly no-op in regular LAN mode.
+     */
+    public void reconcileUsbTetherBindIfNeeded() {
+        if (!wifiEnabled || wifiBindScope != BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY) {
+            return;
+        }
+        synchronized (lifecycleLock) {
+            if (!wifiEnabled || wifiBindScope != BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY) {
+                return;
+            }
+            NetworkInterfaceClassifier.Endpoint cur = detectUsbTetherEndpoint();
+            if (!cur.isPresent()) {
+                System.out.println("OPALDESK_USB_TETHER_LOST closing USB-only listener");
+                stopWifiListenerLocked();
+                disconnectMatchingSessions(
+                        s -> DisplaySink.isTlsNetworkSink(s.sinkType),
+                        "USB tethering disconnected");
+                return;
+            }
+            if (!cur.ipv4.equals(activeBindHost)) {
+                System.out.println("OPALDESK_USB_TETHER_IP_CHANGED " + activeBindHost + "->" + cur.ipv4 + " rebinding");
+                configureWifi(true, wifiPort, BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY);
+            }
         }
     }
 
     public boolean revokeTrustedClient(String clientId) {
         boolean ok = trustStore.revokeClient(clientId);
         disconnectMatchingSessions(
-                s -> s.sinkType == DisplaySink.SINK_REMOTE_WIFI
+                s -> DisplaySink.isTlsNetworkSink(s.sinkType)
                         && ("*".equals(clientId) || (s.clientId != null && s.clientId.equals(clientId))),
                 "Trusted client revoked");
         return ok;
@@ -555,6 +639,8 @@ public final class RemoteStreamServer {
 
     private void stopWifiListenerLocked() {
         wifiEnabled = false;
+        wifiBindScope = BridgeProtocol.TLS_BIND_SCOPE_ALL;
+        activeBindHost = "";
         pairingCoordinator.cancelAll();
         SSLServerSocket ss = wifiServerSocket;
         wifiServerSocket = null;
@@ -630,6 +716,16 @@ public final class RemoteStreamServer {
 
     private void handleWifiClient(SSLSocket sock) {
         try {
+            boolean isUsbTetherLink = NetworkInterfaceClassifier.isUsbTetheringLocalAddress(sock.getLocalAddress());
+            if (wifiBindScope == BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY && !isUsbTetherLink) {
+                System.err.println("OPALDESK_USB_TETHER_REJECT_NON_USB local=" + sock.getLocalAddress());
+                ClientSession.closeTransportQuietly(sock);
+                return;
+            }
+            int networkSinkType = isUsbTetherLink
+                    ? DisplaySink.SINK_REMOTE_USB_TETHER
+                    : DisplaySink.SINK_REMOTE_WIFI;
+
             sock.setTcpNoDelay(true);
             sock.setKeepAlive(true);
             try { sock.setSendBufferSize(SOCKET_SEND_BUF_BYTES); } catch (SocketException ignored) {}
@@ -665,7 +761,7 @@ public final class RemoteStreamServer {
             if (verify.isAuthenticated()) {
                 boolean permanent = verify.isPermanent();
                 completeHandshakeAndRun(
-                        DisplaySink.SINK_REMOTE_WIFI, false, permanent, clientId, clientName,
+                        networkSinkType, false, permanent, clientId, clientName,
                         "", verify.message, permanent,
                         hello, sock, () -> sock.setSoTimeout(0), frameTransport);
                 return;
@@ -678,7 +774,7 @@ public final class RemoteStreamServer {
             if (decision == PairingApprovalCoordinator.DECISION_APPROVE_PERMANENT) {
                 String permanentToken = trustStore.grantPermanentTrust(clientId, clientName, peerIp);
                 completeHandshakeAndRun(
-                        DisplaySink.SINK_REMOTE_WIFI, false, true, clientId, clientName,
+                        networkSinkType, false, true, clientId, clientName,
                         permanentToken, "已永久允许此设备连接", true,
                         hello, sock, () -> sock.setSoTimeout(0), frameTransport);
             } else if (decision == PairingApprovalCoordinator.DECISION_APPROVE_ONCE) {
@@ -687,7 +783,7 @@ public final class RemoteStreamServer {
                         ? trustStore.issueSingleUseHandoverToken(clientId, peerIp)
                         : "";
                 completeHandshakeAndRun(
-                        DisplaySink.SINK_REMOTE_WIFI, false, false, clientId, clientName,
+                        networkSinkType, false, false, clientId, clientName,
                         handoverToken, "已临时允许本次连接", false,
                         hello, sock, () -> sock.setSoTimeout(0), frameTransport);
             } else if (decision == PairingApprovalCoordinator.DECISION_REJECT) {
@@ -1004,56 +1100,16 @@ public final class RemoteStreamServer {
      * RFC1918 addresses over cellular rmnet or VPN tun interfaces).
      */
     public static String detectLanIpv4Address() {
-        String bestWlan = "";
-        String bestEth = "";
-        String bestSiteLocal = "";
-        String bestOther = "";
-        try {
-            Enumeration<NetworkInterface> nics = NetworkInterface.getNetworkInterfaces();
-            while (nics != null && nics.hasMoreElements()) {
-                NetworkInterface nic = nics.nextElement();
-                if (nic == null) continue;
-                try {
-                    if (!nic.isUp() || nic.isLoopback()) continue;
-                } catch (SocketException ignored) {
-                    continue;
-                }
-                String name = (nic.getName() != null) ? nic.getName().toLowerCase(Locale.US) : "";
-                if (name.startsWith("dummy") || name.startsWith("lo")) continue;
+        return NetworkInterfaceClassifier.selectBestLanIp(
+                NetworkInterfaceClassifier.snapshotSystemInterfaces());
+    }
 
-                boolean isWlan = name.startsWith("wlan") || name.startsWith("swlan") || name.startsWith("ap");
-                boolean isEth = name.startsWith("eth") || name.startsWith("en")
-                        || name.startsWith("rndis") || name.startsWith("usb");
-                boolean isTunnelOrCell = name.startsWith("rmnet") || name.startsWith("ccmni")
-                        || name.startsWith("tun") || name.startsWith("tap") || name.startsWith("ppp");
-
-                Enumeration<InetAddress> addrs = nic.getInetAddresses();
-                while (addrs != null && addrs.hasMoreElements()) {
-                    InetAddress addr = addrs.nextElement();
-                    if (!(addr instanceof Inet4Address)) continue;
-                    if (addr.isLoopbackAddress() || addr.isLinkLocalAddress() || addr.isAnyLocalAddress()) continue;
-                    String ip = addr.getHostAddress();
-                    if (ip == null || ip.isEmpty()) continue;
-
-                    if (isWlan && addr.isSiteLocalAddress()) {
-                        if (bestWlan.isEmpty()) bestWlan = ip;
-                    } else if (isEth && addr.isSiteLocalAddress()) {
-                        if (bestEth.isEmpty()) bestEth = ip;
-                    } else if (!isTunnelOrCell && addr.isSiteLocalAddress()) {
-                        if (bestSiteLocal.isEmpty()) bestSiteLocal = ip;
-                    } else if (!isTunnelOrCell) {
-                        if (bestOther.isEmpty()) bestOther = ip;
-                    }
-                }
-            }
-        } catch (SocketException e) {
-            System.err.println("OPALDESK_LAN_IP_DETECT_ERR: " + e.getMessage());
-        }
-
-        if (!bestWlan.isEmpty()) return bestWlan;
-        if (!bestEth.isEmpty()) return bestEth;
-        if (!bestSiteLocal.isEmpty()) return bestSiteLocal;
-        return bestOther;
+    /**
+     * Detects the phone's active USB Tethering IPv4 interface ({@code ncm*}/{@code rndis*}/{@code usb*}).
+     */
+    public static NetworkInterfaceClassifier.Endpoint detectUsbTetherEndpoint() {
+        return NetworkInterfaceClassifier.selectUsbTetherEndpoint(
+                NetworkInterfaceClassifier.snapshotSystemInterfaces());
     }
 
     private void sendAuthFailureAndClose(OpalCastFrameTransport frameTransport, Closeable sock, String msg) {

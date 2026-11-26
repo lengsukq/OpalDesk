@@ -69,9 +69,18 @@ data class RemoteStreamStatus(
     val trustedCount: Int = 0,
     val lanIp: String = "",
     val desktopDisplayId: Int = -1,
+    val usbTetherIp: String = "",
+    val usbTetherInterface: String = "",
+    val tlsBindScope: Int = BridgeProtocol.TlsBindScope.ALL,
 ) {
     val hasActiveDesktopCast: Boolean
         get() = connected && desktopDisplayId > 0
+    val isUsbTetherOnlyMode: Boolean
+        get() = wifiEnabled && tlsBindScope == BridgeProtocol.TlsBindScope.USB_TETHER_ONLY
+    val isLanShareActive: Boolean
+        get() = wifiEnabled && tlsBindScope == BridgeProtocol.TlsBindScope.ALL
+    val hasUsbTetherInterface: Boolean
+        get() = usbTetherIp.isNotBlank()
     val shortCertFingerprint: String
         get() {
             val clean = certFingerprint.replace(":", "").trim().uppercase()
@@ -84,6 +93,7 @@ data class RemoteStreamStatus(
             2 -> "USB 有线直连"
             4 -> "无线 ADB 隧道"
             3 -> "Wi-Fi TLS 直连"
+            6 -> "USB 网络共享直连"
             else -> "无线投屏"
         }
 }

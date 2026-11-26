@@ -51,6 +51,8 @@ import io.github.lengsukq.opaldesk.BridgeService
 import io.github.lengsukq.opaldesk.cast.OpalPeerCastMutex
 import io.github.lengsukq.opaldesk.cast.OpalPeerDiscovery
 import io.github.lengsukq.opaldesk.cast.PeerFloatingAppService
+import io.github.lengsukq.opaldesk.cast.UsbTetherGatewayPolicy
+import io.github.lengsukq.opaldesk.cast.UsbTetherPeerDetector
 import io.github.lengsukq.opaldesk.external.ExternalDisplayPolicy
 import io.github.lengsukq.opaldesk.external.ExternalDisplayTransport
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
@@ -126,6 +128,9 @@ fun ConsoleDashboardTab(
     val discoveredPeers by OpalPeerDiscovery.discoveredPeersFlow.collectAsState()
     val trustedPeers by BridgeClient.trustedPeersFlow.collectAsState()
     val activeFloating by PeerFloatingAppService.activeFlow.collectAsState()
+    val usbTetherEnabled by AppPrefs.usbTetherCastEnabledFlow.collectAsState()
+    val usbTetherPeers by UsbTetherPeerDetector.peersFlow.collectAsState()
+    val usbTetherScanning by UsbTetherPeerDetector.scanningFlow.collectAsState()
 
     var castModeTab by remember { mutableIntStateOf(if (remote.wifiEnabled || remote.connected) 1 else 0) }
     var showManualConnect by remember { mutableStateOf(false) }
@@ -148,7 +153,7 @@ fun ConsoleDashboardTab(
             return
         }
         if (wifiBusy) return
-        val enable = !remote.wifiEnabled
+        val enable = !remote.isLanShareActive
         if (enable) {
             val check = OpalPeerCastMutex.validateEnableSending(peerRole.isReceiving, peerRole.peerName)
             if (!check.allowed) {
@@ -157,10 +162,10 @@ fun ConsoleDashboardTab(
             }
         }
         wifiBusy = true
-        BridgeClient.setWifiStreamEnabledAsync(enable, 19878) {
+        BridgeClient.setWifiStreamEnabledAsync(enable, 19878, BridgeProtocol.TlsBindScope.ALL) {
             wifiBusy = false
             val latest = BridgeClient.remoteStatusFlow.value
-            OpalPeerDiscovery.syncAdvertise(ctx, latest.wifiEnabled, latest.wifiPort, latest.shortCertFingerprint)
+            OpalPeerDiscovery.syncAdvertise(ctx, latest.isLanShareActive, latest.wifiPort, latest.shortCertFingerprint)
             if (latest.wifiEnabled) castModeTab = 1
         }
     }
@@ -505,21 +510,24 @@ fun ConsoleDashboardTab(
                 },
                 modifier = Modifier.weight(1f),
             )
-            val sharingOn = status.connected && remote.wifiEnabled && !peerRole.isReceiving
+            val sharingOn = status.connected && remote.isLanShareActive && !peerRole.isReceiving
+            val usbOnlyOn = usbTetherEnabled && status.connected && remote.isUsbTetherOnlyMode && !peerRole.isReceiving
             DashboardBentoTile(
                 title = "无线共享",
                 subtitle = when {
                     peerRole.isReceiving -> "正在接收其他设备"
                     sharingOn -> if (remote.lanIp.isNotEmpty()) "${remote.lanIp}:${if (remote.wifiPort > 0) remote.wifiPort else 19878}" else "服务已开启"
+                    usbOnlyOn -> "USB 共享中 (Beta)"
                     else -> "局域网免 PIN 投给电脑/平板"
                 },
                 badgeText = when {
                     peerRole.isReceiving -> "接收中"
                     sharingOn -> "已开启"
+                    usbOnlyOn -> "USB中"
                     else -> "未开启"
                 },
-                accent = if (sharingOn) OpalPalette.AccentEmerald else OpalPalette.AccentCyan,
-                active = sharingOn,
+                accent = if (sharingOn || usbOnlyOn) OpalPalette.AccentEmerald else OpalPalette.AccentCyan,
+                active = sharingOn || usbOnlyOn,
                 iconKind = 1,
                 onClick = ::toggleWifiShare,
                 modifier = Modifier.weight(1f),
@@ -552,7 +560,8 @@ fun ConsoleDashboardTab(
                 when {
                     remote.connected -> OpalStatusBadge(label = remote.channelLabel, color = OpalPalette.AccentEmerald)
                     peerRole.isReceiving -> OpalStatusBadge(label = "接收中", color = OpalPalette.AccentBlue)
-                    remote.wifiEnabled -> OpalStatusBadge(label = "无线共享已开", color = OpalPalette.AccentEmerald)
+                    remote.isUsbTetherOnlyMode -> OpalStatusBadge(label = "USB 共享 · Beta", color = OpalPalette.AccentCyan)
+                    remote.isLanShareActive -> OpalStatusBadge(label = "无线共享已开", color = OpalPalette.AccentEmerald)
                 }
             }
 
@@ -604,6 +613,99 @@ fun ConsoleDashboardTab(
 
             Spacer(Modifier.height(14.dp))
             if (castModeTab == 0) {
+                // Beta opt-in: USB Tethering auto-discovered phone peers (hidden when disabled)
+                if (usbTetherEnabled) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(OpalPalette.ChipFill)
+                            .border(0.8.dp, OpalPalette.AccentCyan.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
+                            .padding(horizontal = 13.dp, vertical = 11.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                OpalText(text = "USB 网络共享直连", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                                OpalStatusBadge(label = "Beta", color = OpalPalette.AccentAmber)
+                            }
+                            OpalButton(
+                                label = if (usbTetherScanning) "探测中…" else "刷新",
+                                compact = true,
+                                filled = false,
+                                enabled = !usbTetherScanning,
+                                accent = OpalPalette.AccentCyan,
+                                onClick = { UsbTetherPeerDetector.triggerScanAsync() },
+                            )
+                        }
+                        if (usbTetherPeers.isNotEmpty()) {
+                            usbTetherPeers.forEach { peer ->
+                                val addr = "${peer.host}:${peer.port}"
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(13.dp))
+                                        .background(OpalPalette.GlassPopover.copy(alpha = 0.6f))
+                                        .border(0.75.dp, OpalPalette.BorderSubtle, RoundedCornerShape(13.dp))
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    OpalText(
+                                        text = "${peer.displayName} · ${peer.interfaceName}",
+                                        fontSize = 13.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                    )
+                                    OpalText(
+                                        text = if (peer.shortFingerprint.isNotEmpty()) "$addr · ${peer.shortFingerprint}" else addr,
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = OpalPalette.TextMuted,
+                                        maxLines = 1,
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        OpalButton(
+                                            label = if (remote.connected) "投屏锁定中" else "投屏桌面",
+                                            accent = OpalPalette.AccentEmerald,
+                                            compact = true,
+                                            enabled = !remote.connected,
+                                            onClick = { onConnectPeerCast(peer.host, peer.port, peer.displayName) },
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        OpalButton(
+                                            label = "应用小窗",
+                                            accent = OpalPalette.AccentBlue,
+                                            filled = false,
+                                            compact = true,
+                                            enabled = !remote.connected,
+                                            onClick = { onOpenFloatingAppPicker(peer.host, peer.port, peer.displayName) },
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            OpalText(
+                                text = "用数据线连接手机并在对方开启系统「USB 网络共享」与共享服务后点击刷新自动识别。${UsbTetherGatewayPolicy.BETA_DISCLAIMER}",
+                                fontSize = 11.5.sp,
+                                color = OpalPalette.TextSecondary,
+                                lineHeight = 16.sp,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
+
                 // Mode 0: Connect to another device (Desktop Cast or Standalone Floating Window)
                 if (discoveredPeers.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -770,10 +872,11 @@ fun ConsoleDashboardTab(
                     title = "允许局域网设备连接本机",
                     subtitle = when {
                         peerRole.isReceiving -> "正在接收其他设备画面，已暂时锁定共享"
-                        remote.wifiEnabled -> "TLS 加密服务运行中 · 免 PIN 实时弹窗确认授权"
+                        remote.isLanShareActive -> "TLS 加密服务运行中 · 免 PIN 实时弹窗确认授权"
+                        remote.isUsbTetherOnlyMode -> "当前处于仅 USB 共享监听模式；开启此项将同时开放局域网 Wi-Fi"
                         else -> "有线 USB 连接 Mac 无需开启；无线连接时打开此开关"
                     },
-                    checked = remote.wifiEnabled && !peerRole.isReceiving,
+                    checked = remote.isLanShareActive && !peerRole.isReceiving,
                     onCheckedChange = { enable ->
                         if (!status.connected || wifiBusy) return@OpalSwitchRow
                         if (enable) {
@@ -784,15 +887,15 @@ fun ConsoleDashboardTab(
                             }
                         }
                         wifiBusy = true
-                        BridgeClient.setWifiStreamEnabledAsync(enable, 19878) {
+                        BridgeClient.setWifiStreamEnabledAsync(enable, 19878, BridgeProtocol.TlsBindScope.ALL) {
                             wifiBusy = false
                             val latest = BridgeClient.remoteStatusFlow.value
-                            OpalPeerDiscovery.syncAdvertise(ctx, latest.wifiEnabled, latest.wifiPort, latest.shortCertFingerprint)
+                            OpalPeerDiscovery.syncAdvertise(ctx, latest.isLanShareActive, latest.wifiPort, latest.shortCertFingerprint)
                         }
                     },
                 )
 
-                if (status.connected && remote.wifiEnabled && !peerRole.isReceiving) {
+                if (status.connected && remote.isLanShareActive && !peerRole.isReceiving) {
                     val port = if (remote.wifiPort > 0) remote.wifiPort else 19878
                     val endpoint = if (remote.lanIp.isNotEmpty()) "${remote.lanIp}:$port" else ":$port"
                     val webCastUrl = if (remote.lanIp.isNotEmpty()) {
@@ -841,6 +944,146 @@ fun ConsoleDashboardTab(
                                 fontSize = 11.sp,
                                 color = OpalPalette.TextMuted,
                             )
+                        }
+                    }
+                }
+
+                // Beta opt-in: USB Tethering isolated channel card (completely hidden when disabled)
+                if (usbTetherEnabled && status.connected && !peerRole.isReceiving) {
+                    val usbState = UsbTetherGatewayPolicy.resolveSenderShareState(remote, featureEnabled = true)
+                    val port = if (remote.wifiPort > 0) remote.wifiPort else 19878
+                    Spacer(Modifier.height(10.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(15.dp))
+                            .background(OpalPalette.ChipFill)
+                            .border(
+                                0.85.dp,
+                                if (usbState == UsbTetherGatewayPolicy.SenderShareState.USB_ONLY_ACTIVE) {
+                                    OpalPalette.AccentCyan.copy(alpha = 0.55f)
+                                } else {
+                                    OpalPalette.BorderSubtle
+                                },
+                                RoundedCornerShape(15.dp),
+                            )
+                            .padding(horizontal = 14.dp, vertical = 11.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                OpalText(text = "USB 网络共享通道", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                                OpalStatusBadge(label = "Beta", color = OpalPalette.AccentAmber)
+                            }
+                            val statusLabel = when (usbState) {
+                                UsbTetherGatewayPolicy.SenderShareState.USB_ONLY_ACTIVE -> "仅 USB 监听中"
+                                UsbTetherGatewayPolicy.SenderShareState.REUSING_LAN_SHARE -> "复用共享中"
+                                UsbTetherGatewayPolicy.SenderShareState.USB_READY_IDLE -> "网卡已就绪"
+                                else -> "未检测到网卡"
+                            }
+                            val statusColor = when (usbState) {
+                                UsbTetherGatewayPolicy.SenderShareState.USB_ONLY_ACTIVE,
+                                UsbTetherGatewayPolicy.SenderShareState.REUSING_LAN_SHARE,
+                                -> OpalPalette.AccentEmerald
+                                UsbTetherGatewayPolicy.SenderShareState.USB_READY_IDLE -> OpalPalette.AccentCyan
+                                else -> OpalPalette.TextMuted
+                            }
+                            OpalStatusBadge(label = statusLabel, color = statusColor)
+                        }
+                        OpalText(
+                            text = UsbTetherGatewayPolicy.BETA_DISCLAIMER,
+                            fontSize = 11.sp,
+                            color = OpalPalette.TextMuted,
+                            lineHeight = 15.sp,
+                        )
+
+                        if (usbState == UsbTetherGatewayPolicy.SenderShareState.NO_USB_INTERFACE) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                OpalButton(
+                                    label = "去系统开启 USB 共享",
+                                    compact = true,
+                                    filled = false,
+                                    accent = OpalPalette.AccentBlue,
+                                    onClick = { openTetherSettings(ctx) },
+                                    modifier = Modifier.weight(1.3f),
+                                )
+                                OpalButton(
+                                    label = "刷新检测",
+                                    compact = true,
+                                    filled = false,
+                                    accent = OpalPalette.AccentCyan,
+                                    onClick = {
+                                        Thread({ BridgeClient.refreshRemoteStatus() }, "OpalUsbRefresh").start()
+                                    },
+                                    modifier = Modifier.weight(0.8f),
+                                )
+                            }
+                        } else {
+                            val ifaceTag = remote.usbTetherInterface.ifBlank { "usb" }
+                            CopyableInfoLine(ctx, "USB 共享地址 ($ifaceTag)", "${remote.usbTetherIp}:$port")
+
+                            if (usbState != UsbTetherGatewayPolicy.SenderShareState.REUSING_LAN_SHARE) {
+                                OpalSwitchRow(
+                                    title = "仅通过 USB 网络共享监听",
+                                    subtitle = "仅绑定 USB 共享网卡，不开放 Wi-Fi 端口；拔线自动停止，重插后自动重绑新 IP",
+                                    checked = usbState == UsbTetherGatewayPolicy.SenderShareState.USB_ONLY_ACTIVE,
+                                    onCheckedChange = { enableUsbOnly ->
+                                        if (wifiBusy) return@OpalSwitchRow
+                                        if (enableUsbOnly) {
+                                            val check = OpalPeerCastMutex.validateEnableSending(peerRole.isReceiving, peerRole.peerName)
+                                            if (!check.allowed) {
+                                                Toast.makeText(ctx, check.reason, Toast.LENGTH_LONG).show()
+                                                return@OpalSwitchRow
+                                            }
+                                        }
+                                        wifiBusy = true
+                                        val scope = if (enableUsbOnly) {
+                                            BridgeProtocol.TlsBindScope.USB_TETHER_ONLY
+                                        } else {
+                                            BridgeProtocol.TlsBindScope.ALL
+                                        }
+                                        BridgeClient.setWifiStreamEnabledAsync(enableUsbOnly, 19878, scope) {
+                                            wifiBusy = false
+                                            val latest = BridgeClient.remoteStatusFlow.value
+                                            OpalPeerDiscovery.syncAdvertise(
+                                                ctx,
+                                                latest.isLanShareActive,
+                                                latest.wifiPort,
+                                                latest.shortCertFingerprint,
+                                            )
+                                            if (enableUsbOnly && !latest.isUsbTetherOnlyMode) {
+                                                Toast.makeText(
+                                                    ctx,
+                                                    "未能绑定 USB 网络共享网卡，请确认系统已开启「USB 网络共享」",
+                                                    Toast.LENGTH_LONG,
+                                                ).show()
+                                            }
+                                        }
+                                    },
+                                )
+                                if (usbState == UsbTetherGatewayPolicy.SenderShareState.USB_ONLY_ACTIVE &&
+                                    remote.shortCertFingerprint.isNotEmpty()
+                                ) {
+                                    CopyableInfoLine(ctx, "TLS 证书短指纹", remote.shortCertFingerprint)
+                                }
+                            } else {
+                                OpalText(
+                                    text = "已复用当前局域网共享服务：在 Windows / macOS / 平板端开启 Beta 自动识别后可直接走此 USB 有线链路。",
+                                    fontSize = 11.5.sp,
+                                    color = OpalPalette.TextSecondary,
+                                    lineHeight = 16.sp,
+                                )
+                            }
                         }
                     }
                 }
@@ -1687,6 +1930,48 @@ fun ConsoleEngineSettingsTab(
             )
         }
 
+        ConsoleSectionTitle("实验性功能 (Beta)")
+        MacGlassSectionCard {
+            val usbTetherEnabled by AppPrefs.usbTetherCastEnabledFlow.collectAsState()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    OpalText(text = "USB 网络共享投屏", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    OpalText(
+                        text = "默认关闭 · 不影响主线 Wi-Fi / ADB 投屏，不保证所有设备均可正常使用",
+                        fontSize = 12.sp,
+                        color = OpalPalette.TextSecondary,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                OpalStatusBadge(
+                    label = if (usbTetherEnabled) "Beta · 已启用" else "Beta",
+                    color = if (usbTetherEnabled) OpalPalette.AccentCyan else OpalPalette.AccentAmber,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            OpalSwitchRow(
+                title = "启用 USB 网络共享自动识别与隔离监听",
+                subtitle = "开启后在「跨设备互联」展示 USB 网络共享直连通道（免 USB 调试 / 免 ADB），支持手机仅 USB 网卡隔离监听，以及 Windows / macOS / Android 平板自动识别。",
+                checked = usbTetherEnabled,
+                onCheckedChange = { enabled ->
+                    AppPrefs.setUsbTetherCastEnabled(ctx, enabled)
+                    if (enabled) {
+                        UsbTetherPeerDetector.start(ctx)
+                        Thread({ BridgeClient.refreshRemoteStatus() }, "OpalUsbPrefRefresh").start()
+                    } else {
+                        UsbTetherPeerDetector.stop()
+                        if (BridgeClient.remoteStatusFlow.value.isUsbTetherOnlyMode) {
+                            BridgeClient.setWifiStreamEnabledAsync(false, 19878, BridgeProtocol.TlsBindScope.ALL)
+                        }
+                    }
+                },
+            )
+        }
+
         ConsoleSectionTitle("通用与更新")
         MacGlassSectionCard {
             val notifAccessGranted by io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.accessGrantedFlow.collectAsState()
@@ -2004,6 +2289,22 @@ private fun openDeveloperSettings(ctx: Context) {
             Toast.makeText(ctx, "请手动打开系统「设置 → 开发者选项」", Toast.LENGTH_SHORT).show()
         }
     }
+}
+
+private fun openTetherSettings(ctx: Context) {
+    val candidates = listOf(
+        Intent("android.settings.TETHER_SETTINGS"),
+        Intent(Settings.ACTION_WIRELESS_SETTINGS),
+        Intent(Settings.ACTION_SETTINGS),
+    )
+    for (intent in candidates) {
+        try {
+            ctx.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            return
+        } catch (_: Throwable) {
+        }
+    }
+    Toast.makeText(ctx, "请手动前往系统「设置 → 便携式热点 / USB 网络共享」开启", Toast.LENGTH_SHORT).show()
 }
 
 @Composable

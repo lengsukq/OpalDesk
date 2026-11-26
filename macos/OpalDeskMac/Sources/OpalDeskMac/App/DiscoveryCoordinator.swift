@@ -19,6 +19,8 @@ public final class DiscoveryCoordinator {
     public private(set) var isScanningUSB: Bool = false
     public private(set) var adbBinaryPath: String?
     public private(set) var bonjourDevices: [DiscoveredBonjourDevice] = []
+    public private(set) var usbTetherDevices: [DiscoveredUsbTetherDevice] = []
+    public private(set) var isScanningUsbTether: Bool = false
     public private(set) var trustedDevices: [TrustedDevice] = []
 
     @ObservationIgnored
@@ -36,7 +38,8 @@ public final class DiscoveryCoordinator {
 
     public func start(
         customAdbPath: @escaping @MainActor () -> String,
-        isCanvasActive: @escaping @MainActor () -> Bool
+        isCanvasActive: @escaping @MainActor () -> Bool,
+        isUsbTetherEnabled: @escaping @MainActor () -> Bool = { false }
     ) {
         refreshAdbPath(customPath: customAdbPath())
         bonjourBrowser.start { [weak self] devices in
@@ -47,7 +50,15 @@ public final class DiscoveryCoordinator {
             while !Task.isCancelled {
                 guard let self else { break }
                 let canvasActive = isCanvasActive()
-                if !canvasActive { await self.refreshUSBDevices(customPath: customAdbPath()) }
+                if !canvasActive {
+                    await self.refreshUSBDevices(customPath: customAdbPath())
+                    let tetherOn = isUsbTetherEnabled()
+                    if tetherOn {
+                        await self.refreshUsbTetherDevices(enabled: true)
+                    } else if !self.usbTetherDevices.isEmpty {
+                        self.usbTetherDevices = []
+                    }
+                }
                 let sleepNs = canvasActive ? Self.activeCanvasPollIntervalNs : Self.idlePollIntervalNs
                 guard await sleepCancellable(nanoseconds: sleepNs) else { break }
             }
@@ -83,6 +94,27 @@ public final class DiscoveryCoordinator {
 
     public func refreshTrustedDevices() {
         trustedDevices = trustStore.allDevices()
+    }
+
+    public func refreshUsbTetherDevices(enabled: Bool) async {
+        guard enabled else {
+            usbTetherDevices = []
+            isScanningUsbTether = false
+            return
+        }
+        guard !isScanningUsbTether else { return }
+        isScanningUsbTether = true
+        defer { isScanningUsbTether = false }
+        usbTetherDevices = await UsbTetherScanner.scan()
+    }
+
+    public func isTrusted(_ device: DiscoveredUsbTetherDevice) -> Bool {
+        let normalized = FingerprintUtil.normalize(device.certFingerprint)
+        guard normalized.count >= FingerprintUtil.minimumPrefixHexLength else { return false }
+        return trustedDevices.contains { trusted in
+            !trusted.authToken.isEmpty
+                && FingerprintUtil.matches(actualFullHex: trusted.certFingerprint, expected: normalized)
+        }
     }
 
     /// Observable trust check for Bonjour devices (automatically tracks `trustedDevices` in SwiftUI).

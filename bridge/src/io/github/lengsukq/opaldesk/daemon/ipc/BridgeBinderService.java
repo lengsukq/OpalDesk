@@ -308,21 +308,29 @@ public final class BridgeBinderService extends Binder {
                     reply.writeInt(st.trustedCount);
                     reply.writeString(st.lanIp);
                     reply.writeInt(st.desktopDisplayId);
+                    reply.writeString(st.usbTetherIp);
+                    reply.writeString(st.usbTetherInterface);
+                    reply.writeInt(st.tlsBindScope);
                 }
                 return true;
             }
             case BridgeProtocol.TX_SET_WIFI_STREAM_ENABLED: {
                 boolean enable = data.readInt() != 0;
                 int port = data.readInt();
+                int bindScope = (data.dataAvail() >= 4)
+                        ? data.readInt()
+                        : BridgeProtocol.TLS_BIND_SCOPE_ALL;
                 RemoteStreamServer.WifiConfigStatus st = (remoteBridge != null)
-                        ? remoteBridge.configureWifi(enable, port)
-                        : new RemoteStreamServer.WifiConfigStatus(false, 0, "");
+                        ? remoteBridge.configureWifi(enable, port, bindScope)
+                        : new RemoteStreamServer.WifiConfigStatus(false, 0, "", BridgeProtocol.TLS_BIND_SCOPE_ALL);
                 System.out.println("OPALDESK_WIFI_STREAM_CFG reqEnable=" + enable
-                        + " effective=" + st.enabled + " port=" + st.port);
+                        + " scope=" + bindScope + " effective=" + st.enabled
+                        + " effScope=" + st.bindScope + " port=" + st.port);
                 if (reply != null) {
                     reply.writeInt(st.enabled ? 1 : 0);
                     reply.writeInt(st.port);
                     reply.writeString(st.certFingerprint);
+                    reply.writeInt(st.bindScope);
                 }
                 return true;
             }

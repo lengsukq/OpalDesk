@@ -28,6 +28,9 @@ public struct DeviceHubView: View {
                 }
 
                 adbDevicesSection
+                if model.preferences.usbTetherDiscoveryEnabled {
+                    usbTetherSection
+                }
                 wirelessLANSection
                 manualConnectSection
             }
@@ -188,6 +191,80 @@ public struct DeviceHubView: View {
             Button("进入桌面") { Task { await model.connectWiredUSB(device) } }
                 .buttonStyle(.borderedProminent)
                 .disabled(!device.isReady || model.isConnectingFlow)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    // MARK: - Beta USB Tethering Section (Opt-in, Hidden by Default)
+
+    private var usbTetherSection: some View {
+        let discovery = model.discovery
+        let tetherDevices = discovery.usbTetherDevices
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label("USB 网络共享设备（免 ADB）", systemImage: "network")
+                    .font(.headline)
+                StatusBadgeView(text: "Beta", color: .orange)
+                Spacer()
+                if discovery.isScanningUsbTether { ProgressView().controlSize(.small) }
+                Button { Task { await model.refreshUsbTetherDevices() } } label: {
+                    Label("刷新", systemImage: "arrow.clockwise").font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .disabled(discovery.isScanningUsbTether)
+            }
+
+            VStack(spacing: 0) {
+                if tetherDevices.isEmpty {
+                    emptyStateRow(
+                        icon: "network.badge.shield.half.filled",
+                        tint: .orange,
+                        title: "未识别到 USB 网络共享手机",
+                        subtitle: "Beta 测试功能（不保证所有机型正常）：请用数据线连接手机并开启系统「USB 网络共享」及手机端共享服务；macOS 原生支持较新安卓 CDC-NCM，旧 RNDIS 机型建议使用上方有线 ADB。"
+                    )
+                } else {
+                    ForEach(Array(tetherDevices.enumerated()), id: \.element.id) { index, device in
+                        usbTetherDeviceRow(device)
+                        if index < tetherDevices.count - 1 { Divider().padding(.leading, 56) }
+                    }
+                }
+            }
+            .opalDeskCardContainer()
+        }
+    }
+
+    private func usbTetherDeviceRow(_ device: DiscoveredUsbTetherDevice) -> some View {
+        let isTrusted = model.discovery.isTrusted(device)
+
+        return HStack(spacing: 12) {
+            Image(systemName: "cable.connector.horizontal")
+                .font(.system(size: 20))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 32)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(device.displayName).font(.body.weight(.medium))
+                    StatusBadgeView(text: isTrusted ? "已信任" : "需配对", color: isTrusted ? .green : .blue)
+                }
+                HStack(spacing: 8) {
+                    Text("\(device.host):\(device.port)").font(.caption.monospaced())
+                    Text("· \(device.interfaceLabel)")
+                    if !device.shortFingerprint.isEmpty {
+                        Text("· 安全指纹 \(device.shortFingerprint)").font(.caption.monospaced())
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button(isTrusted ? "进入桌面" : "配对并连接") { model.connectUsbTetherDevice(device) }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isConnectingFlow || model.isProbingManualHost)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)

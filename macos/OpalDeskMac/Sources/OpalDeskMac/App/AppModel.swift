@@ -108,7 +108,8 @@ public final class AppModel {
         configureCallbacks()
         discoveryCoord.start(
             customAdbPath: { [weak self] in self?.preferences.customAdbPath ?? "" },
-            isCanvasActive: { [weak self] in self?.isShowingDisplayCanvas ?? false }
+            isCanvasActive: { [weak self] in self?.isShowingDisplayCanvas ?? false },
+            isUsbTetherEnabled: { [weak self] in self?.preferences.usbTetherDiscoveryEnabled ?? false }
         )
     }
 
@@ -136,6 +137,12 @@ public final class AppModel {
 
     public func refreshAdbPath() { discovery.refreshAdbPath(customPath: preferences.customAdbPath) }
     public func refreshUSBDevices() async { await discovery.refreshUSBDevices(customPath: preferences.customAdbPath) }
+    public func refreshUsbTetherDevices() async {
+        await discovery.refreshUsbTetherDevices(enabled: preferences.usbTetherDiscoveryEnabled)
+    }
+    public func setUsbTetherDiscoveryEnabled(_ enabled: Bool) {
+        Task { await discovery.refreshUsbTetherDevices(enabled: enabled) }
+    }
     public func revokeTrustedDevice(_ device: TrustedDevice) { if let err = discovery.revokeTrustedDevice(device) { bannerError = err } }
     public func revokeAllTrustedDevices() { if let err = discovery.revokeAllTrustedDevices() { bannerError = err } }
     public func applyClipboardSyncPreference() { clipboardSync.isEnabled = preferences.clipboardSyncEnabled }
@@ -219,6 +226,25 @@ public final class AppModel {
             displayName: device.displayName,
             model: device.model,
             expectedFingerprint: device.fingerprintPrefix
+        )
+    }
+
+    public func connectUsbTetherDevice(_ device: DiscoveredUsbTetherDevice) {
+        bannerError = nil
+        let source = PairingPromptContext.Source.manualHostPort(host: device.host, port: device.port)
+        if let trusted = discovery.trustStore.find(byFingerprint: device.certFingerprint), !trusted.authToken.isEmpty {
+            openTrustedWirelessSession(source: source, trusted: trusted)
+            return
+        }
+        if let trusted = discovery.trustStore.find(byHost: device.host, port: device.port), !trusted.authToken.isEmpty {
+            openTrustedWirelessSession(source: source, trusted: trusted)
+            return
+        }
+        pairingContext = PairingPromptContext(
+            source: source,
+            displayName: device.displayName,
+            model: "USB 网络共享 · \(device.interfaceLabel) (Beta)",
+            expectedFingerprint: device.certFingerprint
         )
     }
 

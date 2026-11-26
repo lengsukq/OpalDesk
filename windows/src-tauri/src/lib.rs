@@ -3,6 +3,7 @@ pub mod fingerprint;
 pub mod mdns;
 pub mod tls_bridge;
 pub mod trust;
+pub mod usb_tether;
 
 use adb::{AdbDevice, AdbForwardResult, AdbManager, AdbStatusInfo};
 use mdns::{DiscoveredMdnsDevice, MdnsScanner};
@@ -13,6 +14,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tls_bridge::{LocalWsTunnelInfo, ProbedCertInfo, TlsBridgeRegistry};
 use trust::{TrustStore, TrustedDevice};
+use usb_tether::DiscoveredUsbTetherDevice;
 
 #[cfg(target_os = "windows")]
 const WEBVIEW2_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --enable-features=PlatformHEVCDecoderSupport";
@@ -119,6 +121,13 @@ fn set_custom_adb_path(
 #[tauri::command]
 async fn list_adb_devices(state: tauri::State<'_, DesktopState>) -> Result<Vec<AdbDevice>, String> {
     state.adb_manager.list_devices().await
+}
+
+#[tauri::command]
+async fn scan_usb_tether_devices(
+    port: Option<u16>,
+) -> Result<Vec<DiscoveredUsbTetherDevice>, String> {
+    usb_tether::scan_usb_tether_devices(port.unwrap_or(usb_tether::DEFAULT_CAST_PORT)).await
 }
 
 #[tauri::command]
@@ -296,6 +305,7 @@ pub fn run() {
             get_adb_status,
             set_custom_adb_path,
             list_adb_devices,
+            scan_usb_tether_devices,
             adb_bootstrap_and_forward,
             adb_pair_wireless,
             adb_connect_wireless,

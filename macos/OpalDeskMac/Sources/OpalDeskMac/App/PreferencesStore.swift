@@ -23,6 +23,7 @@ public final class PreferencesStore {
         static let inputBackend = "opaldesk.pref.inputBackend"
         static let pinnedDockPackages = "opaldesk.pref.pinnedDockPackages"
         static let dockAutoHide = "opaldesk.pref.dockAutoHide"
+        static let usbTetherDiscoveryEnabled = "opaldesk.pref.usbTetherDiscoveryEnabled"
     }
 
     private let defaults: UserDefaults
@@ -91,6 +92,11 @@ public final class PreferencesStore {
         didSet { defaults.set(dockAutoHide, forKey: Key.dockAutoHide) }
     }
 
+    /// Beta opt-in (default OFF): discovers Android OpalDesk hosts over macOS USB Tethering (CDC-NCM).
+    public var usbTetherDiscoveryEnabled: Bool {
+        didSet { defaults.set(usbTetherDiscoveryEnabled, forKey: Key.usbTetherDiscoveryEnabled) }
+    }
+
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -137,5 +143,6 @@ public final class PreferencesStore {
 
         self.pinnedDockPackages = defaults.stringArray(forKey: Key.pinnedDockPackages) ?? []
         self.dockAutoHide = defaults.object(forKey: Key.dockAutoHide) as? Bool ?? false
+        self.usbTetherDiscoveryEnabled = defaults.object(forKey: Key.usbTetherDiscoveryEnabled) as? Bool ?? false
     }
 }

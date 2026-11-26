@@ -256,6 +256,11 @@ class PeerFloatingAppService : Service() {
         val tokenToUse = savedTok.ifBlank { handoverToken }
         handoverToken = "" // single-use in memory only
 
+        val boundNet = if (AppPrefs.isUsbTetherCastEnabled(this)) {
+            UsbTetherPeerDetector.resolveBoundNetworkForHost(host)
+        } else {
+            null
+        }
         val peerClient = OpalCastPeerClient(
             host = host,
             port = port,
@@ -268,6 +273,7 @@ class PeerFloatingAppService : Service() {
             sessionRole = OpalCastPeerClient.SESSION_ROLE_STANDALONE_APP,
             appPackage = appPackage,
             appActivity = appActivity,
+            targetNetwork = boundNet,
             audioEnabled = false,
             listener = object : OpalCastPeerClient.Listener {
                 override fun onWaitingForApproval() {

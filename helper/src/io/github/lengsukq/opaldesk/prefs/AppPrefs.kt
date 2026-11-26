@@ -81,6 +81,7 @@ object AppPrefs {
     private const val KEY_DEFAULT_CUSTOM_RES_W = "default_custom_resolution_w_v1"
     private const val KEY_DEFAULT_CUSTOM_RES_H = "default_custom_resolution_h_v1"
     private const val KEY_DEFAULT_CUSTOM_RES_FPS = "default_custom_resolution_fps_v1"
+    private const val KEY_USB_TETHER_CAST_ENABLED = "usb_tether_cast_enabled_v1"
 
     private val DEFAULT_PINNED = listOf(
         "com.android.chrome",
@@ -180,6 +181,9 @@ object AppPrefs {
     private val _defaultCustomResolutionFlow = MutableStateFlow(CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC)
     val defaultCustomResolutionFlow: StateFlow<CustomResolutionSpec> = _defaultCustomResolutionFlow.asStateFlow()
 
+    private val _usbTetherCastEnabledFlow = MutableStateFlow(false)
+    val usbTetherCastEnabledFlow: StateFlow<Boolean> = _usbTetherCastEnabledFlow.asStateFlow()
+
     private fun prefs(ctx: Context?) =
         ctx?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -238,6 +242,7 @@ object AppPrefs {
         val savedFps = p.getInt(KEY_DEFAULT_CUSTOM_RES_FPS, CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC.fps)
         _defaultCustomResolutionFlow.value = CustomResolutionPolicy.sanitize(savedW, savedH, savedFps)
             ?: CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC
+        _usbTetherCastEnabledFlow.value = p.getBoolean(KEY_USB_TETHER_CAST_ENABLED, false)
     }
 
     private fun loadPkgList(p: android.content.SharedPreferences, key: String, fallbackKey: String): List<String> {
@@ -728,6 +733,16 @@ object AppPrefs {
             ?.putInt(KEY_DEFAULT_CUSTOM_RES_FPS, clean.fps)
             ?.apply()
         _defaultCustomResolutionFlow.value = clean
+    }
+
+    fun isUsbTetherCastEnabled(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _usbTetherCastEnabledFlow.value
+    }
+
+    fun setUsbTetherCastEnabled(ctx: Context?, enabled: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_USB_TETHER_CAST_ENABLED, enabled)?.apply()
+        _usbTetherCastEnabledFlow.value = enabled
     }
 
     fun createFeedbackQuotaStorage(ctx: Context): FeedbackQuotaStorage {

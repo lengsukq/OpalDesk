@@ -92,6 +92,11 @@ fun RemoteAppPickerModal(
             statusText = "正在连接 $peerLabel 获取应用列表…"
             errorText = ""
             var clientRef: OpalCastPeerClient? = null
+            val boundNet = if (AppPrefs.isUsbTetherCastEnabled(ctx)) {
+                UsbTetherPeerDetector.resolveBoundNetworkForHost(host)
+            } else {
+                null
+            }
             val client = OpalCastPeerClient(
                 host = host,
                 port = port,
@@ -103,6 +108,7 @@ fun RemoteAppPickerModal(
                 reqFps = 60,
                 sessionRole = OpalCastPeerClient.SESSION_ROLE_APP_CATALOG,
                 audioEnabled = false,
+                targetNetwork = boundNet,
                 listener = object : OpalCastPeerClient.Listener {
                     override fun onWaitingForApproval() {
                         mainHandler.post {

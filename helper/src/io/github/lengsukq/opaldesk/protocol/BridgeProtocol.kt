@@ -75,6 +75,11 @@ object BridgeProtocol {
         const val SPLIT_BY_APP = 1
     }
 
+    object TlsBindScope {
+        const val ALL = 0
+        const val USB_TETHER_ONLY = 1
+    }
+
     object PairingDecision {
         const val REJECT = 0
         const val APPROVE_ONCE = 1

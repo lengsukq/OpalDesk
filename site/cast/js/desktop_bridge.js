@@ -187,6 +187,7 @@ export class OpalDesktopBridge {
     this.enabled = this.invokeFn !== null;
     this.runtimeInfo = null;
     this.mdnsDevices = [];
+    this.usbTetherDevices = [];
     this.trustedDevices = [];
     this.adbDevices = [];
     this.adbStatus = { available: false, adbPath: null, customAdbPath: null };
@@ -298,6 +299,15 @@ export class OpalDesktopBridge {
     const list = await this.invoke('list_adb_devices');
     this.adbDevices = Array.isArray(list) ? list : [];
     return this.adbDevices;
+  }
+
+  async scanUsbTetherDevices(port = 19878) {
+    if (!this.enabled) return [];
+    const list = await this.invoke('scan_usb_tether_devices', {
+      port: Number(port) || 19878,
+    });
+    this.usbTetherDevices = Array.isArray(list) ? list : [];
+    return this.usbTetherDevices;
   }
 
   async bootstrapAndForwardUsb(serial, preferredPort = null) {

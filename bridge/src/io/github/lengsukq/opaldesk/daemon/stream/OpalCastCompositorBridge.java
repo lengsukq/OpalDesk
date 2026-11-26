@@ -76,6 +76,9 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         public final int trustedCount;
         public final String lanIp;
         public final int desktopDisplayId;
+        public final String usbTetherIp;
+        public final String usbTetherInterface;
+        public final int tlsBindScope;
 
         public RemoteStatusSnapshot(
                 boolean connected, int sinkType, String peerName,
@@ -83,6 +86,18 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 boolean wifiEnabled, int wifiPort, String certFingerprint,
                 boolean activeSessionPermanent, int trustedCount, String lanIp,
                 int desktopDisplayId) {
+            this(connected, sinkType, peerName, width, height, fpsX100, bitrateKbps,
+                    wifiEnabled, wifiPort, certFingerprint, activeSessionPermanent,
+                    trustedCount, lanIp, desktopDisplayId, "", "", BridgeProtocol.TLS_BIND_SCOPE_ALL);
+        }
+
+        public RemoteStatusSnapshot(
+                boolean connected, int sinkType, String peerName,
+                int width, int height, int fpsX100, int bitrateKbps,
+                boolean wifiEnabled, int wifiPort, String certFingerprint,
+                boolean activeSessionPermanent, int trustedCount, String lanIp,
+                int desktopDisplayId, String usbTetherIp, String usbTetherInterface,
+                int tlsBindScope) {
             this.connected = connected;
             this.sinkType = sinkType;
             this.peerName = peerName != null ? peerName : "";
@@ -97,6 +112,11 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             this.trustedCount = Math.max(0, trustedCount);
             this.lanIp = lanIp != null ? lanIp : "";
             this.desktopDisplayId = desktopDisplayId;
+            this.usbTetherIp = usbTetherIp != null ? usbTetherIp : "";
+            this.usbTetherInterface = usbTetherInterface != null ? usbTetherInterface : "";
+            this.tlsBindScope = (tlsBindScope == BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY)
+                    ? BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY
+                    : BridgeProtocol.TLS_BIND_SCOPE_ALL;
         }
     }
 
@@ -255,6 +275,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     }
 
     public RemoteStatusSnapshot getStatusSnapshot() {
+        server.reconcileUsbTetherBindIfNeeded();
         ActiveRemoteSession main = (desktopSessionId > 0) ? sessions.get(desktopSessionId) : null;
         if (main == null && !sessions.isEmpty()) {
             main = sessions.values().iterator().next();
@@ -264,7 +285,11 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         int h = active ? main.height : config.getCanvasHeight();
         int fpsX100 = active ? Math.round(main.fps * 100f) : Math.round(config.getTargetFps() * 100f);
         int kbps = (active && main.sink != null) ? main.sink.getBitrateKbps() : 0;
-        String lanIp = RemoteStreamServer.detectLanIpv4Address();
+        List<NetworkInterfaceClassifier.InterfaceSnapshot> nicSnapshots =
+                NetworkInterfaceClassifier.snapshotSystemInterfaces();
+        String lanIp = NetworkInterfaceClassifier.selectBestLanIp(nicSnapshots);
+        NetworkInterfaceClassifier.Endpoint usbEp =
+                NetworkInterfaceClassifier.selectUsbTetherEndpoint(nicSnapshots);
         return new RemoteStatusSnapshot(
                 active,
                 active ? server.getActiveSinkType() : DisplaySink.SINK_NONE,
@@ -276,11 +301,18 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 active && server.isActiveSessionPermanent(),
                 server.getTrustedCount(),
                 lanIp != null ? lanIp : "",
-                getActiveDesktopDisplayId());
+                getActiveDesktopDisplayId(),
+                usbEp.ipv4,
+                usbEp.interfaceName,
+                server.getWifiBindScope());
     }
 
     public RemoteStreamServer.WifiConfigStatus configureWifi(boolean enable, int port) {
-        return server.configureWifi(enable, port > 0 ? port : RemoteStreamServer.DEFAULT_WIFI_PORT);
+        return configureWifi(enable, port, BridgeProtocol.TLS_BIND_SCOPE_ALL);
+    }
+
+    public RemoteStreamServer.WifiConfigStatus configureWifi(boolean enable, int port, int bindScope) {
+        return server.configureWifi(enable, port > 0 ? port : RemoteStreamServer.DEFAULT_WIFI_PORT, bindScope);
     }
 
     public void disconnectActiveClient() {

@@ -23,6 +23,7 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("Network"),
                 .linkedFramework("Security"),
+                .linkedFramework("SystemConfiguration"),
                 .linkedFramework("VideoToolbox"),
                 .linkedFramework("CoreMedia"),
                 .linkedFramework("AVFoundation"),

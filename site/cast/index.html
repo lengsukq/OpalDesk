@@ -114,6 +114,20 @@
                 <button id="saveAdbPathBtn" type="button" class="mini-btn">保存路径</button>
               </div>
             </details>
+            <div id="desktopUsbTetherWrap" class="usb-tether-beta-box">
+              <div class="info-box-head">
+                <label class="switch-row compact-switch">
+                  <input id="usbTetherBetaCheck" type="checkbox" />
+                  <span>启用 USB 网络共享自动识别（免 ADB）</span>
+                  <span class="status-pill warn mono">Beta</span>
+                </label>
+                <button id="scanUsbTetherBtn" type="button" class="mini-btn" hidden>刷新识别</button>
+              </div>
+              <p id="usbTetherBetaHint" class="hint-text">
+                可选测试功能（默认关闭，不影响主线 ADB 投屏，不保证所有设备均可正常使用）：开启后自动识别 Windows USB 网络共享（RNDIS / NCM）网卡上的 OpalDesk 手机。
+              </p>
+              <div id="desktopUsbTetherList" class="mdns-chip-list" hidden></div>
+            </div>
           </div>
 
           <div id="usbHelperBox" class="info-box" hidden>

@@ -953,6 +953,20 @@ html, body {
   color: var(--text-primary);
   font-size: 12px;
 }
+.usb-tether-beta-box {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--glass-rim);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.compact-switch {
+  margin: 0;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
 .recent-chip-group {
   display: inline-flex;
   align-items: center;

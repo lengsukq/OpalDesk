@@ -128,7 +128,7 @@ class MainActivity : ComponentActivity() {
         localNetworkPermGranted = granted || OpalPeerDiscovery.hasLocalNetworkPermission(this)
         if (localNetworkPermGranted) {
             val r = BridgeClient.remoteStatusFlow.value
-            OpalPeerDiscovery.syncAdvertise(this, r.wifiEnabled, r.wifiPort, r.shortCertFingerprint)
+            OpalPeerDiscovery.syncAdvertise(this, r.isLanShareActive, r.wifiPort, r.shortCertFingerprint)
             OpalPeerDiscovery.startBrowsing(this, r.lanIp)
         }
     }
@@ -226,6 +226,11 @@ class MainActivity : ComponentActivity() {
         if (localNetworkPermGranted) {
             OpalPeerDiscovery.startBrowsing(this, BridgeClient.remoteStatusFlow.value.lanIp)
         }
+        if (AppPrefs.isUsbTetherCastEnabled(this)) {
+            io.github.lengsukq.opaldesk.cast.UsbTetherPeerDetector.start(this)
+        } else {
+            io.github.lengsukq.opaldesk.cast.UsbTetherPeerDetector.stop()
+        }
         Thread({
             BridgeClient.refreshStatus()
             BridgeClient.refreshSceneSnapshot()
@@ -237,7 +242,7 @@ class MainActivity : ComponentActivity() {
             val hasLocalNet = OpalPeerDiscovery.hasLocalNetworkPermission(this)
             runOnUiThread { localNetworkPermGranted = hasLocalNet }
             if (hasLocalNet) {
-                OpalPeerDiscovery.syncAdvertise(this, r.wifiEnabled, r.wifiPort, r.shortCertFingerprint)
+                OpalPeerDiscovery.syncAdvertise(this, r.isLanShareActive, r.wifiPort, r.shortCertFingerprint)
                 OpalPeerDiscovery.startBrowsing(this, r.lanIp)
             }
         }, "OpalConsoleRefresh").start()
@@ -246,6 +251,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         autoEnterDexArmed = false
         OpalPeerDiscovery.stopBrowsing()
+        io.github.lengsukq.opaldesk.cast.UsbTetherPeerDetector.stop()
         super.onStop()
     }
 
@@ -256,11 +262,16 @@ class MainActivity : ComponentActivity() {
 
     private fun launchPeerCastViewer(host: String, port: Int, label: String) {
         val remote = BridgeClient.remoteStatusFlow.value
+        val selfIpToGuard = if (remote.usbTetherIp.isNotBlank() && host.trim() == remote.usbTetherIp) {
+            remote.usbTetherIp
+        } else {
+            remote.lanIp
+        }
         val check = OpalPeerCastMutex.validateStartReceiving(
             daemonSending = remote.connected,
             sendingPeerName = remote.peerName,
             targetHost = host,
-            selfLanIp = remote.lanIp,
+            selfLanIp = selfIpToGuard,
         )
         if (!check.allowed) {
             Toast.makeText(this, check.reason, Toast.LENGTH_LONG).show()

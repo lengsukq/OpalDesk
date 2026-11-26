@@ -409,6 +409,9 @@ object BridgeClient {
                 trustedCount = r.readInt(),
                 lanIp = r.readString().orEmpty(),
                 desktopDisplayId = if (r.dataAvail() >= 4) r.readInt() else -1,
+                usbTetherIp = if (r.dataAvail() > 0) r.readString().orEmpty() else "",
+                usbTetherInterface = if (r.dataAvail() > 0) r.readString().orEmpty() else "",
+                tlsBindScope = if (r.dataAvail() >= 4) r.readInt() else BridgeProtocol.TlsBindScope.ALL,
             )
         }?.also { st ->
             _remoteStatusFlow.value = st
@@ -431,7 +434,12 @@ object BridgeClient {
         }
     }
 
-    fun setWifiStreamEnabledAsync(enabled: Boolean, port: Int = 19878, onDone: (() -> Unit)? = null) {
+    fun setWifiStreamEnabledAsync(
+        enabled: Boolean,
+        port: Int = 19878,
+        bindScope: Int = BridgeProtocol.TlsBindScope.ALL,
+        onDone: (() -> Unit)? = null,
+    ) {
         ioExec.execute {
             val svc = getService()
             if (svc != null) {
@@ -442,11 +450,13 @@ object BridgeClient {
                     writeArgs = { d ->
                         d.writeInt(if (enabled) 1 else 0)
                         d.writeInt(port)
+                        d.writeInt(bindScope)
                     },
                 ) { r ->
                     r.readInt()
                     r.readInt()
                     r.readString()
+                    if (r.dataAvail() >= 4) r.readInt()
                 }
                 refreshRemoteStatus()
                 refreshPendingPairing()

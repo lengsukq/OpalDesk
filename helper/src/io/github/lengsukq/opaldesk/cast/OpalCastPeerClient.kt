@@ -8,6 +8,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import android.net.Network
 import android.os.Build
 import android.os.SystemClock
 import android.view.InputDevice
@@ -59,6 +60,7 @@ class OpalCastPeerClient(
     private val appPackage: String = "",
     private val appActivity: String = "",
     private val audioEnabled: Boolean = (sessionRole == SESSION_ROLE_DESKTOP),
+    private val targetNetwork: Network? = null,
     private val listener: Listener,
 ) {
     data class RemoteAppEntry(
@@ -420,11 +422,23 @@ class OpalCastPeerClient(
         )
         val ctx = SSLContext.getInstance("TLS")
         ctx.init(null, trustAll, SecureRandom())
-        val ssl = ctx.socketFactory.createSocket() as SSLSocket
-        ssl.tcpNoDelay = true
-        try { ssl.receiveBufferSize = 512 * 1024 } catch (_: Throwable) {}
-        try { ssl.sendBufferSize = 256 * 1024 } catch (_: Throwable) {}
-        ssl.connect(InetSocketAddress(host, port), 6_000)
+        val ssl: SSLSocket = if (targetNetwork != null) {
+            // Bind via explicit Network.socketFactory so Android netd fwmark routes via USB Ethernet
+            // even when Wi-Fi is simultaneously active as the default network.
+            val raw = targetNetwork.socketFactory.createSocket()
+            raw.tcpNoDelay = true
+            try { raw.receiveBufferSize = 512 * 1024 } catch (_: Throwable) {}
+            try { raw.sendBufferSize = 256 * 1024 } catch (_: Throwable) {}
+            raw.connect(InetSocketAddress(host, port), 6_000)
+            ctx.socketFactory.createSocket(raw, host, port, true) as SSLSocket
+        } else {
+            (ctx.socketFactory.createSocket() as SSLSocket).apply {
+                tcpNoDelay = true
+                try { receiveBufferSize = 512 * 1024 } catch (_: Throwable) {}
+                try { sendBufferSize = 256 * 1024 } catch (_: Throwable) {}
+                connect(InetSocketAddress(host, port), 6_000)
+            }
+        }
         ssl.soTimeout = 10_000
         ssl.startHandshake()
         val peerCert = ssl.session.peerCertificates.firstOrNull() as? X509Certificate
