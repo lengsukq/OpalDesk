@@ -70,6 +70,7 @@ function uploadWorkerScript() {
   const metadata = JSON.stringify({
     main_module: "index.mjs",
     compatibility_date: "2026-11-01",
+    keep_bindings: ["secret_text"],
     bindings: [
       { type: "plain_text", name: "SENTRY_API_BASE", text: sentryApiBase },
       { type: "plain_text", name: "SENTRY_ORG", text: sentryOrg },
