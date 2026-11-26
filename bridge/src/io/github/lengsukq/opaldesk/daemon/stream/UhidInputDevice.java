@@ -52,6 +52,7 @@ public final class UhidInputDevice implements Closeable {
     private final Object touchWriteLock = new Object();
     private final int displayId;
     private final String vdUniqueId;
+    private final boolean keyboardOnly;
     private final String touchPhys;
     private final String ptrPhys;
     private final String kbdPhys;
@@ -77,10 +78,12 @@ public final class UhidInputDevice implements Closeable {
     private UhidInputDevice(
             int displayId,
             String vdUniqueId,
+            boolean keyboardOnly,
             InputManager inputManager,
             Object iInputManager) {
         this.displayId = displayId;
         this.vdUniqueId = vdUniqueId;
+        this.keyboardOnly = keyboardOnly;
         this.touchPhys = UhidProtocol.touchPhysForDisplay(displayId);
         this.ptrPhys = UhidProtocol.pointerPhysForDisplay(displayId);
         this.kbdPhys = UhidProtocol.keyboardPhysForDisplay(displayId);
@@ -98,7 +101,29 @@ public final class UhidInputDevice implements Closeable {
             String vdUniqueId,
             InputManager inputManager,
             Object iInputManager) throws IOException {
-        UhidInputDevice dev = new UhidInputDevice(displayId, vdUniqueId, inputManager, iInputManager);
+        return openInternal(displayId, vdUniqueId, false, inputManager, iInputManager);
+    }
+
+    /**
+     * Opens a lightweight keyboard-only /dev/uhid HID keyboard bound to {@code vdUniqueId} so
+     * physical keyboard typing delivers authentic positive-{@code deviceId} kernel key events to
+     * Android Chinese IMEs without creating extra virtual touch or mouse pointers.
+     */
+    public static UhidInputDevice openKeyboardOnly(
+            int displayId,
+            String vdUniqueId,
+            InputManager inputManager,
+            Object iInputManager) throws IOException {
+        return openInternal(displayId, vdUniqueId, true, inputManager, iInputManager);
+    }
+
+    private static UhidInputDevice openInternal(
+            int displayId,
+            String vdUniqueId,
+            boolean keyboardOnly,
+            InputManager inputManager,
+            Object iInputManager) throws IOException {
+        UhidInputDevice dev = new UhidInputDevice(displayId, vdUniqueId, keyboardOnly, inputManager, iInputManager);
         try {
             dev.init();
             return dev;
@@ -117,38 +142,42 @@ public final class UhidInputDevice implements Closeable {
             boolean kbdBound = false;
             if (needAssoc) {
                 // Pre-register before UHID_CREATE2 so EventHub binds the display during initial HID probe.
-                touchBound = bindPortAssociation(touchPhys, vdUniqueId);
-                ptrBound = bindPortAssociation(ptrPhys, vdUniqueId);
+                if (!keyboardOnly) {
+                    touchBound = bindPortAssociation(touchPhys, vdUniqueId);
+                    ptrBound = bindPortAssociation(ptrPhys, vdUniqueId);
+                }
                 kbdBound = bindPortAssociation(kbdPhys, vdUniqueId);
                 portAssociated = touchBound || ptrBound || kbdBound;
             }
 
-            touchFd = openUhidFd();
-            startTouchEventLoopLocked(touchFd);
-            byte[] createTouch = UhidProtocol.buildCreate2Event(
-                    "OpalDesk Virtual Touch " + displayId,
-                    touchPhys,
-                    "opaldesk-touch-" + displayId,
-                    UhidProtocol.BUS_VIRTUAL,
-                    UhidProtocol.VENDOR_ID,
-                    UhidProtocol.PRODUCT_ID_TOUCH,
-                    UhidProtocol.DEVICE_VERSION,
-                    0,
-                    UhidProtocol.getTouchReportDescriptor());
-            writeTouchEvent(createTouch);
+            if (!keyboardOnly) {
+                touchFd = openUhidFd();
+                startTouchEventLoopLocked(touchFd);
+                byte[] createTouch = UhidProtocol.buildCreate2Event(
+                        "OpalDesk Virtual Touch " + displayId,
+                        touchPhys,
+                        "opaldesk-touch-" + displayId,
+                        UhidProtocol.BUS_VIRTUAL,
+                        UhidProtocol.VENDOR_ID,
+                        UhidProtocol.PRODUCT_ID_TOUCH,
+                        UhidProtocol.DEVICE_VERSION,
+                        0,
+                        UhidProtocol.getTouchReportDescriptor());
+                writeTouchEvent(createTouch);
 
-            ptrFd = openUhidFd();
-            byte[] createPtr = UhidProtocol.buildCreate2Event(
-                    "OpalDesk Virtual Pointer " + displayId,
-                    ptrPhys,
-                    "opaldesk-ptr-" + displayId,
-                    UhidProtocol.BUS_VIRTUAL,
-                    UhidProtocol.VENDOR_ID,
-                    UhidProtocol.PRODUCT_ID_POINTER,
-                    UhidProtocol.DEVICE_VERSION,
-                    0,
-                    UhidProtocol.getPointerReportDescriptor());
-            writeAll(ptrFd, createPtr);
+                ptrFd = openUhidFd();
+                byte[] createPtr = UhidProtocol.buildCreate2Event(
+                        "OpalDesk Virtual Pointer " + displayId,
+                        ptrPhys,
+                        "opaldesk-ptr-" + displayId,
+                        UhidProtocol.BUS_VIRTUAL,
+                        UhidProtocol.VENDOR_ID,
+                        UhidProtocol.PRODUCT_ID_POINTER,
+                        UhidProtocol.DEVICE_VERSION,
+                        0,
+                        UhidProtocol.getPointerReportDescriptor());
+                writeAll(ptrFd, createPtr);
+            }
 
             kbdFd = openUhidFd();
             byte[] createKbd = UhidProtocol.buildCreate2Event(
@@ -165,18 +194,23 @@ public final class UhidInputDevice implements Closeable {
 
             if (needAssoc) {
                 // Re-apply after UHID_CREATE2 for ROMs whose InputReader only attaches associations to live ports.
-                touchBound |= bindPortAssociation(touchPhys, vdUniqueId);
-                ptrBound |= bindPortAssociation(ptrPhys, vdUniqueId);
+                if (!keyboardOnly) {
+                    touchBound |= bindPortAssociation(touchPhys, vdUniqueId);
+                    ptrBound |= bindPortAssociation(ptrPhys, vdUniqueId);
+                }
                 kbdBound |= bindPortAssociation(kbdPhys, vdUniqueId);
                 portAssociated = touchBound || ptrBound || kbdBound;
-                if (!touchBound) {
+                boolean requiredOk = keyboardOnly ? kbdBound : touchBound;
+                if (!requiredOk) {
                     String err = lastAssocError;
                     throw new IOException("UHID port-to-display association rejected for display " + displayId
                             + (err.isEmpty() ? "" : (" (" + err + ")")));
                 }
             }
-            System.out.println("OPALDESK_UHID_CREATED displayId=" + displayId
-                    + " touchPhys=" + touchPhys + " ptrPhys=" + ptrPhys + " kbdPhys=" + kbdPhys
+            System.out.println((keyboardOnly ? "OPALDESK_UHID_KBD_CREATED displayId=" : "OPALDESK_UHID_CREATED displayId=")
+                    + displayId
+                    + (keyboardOnly ? "" : (" touchPhys=" + touchPhys + " ptrPhys=" + ptrPhys))
+                    + " kbdPhys=" + kbdPhys
                     + " vdUniqueId=" + (vdUniqueId != null ? vdUniqueId : ""));
         }
     }
@@ -285,7 +319,13 @@ public final class UhidInputDevice implements Closeable {
     }
 
     public boolean isOpen() {
-        return !closed && touchFd != null && ptrFd != null && kbdFd != null;
+        return keyboardOnly
+                ? (!closed && kbdFd != null)
+                : (!closed && touchFd != null && ptrFd != null && kbdFd != null);
+    }
+
+    public boolean isKeyboardOnly() {
+        return keyboardOnly;
     }
 
     public boolean injectInputEvent(InputEvent ev, int displayW, int displayH) {
@@ -435,6 +475,15 @@ public final class UhidInputDevice implements Closeable {
         boolean isDown = (action == KeyEvent.ACTION_DOWN);
         boolean isUp = (action == KeyEvent.ACTION_UP);
         if (!isDown && !isUp) return false;
+        if (isDown && ke.getRepeatCount() > 0) {
+            int keyCode = ke.getKeyCode();
+            synchronized (ioLock) {
+                int modBit = UhidProtocol.androidModifierKeyToBit(keyCode);
+                if (modBit != 0 && (activeModifiers & modBit) != 0) return true;
+                int hidUsage = UhidProtocol.androidKeyCodeToHidUsage(keyCode);
+                if (hidUsage != 0 && pressedHidKeys.contains(hidUsage)) return true;
+            }
+        }
         return sendKey(isDown, ke.getKeyCode(), ke.getMetaState());
     }
 
@@ -485,6 +534,21 @@ public final class UhidInputDevice implements Closeable {
             } catch (Throwable t) {
                 System.err.println("OPALDESK_UHID_KBD_WRITE_ERR: " + t.getMessage());
                 return false;
+            }
+        }
+    }
+
+    /** Releases any held modifiers or keys (e.g. when focus switches away mid-Alt+Tab). */
+    public void releaseAllKeys() {
+        synchronized (ioLock) {
+            if (closed || kbdFd == null) return;
+            if (activeModifiers == 0 && pressedHidKeys.isEmpty()) return;
+            activeModifiers = 0;
+            pressedHidKeys.clear();
+            try {
+                writeAll(kbdFd, UhidProtocol.buildInput2Event(UhidProtocol.buildKeyboardReport(0, null)));
+            } catch (Throwable t) {
+                System.err.println("OPALDESK_UHID_KBD_RESET_WARN: " + t.getMessage());
             }
         }
     }
@@ -553,8 +617,10 @@ public final class UhidInputDevice implements Closeable {
 
             if (portAssociated) {
                 portAssociated = false;
-                unbindPortAssociation(touchPhys);
-                unbindPortAssociation(ptrPhys);
+                if (!keyboardOnly) {
+                    unbindPortAssociation(touchPhys);
+                    unbindPortAssociation(ptrPhys);
+                }
                 unbindPortAssociation(kbdPhys);
             }
         }

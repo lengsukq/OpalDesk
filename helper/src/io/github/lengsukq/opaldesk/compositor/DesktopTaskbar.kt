@@ -963,6 +963,8 @@ fun MacControlCenterPopover(
     dockVisible: Boolean = true,
     dockOpacity: Float = DockAppearancePolicy.DEFAULT_OPACITY,
     dockScale: Float = DockAppearancePolicy.DEFAULT_SCALE,
+    globalShortcutsEnabled: Boolean = true,
+    disabledShortcutIds: Set<String> = emptySet(),
     maxHeight: Dp = 640.dp,
     initialTab: Int = 0,
     onToggleDockVisible: (Boolean) -> Unit = {},
@@ -981,6 +983,7 @@ fun MacControlCenterPopover(
     onPickCustomWallpaper: () -> Unit,
     onSelectMouseTarget: (Int) -> Unit,
     onOpenDpiSettings: () -> Unit = {},
+    onOpenKeyboardShortcuts: () -> Unit = {},
     onApplyTilingLayout: (WindowTilingLayout) -> Unit,
     onMinimizeAll: () -> Unit,
     onCloseAll: () -> Unit,
@@ -1601,16 +1604,32 @@ fun MacControlCenterPopover(
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             OpalText(text = "分屏布局", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = OpalPalette.TextSecondary)
-                            OpalText(
-                                text = if (showMoreTiling) "收起 ▴" else "更多 (6) ▾",
-                                fontSize = 11.sp,
-                                color = OpalPalette.TextSecondary,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .clickable { showMoreTiling = !showMoreTiling }
-                                    .padding(horizontal = 5.dp, vertical = 2.dp),
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                OpalText(
+                                    text = "快捷键",
+                                    fontSize = 10.5.sp,
+                                    color = OpalPalette.AccentBlue,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(OpalPalette.ChipActiveFill)
+                                        .clickable(onClick = onOpenKeyboardShortcuts)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                                OpalText(
+                                    text = if (showMoreTiling) "收起 ▴" else "更多 (6) ▾",
+                                    fontSize = 11.sp,
+                                    color = OpalPalette.TextSecondary,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { showMoreTiling = !showMoreTiling }
+                                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                                )
+                            }
                         }
                         val primaryTiles = listOf(
                             WindowTilingLayout.SPLIT_2_COLS,
@@ -1797,6 +1816,39 @@ fun MacControlCenterPopover(
                             compact = true,
                             filled = true,
                             onClick = onOpenDpiSettings,
+                        )
+                    }
+
+                    // Compact Single-Row Keyboard Shortcuts Cheatsheet & Toggle Entry
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(infoCardShape)
+                            .background(OpalPalette.ChipFill)
+                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
+                            .clickable(onClick = onOpenKeyboardShortcuts)
+                            .padding(horizontal = 11.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            OpalText(text = "键盘快捷键", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            OpalText(
+                                text = io.github.lengsukq.opaldesk.ui.WorkstationShortcutCatalog.formatDetailSubtitle(
+                                    globalShortcutsEnabled,
+                                    disabledShortcutIds,
+                                ),
+                                fontSize = 10.sp,
+                                color = if (globalShortcutsEnabled) OpalPalette.TextSecondary else OpalPalette.AccentAmber,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        OpalButton(
+                            label = "查看",
+                            compact = true,
+                            filled = false,
+                            accent = OpalPalette.AccentBlue,
+                            onClick = onOpenKeyboardShortcuts,
                         )
                     }
 

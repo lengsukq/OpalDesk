@@ -41,12 +41,17 @@ public final class PerDisplayInputRouter {
     }
 
     private final AndroidServices services;
+    private final DaemonConfig config;
     private final InputFallbackDispatcher dispatcher;
     private final Object uhidLock = new Object();
     private final Map<Integer, UhidInputDevice> uhidByDisplay = new HashMap<>();
     private final Map<Integer, Long> uhidBlockedUntilMs = new HashMap<>();
+    private final Map<Integer, UhidInputDevice> uhidKeyboardByDisplay = new HashMap<>();
+    private final Map<Integer, Long> uhidKbdBlockedUntilMs = new HashMap<>();
 
     private volatile boolean localImeActive = false;
+    private volatile boolean physicalKeyboardConnected = false;
+    private volatile int lastKeyTargetDisplayId = -1;
     private volatile TapUpListener tapUpListener;
 
     private int lastDownWinId = -1;
@@ -58,6 +63,7 @@ public final class PerDisplayInputRouter {
 
     public PerDisplayInputRouter(AndroidServices services, DaemonConfig config) {
         this.services = services;
+        this.config = config;
         this.dispatcher = new InputFallbackDispatcher(config, new InputFallbackDispatcher.BackendAdapter() {
             @Override
             public boolean isSystemInjectorAvailable() {
@@ -92,10 +98,21 @@ public final class PerDisplayInputRouter {
 
     public void setLocalImeActive(boolean active) {
         this.localImeActive = active;
+        if (active) {
+            releaseAllHeldKeys();
+        }
     }
 
     public boolean isLocalImeActive() {
         return localImeActive;
+    }
+
+    public void setPhysicalKeyboardConnected(boolean connected) {
+        this.physicalKeyboardConnected = connected;
+    }
+
+    public boolean isPhysicalKeyboardConnected() {
+        return physicalKeyboardConnected;
     }
 
     public int getLastInjectStatus() {
@@ -105,6 +122,7 @@ public final class PerDisplayInputRouter {
     public int onInputBackendConfigChanged(int mode) {
         synchronized (uhidLock) {
             uhidBlockedUntilMs.clear();
+            uhidKbdBlockedUntilMs.clear();
         }
         return dispatcher.onInputBackendConfigChanged(mode, this::releaseAllDisplays);
     }
@@ -285,18 +303,78 @@ public final class PerDisplayInputRouter {
     }
 
     public boolean injectWindowKey(WindowSession ws, int action, int keyCode, int metaState) {
+        return injectWindowKey(ws, action, keyCode, metaState, KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0);
+    }
+
+    public boolean injectWindowKey(
+            WindowSession ws,
+            int action,
+            int keyCode,
+            int metaState,
+            int deviceId,
+            int scanCode,
+            int repeatCount) {
         if (ws == null || !ws.isLive() || ws.displayId <= 0) return false;
         ws.lastActiveAtMs = System.currentTimeMillis();
+        int prevDisplay = lastKeyTargetDisplayId;
+        if (prevDisplay > 0 && prevDisplay != ws.displayId) {
+            releaseHeldKeysOnDisplay(prevDisplay);
+        }
+        lastKeyTargetDisplayId = ws.displayId;
         if (localImeActive) {
             services.focusDisplayTaskOnly(ws.displayId);
         } else {
             services.focusDisplay(ws.displayId);
         }
         long now = SystemClock.uptimeMillis();
+        int effDeviceId = (deviceId > 0) ? deviceId : KeyCharacterMap.VIRTUAL_KEYBOARD;
+        int effRepeat = Math.max(0, repeatCount);
         KeyEvent ev = new KeyEvent(
-                now, now, action, keyCode, 0, metaState,
-                KeyCharacterMap.VIRTUAL_KEYBOARD, 0, KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_KEYBOARD);
+                now, now, action, keyCode, effRepeat, metaState,
+                effDeviceId, Math.max(0, scanCode), KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_KEYBOARD);
+
+        boolean hasUid = ws.vdUniqueId != null && !ws.vdUniqueId.isEmpty();
+        boolean isPhysicalKey = deviceId > 0;
+        int backendMode = (config != null) ? config.getInputBackendMode() : 0;
+        if (MouseRoutingPolicy.shouldPreferUhidForPhysicalKey(backendMode, isPhysicalKey, hasUid)) {
+            if (injectKeyViaUhid(ev, ws.displayId, ws.vdUniqueId)) {
+                return true;
+            }
+        }
         return dispatchToDisplay(ev, ws.displayId, ws.vdUniqueId, ws.contentWidth, ws.contentHeight);
+    }
+
+    /** Pre-warms a display-bound kernel UHID keyboard on a background thread so keystroke #1 has zero settle pause. */
+    public void prewarmKeyboardForDisplay(int displayId, String vdUniqueId) {
+        if (displayId <= 0 || vdUniqueId == null || vdUniqueId.isEmpty()) return;
+        int backendMode = (config != null) ? config.getInputBackendMode() : 0;
+        if (!MouseRoutingPolicy.shouldPreferUhidForPhysicalKey(backendMode, true, true)) return;
+        ensureUhidKeyboardDevice(displayId, vdUniqueId);
+    }
+
+    /** Releases held modifier/key state across all open UHID keyboards (prevents stuck Alt/Ctrl on focus switch). */
+    public void releaseAllHeldKeys() {
+        ArrayList<UhidInputDevice> devs = new ArrayList<>();
+        synchronized (uhidLock) {
+            devs.addAll(uhidByDisplay.values());
+            devs.addAll(uhidKeyboardByDisplay.values());
+        }
+        for (UhidInputDevice d : devs) {
+            if (d != null) {
+                d.releaseAllKeys();
+            }
+        }
+    }
+
+    private void releaseHeldKeysOnDisplay(int displayId) {
+        UhidInputDevice fullDev;
+        UhidInputDevice kbdDev;
+        synchronized (uhidLock) {
+            fullDev = uhidByDisplay.get(displayId);
+            kbdDev = uhidKeyboardByDisplay.get(displayId);
+        }
+        if (fullDev != null) fullDev.releaseAllKeys();
+        if (kbdDev != null) kbdDev.releaseAllKeys();
     }
 
     public boolean sendBackToWindow(WindowSession ws) {
@@ -326,22 +404,44 @@ public final class PerDisplayInputRouter {
 
     public void releaseDisplayResources(int displayId) {
         UhidInputDevice dev;
+        UhidInputDevice kbdDev;
         synchronized (uhidLock) {
             dev = uhidByDisplay.remove(displayId);
             uhidBlockedUntilMs.remove(displayId);
+            kbdDev = uhidKeyboardByDisplay.remove(displayId);
+            uhidKbdBlockedUntilMs.remove(displayId);
         }
         if (dev != null) {
             dev.close();
         }
+        if (kbdDev != null) {
+            kbdDev.close();
+        }
+    }
+
+    /** Closes all standalone keyboard-only UHID devices when no physical keyboard remains connected. */
+    public void releasePhysicalKeyboardUhidDevices() {
+        ArrayList<UhidInputDevice> kbds;
+        synchronized (uhidLock) {
+            uhidKbdBlockedUntilMs.clear();
+            if (uhidKeyboardByDisplay.isEmpty()) return;
+            kbds = new ArrayList<>(uhidKeyboardByDisplay.values());
+            uhidKeyboardByDisplay.clear();
+        }
+        for (UhidInputDevice d : kbds) {
+            d.close();
+        }
     }
 
     public void releaseAllDisplays() {
-        ArrayList<UhidInputDevice> all;
+        ArrayList<UhidInputDevice> all = new ArrayList<>();
         synchronized (uhidLock) {
             uhidBlockedUntilMs.clear();
-            if (uhidByDisplay.isEmpty()) return;
-            all = new ArrayList<>(uhidByDisplay.values());
+            uhidKbdBlockedUntilMs.clear();
+            all.addAll(uhidByDisplay.values());
+            all.addAll(uhidKeyboardByDisplay.values());
             uhidByDisplay.clear();
+            uhidKeyboardByDisplay.clear();
         }
         for (UhidInputDevice d : all) {
             d.close();
@@ -357,18 +457,66 @@ public final class PerDisplayInputRouter {
         return dev != null && dev.injectInputEvent(ev, Math.max(2, dispW), Math.max(2, dispH));
     }
 
+    private boolean injectKeyViaUhid(KeyEvent ev, int displayId, String vdUniqueId) {
+        UhidInputDevice dev = ensureUhidKeyboardDevice(displayId, vdUniqueId);
+        return dev != null && dev.injectInputEvent(ev, 2, 2);
+    }
+
+    private UhidInputDevice ensureUhidKeyboardDevice(int displayId, String vdUniqueId) {
+        boolean newlyOpened = false;
+        UhidInputDevice dev;
+        synchronized (uhidLock) {
+            UhidInputDevice full = uhidByDisplay.get(displayId);
+            if (full != null && full.isOpen() && sameUniqueId(full.getVdUniqueId(), vdUniqueId)) {
+                return full;
+            }
+            dev = uhidKeyboardByDisplay.get(displayId);
+            if (dev != null && dev.isOpen()) {
+                if (sameUniqueId(dev.getVdUniqueId(), vdUniqueId)) {
+                    return dev;
+                }
+                dev.close();
+                uhidKeyboardByDisplay.remove(displayId);
+            }
+            Long blockedUntil = uhidKbdBlockedUntilMs.get(displayId);
+            long nowMs = SystemClock.uptimeMillis();
+            if (blockedUntil != null && nowMs < blockedUntil) {
+                return null;
+            }
+            try {
+                dev = UhidInputDevice.openKeyboardOnly(displayId, vdUniqueId, services.inputManager, services.iInputManager);
+                uhidKeyboardByDisplay.put(displayId, dev);
+                uhidKbdBlockedUntilMs.remove(displayId);
+                newlyOpened = true;
+            } catch (Exception e) {
+                uhidKbdBlockedUntilMs.put(displayId, nowMs + UHID_RETRY_COOLDOWN_MS);
+                System.err.println("OPALDESK_UHID_KBD_OPEN_WARN displayId=" + displayId + ": " + e.getMessage());
+                return null;
+            }
+        }
+        if (newlyOpened && Looper.myLooper() != Looper.getMainLooper()) {
+            SystemClock.sleep(UHID_SETTLE_MS);
+        }
+        return dev;
+    }
+
     private UhidInputDevice ensureUhidDevice(int displayId, String vdUniqueId) {
         boolean newlyOpened = false;
         UhidInputDevice dev;
         synchronized (uhidLock) {
             dev = uhidByDisplay.get(displayId);
             if (dev != null && dev.isOpen()) {
-                String curUid = dev.getVdUniqueId();
-                if ((vdUniqueId == null && curUid == null) || (vdUniqueId != null && vdUniqueId.equals(curUid))) {
+                if (sameUniqueId(dev.getVdUniqueId(), vdUniqueId)) {
                     return dev;
                 }
                 dev.close();
                 uhidByDisplay.remove(displayId);
+            }
+            // Close any standalone keyboard-only UHID on this display before opening full UHID
+            // so kbdPhys is never registered twice for the same displayId.
+            UhidInputDevice prevKbd = uhidKeyboardByDisplay.remove(displayId);
+            if (prevKbd != null) {
+                prevKbd.close();
             }
             Long blockedUntil = uhidBlockedUntilMs.get(displayId);
             long nowMs = SystemClock.uptimeMillis();
@@ -390,5 +538,9 @@ public final class PerDisplayInputRouter {
             SystemClock.sleep(UHID_SETTLE_MS);
         }
         return dev;
+    }
+
+    private static boolean sameUniqueId(String a, String b) {
+        return (a == null && b == null) || (a != null && a.equals(b));
     }
 }

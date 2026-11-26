@@ -401,4 +401,99 @@ class ExternalTrackpadPolicyTest {
         )
         assertEquals("无线电视 · 1920×1080 @ 24Hz", tvSession.summary)
     }
+
+    @Test
+    fun nonPresentationDisplaysNeverForcePresentationAndEscalateCleanlyToShellLaunch() {
+        val pubPres = ExternalDisplayPolicy.FLAG_PRESENTATION
+        val privPres = ExternalDisplayPolicy.FLAG_PRESENTATION or ExternalDisplayPolicy.FLAG_PRIVATE
+
+        assertTrue(ExternalDisplayPolicy.isPublicPresentationDisplay(pubPres))
+        assertFalse(ExternalDisplayPolicy.isPublicPresentationDisplay(0))
+        assertFalse(ExternalDisplayPolicy.isPublicPresentationDisplay(privPres))
+
+        // Regression test: manual launch on a non-presentation display must NOT force Presentation
+        assertFalse(
+            ExternalDisplayPolicy.shouldForcePresentationForManualLaunch(
+                transport = ExternalDisplayTransport.OTHER_EXTERNAL,
+                isPresentationCapable = false,
+            ),
+        )
+        assertFalse(
+            ExternalDisplayPolicy.shouldForcePresentationForManualLaunch(
+                transport = ExternalDisplayTransport.WIRED,
+                isPresentationCapable = false,
+            ),
+        )
+        assertTrue(
+            ExternalDisplayPolicy.shouldForcePresentationForManualLaunch(
+                transport = ExternalDisplayTransport.WIRELESS_TV,
+                isPresentationCapable = true,
+            ),
+        )
+        assertFalse(
+            ExternalDisplayPolicy.shouldPreferPresentationMode(
+                transport = ExternalDisplayTransport.WIRED,
+                projectionModePref = ExternalDisplayPolicy.PROJECTION_MODE_PRESENTATION,
+                isPresentationCapable = false,
+            ),
+        )
+
+        // Display 0 landing state machine
+        assertEquals(
+            ExternalDisplayPolicy.Display0ExternalAction.USE_PRESENTATION,
+            ExternalDisplayPolicy.resolveDisplay0ExternalAction(
+                hasTargetDisplay = true,
+                isPublicPresentation = true,
+                shellLaunchAlreadyTried = false,
+                daemonConnected = true,
+            ),
+        )
+        assertEquals(
+            ExternalDisplayPolicy.Display0ExternalAction.RELAUNCH_DIRECT_VIA_SHELL,
+            ExternalDisplayPolicy.resolveDisplay0ExternalAction(
+                hasTargetDisplay = true,
+                isPublicPresentation = false,
+                shellLaunchAlreadyTried = false,
+                daemonConnected = true,
+            ),
+        )
+        assertEquals(
+            ExternalDisplayPolicy.Display0ExternalAction.FALLBACK_LOCAL_ONLY,
+            ExternalDisplayPolicy.resolveDisplay0ExternalAction(
+                hasTargetDisplay = true,
+                isPublicPresentation = false,
+                shellLaunchAlreadyTried = true,
+                daemonConnected = true,
+            ),
+        )
+
+        // Presentation failure recovery state machine: 1 fresh retry -> shell direct launch -> local fallback
+        assertEquals(
+            ExternalDisplayPolicy.PresentationFailureAction.RETRY_PRESENTATION,
+            ExternalDisplayPolicy.resolvePresentationFailureAction(
+                retryAttempt = 0,
+                isPublicPresentation = true,
+                shellLaunchAlreadyTried = false,
+                daemonConnected = true,
+            ),
+        )
+        assertEquals(
+            ExternalDisplayPolicy.PresentationFailureAction.ESCALATE_DIRECT_VIA_SHELL,
+            ExternalDisplayPolicy.resolvePresentationFailureAction(
+                retryAttempt = 1,
+                isPublicPresentation = true,
+                shellLaunchAlreadyTried = false,
+                daemonConnected = true,
+            ),
+        )
+        assertEquals(
+            ExternalDisplayPolicy.PresentationFailureAction.FALLBACK_LOCAL_ONLY,
+            ExternalDisplayPolicy.resolvePresentationFailureAction(
+                retryAttempt = 1,
+                isPublicPresentation = true,
+                shellLaunchAlreadyTried = true,
+                daemonConnected = true,
+            ),
+        )
+    }
 }

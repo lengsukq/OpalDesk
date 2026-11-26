@@ -2,6 +2,7 @@ package io.github.lengsukq.opaldesk.daemon.platform;
 
 import android.app.ActivityManager;
 import android.content.ClipData;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.hardware.display.DisplayManager;
@@ -12,10 +13,12 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
+import android.provider.Settings;
 import android.view.Display;
 import android.view.InputEvent;
 import android.view.MotionEvent;
 
+import io.github.lengsukq.opaldesk.daemon.BridgeBuildConfig;
 import io.github.lengsukq.opaldesk.daemon.input.ImmsDumpInspector;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.util.ShellCommand;
@@ -75,6 +78,9 @@ public final class AndroidServices {
     public final Method focusTopTaskMethod;
     public final Method moveDisplayToTopMethod;
     public final Method setDisplayImePolicyMethod;
+    public final Method getDisplayImePolicyMethod;
+    public final Method setShouldShowImeMethod;
+    public final Method shouldShowImeMethod;
     public final Method shouldShowSystemDecorsMethod;
     public final Method setIgnoreOrientationRequestMethod;
     public final Method setRemoveContentModeMethod;
@@ -123,6 +129,15 @@ public final class AndroidServices {
         this.moveDisplayToTopMethod = findMethodByName(iWindowManager, "moveDisplayToTop", 2);
         this.setDisplayImePolicyMethod = (iWindowManager != null)
                 ? findMethodOrNull(iWindowManager.getClass(), "setDisplayImePolicy", int.class, int.class)
+                : null;
+        this.getDisplayImePolicyMethod = (iWindowManager != null)
+                ? findMethodOrNull(iWindowManager.getClass(), "getDisplayImePolicy", int.class)
+                : null;
+        this.setShouldShowImeMethod = (iWindowManager != null)
+                ? findMethodOrNull(iWindowManager.getClass(), "setShouldShowIme", int.class, boolean.class)
+                : null;
+        this.shouldShowImeMethod = (iWindowManager != null)
+                ? findMethodOrNull(iWindowManager.getClass(), "shouldShowIme", int.class)
                 : null;
         this.shouldShowSystemDecorsMethod = (iWindowManager != null)
                 ? findMethodOrNull(iWindowManager.getClass(), "setShouldShowSystemDecors", int.class, boolean.class)
@@ -212,6 +227,63 @@ public final class AndroidServices {
     }
 
     /**
+     * Queries the current {@code DisplayImePolicy} ({@code 0 = LOCAL}, {@code 1 = FALLBACK_DISPLAY})
+     * across Android 11–17, or returns {@code -1} if unavailable.
+     */
+    public int getDisplayImePolicy(int displayId) {
+        if (displayId <= 0 || iWindowManager == null) return -1;
+        if (getDisplayImePolicyMethod != null) {
+            try {
+                Object val = getDisplayImePolicyMethod.invoke(iWindowManager, displayId);
+                if (val instanceof Number) {
+                    return ((Number) val).intValue();
+                }
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+            }
+        }
+        if (shouldShowImeMethod != null) {
+            try {
+                Object val = shouldShowImeMethod.invoke(iWindowManager, displayId);
+                if (val instanceof Boolean) {
+                    return ((Boolean) val)
+                            ? BridgeProtocol.DISPLAY_IME_POLICY_LOCAL
+                            : BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY;
+                }
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Applies {@code DisplayImePolicy} ({@code DISPLAY_IME_POLICY_LOCAL} or
+     * {@code DISPLAY_IME_POLICY_FALLBACK_DISPLAY}) across Android 11–17.
+     */
+    public boolean setDisplayImePolicy(int displayId, int imePolicy) {
+        if (displayId <= 0 || iWindowManager == null) return false;
+        if (setDisplayImePolicyMethod != null) {
+            try {
+                setDisplayImePolicyMethod.invoke(iWindowManager, displayId, imePolicy);
+                return true;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.err.println("OPALDESK_IME_POLICY_WARN displayId=" + displayId
+                        + " policy=" + imePolicy + ": " + unwrapMessage(e));
+            }
+        }
+        if (setShouldShowImeMethod != null) {
+            try {
+                boolean local = (imePolicy == BridgeProtocol.DISPLAY_IME_POLICY_LOCAL);
+                setShouldShowImeMethod.invoke(iWindowManager, displayId, local);
+                return true;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.err.println("OPALDESK_IME_SHOW_WARN displayId=" + displayId
+                        + " policy=" + imePolicy + ": " + unwrapMessage(e));
+            }
+        }
+        return false;
+    }
+
+    /**
      * Configures IME policy for an isolated window VirtualDisplay so tapping text fields
      * triggers soft keyboard fallback on Display 0 (or local IME where supported) instead of dropping input.
      */
@@ -223,12 +295,7 @@ public final class AndroidServices {
             } catch (ReflectiveOperationException | RuntimeException ignored) {
             }
         }
-        if (setDisplayImePolicyMethod != null) {
-            try {
-                setDisplayImePolicyMethod.invoke(iWindowManager, displayId, imePolicy);
-            } catch (ReflectiveOperationException | RuntimeException ignored) {
-            }
-        }
+        setDisplayImePolicy(displayId, imePolicy);
         if (setIgnoreOrientationRequestMethod != null) {
             try {
                 setIgnoreOrientationRequestMethod.invoke(iWindowManager, displayId, true);
@@ -515,6 +582,55 @@ public final class AndroidServices {
         }
     }
 
+    /**
+     * Launches {@code ExternalDesktopActivity} directly onto a physical or wireless external
+     * display via {@code com.android.shell} ({@code uid=2000}), bypassing Android 14–16
+     * background-activity-launch (BAL) and unprivileged cross-display launch restrictions.
+     */
+    public boolean launchExternalDesktopOnDisplay(int displayId, boolean isWireless) {
+        if (displayId <= Display.DEFAULT_DISPLAY || displayManager == null) return false;
+        Display disp = null;
+        try {
+            disp = displayManager.getDisplay(displayId);
+        } catch (RuntimeException ignored) {
+        }
+        if (disp == null || !disp.isValid()) {
+            System.err.println("OPALDESK_EXT_DESKTOP_LAUNCH_SKIP displayId=" + displayId + " invalid_or_missing");
+            return false;
+        }
+        Display.Mode mode = disp.getMode();
+        String modeDesc = (mode != null)
+                ? (mode.getPhysicalWidth() + "x" + mode.getPhysicalHeight() + "@" + Math.round(mode.getRefreshRate()) + "Hz")
+                : "unknown";
+        Intent intent = new Intent();
+        intent.setComponent(new ComponentName(
+                BridgeBuildConfig.HELPER_PACKAGE,
+                BridgeBuildConfig.HELPER_PACKAGE + ".ExternalDesktopActivity"));
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        intent.putExtra("targetDisplayId", displayId);
+        intent.putExtra("preferPresentation", false);
+        intent.putExtra("isWirelessDisplay", isWireless);
+        intent.putExtra("shellLaunched", true);
+        Bundle opts = TaskApiAdapter.makeFullscreenLaunchOptions(displayId).toBundle();
+        boolean ok = startActivityAsShell(intent, opts);
+        if (ok) {
+            focusDisplay(displayId);
+        }
+        System.out.println("OPALDESK_EXT_DESKTOP_LAUNCH displayId=" + displayId
+                + " name=" + disp.getName()
+                + " flags=0x" + Integer.toHexString(disp.getFlags())
+                + " state=" + disp.getState()
+                + " mode=" + modeDesc
+                + " wireless=" + isWireless
+                + " ok=" + ok);
+        return ok;
+    }
+
     @SuppressWarnings("unchecked")
     public List<ActivityManager.RunningAppProcessInfo> getRunningAppProcesses() {
         Object am = (iActivityManager != null)
@@ -752,17 +868,23 @@ public final class AndroidServices {
     }
 
     /** Applies hardware mouse pointer speed (-7..+7) via {@code IInputManager.tryPointerSpeed}. */
+    private volatile boolean tryPointerSpeedDenied = false;
+
     public boolean setHardwarePointerSpeed(int speed) {
         int clamped = Math.max(-7, Math.min(7, speed));
         boolean ok = false;
-        if (iInputManager != null) {
+        if (iInputManager != null && !tryPointerSpeedDenied) {
             Method tryM = findMethodOrNull(iInputManager.getClass(), "tryPointerSpeed", int.class);
             if (tryM != null) {
                 try {
                     tryM.invoke(iInputManager, clamped);
                     ok = true;
                 } catch (ReflectiveOperationException | RuntimeException e) {
-                    System.err.println("OPALDESK_PTR_SPEED_WARN: " + unwrapMessage(e));
+                    String msg = unwrapMessage(e);
+                    if (msg != null && (msg.contains("SecurityException") || msg.contains("SET_POINTER_SPEED"))) {
+                        tryPointerSpeedDenied = true;
+                    }
+                    System.err.println("OPALDESK_PTR_SPEED_WARN: " + msg);
                 }
             }
         }
@@ -775,6 +897,17 @@ public final class AndroidServices {
                 } catch (ReflectiveOperationException | RuntimeException ignored) {
                 }
             }
+        }
+        if (!ok && context != null) {
+            try {
+                ok = Settings.System.putInt(context.getContentResolver(), "pointer_speed", clamped);
+            } catch (RuntimeException ignored) {
+            }
+        }
+        if (!ok) {
+            ShellCommand.Result res = ShellCommand.runWithTimeout(
+                    1200L, "settings", "put", "system", "pointer_speed", String.valueOf(clamped));
+            ok = res.isSuccess();
         }
         return ok;
     }

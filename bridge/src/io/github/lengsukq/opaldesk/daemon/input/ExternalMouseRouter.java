@@ -47,6 +47,11 @@ public final class ExternalMouseRouter {
         }
     }
 
+    /** Callback notified whenever a physical Bluetooth/USB alphabetic keyboard connects or disconnects. */
+    public interface PhysicalKeyboardListener {
+        void onPhysicalKeyboardPresenceChanged(boolean connected);
+    }
+
     private final AndroidServices services;
     private final DaemonConfig config;
     private final Handler mainHandler;
@@ -56,6 +61,12 @@ public final class ExternalMouseRouter {
     private volatile int activeExternalDisplayId = -1;
     private volatile String activeDisplayUniqueId = null;
     private volatile int activeDisplayPort = -1;
+    private volatile int observedExternalDisplayId = -1;
+    private volatile String observedExternalDisplayUniqueId = null;
+    private int imePolicyOverriddenDisplayId = -1;
+    private int imePolicyOriginalValue = -1;
+    private volatile boolean physicalKeyboardConnected = false;
+    private volatile PhysicalKeyboardListener physicalKeyboardListener;
     private volatile boolean localDesktopPinned = false;
     private volatile boolean listenersRegistered = false;
 
@@ -68,6 +79,14 @@ public final class ExternalMouseRouter {
         this.mainHandler = mainHandler;
     }
 
+    public void setPhysicalKeyboardListener(PhysicalKeyboardListener listener) {
+        this.physicalKeyboardListener = listener;
+    }
+
+    public boolean hasPhysicalKeyboard() {
+        return physicalKeyboardConnected;
+    }
+
     public void start() {
         if (listenersRegistered || services == null) return;
         listenersRegistered = true;
@@ -78,20 +97,24 @@ public final class ExternalMouseRouter {
                 sweepClearConnectedDeviceAssociationsLocked();
             }
         }
+        refreshPhysicalKeyboardState(false);
         if (services.inputManager != null) {
             inputListener = new InputManager.InputDeviceListener() {
                 @Override
                 public void onInputDeviceAdded(int deviceId) {
+                    refreshPhysicalKeyboardState(true);
                     resyncBindings();
                 }
 
                 @Override
                 public void onInputDeviceRemoved(int deviceId) {
+                    refreshPhysicalKeyboardState(true);
                     resyncBindings();
                 }
 
                 @Override
                 public void onInputDeviceChanged(int deviceId) {
+                    refreshPhysicalKeyboardState(true);
                     resyncBindings();
                 }
             };
@@ -111,12 +134,22 @@ public final class ExternalMouseRouter {
 
                 @Override
                 public void onDisplayRemoved(int displayId) {
-                    if (displayId > 0 && displayId == activeExternalDisplayId) {
+                    if (displayId > 0 && (displayId == activeExternalDisplayId || displayId == observedExternalDisplayId)) {
                         System.out.println("OPALDESK_MOUSE_EXT_DISPLAY_REMOVED id=" + displayId + " -> returning mouse to Display 0");
                         synchronized (lock) {
-                            activeExternalDisplayId = -1;
-                            activeDisplayUniqueId = null;
-                            activeDisplayPort = -1;
+                            if (displayId == activeExternalDisplayId) {
+                                activeExternalDisplayId = -1;
+                                activeDisplayUniqueId = null;
+                                activeDisplayPort = -1;
+                            }
+                            if (displayId == observedExternalDisplayId) {
+                                observedExternalDisplayId = -1;
+                                observedExternalDisplayUniqueId = null;
+                            }
+                            if (displayId == imePolicyOverriddenDisplayId) {
+                                imePolicyOverriddenDisplayId = -1;
+                                imePolicyOriginalValue = -1;
+                            }
                         }
                         resyncBindings();
                         if (!localDesktopPinned) {
@@ -166,6 +199,7 @@ public final class ExternalMouseRouter {
     public int setMouseTarget(int targetMode, int externalDisplayId) {
         if (targetMode == BridgeProtocol.MOUSE_TARGET_PIN_LOCAL_DISPLAY0) {
             localDesktopPinned = true;
+            refreshPhysicalKeyboardState(true);
             return resyncBindings();
         }
         if (targetMode == BridgeProtocol.MOUSE_TARGET_UNPIN_LOCAL_DISPLAY0) {
@@ -183,11 +217,28 @@ public final class ExternalMouseRouter {
         }
 
         config.setMouseTargetMode(targetMode);
+        String uniqueId = (externalDisplayId > 0 && services != null)
+                ? services.getDisplayUniqueId(externalDisplayId) : null;
+        int physPort = (externalDisplayId > 0 && services != null)
+                ? services.getDisplayPhysicalPort(externalDisplayId) : -1;
+
+        synchronized (lock) {
+            if (externalDisplayId > 0) {
+                observedExternalDisplayId = externalDisplayId;
+                observedExternalDisplayUniqueId = uniqueId;
+            } else {
+                observedExternalDisplayId = -1;
+                observedExternalDisplayUniqueId = null;
+            }
+        }
+        refreshPhysicalKeyboardState(true);
+
         if (targetMode != BridgeProtocol.MOUSE_TARGET_EXTERNAL || externalDisplayId <= 0) {
             synchronized (lock) {
                 activeExternalDisplayId = -1;
                 activeDisplayUniqueId = null;
                 activeDisplayPort = -1;
+                syncExternalDisplayImePolicyLocked();
             }
             int bound = resyncBindings();
             if (services != null && !localDesktopPinned) {
@@ -195,14 +246,13 @@ public final class ExternalMouseRouter {
             }
             return bound;
         }
-        String uniqueId = (services != null) ? services.getDisplayUniqueId(externalDisplayId) : null;
-        int physPort = (services != null) ? services.getDisplayPhysicalPort(externalDisplayId) : -1;
         if ((uniqueId == null || uniqueId.isEmpty()) && physPort < 0) {
             System.err.println("OPALDESK_MOUSE_ROUTE_SKIP no uniqueId/port for displayId=" + externalDisplayId);
             synchronized (lock) {
                 activeExternalDisplayId = -1;
                 activeDisplayUniqueId = null;
                 activeDisplayPort = -1;
+                syncExternalDisplayImePolicyLocked();
             }
             return resyncBindings();
         }
@@ -210,6 +260,7 @@ public final class ExternalMouseRouter {
             activeExternalDisplayId = externalDisplayId;
             activeDisplayUniqueId = uniqueId;
             activeDisplayPort = physPort;
+            syncExternalDisplayImePolicyLocked();
         }
         return resyncBindings();
     }
@@ -220,6 +271,9 @@ public final class ExternalMouseRouter {
             activeExternalDisplayId = -1;
             activeDisplayUniqueId = null;
             activeDisplayPort = -1;
+            observedExternalDisplayId = -1;
+            observedExternalDisplayUniqueId = null;
+            restoreExternalDisplayImePolicyLocked();
         }
         resyncBindings();
         if (services != null) {
@@ -373,6 +427,88 @@ public final class ExternalMouseRouter {
         }
     }
 
+    private void refreshPhysicalKeyboardState(boolean notifyListener) {
+        boolean detected = detectPhysicalKeyboardConnected();
+        boolean changed;
+        synchronized (lock) {
+            changed = (detected != physicalKeyboardConnected);
+            physicalKeyboardConnected = detected;
+            syncExternalDisplayImePolicyLocked();
+        }
+        if (changed) {
+            System.out.println("OPALDESK_PHYSICAL_KBD_STATE connected=" + detected);
+            if (notifyListener) {
+                PhysicalKeyboardListener listener = physicalKeyboardListener;
+                if (listener != null) {
+                    try {
+                        listener.onPhysicalKeyboardPresenceChanged(detected);
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+            }
+        }
+    }
+
+    private boolean detectPhysicalKeyboardConnected() {
+        if (services == null || services.inputManager == null) return false;
+        try {
+            int[] ids = services.inputManager.getInputDeviceIds();
+            if (ids == null) return false;
+            for (int id : ids) {
+                InputDevice dev = services.inputManager.getInputDevice(id);
+                if (dev != null && MouseRoutingPolicy.isPhysicalAlphabeticKeyboard(
+                        dev.getName(), dev.getSources(), dev.getKeyboardType(), dev.isVirtual(), dev.isExternal())) {
+                    return true;
+                }
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return false;
+    }
+
+    /**
+     * When a physical keyboard is connected during a physical external-monitor session (HDMI / USB-C /
+     * Miracast, never OpalCast {@code virtual:*} displays), switches the external display's IME policy
+     * to {@code DISPLAY_IME_POLICY_LOCAL} so OpalDesk's own in-desktop search fields render their CJK
+     * candidate bar on the monitor; restores the prior policy as soon as the keyboard or monitor leaves.
+     */
+    private void syncExternalDisplayImePolicyLocked() {
+        if (services == null) return;
+        int extId = observedExternalDisplayId;
+        String extUid = observedExternalDisplayUniqueId;
+        boolean isPhysicalExternal = extId > 0 && (extUid == null || !extUid.startsWith("virtual:"));
+        int desiredTarget = (isPhysicalExternal && physicalKeyboardConnected) ? extId : -1;
+
+        if (desiredTarget == imePolicyOverriddenDisplayId) {
+            return;
+        }
+        restoreExternalDisplayImePolicyLocked();
+        if (desiredTarget > 0) {
+            int prior = services.getDisplayImePolicy(desiredTarget);
+            if (prior == BridgeProtocol.DISPLAY_IME_POLICY_LOCAL) {
+                return;
+            }
+            if (services.setDisplayImePolicy(desiredTarget, BridgeProtocol.DISPLAY_IME_POLICY_LOCAL)) {
+                imePolicyOverriddenDisplayId = desiredTarget;
+                imePolicyOriginalValue = (prior >= 0) ? prior : BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY;
+                System.out.println("OPALDESK_EXT_DISPLAY_IME_POLICY displayId=" + desiredTarget
+                        + " policy=LOCAL prior=" + imePolicyOriginalValue);
+            }
+        }
+    }
+
+    private void restoreExternalDisplayImePolicyLocked() {
+        int dispId = imePolicyOverriddenDisplayId;
+        int orig = imePolicyOriginalValue;
+        imePolicyOverriddenDisplayId = -1;
+        imePolicyOriginalValue = -1;
+        if (dispId > 0 && orig >= 0 && services != null) {
+            boolean ok = services.setDisplayImePolicy(dispId, orig);
+            System.out.println("OPALDESK_EXT_DISPLAY_IME_POLICY_RESTORED displayId=" + dispId
+                    + " policy=" + orig + " ok=" + ok);
+        }
+    }
+
     private void unbindAllInternal(boolean clearDisplay, boolean sweepSystemDevices) {
         synchronized (lock) {
             unbindLocked();
@@ -383,6 +519,9 @@ public final class ExternalMouseRouter {
                 activeExternalDisplayId = -1;
                 activeDisplayUniqueId = null;
                 activeDisplayPort = -1;
+                observedExternalDisplayId = -1;
+                observedExternalDisplayUniqueId = null;
+                restoreExternalDisplayImePolicyLocked();
             }
         }
     }

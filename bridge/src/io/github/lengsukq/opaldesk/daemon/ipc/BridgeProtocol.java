@@ -74,6 +74,7 @@ public final class BridgeProtocol {
     public static final int TX_GET_ADVANCED_CONFIG_STATE = 42;
     public static final int TX_SET_REMOTE_MEDIA_CONFIG = 43;
     public static final int TX_SET_AUDIO_ROUTE_MODE = 44;
+    public static final int TX_LAUNCH_EXTERNAL_DESKTOP = 45;
     public static final int TX_SHUTDOWN = 99;
 
     // ---- Downlink Audio Routing Modes (OpalCast DeX) ----
@@ -114,6 +115,8 @@ public final class BridgeProtocol {
     public static final int VD_FLAGS_TRUSTED_IME = 0x00449;
     public static final int VD_FLAGS_TRUSTED_ISOLATED = 0x14449;
     public static final int VD_FLAGS_TRUSTED_FOCUS = 0x04449;
+    /** DisplayManager.VIRTUAL_DISPLAY_FLAG_TRUSTED (1<<10): permits local IME & system input policies. */
+    public static final int VD_FLAG_TRUSTED = 1 << 10;
     public static final int VD_FLAG_SECURE = 0x0004;
     /** DisplayManager.VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL (1<<8): never dump tasks onto Display 0. */
     public static final int VD_FLAG_DESTROY_CONTENT_ON_REMOVAL = 1 << 8;

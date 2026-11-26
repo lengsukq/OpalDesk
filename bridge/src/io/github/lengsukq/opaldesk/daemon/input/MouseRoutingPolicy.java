@@ -111,18 +111,94 @@ public final class MouseRoutingPolicy {
     }
 
     /**
+     * Decides whether an InputDevice represents a real physical external mouse
+     * (excluding built-in devices, virtual devices, and OpalDesk's own UHID devices).
+     */
+    public static boolean isPhysicalMouse(String name, int sources, boolean isVirtual, boolean isExternal) {
+        if (isVirtual || !isExternal) return false;
+        if (name != null && name.startsWith("OpalDesk Virtual")) return false;
+        return (sources & SOURCE_MOUSE) == SOURCE_MOUSE;
+    }
+
+    /**
+     * Decides whether an InputDevice represents a real physical external alphabetic keyboard
+     * (excluding built-in gpio-keys, Bluetooth headphone media buttons, virtual devices, and
+     * OpalDesk's own UHID keyboards).
+     */
+    public static boolean isPhysicalAlphabeticKeyboard(
+            String name, int sources, int keyboardType, boolean isVirtual, boolean isExternal) {
+        if (isVirtual || !isExternal) return false;
+        if (name != null && name.startsWith("OpalDesk Virtual")) return false;
+        return (sources & SOURCE_KEYBOARD) == SOURCE_KEYBOARD
+                && keyboardType == KEYBOARD_TYPE_ALPHABETIC;
+    }
+
+    /**
      * Decides whether an InputDevice represents a routable physical external mouse OR alphabetic
      * external physical keyboard (excluding built-in keys, virtual UHID devices, and Bluetooth
      * headphone non-alphabetic media-key devices).
      */
     public static boolean shouldRouteDevice(
             String name, int sources, int keyboardType, boolean isVirtual, boolean isExternal) {
-        if (isVirtual || !isExternal) return false;
-        if (name != null && name.startsWith("OpalDesk Virtual")) return false;
-        boolean isMouse = (sources & SOURCE_MOUSE) == SOURCE_MOUSE;
-        boolean isAlphaKeyboard = (sources & SOURCE_KEYBOARD) == SOURCE_KEYBOARD
-                && keyboardType == KEYBOARD_TYPE_ALPHABETIC;
-        return isMouse || isAlphaKeyboard;
+        return isPhysicalMouse(name, sources, isVirtual, isExternal)
+                || isPhysicalAlphabeticKeyboard(name, sources, keyboardType, isVirtual, isExternal);
+    }
+
+    /**
+     * Resolves the Android {@code DisplayImePolicy} for a managed {@code OpalWin-*} VirtualDisplay:
+     * <ul>
+     *   <li>When a physical alphabetic keyboard is connected (and not casting desktop to a remote PC/client),
+     *       returns {@code DISPLAY_IME_POLICY_LOCAL (0)} on trusted displays so Android's native IME
+     *       renders its physical-keyboard Pinyin/CJK candidate bar directly inside the window on the
+     *       active monitor/desktop instead of hiding it on Display 0 ("盲打").</li>
+     *   <li>Otherwise returns {@code DISPLAY_IME_POLICY_FALLBACK_DISPLAY (1)} so phone trackpad / touch
+     *       taps summon the full-width soft keyboard cleanly on Display 0.</li>
+     * </ul>
+     */
+    public static int resolveWindowDisplayImePolicy(
+            boolean hasPhysicalKeyboard,
+            boolean remoteDesktopActive,
+            boolean displayIsTrusted) {
+        if (displayIsTrusted && hasPhysicalKeyboard && !remoteDesktopActive) {
+            return 0; // BridgeProtocol.DISPLAY_IME_POLICY_LOCAL
+        }
+        return 1; // BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY
+    }
+
+    /**
+     * Returns {@code true} when a physical keyboard {@code KeyEvent} targeting an isolated
+     * {@code VirtualDisplay} should prefer Linux {@code /dev/uhid} keyboard injection over
+     * {@code IInputManager.injectInputEvent}.
+     *
+     * <p>AOSP {@code InputDispatcher::injectInputEvent} forcibly rewrites {@code deviceId} to
+     * {@code VIRTUAL_KEYBOARD_ID (-1)}, which causes many Chinese IMEs (Gboard, Sogou, WeType, Baidu)
+     * to bypass hardware-keyboard Pinyin composition or suppress their candidate bar. Delivering the
+     * keypress through a display-associated kernel UHID keyboard preserves authentic physical HID
+     * semantics while keeping {@code INPUT_BACKEND_SYSTEM} strictly system-only.
+     */
+    public static boolean shouldPreferUhidForPhysicalKey(
+            int inputBackendMode,
+            boolean isPhysicalKeyEvent,
+            boolean hasVdUniqueId) {
+        if (!isPhysicalKeyEvent || !hasVdUniqueId) return false;
+        return inputBackendMode != 1; // BridgeProtocol.INPUT_BACKEND_SYSTEM
+    }
+
+    /**
+     * Returns {@code true} when {@code OpalDeskDaemon} should probe {@code dumpsys input_method}
+     * after a tap inside a window to auto-summon the Display 0 / remote host soft-keyboard bridge.
+     *
+     * <p>When a physical keyboard is connected during local or external-monitor DeX (not remote cast),
+     * Android intentionally keeps {@code mInputShown=false} while binding the local IME candidate bar;
+     * firing the host soft-keyboard bridge in that state would steal IMMS client focus from the app.
+     */
+    public static boolean shouldRunFallbackImeProbe(
+            boolean localImeActive,
+            boolean hasPhysicalKeyboard,
+            boolean remoteDesktopActive) {
+        if (localImeActive) return false;
+        if (remoteDesktopActive) return true;
+        return !hasPhysicalKeyboard;
     }
 
     /**

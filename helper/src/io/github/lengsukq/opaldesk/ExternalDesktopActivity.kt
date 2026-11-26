@@ -91,6 +91,9 @@ class ExternalDesktopActivity : ComponentActivity() {
         const val EXTRA_TARGET_DISPLAY_ID = "targetDisplayId"
         const val EXTRA_PREFER_PRESENTATION = "preferPresentation"
         const val EXTRA_IS_WIRELESS_DISPLAY = "isWirelessDisplay"
+        const val EXTRA_SHELL_LAUNCHED = "shellLaunched"
+        private const val PRESENTATION_RETRY_DELAY_MS = 260L
+        private const val SHELL_RELAUNCH_DELAY_MS = 140L
 
         val isPresentationActive: Boolean
             get() = ExternalTrackpadBridge.sessionFlow.value.isPresentation
@@ -126,6 +129,8 @@ class ExternalDesktopActivity : ComponentActivity() {
     private var directImeVisible by mutableStateOf(false)
     private var directComposingText by mutableStateOf("")
     private var directImeController: NativeImeHostController? = null
+    private var pendingRecoveryRunnable: Runnable? = null
+    private var fallbackNoticeShown = false
 
     private val presentationTrackpadCloser: () -> Unit = {
         runOnUiThread { openConsoleOnPrimaryDisplay() }
@@ -134,8 +139,12 @@ class ExternalDesktopActivity : ComponentActivity() {
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
         override fun onDisplayChanged(displayId: Int) {
-            if (!runningInPresentationMode && targetDisplayId > Display.DEFAULT_DISPLAY && displayId == targetDisplayId) {
-                refreshDirectSessionMetadata(targetDisplayId)
+            val actualDisplayId = display?.displayId ?: Display.DEFAULT_DISPLAY
+            if (!runningInPresentationMode
+                && actualDisplayId > Display.DEFAULT_DISPLAY
+                && displayId == actualDisplayId
+            ) {
+                refreshDirectSessionMetadata(actualDisplayId)
             }
         }
         override fun onDisplayRemoved(displayId: Int) {
@@ -160,57 +169,22 @@ class ExternalDesktopActivity : ComponentActivity() {
             dm.registerDisplayListener(displayListener, handler)
         }
 
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    sendBackToFocusedWindow()
+                }
+            },
+        )
+
         val currentDisplayId = display?.displayId ?: Display.DEFAULT_DISPLAY
         val requestedId = intent?.getIntExtra(EXTRA_TARGET_DISPLAY_ID, -1) ?: -1
         val requestedWireless = intent?.getBooleanExtra(EXTRA_IS_WIRELESS_DISPLAY, false) == true
-        val inspectedExternal = findExternalDisplay(requestedId)
-        val physicalExternal = inspectedExternal?.display
+        val shellLaunched = intent?.getBooleanExtra(EXTRA_SHELL_LAUNCHED, false) == true
 
-        val usePresentation = (currentDisplayId == Display.DEFAULT_DISPLAY) && (physicalExternal != null)
-        runningInPresentationMode = usePresentation
-
-        if (currentDisplayId == Display.DEFAULT_DISPLAY && inspectedExternal != null) {
-            val targetExternal = inspectedExternal.display
-            targetDisplayId = targetExternal.displayId
-            val isWireless = requestedWireless || inspectedExternal.transport == ExternalDisplayTransport.WIRELESS_TV
-            activeIsWirelessDisplay = isWireless
-            val pres = ExternalMonitorPresentation(
-                hostActivity = this,
-                targetDisplay = targetExternal,
-                displayLabelOverride = inspectedExternal.displayName,
-                onPickCustomWallpaper = { wallpaperPicker.launch("image/*") },
-                onOpenConsole = ::openConsoleOnPrimaryDisplay,
-                onExitDesktop = { finish() },
-            )
-            try {
-                pres.show()
-                presentation = pres
-                presentationSummary = pres.monitorSummary
-                ExternalTrackpadBridge.publishSession(
-                    owner = this,
-                    session = ExternalDesktopSession(
-                        mode = ExternalDesktopMode.PRESENTATION,
-                        displayId = targetExternal.displayId,
-                        displayName = inspectedExternal.displayName,
-                        widthPx = pres.displayWidthPx,
-                        heightPx = pres.displayHeightPx,
-                        refreshRateHz = pres.refreshRateHz,
-                        isRemoteCastDisplay = false,
-                        isWirelessDisplay = isWireless,
-                    ),
-                )
-                syncExternalMouseRouting(targetExternal.displayId)
-                OpalLogStore.i(
-                    TAG,
-                    "Started PRESENTATION mode: targetDisplayId=${targetExternal.displayId} " +
-                        "${pres.displayWidthPx}x${pres.displayHeightPx}@${pres.refreshRateHz}Hz wireless=$isWireless",
-                )
-            } catch (t: Throwable) {
-                OpalLogStore.w(TAG, "Presentation.show failed, falling back to direct render", t)
-                runningInPresentationMode = false
-                ExternalTrackpadBridge.clearSessionIfOwner(this)
-            }
-        } else if (currentDisplayId > Display.DEFAULT_DISPLAY) {
+        if (currentDisplayId > Display.DEFAULT_DISPLAY) {
+            runningInPresentationMode = false
             targetDisplayId = currentDisplayId
             val session = publishDirectSession(currentDisplayId, requestedWireless)
             activeIsWirelessDisplay = session.isWirelessDisplay
@@ -231,23 +205,223 @@ class ExternalDesktopActivity : ComponentActivity() {
                     ExternalTrackpadLauncher.openPhoneTrackpad(this)
                 }
             }
-        }
-
-        onBackPressedDispatcher.addCallback(
-            this,
-            object : OnBackPressedCallback(true) {
-                override fun handleOnBackPressed() {
-                    sendBackToFocusedWindow()
-                }
-            },
-        )
-
-        if (runningInPresentationMode && presentation != null) {
-            bindPresentationTrackpadUi(presentation!!)
-        } else {
             bindDirectExtendedWorkspaceUi(currentDisplayId)
             applyImmersiveFullscreen()
+            return
         }
+
+        // Activity landed on Display 0: inspect target external display and choose Presentation vs Shell relaunch.
+        val inspectedExternal = findExternalDisplay(requestedId)
+        handleDisplay0Launch(
+            inspectedExternal = inspectedExternal,
+            requestedWireless = requestedWireless,
+            shellLaunched = shellLaunched,
+        )
+    }
+
+    private fun handleDisplay0Launch(
+        inspectedExternal: WirelessDisplayHelper.InspectedDisplay?,
+        requestedWireless: Boolean,
+        shellLaunched: Boolean,
+    ) {
+        cancelPendingRecovery()
+        val targetExternal = inspectedExternal?.display
+        val isPublicPres = targetExternal != null &&
+            targetExternal.isValid &&
+            ExternalDisplayPolicy.isPublicPresentationDisplay(targetExternal.flags)
+        val isWireless = requestedWireless ||
+            inspectedExternal?.transport == ExternalDisplayTransport.WIRELESS_TV
+        activeIsWirelessDisplay = isWireless
+
+        if (targetExternal != null) {
+            val mode = targetExternal.mode
+            val modeDesc = if (mode != null) {
+                "${mode.physicalWidth}x${mode.physicalHeight}@${mode.refreshRate.roundToInt()}Hz"
+            } else {
+                "unknown"
+            }
+            OpalLogStore.i(
+                TAG,
+                "Display0 host evaluating external displayId=${targetExternal.displayId} " +
+                    "name=${inspectedExternal.displayName} flags=0x${Integer.toHexString(targetExternal.flags)} " +
+                    "type=${inspectedExternal.displayType} state=${targetExternal.state} " +
+                    "valid=${targetExternal.isValid} publicPres=$isPublicPres mode=$modeDesc " +
+                    "shellLaunched=$shellLaunched",
+            )
+        }
+
+        val action = ExternalDisplayPolicy.resolveDisplay0ExternalAction(
+            hasTargetDisplay = targetExternal != null,
+            isPublicPresentation = isPublicPres,
+            shellLaunchAlreadyTried = shellLaunched,
+            daemonConnected = BridgeClient.statusFlow.value.connected,
+        )
+        when (action) {
+            ExternalDisplayPolicy.Display0ExternalAction.USE_PRESENTATION -> {
+                attemptPresentationWithRecovery(
+                    targetId = targetExternal!!.displayId,
+                    displayLabel = inspectedExternal.displayName,
+                    isWireless = isWireless,
+                    shellLaunched = shellLaunched,
+                    retryAttempt = 0,
+                )
+            }
+            ExternalDisplayPolicy.Display0ExternalAction.RELAUNCH_DIRECT_VIA_SHELL -> {
+                escalateToShellDirectLaunch(
+                    targetId = targetExternal!!.displayId,
+                    isWireless = isWireless,
+                    reason = "target lacks FLAG_PRESENTATION (flags=0x${Integer.toHexString(targetExternal.flags)})",
+                )
+            }
+            ExternalDisplayPolicy.Display0ExternalAction.FALLBACK_LOCAL_ONLY -> {
+                enterDisplay0LocalFallback(
+                    notifyExternalUnavailable = targetExternal != null,
+                )
+            }
+        }
+    }
+
+    private fun attemptPresentationWithRecovery(
+        targetId: Int,
+        displayLabel: String,
+        isWireless: Boolean,
+        shellLaunched: Boolean,
+        retryAttempt: Int,
+    ) {
+        if (isFinishing || isDestroyed) return
+        val freshDisplay = displayManager?.getDisplay(targetId)
+        val freshPublicPres = freshDisplay != null &&
+            freshDisplay.isValid &&
+            ExternalDisplayPolicy.isPublicPresentationDisplay(freshDisplay.flags)
+
+        if (freshDisplay != null && freshPublicPres) {
+            val pres = ExternalMonitorPresentation(
+                hostActivity = this,
+                targetDisplay = freshDisplay,
+                displayLabelOverride = displayLabel,
+                onPickCustomWallpaper = { wallpaperPicker.launch("image/*") },
+                onOpenConsole = ::openConsoleOnPrimaryDisplay,
+                onExitDesktop = { finish() },
+            )
+            try {
+                pres.show()
+                presentation = pres
+                targetDisplayId = freshDisplay.displayId
+                runningInPresentationMode = true
+                presentationSummary = pres.monitorSummary
+                ExternalTrackpadBridge.publishSession(
+                    owner = this,
+                    session = ExternalDesktopSession(
+                        mode = ExternalDesktopMode.PRESENTATION,
+                        displayId = freshDisplay.displayId,
+                        displayName = displayLabel,
+                        widthPx = pres.displayWidthPx,
+                        heightPx = pres.displayHeightPx,
+                        refreshRateHz = pres.refreshRateHz,
+                        isRemoteCastDisplay = false,
+                        isWirelessDisplay = isWireless,
+                    ),
+                )
+                ExternalTrackpadBridge.setPhoneTrackpadVisible(true, presentationTrackpadCloser)
+                syncExternalMouseRouting(freshDisplay.displayId)
+                OpalLogStore.i(
+                    TAG,
+                    "Started PRESENTATION mode: targetDisplayId=${freshDisplay.displayId} " +
+                        "${pres.displayWidthPx}x${pres.displayHeightPx}@${pres.refreshRateHz}Hz " +
+                        "wireless=$isWireless retry=$retryAttempt",
+                )
+                bindPresentationTrackpadUi(pres)
+                return
+            } catch (t: Throwable) {
+                runCatching { pres.dismiss() }
+                OpalLogStore.w(
+                    TAG,
+                    "Presentation.show failed (displayId=$targetId flags=0x${Integer.toHexString(freshDisplay.flags)} " +
+                        "state=${freshDisplay.state} retry=$retryAttempt): ${t.javaClass.simpleName}: ${t.message}",
+                )
+            }
+        } else {
+            OpalLogStore.w(
+                TAG,
+                "Presentation skipped: displayId=$targetId freshNull=${freshDisplay == null} " +
+                    "valid=${freshDisplay?.isValid} flags=0x${Integer.toHexString(freshDisplay?.flags ?: 0)}",
+            )
+        }
+
+        runningInPresentationMode = false
+        ExternalTrackpadBridge.clearSessionIfOwner(this)
+
+        val recovery = ExternalDisplayPolicy.resolvePresentationFailureAction(
+            retryAttempt = retryAttempt,
+            isPublicPresentation = freshPublicPres,
+            shellLaunchAlreadyTried = shellLaunched,
+            daemonConnected = BridgeClient.statusFlow.value.connected,
+        )
+        when (recovery) {
+            ExternalDisplayPolicy.PresentationFailureAction.RETRY_PRESENTATION -> {
+                val r = Runnable {
+                    pendingRecoveryRunnable = null
+                    attemptPresentationWithRecovery(
+                        targetId = targetId,
+                        displayLabel = displayLabel,
+                        isWireless = isWireless,
+                        shellLaunched = shellLaunched,
+                        retryAttempt = retryAttempt + 1,
+                    )
+                }
+                pendingRecoveryRunnable = r
+                handler.postDelayed(r, PRESENTATION_RETRY_DELAY_MS)
+            }
+            ExternalDisplayPolicy.PresentationFailureAction.ESCALATE_DIRECT_VIA_SHELL -> {
+                escalateToShellDirectLaunch(
+                    targetId = targetId,
+                    isWireless = isWireless,
+                    reason = "Presentation.show rejected on displayId=$targetId",
+                )
+            }
+            ExternalDisplayPolicy.PresentationFailureAction.FALLBACK_LOCAL_ONLY -> {
+                enterDisplay0LocalFallback(notifyExternalUnavailable = true)
+            }
+        }
+    }
+
+    private fun escalateToShellDirectLaunch(
+        targetId: Int,
+        isWireless: Boolean,
+        reason: String,
+    ) {
+        OpalLogStore.i(
+            TAG,
+            "Escalating external desktop to shell-daemon Direct Extended launch on displayId=$targetId ($reason)",
+        )
+        runningInPresentationMode = false
+        targetDisplayId = Display.DEFAULT_DISPLAY
+        ExternalTrackpadBridge.clearSessionIfOwner(this)
+        finish()
+        Handler(Looper.getMainLooper()).postDelayed({
+            BridgeClient.launchExternalDesktopOnDisplayAsync(targetId, isWireless)
+        }, SHELL_RELAUNCH_DELAY_MS)
+    }
+
+    private fun enterDisplay0LocalFallback(notifyExternalUnavailable: Boolean) {
+        runningInPresentationMode = false
+        targetDisplayId = Display.DEFAULT_DISPLAY
+        ExternalTrackpadBridge.clearSessionIfOwner(this)
+        if (notifyExternalUnavailable && !fallbackNoticeShown) {
+            fallbackNoticeShown = true
+            Toast.makeText(
+                this,
+                "外接屏暂不支持独立副屏投射（可能处于系统镜像模式），当前在主屏渲染",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+        bindDirectExtendedWorkspaceUi(Display.DEFAULT_DISPLAY)
+        applyImmersiveFullscreen()
+    }
+
+    private fun cancelPendingRecovery() {
+        pendingRecoveryRunnable?.let { handler.removeCallbacks(it) }
+        pendingRecoveryRunnable = null
     }
 
     private fun bindPresentationTrackpadUi(pres: ExternalMonitorPresentation) {
@@ -466,7 +640,11 @@ class ExternalDesktopActivity : ComponentActivity() {
     }
 
     private fun publishDirectSession(currentDisplayId: Int, requestedWireless: Boolean = false): ExternalDesktopSession {
-        val curDisplay = display ?: displayManager?.getDisplay(currentDisplayId)
+        if (currentDisplayId <= Display.DEFAULT_DISPLAY) {
+            return ExternalDesktopSession()
+        }
+        val curDisplay = displayManager?.getDisplay(currentDisplayId)
+            ?: display?.takeIf { it.displayId == currentDisplayId }
         val curMode = curDisplay?.mode
         val widthPx = curMode?.physicalWidth?.coerceAtLeast(640) ?: resources.displayMetrics.widthPixels.coerceAtLeast(640)
         val heightPx = curMode?.physicalHeight?.coerceAtLeast(480) ?: resources.displayMetrics.heightPixels.coerceAtLeast(480)
@@ -505,6 +683,7 @@ class ExternalDesktopActivity : ComponentActivity() {
     }
 
     private fun refreshDirectSessionMetadata(currentDisplayId: Int) {
+        if (currentDisplayId <= Display.DEFAULT_DISPLAY) return
         val session = publishDirectSession(currentDisplayId)
         if (!session.isPhysicalDirectExtended) {
             directTrackpadSink?.let { ExternalTrackpadBridge.unregisterDirectSink(it) }
@@ -524,6 +703,20 @@ class ExternalDesktopActivity : ComponentActivity() {
             targetDisplayId = currentDisplayId
             refreshDirectSessionMetadata(currentDisplayId)
             syncExternalMouseRouting(currentDisplayId)
+            return
+        }
+        if (currentDisplayId == Display.DEFAULT_DISPLAY && presentation == null) {
+            val requestedId = intent.getIntExtra(EXTRA_TARGET_DISPLAY_ID, -1)
+            val requestedWireless = intent.getBooleanExtra(EXTRA_IS_WIRELESS_DISPLAY, false)
+            val shellLaunched = intent.getBooleanExtra(EXTRA_SHELL_LAUNCHED, false)
+            val inspectedExternal = findExternalDisplay(requestedId)
+            if (inspectedExternal != null) {
+                handleDisplay0Launch(
+                    inspectedExternal = inspectedExternal,
+                    requestedWireless = requestedWireless,
+                    shellLaunched = shellLaunched,
+                )
+            }
         }
     }
 
@@ -558,6 +751,7 @@ class ExternalDesktopActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        cancelPendingRecovery()
         if (runningInPresentationMode) {
             ExternalTrackpadBridge.setPhoneTrackpadVisible(false, presentationTrackpadCloser)
         }
@@ -581,8 +775,19 @@ class ExternalDesktopActivity : ComponentActivity() {
         if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
 
+        val hostSoftImeVisible = directImeVisible || (presentation?.isImeActive == true)
+        val isPhysicalKey = WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)
+        val forwardImeSwitch = WorkstationKeyDispatcher.shouldForwardImeSwitchToWindow(
+            localComposeTextFieldFocused = OpalImeFocusTracker.localComposeTextFieldFocused,
+            hostSoftImeVisible = hostSoftImeVisible,
+            isPhysicalKeyEvent = isPhysicalKey,
+        )
+
         if (WorkstationKeyDispatcher.isImeSwitchShortcut(event.keyCode, event.metaState)) {
-            if (event.action == KeyEvent.ACTION_DOWN && !OpalImeFocusTracker.localComposeTextFieldFocused) {
+            if (forwardImeSwitch && WorkstationKeyDispatcher.forwardToFocusedWindow(event, forwardImeSwitch = true)) {
+                return true
+            }
+            if (event.action == KeyEvent.ACTION_DOWN && !OpalImeFocusTracker.localComposeTextFieldFocused && !isPhysicalKey) {
                 val focused = BridgeClient.sceneFlow.value.focusedWindow
                 if (focused != null && !focused.isMinimized) {
                     if (runningInPresentationMode) {
@@ -597,12 +802,12 @@ class ExternalDesktopActivity : ComponentActivity() {
             return false
         }
 
-        if (OpalImeFocusTracker.localComposeTextFieldFocused || directImeVisible || (presentation?.isImeActive == true)) {
+        if (OpalImeFocusTracker.localComposeTextFieldFocused || hostSoftImeVisible) {
             if (super.dispatchKeyEvent(event)) return true
             if (presentation?.dispatchKeyEventToPresentation(event) == true) return true
         }
 
-        if (WorkstationKeyDispatcher.forwardToFocusedWindow(event)) {
+        if (WorkstationKeyDispatcher.forwardToFocusedWindow(event, forwardImeSwitch = forwardImeSwitch)) {
             return true
         }
 

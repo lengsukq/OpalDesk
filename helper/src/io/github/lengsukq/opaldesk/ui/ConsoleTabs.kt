@@ -51,6 +51,7 @@ import io.github.lengsukq.opaldesk.BridgeService
 import io.github.lengsukq.opaldesk.cast.OpalPeerCastMutex
 import io.github.lengsukq.opaldesk.cast.OpalPeerDiscovery
 import io.github.lengsukq.opaldesk.cast.PeerFloatingAppService
+import io.github.lengsukq.opaldesk.external.ExternalDisplayPolicy
 import io.github.lengsukq.opaldesk.external.ExternalDisplayTransport
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 import io.github.lengsukq.opaldesk.external.WirelessDisplayHelper
@@ -959,7 +960,10 @@ fun ConsoleDashboardTab(
                                             onProjectSpecificDisplay(
                                                 disp.displayId,
                                                 disp.transport,
-                                                disp.isWirelessDisplay || !disp.isPresentationCapable,
+                                                ExternalDisplayPolicy.shouldForcePresentationForManualLaunch(
+                                                    disp.transport,
+                                                    disp.isPresentationCapable,
+                                                ),
                                             )
                                         }
                                     },
@@ -1257,7 +1261,10 @@ fun ConsoleDisplaySettingsTab(
                                     onProjectSpecificDisplay(
                                         d.displayId,
                                         d.transport,
-                                        d.isWirelessDisplay || !d.isPresentationCapable,
+                                        ExternalDisplayPolicy.shouldForcePresentationForManualLaunch(
+                                            d.transport,
+                                            d.isPresentationCapable,
+                                        ),
                                     )
                                 },
                             )
@@ -1579,6 +1586,8 @@ fun ConsoleDisplaySettingsTab(
                 }
             }
         }
+
+        ConsoleKeyboardShortcutsCard()
     }
 }
 

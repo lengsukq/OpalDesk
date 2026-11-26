@@ -172,20 +172,84 @@ object ExternalDisplayPolicy {
         transport == ExternalDisplayTransport.WIRED || transport == ExternalDisplayTransport.WIRELESS_TV
 
     /**
+     * Mirrors AOSP `Display.isPublicPresentation()`: `WindowManagerService.addWindow()` rejects
+     * `TYPE_PRESENTATION` with `ADD_INVALID_DISPLAY` (`InvalidDisplayException`) unless
+     * `FLAG_PRESENTATION` is set and `FLAG_PRIVATE` is clear.
+     */
+    fun isPublicPresentationDisplay(flags: Int): Boolean =
+        (flags and (FLAG_PRIVATE or FLAG_PRESENTATION)) == FLAG_PRESENTATION
+
+    /**
+     * Determines whether a manual "投射" action should force Presentation mode.
+     * Never forces Presentation onto displays lacking `FLAG_PRESENTATION`, which would guarantee
+     * `InvalidDisplayException` in `WindowManagerService.addWindow()`.
+     */
+    fun shouldForcePresentationForManualLaunch(
+        transport: ExternalDisplayTransport,
+        isPresentationCapable: Boolean,
+    ): Boolean = transport == ExternalDisplayTransport.WIRELESS_TV && isPresentationCapable
+
+    /**
      * Determines whether [io.github.lengsukq.opaldesk.ExternalDesktopActivity] should open on
      * Display 0 and host a full-bleed [android.app.Presentation] on the target display rather
-     * than attempting `ActivityOptions.setLaunchDisplayId(displayId)`.
+     * than attempting direct extended Activity launch on [displayId].
      *
      * Wireless Miracast / Wi-Fi Displays strongly prefer standard AOSP [android.app.Presentation]
-     * because `TYPE_WIFI` displays are designed for Presentation windows and often reject or
-     * misbehave under direct Activity launch.
+     * when `FLAG_PRESENTATION` is available; displays lacking `FLAG_PRESENTATION` must always use
+     * direct extended launch because WMS rejects `TYPE_PRESENTATION` with `InvalidDisplayException`.
      */
     fun shouldPreferPresentationMode(
         transport: ExternalDisplayTransport,
         projectionModePref: Int,
+        isPresentationCapable: Boolean = true,
     ): Boolean {
+        if (!isPresentationCapable) return false
         if (projectionModePref == PROJECTION_MODE_PRESENTATION) return true
         return transport == ExternalDisplayTransport.WIRELESS_TV
+    }
+
+    enum class Display0ExternalAction {
+        USE_PRESENTATION,
+        RELAUNCH_DIRECT_VIA_SHELL,
+        FALLBACK_LOCAL_ONLY,
+    }
+
+    /**
+     * Decides what [io.github.lengsukq.opaldesk.ExternalDesktopActivity] should do when it lands on
+     * Display 0 (`currentDisplayId == 0`) while targeting a physical/wireless external display.
+     */
+    fun resolveDisplay0ExternalAction(
+        hasTargetDisplay: Boolean,
+        isPublicPresentation: Boolean,
+        shellLaunchAlreadyTried: Boolean,
+        daemonConnected: Boolean,
+    ): Display0ExternalAction = when {
+        !hasTargetDisplay -> Display0ExternalAction.FALLBACK_LOCAL_ONLY
+        isPublicPresentation -> Display0ExternalAction.USE_PRESENTATION
+        !shellLaunchAlreadyTried && daemonConnected -> Display0ExternalAction.RELAUNCH_DIRECT_VIA_SHELL
+        else -> Display0ExternalAction.FALLBACK_LOCAL_ONLY
+    }
+
+    enum class PresentationFailureAction {
+        RETRY_PRESENTATION,
+        ESCALATE_DIRECT_VIA_SHELL,
+        FALLBACK_LOCAL_ONLY,
+    }
+
+    /**
+     * Decides how [io.github.lengsukq.opaldesk.ExternalDesktopActivity] recovers when
+     * `Presentation.show()` fails (e.g. `InvalidDisplayException` during USB-C hot-plug or on
+     * HyperOS/OEM ROMs rejecting `TYPE_PRESENTATION` on secondary displays).
+     */
+    fun resolvePresentationFailureAction(
+        retryAttempt: Int,
+        isPublicPresentation: Boolean,
+        shellLaunchAlreadyTried: Boolean,
+        daemonConnected: Boolean,
+    ): PresentationFailureAction = when {
+        retryAttempt < 1 && isPublicPresentation -> PresentationFailureAction.RETRY_PRESENTATION
+        !shellLaunchAlreadyTried && daemonConnected -> PresentationFailureAction.ESCALATE_DIRECT_VIA_SHELL
+        else -> PresentationFailureAction.FALLBACK_LOCAL_ONLY
     }
 
     fun isSupportedExternalMode(width: Int, height: Int, refreshRate: Float): Boolean =

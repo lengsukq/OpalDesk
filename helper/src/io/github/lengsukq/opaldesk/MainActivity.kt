@@ -302,7 +302,13 @@ class MainActivity : ComponentActivity() {
         val matched = BridgeService.detectedExternalDisplaysFlow.value.firstOrNull { it.displayId == displayId }
             ?: BridgeService.externalDisplayFlow.value
         val transport = matched?.transport ?: ExternalDisplayTransport.WIRED
-        BridgeService.projectToDisplay(this, displayId, transport)
+        val presCapable = matched?.isPresentationCapable ?: true
+        BridgeService.projectToDisplay(
+            ctx = this,
+            displayId = displayId,
+            transport = transport,
+            isPresentationCapable = presCapable,
+        )
     }
 
     private fun launchSpecificExternalDisplay(
@@ -315,11 +321,15 @@ class MainActivity : ComponentActivity() {
             ExternalTrackpadLauncher.openPhoneTrackpad(this)
             return
         }
+        val matched = BridgeService.detectedExternalDisplaysFlow.value.firstOrNull { it.displayId == displayId }
+            ?: BridgeService.externalDisplayFlow.value
+        val presCapable = matched?.isPresentationCapable ?: true
         BridgeService.projectToDisplay(
             ctx = this,
             displayId = displayId,
             transport = transport,
             forcePresentation = forcePresentation,
+            isPresentationCapable = presCapable,
         )
     }
 

@@ -48,6 +48,7 @@ public final class VirtualDisplayStatusBarInset {
     private final Context baseContext;
     private final Handler mainHandler;
     private final Map<Integer, Entry> activeByDisplay = new ConcurrentHashMap<>();
+    private volatile boolean windowAddUnsupported = false;
 
     public VirtualDisplayStatusBarInset(Context baseContext, Handler mainHandler) {
         this.baseContext = baseContext;
@@ -59,7 +60,7 @@ public final class VirtualDisplayStatusBarInset {
      * Returns {@code true} if WindowManager accepted the inset window.
      */
     public boolean attach(Display display, int heightPx) {
-        if (baseContext == null || display == null || heightPx <= 0) return false;
+        if (windowAddUnsupported || baseContext == null || display == null || heightPx <= 0) return false;
         int displayId = display.getDisplayId();
         if (displayId <= 0) return false;
         detach(displayId);
@@ -94,6 +95,10 @@ public final class VirtualDisplayStatusBarInset {
                 ok.set(true);
                 System.out.println("OPALDESK_STATUS_INSET_ATTACHED displayId=" + displayId + " h=" + heightPx);
             } catch (Throwable t) {
+                String msg = t.getMessage();
+                if (t instanceof IllegalStateException && msg != null && msg.contains("Unknown pid")) {
+                    windowAddUnsupported = true;
+                }
                 System.err.println("OPALDESK_STATUS_INSET_WARN displayId=" + displayId + ": " + t);
             } finally {
                 latch.countDown();

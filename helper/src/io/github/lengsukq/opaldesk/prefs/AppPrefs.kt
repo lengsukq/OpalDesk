@@ -71,6 +71,8 @@ object AppPrefs {
     private const val KEY_DOCK_VISIBLE = "dock_visible_v1"
     private const val KEY_DOCK_OPACITY = "dock_opacity_v1"
     private const val KEY_DOCK_SCALE = "dock_scale_v1"
+    private const val KEY_GLOBAL_SHORTCUTS_ENABLED = "global_shortcuts_enabled_v1"
+    private const val KEY_DISABLED_SHORTCUT_IDS = "disabled_shortcut_ids_v1"
 
     private val DEFAULT_PINNED = listOf(
         "com.android.chrome",
@@ -152,6 +154,12 @@ object AppPrefs {
     private val _dockScaleFlow = MutableStateFlow(DockAppearancePolicy.DEFAULT_SCALE)
     val dockScaleFlow: StateFlow<Float> = _dockScaleFlow.asStateFlow()
 
+    private val _globalShortcutsEnabledFlow = MutableStateFlow(true)
+    val globalShortcutsEnabledFlow: StateFlow<Boolean> = _globalShortcutsEnabledFlow.asStateFlow()
+
+    private val _disabledShortcutIdsFlow = MutableStateFlow<Set<String>>(emptySet())
+    val disabledShortcutIdsFlow: StateFlow<Set<String>> = _disabledShortcutIdsFlow.asStateFlow()
+
     private fun prefs(ctx: Context?) =
         ctx?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -195,6 +203,10 @@ object AppPrefs {
         )
         _dockScaleFlow.value = DockAppearancePolicy.clampScale(
             p.getFloat(KEY_DOCK_SCALE, DockAppearancePolicy.DEFAULT_SCALE),
+        )
+        _globalShortcutsEnabledFlow.value = p.getBoolean(KEY_GLOBAL_SHORTCUTS_ENABLED, true)
+        _disabledShortcutIdsFlow.value = io.github.lengsukq.opaldesk.ui.WorkstationShortcutCatalog.parseDisabledIds(
+            p.getString(KEY_DISABLED_SHORTCUT_IDS, null),
         )
     }
 
@@ -587,6 +599,47 @@ object AppPrefs {
 
     fun setFeedbackUsername(ctx: Context?, username: String) {
         prefs(ctx)?.edit()?.putString(KEY_FEEDBACK_USERNAME, username.trim().take(64))?.apply()
+    }
+
+    fun isGlobalShortcutsEnabled(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _globalShortcutsEnabledFlow.value
+    }
+
+    fun setGlobalShortcutsEnabled(ctx: Context?, enabled: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_GLOBAL_SHORTCUTS_ENABLED, enabled)?.apply()
+        _globalShortcutsEnabledFlow.value = enabled
+    }
+
+    fun getDisabledShortcutIds(ctx: Context?): Set<String> {
+        hydrateFlows(ctx)
+        return _disabledShortcutIdsFlow.value
+    }
+
+    fun setShortcutEnabled(
+        ctx: Context?,
+        shortcutId: io.github.lengsukq.opaldesk.ui.WorkstationShortcutId,
+        enabled: Boolean,
+    ) {
+        hydrateFlows(ctx)
+        val next = _disabledShortcutIdsFlow.value.toMutableSet()
+        if (enabled) {
+            next.remove(shortcutId.prefKey)
+        } else {
+            next.add(shortcutId.prefKey)
+        }
+        val serialized = io.github.lengsukq.opaldesk.ui.WorkstationShortcutCatalog.serializeDisabledIds(next)
+        prefs(ctx)?.edit()?.putString(KEY_DISABLED_SHORTCUT_IDS, serialized)?.apply()
+        _disabledShortcutIdsFlow.value = next
+    }
+
+    fun resetKeyboardShortcuts(ctx: Context?) {
+        prefs(ctx)?.edit()
+            ?.putBoolean(KEY_GLOBAL_SHORTCUTS_ENABLED, true)
+            ?.remove(KEY_DISABLED_SHORTCUT_IDS)
+            ?.apply()
+        _globalShortcutsEnabledFlow.value = true
+        _disabledShortcutIdsFlow.value = emptySet()
     }
 
     fun createFeedbackQuotaStorage(ctx: Context): FeedbackQuotaStorage {

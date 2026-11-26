@@ -658,6 +658,39 @@ object BridgeClient {
         }
     }
 
+    /**
+     * Launches [ExternalDesktopActivity] directly onto an external physical/wireless [displayId]
+     * via the shell daemon (`uid=2000`), bypassing Android 14–16 BAL and unprivileged cross-display
+     * launch restrictions.
+     */
+    fun launchExternalDesktopOnDisplayAsync(
+        displayId: Int,
+        isWireless: Boolean = false,
+        onDone: ((Boolean) -> Unit)? = null,
+    ) {
+        if (displayId <= 0) {
+            if (onDone != null) mainHandler.post { onDone(false) }
+            return
+        }
+        ioExec.execute {
+            val svc = getService()
+            val ok = if (svc != null) {
+                transact(
+                    svc,
+                    BridgeProtocol.Tx.LAUNCH_EXTERNAL_DESKTOP,
+                    oneway = false,
+                    writeArgs = { d ->
+                        d.writeInt(displayId)
+                        d.writeInt(if (isWireless) 1 else 0)
+                    },
+                ) { it.readInt() != 0 } ?: false
+            } else {
+                false
+            }
+            if (onDone != null) mainHandler.post { onDone(ok) }
+        }
+    }
+
     private val dpiExec = Executors.newSingleThreadExecutor { r ->
         Thread(r, "OpalDpiApply").apply { isDaemon = true }
     }
@@ -1139,7 +1172,15 @@ object BridgeClient {
         }
     }
 
-    fun injectWindowKeyAsync(windowId: Int, action: Int, keyCode: Int, metaState: Int) {
+    fun injectWindowKeyAsync(
+        windowId: Int,
+        action: Int,
+        keyCode: Int,
+        metaState: Int,
+        deviceId: Int = android.view.KeyCharacterMap.VIRTUAL_KEYBOARD,
+        scanCode: Int = 0,
+        repeatCount: Int = 0,
+    ) {
         inputExec.execute {
             val svc = getService() ?: return@execute
             transact(
@@ -1151,6 +1192,9 @@ object BridgeClient {
                     d.writeInt(action)
                     d.writeInt(keyCode)
                     d.writeInt(metaState)
+                    d.writeInt(deviceId)
+                    d.writeInt(scanCode)
+                    d.writeInt(repeatCount)
                 },
                 readReply = { Unit },
             )

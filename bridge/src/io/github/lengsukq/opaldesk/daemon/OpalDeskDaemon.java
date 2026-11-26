@@ -112,7 +112,11 @@ public final class OpalDeskDaemon implements Runnable {
                 inputRouter,
                 mouseRouter);
         this.remoteBridge.setPairingEventConsumer(helperBridge::pushPairingEvent);
-        this.remoteBridge.setRemoteStateChangeListener(helperBridge::pushRemoteStateChanged);
+        this.remoteBridge.setRemoteStateChangeListener(() -> {
+            helperBridge.pushRemoteStateChanged();
+            bgExec.execute(this::syncWindowImePolicy);
+        });
+        this.mouseRouter.setPhysicalKeyboardListener(connected -> bgExec.execute(this::syncWindowImePolicy));
         this.displayDriver.setAllSurfacesDetachedListener(() -> {
             if (services != null && MouseRoutingPolicy.shouldRestoreDefaultDisplayFocusOnLocalExit(
                     mouseRouter.isLocalDesktopPinned(),
@@ -204,6 +208,7 @@ public final class OpalDeskDaemon implements Runnable {
     private void start() {
         taskStackObserver.start();
         mouseRouter.start();
+        syncWindowImePolicy();
         remoteBridge.start();
         helperBridge.enqueuePushBinder(true);
         for (long delayMs : new long[]{350L, 1000L, 2200L}) {
@@ -232,6 +237,7 @@ public final class OpalDeskDaemon implements Runnable {
                 + " rootEnhanced=" + config.isRootEnhanced()
                 + " injector=" + injectorKind
                 + " uhidRw=" + uhidRw
+                + " physKbd=" + mouseRouter.hasPhysicalKeyboard()
                 + " svc=" + svcFlags
                 + " ctx=" + readSeLinuxContextQuietly();
         DaemonLogBuffer.recordStickyHeader(startupBanner);
@@ -263,10 +269,42 @@ public final class OpalDeskDaemon implements Runnable {
         if (remoteBridge != null) {
             bgExec.execute(remoteBridge::onCompositorWindowsChanged);
         }
+        if (mouseRouter != null && mouseRouter.hasPhysicalKeyboard()
+                && (remoteBridge == null || !remoteBridge.hasActiveDesktopSession())) {
+            WindowSession focused = compositor.getFocusedLiveWindow();
+            if (focused != null && focused.displayId > 0 && focused.vdUniqueId != null && !focused.vdUniqueId.isEmpty()) {
+                final int dispId = focused.displayId;
+                final String vdUid = focused.vdUniqueId;
+                bgExec.execute(() -> inputRouter.prewarmKeyboardForDisplay(dispId, vdUid));
+            }
+        }
+    }
+
+    private void syncWindowImePolicy() {
+        if (config.shuttingDown) return;
+        boolean hasPhysKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
+        boolean remoteDesktop = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
+        int desiredPolicy = MouseRoutingPolicy.resolveWindowDisplayImePolicy(hasPhysKbd, remoteDesktop, true);
+        displayDriver.updateWindowImePolicy(desiredPolicy);
+        inputRouter.setPhysicalKeyboardConnected(hasPhysKbd);
+        if (!hasPhysKbd) {
+            inputRouter.releasePhysicalKeyboardUhidDevices();
+        } else if (!remoteDesktop) {
+            WindowSession focused = compositor.getFocusedLiveWindow();
+            if (focused != null && focused.displayId > 0 && focused.vdUniqueId != null && !focused.vdUniqueId.isEmpty()) {
+                inputRouter.prewarmKeyboardForDisplay(focused.displayId, focused.vdUniqueId);
+            }
+        }
     }
 
     private void scheduleImeFallbackProbe(int windowId, int displayId, long tapDownUptimeMs) {
-        if (config.shuttingDown || windowId <= 0 || displayId <= 0 || inputRouter.isLocalImeActive()) return;
+        boolean hasPhysKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
+        boolean remoteDesktop = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
+        if (config.shuttingDown || windowId <= 0 || displayId <= 0
+                || !MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                        inputRouter.isLocalImeActive(), hasPhysKbd, remoteDesktop)) {
+            return;
+        }
         final long gen = imeProbeGen.incrementAndGet();
         mainHandler.postDelayed(
                 () -> bgExec.execute(() -> runImeFallbackProbe(gen, windowId, displayId, tapDownUptimeMs)),
@@ -280,7 +318,13 @@ public final class OpalDeskDaemon implements Runnable {
     }
 
     private void runImeFallbackProbe(long gen, int windowId, int displayId, long tapDownUptimeMs) {
-        if (config.shuttingDown || imeProbeGen.get() != gen || inputRouter.isLocalImeActive()) return;
+        boolean hasPhysKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
+        boolean remoteDesktopActive = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
+        if (config.shuttingDown || imeProbeGen.get() != gen
+                || !MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                        inputRouter.isLocalImeActive(), hasPhysKbd, remoteDesktopActive)) {
+            return;
+        }
         WindowSession ws = compositor.getWindowSnapshot(windowId);
         if (ws == null || !ws.isLive() || !ws.focused || ws.displayId != displayId) return;
 
@@ -288,7 +332,6 @@ public final class OpalDeskDaemon implements Runnable {
         if (snap == null || imeProbeGen.get() != gen) return;
 
         long nowUptime = SystemClock.uptimeMillis();
-        boolean remoteDesktopActive = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
         if (remoteDesktopActive) {
             // While casting desktop to a remote receiver (e.g. Phone -> Tablet), always summon the
             // receiver's soft keyboard — even if Android 16 opened a fallback IME on the sender phone!

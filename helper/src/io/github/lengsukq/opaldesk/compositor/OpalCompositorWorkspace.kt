@@ -201,6 +201,8 @@ fun OpalCompositorWorkspace(
     val dockVisible by AppPrefs.dockVisibleFlow.collectAsState()
     val dockOpacity by AppPrefs.dockOpacityFlow.collectAsState()
     val dockScale by AppPrefs.dockScaleFlow.collectAsState()
+    val globalShortcutsEnabled by AppPrefs.globalShortcutsEnabledFlow.collectAsState()
+    val disabledShortcutIds by AppPrefs.disabledShortcutIdsFlow.collectAsState()
 
     val profileState by io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.stateFlow.collectAsState()
     var showAppDrawer by remember { mutableStateOf(false) }
@@ -208,6 +210,7 @@ fun OpalCompositorWorkspace(
     var showControlCenter by remember { mutableStateOf(false) }
     var controlCenterInitialTab by remember { mutableStateOf(0) }
     var showDpiPopover by remember { mutableStateOf(false) }
+    var showShortcutsPopover by remember { mutableStateOf(false) }
     var showNotificationCenter by remember { mutableStateOf(false) }
     val notifications by io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.notificationsFlow.collectAsState()
     val liveNotificationBanner by io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.bannerFlow.collectAsState()
@@ -238,6 +241,7 @@ fun OpalCompositorWorkspace(
         showExposeOverview = false
         showControlCenter = false
         showDpiPopover = false
+        showShortcutsPopover = false
         showNotificationCenter = false
         contextMenuTarget = null
         wallpaperMenuPos = null
@@ -479,7 +483,7 @@ fun OpalCompositorWorkspace(
                 modifier = Modifier
                     .fillMaxSize()
                     .onTapOrContextAction(
-                        showAppDrawer, showExposeOverview, showControlCenter, showDpiPopover,
+                        showAppDrawer, showExposeOverview, showControlCenter, showDpiPopover, showShortcutsPopover,
                         contextMenuTarget, wallpaperMenuPos,
                         onPrimaryTap = { dismissAllPopovers() },
                         onContextAction = { pos ->
@@ -824,6 +828,8 @@ fun OpalCompositorWorkspace(
                     dockVisible = dockVisible,
                     dockOpacity = dockOpacity,
                     dockScale = dockScale,
+                    globalShortcutsEnabled = globalShortcutsEnabled,
+                    disabledShortcutIds = disabledShortcutIds,
                     maxHeight = ccMaxH,
                     initialTab = controlCenterInitialTab,
                     onToggleDockVisible = { enabled ->
@@ -897,6 +903,10 @@ fun OpalCompositorWorkspace(
                         showControlCenter = false
                         showDpiPopover = true
                     },
+                    onOpenKeyboardShortcuts = {
+                        showControlCenter = false
+                        showShortcutsPopover = true
+                    },
                     onApplyTilingLayout = ::applyTiling,
                     onMinimizeAll = {
                         showControlCenter = false
@@ -934,6 +944,19 @@ fun OpalCompositorWorkspace(
                         .align(Alignment.TopEnd)
                         .padding(top = (CompositorGeometry.TOP_BAR_DP + 8f).dp, start = 12.dp, end = 12.dp)
                         .zIndex(10_022f),
+                )
+            }
+
+            // In-DeX Keyboard Shortcuts Cheatsheet & Toggle Popover
+            if (showShortcutsPopover) {
+                val shortcutsMaxH = (maxHeight - (CompositorGeometry.TOP_BAR_DP + 24f).dp).coerceAtLeast(240.dp)
+                io.github.lengsukq.opaldesk.ui.DexKeyboardShortcutsPopover(
+                    maxHeight = shortcutsMaxH,
+                    onDismiss = { showShortcutsPopover = false },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = (CompositorGeometry.TOP_BAR_DP + 8f).dp, start = 12.dp, end = 12.dp)
+                        .zIndex(10_023f),
                 )
             }
 

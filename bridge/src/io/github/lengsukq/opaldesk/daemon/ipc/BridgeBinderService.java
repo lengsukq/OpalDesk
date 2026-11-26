@@ -5,6 +5,7 @@ import android.os.IBinder;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.os.SystemClock;
+import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.Surface;
 
@@ -179,6 +180,11 @@ public final class BridgeBinderService extends Binder {
                     if (reply != null) reply.writeInt(ok ? 1 : 0);
                     return true;
                 }
+                if (action == BridgeProtocol.WIN_ACTION_FOCUS
+                        || action == BridgeProtocol.WIN_ACTION_MINIMIZE
+                        || action == BridgeProtocol.WIN_ACTION_CLOSE) {
+                    inputRouter.releaseAllHeldKeys();
+                }
                 byte[] preSnap = null;
                 if (action == BridgeProtocol.WIN_ACTION_MINIMIZE && ws != null && ws.taskId > 0) {
                     preSnap = taskApi.captureTaskSnapshotJpeg(ws.taskId);
@@ -226,8 +232,11 @@ public final class BridgeBinderService extends Binder {
                 int action = data.readInt();
                 int keyCode = data.readInt();
                 int metaState = data.readInt();
+                int deviceId = (data.dataAvail() >= 4) ? data.readInt() : KeyCharacterMap.VIRTUAL_KEYBOARD;
+                int scanCode = (data.dataAvail() >= 4) ? data.readInt() : 0;
+                int repeatCount = (data.dataAvail() >= 4) ? data.readInt() : 0;
                 WindowSession ws = compositor.getWindowSnapshot(winId);
-                boolean ok = inputRouter.injectWindowKey(ws, action, keyCode, metaState);
+                boolean ok = inputRouter.injectWindowKey(ws, action, keyCode, metaState, deviceId, scanCode, repeatCount);
                 if (ok && ws != null && keyCode == KeyEvent.KEYCODE_BACK && action == KeyEvent.ACTION_UP) {
                     compositor.notifyBackSent(ws.windowId);
                 }
@@ -501,6 +510,13 @@ public final class BridgeBinderService extends Binder {
                     remoteBridge.applyAudioRouteMode(config.getAudioRouteMode());
                 }
                 if (reply != null) reply.writeInt(1);
+                return true;
+            }
+            case BridgeProtocol.TX_LAUNCH_EXTERNAL_DESKTOP: {
+                int displayId = data.readInt();
+                boolean isWireless = data.readInt() != 0;
+                boolean ok = services != null && services.launchExternalDesktopOnDisplay(displayId, isWireless);
+                if (reply != null) reply.writeInt(ok ? 1 : 0);
                 return true;
             }
             case BridgeProtocol.TX_SHUTDOWN: {

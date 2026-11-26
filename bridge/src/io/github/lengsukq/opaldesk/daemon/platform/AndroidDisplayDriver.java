@@ -19,7 +19,9 @@ import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.util.ShellCommand;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Concrete Android implementation of {@link VirtualDisplayPool.DisplayDriver} and
@@ -40,6 +42,8 @@ public final class AndroidDisplayDriver
     private final AndroidServices services;
     private final TaskApiAdapter taskApi;
     private final VirtualDisplayStatusBarInset statusBarInset;
+    private final Map<Integer, Boolean> trustedByDisplayId = new ConcurrentHashMap<>();
+    private volatile int desiredWindowImePolicy = BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY;
     private volatile PerDisplayInputRouter inputRouter;
     private volatile Runnable allSurfacesDetachedListener;
     private volatile VirtualDisplayProvider customVirtualDisplayProvider;
@@ -62,7 +66,29 @@ public final class AndroidDisplayDriver
         this.customVirtualDisplayProvider = provider;
     }
 
+    /**
+     * Dynamically updates the {@code DisplayImePolicy} across all live trusted {@code OpalWin-*}
+     * VirtualDisplays whenever a physical keyboard connects/disconnects or remote casting toggles.
+     */
+    public void updateWindowImePolicy(int desiredPolicy) {
+        int clamped = (desiredPolicy == BridgeProtocol.DISPLAY_IME_POLICY_LOCAL)
+                ? BridgeProtocol.DISPLAY_IME_POLICY_LOCAL
+                : BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY;
+        this.desiredWindowImePolicy = clamped;
+        for (Map.Entry<Integer, Boolean> entry : trustedByDisplayId.entrySet()) {
+            int dispId = entry.getKey();
+            boolean trusted = Boolean.TRUE.equals(entry.getValue());
+            int effective = trusted ? clamped : BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY;
+            boolean ok = services.setDisplayImePolicy(dispId, effective);
+            System.out.println("OPALDESK_VD_IME_POLICY displayId=" + dispId
+                    + " policy=" + (effective == BridgeProtocol.DISPLAY_IME_POLICY_LOCAL ? "LOCAL" : "FALLBACK")
+                    + " trusted=" + trusted
+                    + " ok=" + ok);
+        }
+    }
+
     public void shutdown() {
+        trustedByDisplayId.clear();
         statusBarInset.detachAll();
     }
 
@@ -137,16 +163,22 @@ public final class AndroidDisplayDriver
         Display disp = vd.getDisplay();
         int displayId = disp.getDisplayId();
         String uniqueId = VirtualDisplayFactory.getUniqueId(disp);
+        boolean isTrusted = (chosenFlags[0] & BridgeProtocol.VD_FLAG_TRUSTED) != 0;
+        int effectiveImePolicy = isTrusted
+                ? desiredWindowImePolicy
+                : BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY;
+        trustedByDisplayId.put(displayId, isTrusted);
         System.out.println("OPALDESK_VD_CREATED name=" + name
                 + " displayId=" + displayId
                 + " size=" + width + "x" + height + "@" + dpi + "dpi"
                 + " flags=0x" + Integer.toHexString(chosenFlags[0])
+                + " imePolicy=" + (effectiveImePolicy == BridgeProtocol.DISPLAY_IME_POLICY_LOCAL ? "LOCAL" : "FALLBACK")
                 + " uid=" + (uniqueId != null ? uniqueId : ""));
-        // Combined with VD_FLAGS_TRUSTED_IME (no OWN_FOCUS / STEAL_TOP_FOCUS_DISABLED),
-        // DISPLAY_IME_POLICY_FALLBACK_DISPLAY routes the app's real InputConnection directly to
-        // Display 0's IME (full width, works even with FLAG_SECURE password keyboards without
-        // ever blanking the non-secure VirtualDisplay surface!).
-        services.configureVirtualDisplayWindowing(displayId, BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY);
+        // Use DISPLAY_IME_POLICY_LOCAL when a physical keyboard is connected (so native CJK candidate
+        // bars render directly inside the window on external monitors/local DeX instead of hiding on
+        // Display 0), and DISPLAY_IME_POLICY_FALLBACK_DISPLAY otherwise (so phone trackpad / touch
+        // taps summon the full-width Display 0 soft keyboard cleanly).
+        services.configureVirtualDisplayWindowing(displayId, effectiveImePolicy);
         statusBarInset.attach(disp, 1);
         return new CreatedDisplay(vd, displayId, uniqueId);
     }
@@ -185,6 +217,7 @@ public final class AndroidDisplayDriver
 
     @Override
     public void releaseVirtualDisplay(Object handle, int displayId) {
+        trustedByDisplayId.remove(displayId);
         statusBarInset.detach(displayId);
         if (!(handle instanceof VirtualDisplay)) return;
         VirtualDisplay vd = (VirtualDisplay) handle;

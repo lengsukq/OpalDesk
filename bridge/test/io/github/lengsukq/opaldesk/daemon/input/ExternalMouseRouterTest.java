@@ -1,5 +1,7 @@
 package io.github.lengsukq.opaldesk.daemon.input;
 
+import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
+
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -161,5 +163,53 @@ public class ExternalMouseRouterTest {
         assertFalse(MouseRoutingPolicy.shouldRestoreDefaultDisplayFocusOnLocalExit(true, -1, false));
         assertFalse(MouseRoutingPolicy.shouldRestoreDefaultDisplayFocusOnLocalExit(false, 2, false));
         assertFalse(MouseRoutingPolicy.shouldRestoreDefaultDisplayFocusOnLocalExit(false, -1, true));
+    }
+
+    @Test
+    public void physicalKeyboardPolicySelectsLocalWindowImeAndUhidKeyboardDelivery() {
+        // Distinguish real physical alphabetic keyboards from mice, media buttons, built-in & UHID keyboards
+        assertTrue(MouseRoutingPolicy.isPhysicalAlphabeticKeyboard(
+                "Keychron K3 Pro", MouseRoutingPolicy.SOURCE_KEYBOARD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, true));
+        assertFalse(MouseRoutingPolicy.isPhysicalAlphabeticKeyboard(
+                "BT5.0 Mouse", MouseRoutingPolicy.SOURCE_MOUSE, 0, false, true));
+        assertFalse(MouseRoutingPolicy.isPhysicalAlphabeticKeyboard(
+                "OpalDesk Virtual Keyboard 12", MouseRoutingPolicy.SOURCE_KEYBOARD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, true));
+        assertFalse(MouseRoutingPolicy.isPhysicalAlphabeticKeyboard(
+                "AirPods AVRCP", MouseRoutingPolicy.SOURCE_KEYBOARD, 1, false, true));
+
+        // Trusted OpalWin-* uses DISPLAY_IME_POLICY_LOCAL when physical keyboard is connected (local/external DeX)
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_LOCAL,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(true, false, true));
+        // Without physical keyboard -> FALLBACK_DISPLAY so phone trackpad / touch pops soft keyboard on Display 0
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(false, false, true));
+        // During remote PC/tablet casting -> always FALLBACK_DISPLAY so sender phone IME stays out of remote desktop
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(true, true, true));
+        // Untrusted displays never request DISPLAY_IME_POLICY_LOCAL (avoids WMS SecurityException)
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(true, false, false));
+
+        // Physical key events prefer per-display kernel UHID keyboard in AUTO & UHID modes (preserving positive deviceId
+        // for CJK IME candidate bars), while honoring explicit INPUT_BACKEND_SYSTEM and skipping non-physical events
+        assertTrue(MouseRoutingPolicy.shouldPreferUhidForPhysicalKey(
+                BridgeProtocol.INPUT_BACKEND_AUTO, true, true));
+        assertTrue(MouseRoutingPolicy.shouldPreferUhidForPhysicalKey(
+                BridgeProtocol.INPUT_BACKEND_UHID, true, true));
+        assertFalse(MouseRoutingPolicy.shouldPreferUhidForPhysicalKey(
+                BridgeProtocol.INPUT_BACKEND_SYSTEM, true, true));
+        assertFalse(MouseRoutingPolicy.shouldPreferUhidForPhysicalKey(
+                BridgeProtocol.INPUT_BACKEND_AUTO, false, true));
+        assertFalse(MouseRoutingPolicy.shouldPreferUhidForPhysicalKey(
+                BridgeProtocol.INPUT_BACKEND_AUTO, true, false));
+
+        // Do not fire Display 0 soft-keyboard fallback probe when physical keyboard owns local window IME
+        assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(false, true, false));
+        assertTrue(MouseRoutingPolicy.shouldRunFallbackImeProbe(false, false, false));
+        assertTrue(MouseRoutingPolicy.shouldRunFallbackImeProbe(false, true, true));
+        assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(true, false, false));
+        assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(true, false, true));
     }
 }

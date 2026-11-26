@@ -66,6 +66,7 @@ object BridgeProtocol {
         const val GET_ADVANCED_CONFIG_STATE = 42
         const val SET_REMOTE_MEDIA_CONFIG = 43
         const val SET_AUDIO_ROUTE_MODE = 44
+        const val LAUNCH_EXTERNAL_DESKTOP = 45
         const val SHUTDOWN = 99
     }
 

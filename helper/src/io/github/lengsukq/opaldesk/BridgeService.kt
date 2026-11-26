@@ -139,11 +139,15 @@ class BridgeService : Service() {
             displayId: Int,
             transport: ExternalDisplayTransport = ExternalDisplayTransport.WIRED,
             forcePresentation: Boolean = false,
+            isPresentationCapable: Boolean = true,
         ) {
             val isWireless = transport == ExternalDisplayTransport.WIRELESS_TV
-            val preferPresentation = forcePresentation || ExternalDisplayPolicy.shouldPreferPresentationMode(
-                transport = transport,
-                projectionModePref = AppPrefs.getExternalProjectionMode(ctx),
+            val preferPresentation = isPresentationCapable && (
+                forcePresentation || ExternalDisplayPolicy.shouldPreferPresentationMode(
+                    transport = transport,
+                    projectionModePref = AppPrefs.getExternalProjectionMode(ctx),
+                    isPresentationCapable = isPresentationCapable,
+                )
             )
             val intent = Intent(ctx, ExternalDesktopActivity::class.java).apply {
                 addFlags(
@@ -157,6 +161,17 @@ class BridgeService : Service() {
             }
             if (preferPresentation) {
                 DisplayLaunchHelper.launchOnDisplay0(ctx, intent)
+                return
+            }
+            // Prefer shell-daemon launch (uid=2000) for Direct Extended displays so Android 14–16
+            // BAL & unprivileged cross-display restrictions never silently bounce the Activity to Display 0.
+            if (BridgeClient.statusFlow.value.connected) {
+                val appCtx = ctx.applicationContext
+                BridgeClient.launchExternalDesktopOnDisplayAsync(displayId, isWireless) { ok ->
+                    if (!ok) {
+                        DisplayLaunchHelper.launchOnDisplay(appCtx, intent, displayId)
+                    }
+                }
             } else {
                 DisplayLaunchHelper.launchOnDisplay(ctx, intent, displayId)
             }
@@ -431,7 +446,7 @@ class BridgeService : Service() {
             && BridgeClient.statusFlow.value.connected
         ) {
             lastProjectedDisplayId = primary.displayId
-            projectToExternalDisplay(this, primary.displayId, primary.transport)
+            projectToExternalDisplay(this, primary.displayId, primary.transport, primary.isPresentationCapable)
         }
     }
 
@@ -439,8 +454,9 @@ class BridgeService : Service() {
         ctx: Context,
         displayId: Int,
         transport: ExternalDisplayTransport = ExternalDisplayTransport.WIRED,
+        isPresentationCapable: Boolean = true,
     ) {
-        projectToDisplay(ctx, displayId, transport)
+        projectToDisplay(ctx, displayId, transport, isPresentationCapable = isPresentationCapable)
     }
 
     private fun startSessionForeground() {

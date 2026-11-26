@@ -124,9 +124,7 @@ object WirelessDisplayHelper {
                 activeRemoteDesktopDisplayId = activeRemoteDesktopDisplayId,
             ) ?: continue
 
-            val presentationCapable = (d.flags and ExternalDisplayPolicy.FLAG_PRESENTATION) != 0 ||
-                isPresCat ||
-                isMr
+            val presentationCapable = ExternalDisplayPolicy.isPublicPresentationDisplay(d.flags)
             results.add(
                 InspectedDisplay(
                     display = d,

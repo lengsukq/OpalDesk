@@ -9,6 +9,7 @@ import android.content.ContextWrapper
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.view.InputDevice
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.View
@@ -33,8 +34,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.compositor.applyWindowTilingLayout
+import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
-import io.github.lengsukq.opaldesk.protocol.WindowTilingLayout
 
 /**
  * Tracks whether an in-process Compose text field (such as App Drawer search or Trackpad IME bar)
@@ -63,64 +64,105 @@ object WorkstationKeyDispatcher {
     private val textCommitExec = Executors.newSingleThreadExecutor { r ->
         Thread(r, "OpalImeTextCommit").apply { isDaemon = true }
     }
+    private val consumedShortcutKeyCodes = HashSet<Int>()
 
     fun handleGlobalShortcut(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_UP) {
+            return consumedShortcutKeyCodes.remove(event.keyCode)
+        }
         if (event.action != KeyEvent.ACTION_DOWN) return false
         val scene = BridgeClient.sceneFlow.value
         val focused = scene.focusedWindow
+        val action = WorkstationShortcutCatalog.resolveGlobalShortcutAction(
+            keyCode = event.keyCode,
+            metaState = event.metaState,
+            hasFocusedWindow = focused != null,
+            focusedIsFullscreen = focused?.isFullscreen == true,
+            globalEnabled = AppPrefs.globalShortcutsEnabledFlow.value,
+            disabledIds = AppPrefs.disabledShortcutIdsFlow.value,
+        ) ?: return false
 
-        if (event.isAltPressed && event.keyCode == KeyEvent.KEYCODE_TAB) {
-            val candidates = scene.windows.filter { !it.isMinimized }
-            if (candidates.size >= 2) {
-                val idx = candidates.indexOfFirst { it.focused }
-                val next = candidates[(idx + 1) % candidates.size]
-                BridgeClient.sendWindowActionAsync(next.windowId, BridgeProtocol.WinAction.FOCUS)
+        when (action) {
+            GlobalShortcutAction.SwitchNextWindow -> {
+                val candidates = scene.windows.filter { !it.isMinimized }
+                if (candidates.size >= 2) {
+                    val idx = candidates.indexOfFirst { it.focused }
+                    val next = candidates[(idx + 1) % candidates.size]
+                    BridgeClient.sendWindowActionAsync(next.windowId, BridgeProtocol.WinAction.FOCUS)
+                }
             }
-            return true
-        }
-        if (event.isAltPressed) {
-            val layout = when (event.keyCode) {
-                KeyEvent.KEYCODE_2 -> WindowTilingLayout.SPLIT_2_COLS
-                KeyEvent.KEYCODE_3 -> WindowTilingLayout.SPLIT_3_COLS
-                KeyEvent.KEYCODE_4 -> WindowTilingLayout.SPLIT_4_COLS
-                KeyEvent.KEYCODE_5 -> WindowTilingLayout.SPLIT_5_COLS
-                KeyEvent.KEYCODE_6 -> WindowTilingLayout.SPLIT_6_GRID
-                KeyEvent.KEYCODE_8 -> WindowTilingLayout.SPLIT_8_GRID
-                KeyEvent.KEYCODE_G -> WindowTilingLayout.SPLIT_4_GRID
-                else -> null
-            }
-            if (layout != null) {
+            is GlobalShortcutAction.ApplyTiling -> {
                 val st = BridgeClient.statusFlow.value
                 applyWindowTilingLayout(
-                    layout = layout,
+                    layout = action.layout,
                     scene = scene,
                     canvasW = st.canvasWidth,
                     canvasH = st.canvasHeight,
                     density = (st.canvasDpi / 160f).coerceIn(0.8f, 3.5f),
                 )
-                return true
+            }
+            GlobalShortcutAction.CloseFocusedWindow -> {
+                if (focused != null) {
+                    BridgeClient.sendWindowActionAsync(focused.windowId, BridgeProtocol.WinAction.CLOSE)
+                }
+            }
+            GlobalShortcutAction.ToggleFullscreen,
+            GlobalShortcutAction.ExitFullscreen,
+            -> {
+                if (focused != null) {
+                    BridgeClient.sendWindowActionAsync(focused.windowId, BridgeProtocol.WinAction.TOGGLE_FULLSCREEN)
+                }
             }
         }
-        if (event.isCtrlPressed && event.keyCode == KeyEvent.KEYCODE_W && focused != null) {
-            BridgeClient.sendWindowActionAsync(focused.windowId, BridgeProtocol.WinAction.CLOSE)
-            return true
-        }
-        if (event.isAltPressed && event.keyCode == KeyEvent.KEYCODE_ENTER && focused != null) {
-            BridgeClient.sendWindowActionAsync(focused.windowId, BridgeProtocol.WinAction.TOGGLE_FULLSCREEN)
-            return true
-        }
-        if (event.keyCode == KeyEvent.KEYCODE_ESCAPE && focused != null && focused.isFullscreen) {
-            BridgeClient.sendWindowActionAsync(focused.windowId, BridgeProtocol.WinAction.TOGGLE_FULLSCREEN)
-            return true
-        }
-        return false
+        consumedShortcutKeyCodes.add(event.keyCode)
+        return true
     }
+
+    /**
+     * Pure JVM-testable matcher identifying real physical keyboard devices (Bluetooth / USB / OTG)
+     * while rejecting virtual keyboards, soft-keyboard synthetic events (`deviceId <= 0`), and
+     * OpalDesk's own kernel UHID keyboards.
+     */
+    fun isPhysicalKeyboardDevice(
+        deviceId: Int,
+        name: String?,
+        isVirtual: Boolean,
+        isExternal: Boolean,
+        keyboardType: Int,
+    ): Boolean {
+        if (deviceId <= 0 || isVirtual) return false
+        if (name != null && name.startsWith("OpalDesk Virtual")) return false
+        return isExternal || keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC
+    }
+
+    fun isPhysicalKeyboardEvent(event: KeyEvent): Boolean {
+        val devId = event.deviceId
+        if (devId <= 0) return false
+        val dev = event.device ?: return true
+        return isPhysicalKeyboardDevice(
+            deviceId = devId,
+            name = dev.name,
+            isVirtual = dev.isVirtual,
+            isExternal = dev.isExternal,
+            keyboardType = dev.keyboardType,
+        )
+    }
+
+    /**
+     * Pure JVM-testable policy deciding whether an IME switch shortcut (`Shift+Space`, `Ctrl+Space`,
+     * `KEYCODE_LANGUAGE_SWITCH`, etc.) should be forwarded directly to the focused window's local IME
+     * (physical keyboard mode with `DISPLAY_IME_POLICY_LOCAL`) rather than hijacking focus onto the
+     * host Activity's soft-keyboard `NativeImeBridgeHost`.
+     */
+    fun shouldForwardImeSwitchToWindow(
+        localComposeTextFieldFocused: Boolean,
+        hostSoftImeVisible: Boolean,
+        isPhysicalKeyEvent: Boolean,
+    ): Boolean = !localComposeTextFieldFocused && !hostSoftImeVisible && isPhysicalKeyEvent
 
     /**
      * Pure JVM-testable matcher for physical/Bluetooth keyboard IME language-switch keys and chords
      * (e.g. Ctrl+Space, Shift+Space, Meta+Space, Globe/Language-Switch, CJK toggle keys).
-     * These must never be swallowed into raw VirtualDisplay key injection so Android's system IME
-     * can switch between Chinese and English cleanly.
      */
     fun isImeSwitchShortcut(keyCode: Int, metaState: Int): Boolean {
         when (keyCode) {
@@ -153,17 +195,25 @@ object WorkstationKeyDispatcher {
         else -> true
     }
 
-    fun forwardToFocusedWindow(event: KeyEvent): Boolean {
+    fun forwardToFocusedWindow(event: KeyEvent, forwardImeSwitch: Boolean = false): Boolean {
         if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) return false
         if (!isForwardableKey(event.keyCode)) return false
-        if (isImeSwitchShortcut(event.keyCode, event.metaState)) return false
+        if (!forwardImeSwitch && isImeSwitchShortcut(event.keyCode, event.metaState)) return false
         val focused = BridgeClient.sceneFlow.value.focusedWindow ?: return false
         if (focused.isMinimized) return false
+        val effDeviceId = if (isPhysicalKeyboardEvent(event)) {
+            event.deviceId
+        } else {
+            KeyCharacterMap.VIRTUAL_KEYBOARD
+        }
         BridgeClient.injectWindowKeyAsync(
             windowId = focused.windowId,
             action = event.action,
             keyCode = event.keyCode,
             metaState = event.metaState,
+            deviceId = effDeviceId,
+            scanCode = event.scanCode,
+            repeatCount = event.repeatCount,
         )
         return true
     }
@@ -290,6 +340,7 @@ internal class NativeImeBridgeView(
     }
     private var lastImeVisible = false
     private var pendingShowAfterFocus = false
+    private var showAttemptGen = 0L
     private var activeInputType = DEFAULT_INPUT_TYPE
 
     init {
@@ -376,18 +427,31 @@ internal class NativeImeBridgeView(
     @Suppress("DEPRECATION")
     fun showIme(inputType: Int = 0) {
         activeInputType = if (inputType != 0) inputType else DEFAULT_INPUT_TYPE
+        val gen = ++showAttemptGen
         // Tell the daemon to keep Display 0 top-focused so InputMethodManagerService accepts showSoftInput
         // and subsequent forwarded keystrokes do not steal top display focus away from the host Activity.
         BridgeClient.setLocalTextFieldFocusedOneway(true)
         pendingShowAfterFocus = true
         triggerShowNow()
         postDelayed({
-            if (!isAttachedToWindow) return@postDelayed
+            if (!isAttachedToWindow || showAttemptGen != gen) return@postDelayed
             pendingShowAfterFocus = false
             if (!lastImeVisible) {
                 triggerShowNow()
             }
         }, 120L)
+        postDelayed({
+            if (!isAttachedToWindow || showAttemptGen != gen) return@postDelayed
+            pendingShowAfterFocus = false
+            if (!lastImeVisible) {
+                // Soft IME stayed hidden (e.g. a physical keyboard suppresses soft input): release
+                // focus and daemon localImeActive lock so window keyboard input never gets stranded.
+                clearFocus()
+                if (!OpalImeFocusTracker.localComposeTextFieldFocused) {
+                    BridgeClient.setLocalTextFieldFocusedOneway(false)
+                }
+            }
+        }, 450L)
     }
 
     @Suppress("DEPRECATION")
@@ -402,6 +466,7 @@ internal class NativeImeBridgeView(
     }
 
     fun hideIme() {
+        showAttemptGen++
         pendingShowAfterFocus = false
         onComposingChanged("")
         BridgeClient.setLocalTextFieldFocusedOneway(false)

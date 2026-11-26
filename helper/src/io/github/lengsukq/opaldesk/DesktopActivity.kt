@@ -286,11 +286,21 @@ class DesktopActivity : ComponentActivity() {
         if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
 
-        // Never swallow physical/Bluetooth keyboard IME language-switch shortcuts (Ctrl+Space,
-        // Shift+Space, Meta+Space, LanguageSwitch); ensure the native IME host is active and let
-        // Android's IME framework handle switching between Chinese and English.
+        val isPhysicalKey = WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)
+        val forwardImeSwitch = WorkstationKeyDispatcher.shouldForwardImeSwitchToWindow(
+            localComposeTextFieldFocused = OpalImeFocusTracker.localComposeTextFieldFocused,
+            hostSoftImeVisible = imeVisible,
+            isPhysicalKeyEvent = isPhysicalKey,
+        )
+
+        // When a physical keyboard is typing directly into a managed VirtualDisplay window (with
+        // DISPLAY_IME_POLICY_LOCAL), forward Ctrl+Space / Shift+Space / LanguageSwitch directly to
+        // the window so its local CJK IME toggles cleanly instead of hijacking Display 0 focus.
         if (WorkstationKeyDispatcher.isImeSwitchShortcut(event.keyCode, event.metaState)) {
-            if (event.action == KeyEvent.ACTION_DOWN && !imeVisible && !OpalImeFocusTracker.localComposeTextFieldFocused) {
+            if (forwardImeSwitch && WorkstationKeyDispatcher.forwardToFocusedWindow(event, forwardImeSwitch = true)) {
+                return true
+            }
+            if (event.action == KeyEvent.ACTION_DOWN && !imeVisible && !OpalImeFocusTracker.localComposeTextFieldFocused && !isPhysicalKey) {
                 val focused = BridgeClient.sceneFlow.value.focusedWindow
                 if (focused != null && !focused.isMinimized) activeImeController?.showKeyboard()
             }
@@ -304,7 +314,7 @@ class DesktopActivity : ComponentActivity() {
 
         // Forward physical/external keyboard keystrokes directly to the focused VirtualDisplay session
         // BEFORE super.dispatchKeyEvent can swallow Space/Enter/Tab/Arrows for Compose focus traversal
-        if (WorkstationKeyDispatcher.forwardToFocusedWindow(event)) {
+        if (WorkstationKeyDispatcher.forwardToFocusedWindow(event, forwardImeSwitch = forwardImeSwitch)) {
             return true
         }
 

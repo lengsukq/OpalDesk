@@ -308,15 +308,24 @@ class ExternalMonitorPresentation(
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
+        val isPhysicalKey = WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)
+        val forwardImeSwitch = WorkstationKeyDispatcher.shouldForwardImeSwitchToWindow(
+            localComposeTextFieldFocused = OpalImeFocusTracker.localComposeTextFieldFocused,
+            hostSoftImeVisible = imeVisible,
+            isPhysicalKeyEvent = isPhysicalKey,
+        )
         if (WorkstationKeyDispatcher.isImeSwitchShortcut(event.keyCode, event.metaState)) {
-            if (event.action == KeyEvent.ACTION_DOWN && !OpalImeFocusTracker.localComposeTextFieldFocused) {
+            if (forwardImeSwitch && WorkstationKeyDispatcher.forwardToFocusedWindow(event, forwardImeSwitch = true)) {
+                return true
+            }
+            if (event.action == KeyEvent.ACTION_DOWN && !OpalImeFocusTracker.localComposeTextFieldFocused && !isPhysicalKey) {
                 val focused = BridgeClient.sceneFlow.value.focusedWindow
                 if (focused != null && !focused.isMinimized) ensureImeHostActive()
             }
             return super.dispatchKeyEvent(event)
         }
         if ((OpalImeFocusTracker.localComposeTextFieldFocused || imeVisible) && super.dispatchKeyEvent(event)) return true
-        if (WorkstationKeyDispatcher.forwardToFocusedWindow(event)) return true
+        if (WorkstationKeyDispatcher.forwardToFocusedWindow(event, forwardImeSwitch = forwardImeSwitch)) return true
         return super.dispatchKeyEvent(event)
     }
 
