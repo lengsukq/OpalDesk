@@ -1601,11 +1601,13 @@ fun ConsoleEngineSettingsTab(
     scene: CompositorScene,
     onOpenActivation: () -> Unit,
     onOpenUpdateModal: () -> Unit,
+    onOpenFeatureGuide: () -> Unit = {},
     onStopEngine: () -> Unit,
 ) {
     val ctx = LocalContext.current
     val autoEnterDex by AppPrefs.autoEnterDexFlow.collectAsState()
     val sortByUsage by AppPrefs.sortAppsByUsageFlow.collectAsState()
+    val showDesktopGuideIcon by AppPrefs.showDesktopGuideIconFlow.collectAsState()
     val autoCheckUpdate by AppPrefs.autoCheckUpdateFlow.collectAsState()
     val updateState by AppUpdateManager.stateFlow.collectAsState()
     val currentVersion = remember(ctx) { AppUpdateManager.getCurrentVersionName(ctx) }
@@ -1831,6 +1833,37 @@ fun ConsoleEngineSettingsTab(
                     AppPrefs.setSortAppsByUsage(ctx, enabled)
                 },
             )
+            OpalSwitchRow(
+                title = "在 DeX 桌面显示「使用指南」图标",
+                subtitle = "默认显示，方便查看特性说明、技巧与云端公告；关闭后隐藏桌面图标，仍可从控制中心或下方随时打开",
+                checked = showDesktopGuideIcon,
+                onCheckedChange = { enabled ->
+                    AppPrefs.setDesktopGuideIconVisible(ctx, enabled)
+                },
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    OpalText(text = "OpalDesk 使用指南", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    OpalText(
+                        text = "特性速览、快捷键技巧与排障文档 · 支持云端热更新",
+                        fontSize = 11.5.sp,
+                        color = OpalPalette.TextSecondary,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                OpalButton(
+                    label = "打开指南",
+                    compact = true,
+                    filled = false,
+                    accent = OpalPalette.AccentBlue,
+                    onClick = onOpenFeatureGuide,
+                )
+            }
         }
 
         MacGlassSectionCard {

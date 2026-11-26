@@ -59,6 +59,7 @@ import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import io.github.lengsukq.opaldesk.external.ExternalDisplayTransport
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadLauncher
+import io.github.lengsukq.opaldesk.guide.OpalGuidePolicy
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
 import io.github.lengsukq.opaldesk.service.DisplayLaunchHelper
@@ -71,6 +72,7 @@ import io.github.lengsukq.opaldesk.ui.AppUpdateModal
 import io.github.lengsukq.opaldesk.ui.ConsoleDashboardTab
 import io.github.lengsukq.opaldesk.ui.ConsoleDisplaySettingsTab
 import io.github.lengsukq.opaldesk.ui.ConsoleEngineSettingsTab
+import io.github.lengsukq.opaldesk.ui.ConsoleFeatureGuideModal
 import io.github.lengsukq.opaldesk.ui.ConsoleLogsTab
 import io.github.lengsukq.opaldesk.ui.OpalAmbientBackdrop
 import io.github.lengsukq.opaldesk.ui.OpalButton
@@ -81,6 +83,8 @@ import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.OpalText
 import io.github.lengsukq.opaldesk.ui.OpalTheme
 import io.github.lengsukq.opaldesk.ui.PairingConsentModal
+import io.github.lengsukq.opaldesk.ui.joinOpalDeskQqGroup
+import io.github.lengsukq.opaldesk.ui.openAllowedGuideUrl
 import io.github.lengsukq.opaldesk.update.AppUpdateManager
 
 /**
@@ -386,6 +390,7 @@ private fun OpalConsoleScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     var showActivationModal by remember { mutableStateOf(false) }
     var showUpdateModal by remember { mutableStateOf(false) }
+    var showGuideModal by remember { mutableStateOf(false) }
     var showExitConfirmModal by remember { mutableStateOf(false) }
     var exitingApp by remember { mutableStateOf(false) }
     var floatingPickerTarget by remember { mutableStateOf<Triple<String, Int, String>?>(null) }
@@ -548,6 +553,10 @@ private fun OpalConsoleScreen(
                                 onDisarmAutoEnterDex()
                                 showUpdateModal = true
                             },
+                            onOpenFeatureGuide = {
+                                onDisarmAutoEnterDex()
+                                showGuideModal = true
+                            },
                             onStopEngine = onStopEngine,
                         )
                         else -> ConsoleLogsTab(
@@ -585,6 +594,29 @@ private fun OpalConsoleScreen(
         if (showUpdateModal) {
             AppUpdateModal(
                 onDismiss = { showUpdateModal = false },
+            )
+        }
+
+        if (showGuideModal) {
+            ConsoleFeatureGuideModal(
+                onAction = { action, url ->
+                    when (action) {
+                        OpalGuidePolicy.ACTION_OPEN_URL -> openAllowedGuideUrl(ctx, url)
+                        OpalGuidePolicy.ACTION_JOIN_QQ -> joinOpalDeskQqGroup(ctx)
+                        OpalGuidePolicy.ACTION_OPEN_SHORTCUTS,
+                        OpalGuidePolicy.ACTION_OPEN_DPI,
+                        OpalGuidePolicy.ACTION_OPEN_TILING,
+                        OpalGuidePolicy.ACTION_OPEN_DOCK_SETTINGS,
+                        OpalGuidePolicy.ACTION_OPEN_CONTROL_CENTER -> {
+                            showGuideModal = false
+                            selectedTab = 1
+                        }
+                        OpalGuidePolicy.ACTION_OPEN_CONSOLE -> {
+                            showGuideModal = false
+                        }
+                    }
+                },
+                onDismiss = { showGuideModal = false },
             )
         }
 

@@ -203,6 +203,7 @@ fun OpalCompositorWorkspace(
     val dockScale by AppPrefs.dockScaleFlow.collectAsState()
     val globalShortcutsEnabled by AppPrefs.globalShortcutsEnabledFlow.collectAsState()
     val disabledShortcutIds by AppPrefs.disabledShortcutIdsFlow.collectAsState()
+    val showDesktopGuideIcon by AppPrefs.showDesktopGuideIconFlow.collectAsState()
 
     val profileState by io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.stateFlow.collectAsState()
     var showAppDrawer by remember { mutableStateOf(false) }
@@ -211,6 +212,7 @@ fun OpalCompositorWorkspace(
     var controlCenterInitialTab by remember { mutableStateOf(0) }
     var showDpiPopover by remember { mutableStateOf(false) }
     var showShortcutsPopover by remember { mutableStateOf(false) }
+    var showFeatureGuide by remember { mutableStateOf(false) }
     var showNotificationCenter by remember { mutableStateOf(false) }
     val notifications by io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.notificationsFlow.collectAsState()
     val liveNotificationBanner by io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.bannerFlow.collectAsState()
@@ -222,6 +224,7 @@ fun OpalCompositorWorkspace(
     var editingAppDpiTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
     var autoRestoredOnce by remember { mutableStateOf(false) }
     var contextMenuTarget by remember { mutableStateOf<Triple<String, CompositorWindow?, Offset>?>(null) }
+    var guideIconMenuPos by remember { mutableStateOf<Offset?>(null) }
     var wallpaperMenuPos by remember { mutableStateOf<Offset?>(null) }
     var snapPreviewRect by remember { mutableStateOf<WindowRect?>(null) }
     var trayInfo by remember { mutableStateOf(SystemTrayInfo()) }
@@ -242,8 +245,10 @@ fun OpalCompositorWorkspace(
         showControlCenter = false
         showDpiPopover = false
         showShortcutsPopover = false
+        showFeatureGuide = false
         showNotificationCenter = false
         contextMenuTarget = null
+        guideIconMenuPos = null
         wallpaperMenuPos = null
     }
 
@@ -484,7 +489,7 @@ fun OpalCompositorWorkspace(
                     .fillMaxSize()
                     .onTapOrContextAction(
                         showAppDrawer, showExposeOverview, showControlCenter, showDpiPopover, showShortcutsPopover,
-                        contextMenuTarget, wallpaperMenuPos,
+                        showFeatureGuide, contextMenuTarget, guideIconMenuPos, wallpaperMenuPos,
                         onPrimaryTap = { dismissAllPopovers() },
                         onContextAction = { pos ->
                             dismissAllPopovers()
@@ -494,11 +499,20 @@ fun OpalCompositorWorkspace(
             )
 
             // Samsung DeX-style Left-Column Desktop App Shortcuts (hidden during true app fullscreen)
-            if (status.connected && allApps.isNotEmpty() && fullscreenWin == null) {
+            if (status.connected && (showDesktopGuideIcon || allApps.isNotEmpty()) && fullscreenWin == null) {
                 DesktopShortcutColumn(
                     allApps = allApps,
                     desktopPkgs = desktopPkgs,
+                    showGuideIcon = showDesktopGuideIcon,
                     rowsPerColumn = shortcutRowsPerCol,
+                    onOpenGuide = {
+                        dismissAllPopovers()
+                        showFeatureGuide = true
+                    },
+                    onContextGuide = { rootPos ->
+                        dismissAllPopovers()
+                        guideIconMenuPos = rootPos
+                    },
                     onLaunch = { entry ->
                         dismissAllPopovers()
                         AppPrefs.recordAppLaunch(ctx, entry.pkg)
@@ -830,6 +844,7 @@ fun OpalCompositorWorkspace(
                     dockScale = dockScale,
                     globalShortcutsEnabled = globalShortcutsEnabled,
                     disabledShortcutIds = disabledShortcutIds,
+                    showDesktopGuideIcon = showDesktopGuideIcon,
                     maxHeight = ccMaxH,
                     initialTab = controlCenterInitialTab,
                     onToggleDockVisible = { enabled ->
@@ -907,6 +922,10 @@ fun OpalCompositorWorkspace(
                         showControlCenter = false
                         showShortcutsPopover = true
                     },
+                    onOpenFeatureGuide = {
+                        showControlCenter = false
+                        showFeatureGuide = true
+                    },
                     onApplyTilingLayout = ::applyTiling,
                     onMinimizeAll = {
                         showControlCenter = false
@@ -960,12 +979,100 @@ fun OpalCompositorWorkspace(
                 )
             }
 
+            // Built-in Liquid Glass Feature Guide Window (hot-updateable, zero VirtualDisplay quota)
+            if (showFeatureGuide) {
+                val guideMaxH = (maxHeight - (CompositorGeometry.TOP_BAR_DP + effectiveDockInsetDp + 28f).dp)
+                    .coerceAtLeast(300.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(10_028f)
+                        .background(OpalPalette.ScrimColor.copy(alpha = 0.28f))
+                        .pointerInput(Unit) { detectTapGestures { showFeatureGuide = false } }
+                        .padding(horizontal = 16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    io.github.lengsukq.opaldesk.ui.DexFeatureGuideWindow(
+                        maxHeight = guideMaxH,
+                        onAction = { action, url ->
+                            when (action) {
+                                io.github.lengsukq.opaldesk.guide.OpalGuidePolicy.ACTION_OPEN_SHORTCUTS -> {
+                                    showFeatureGuide = false
+                                    showShortcutsPopover = true
+                                }
+                                io.github.lengsukq.opaldesk.guide.OpalGuidePolicy.ACTION_OPEN_DPI -> {
+                                    showFeatureGuide = false
+                                    showDpiPopover = true
+                                }
+                                io.github.lengsukq.opaldesk.guide.OpalGuidePolicy.ACTION_OPEN_TILING -> {
+                                    showFeatureGuide = false
+                                    controlCenterInitialTab = 1
+                                    showControlCenter = true
+                                }
+                                io.github.lengsukq.opaldesk.guide.OpalGuidePolicy.ACTION_OPEN_DOCK_SETTINGS -> {
+                                    showFeatureGuide = false
+                                    controlCenterInitialTab = 2
+                                    showControlCenter = true
+                                }
+                                io.github.lengsukq.opaldesk.guide.OpalGuidePolicy.ACTION_OPEN_CONTROL_CENTER -> {
+                                    showFeatureGuide = false
+                                    controlCenterInitialTab = 0
+                                    showControlCenter = true
+                                }
+                                io.github.lengsukq.opaldesk.guide.OpalGuidePolicy.ACTION_OPEN_CONSOLE -> {
+                                    showFeatureGuide = false
+                                    onOpenConsole()
+                                }
+                                io.github.lengsukq.opaldesk.guide.OpalGuidePolicy.ACTION_JOIN_QQ -> {
+                                    io.github.lengsukq.opaldesk.ui.joinOpalDeskQqGroup(ctx)
+                                }
+                                io.github.lengsukq.opaldesk.guide.OpalGuidePolicy.ACTION_OPEN_URL -> {
+                                    io.github.lengsukq.opaldesk.ui.openAllowedGuideUrl(ctx, url)
+                                }
+                            }
+                        },
+                        onDismiss = { showFeatureGuide = false },
+                    )
+                }
+            }
+
+            // Built-in Desktop "使用指南" Icon Right-Click / Long-Press Context Menu
+            guideIconMenuPos?.let { pos ->
+                val menuW = with(density) { 214.dp.toPx() }.roundToInt()
+                val menuH = with(density) { 112.dp.toPx() }.roundToInt()
+                val (xPx, yPx) = CompositorGeometry.computeAnchoredMenuPosition(
+                    anchorX = pos.x.roundToInt(),
+                    anchorY = pos.y.roundToInt(),
+                    menuW = menuW,
+                    menuH = menuH,
+                    canvasW = canvasW,
+                    canvasH = canvasH,
+                    density = densityVal,
+                )
+                io.github.lengsukq.opaldesk.ui.GuideIconContextMenu(
+                    onOpenGuide = { showFeatureGuide = true },
+                    onHideFromDesktop = {
+                        AppPrefs.setDesktopGuideIconVisible(ctx, false)
+                        Toast.makeText(
+                            ctx,
+                            "已隐藏桌面「使用指南」图标，可在系统设置或控制中心重新开启",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    },
+                    onDismiss = { guideIconMenuPos = null },
+                    modifier = Modifier
+                        .offset { IntOffset(xPx, yPx) }
+                        .zIndex(10_026f),
+                )
+            }
+
             // Desktop Wallpaper Right-Click / Long-Press Context Menu (anchored right at cursor)
             wallpaperMenuPos?.let { pos ->
                 val isCurrentlyDark = OpalPalette.isDark
                 val menuW = with(density) { 252.dp.toPx() }.roundToInt()
-                val baseMenuDp = (if (customWallpaperPath.isNotBlank()) 358f else 322f) +
-                    (if (canControlPhoneTrackpad) 38f else 0f)
+                val baseMenuDp = (if (customWallpaperPath.isNotBlank()) 396f else 360f) +
+                    (if (canControlPhoneTrackpad) 38f else 0f) +
+                    (if (!showDesktopGuideIcon) 38f else 0f)
                 val menuH = with(density) { baseMenuDp.dp.toPx() }.roundToInt()
                 val (xPx, yPx) = CompositorGeometry.computeAnchoredMenuPosition(
                     anchorX = pos.x.roundToInt(),
@@ -981,6 +1088,7 @@ fun OpalCompositorWorkspace(
                     hasCustomWallpaper = customWallpaperPath.isNotBlank(),
                     showPhoneTrackpadAction = canControlPhoneTrackpad,
                     phoneTrackpadVisible = phoneTrackpadVisible,
+                    showDesktopGuideIcon = showDesktopGuideIcon,
                     onTogglePhoneTrackpad = ::togglePhoneTrackpadFromExternal,
                     onSelectPreset = { idx ->
                         WallpaperStorage.clearCustomWallpaper(ctx)
@@ -1000,6 +1108,11 @@ fun OpalCompositorWorkspace(
                         showControlCenter = true
                     },
                     onOpenAppDrawer = { showAppDrawer = true },
+                    onOpenFeatureGuide = { showFeatureGuide = true },
+                    onRestoreDesktopGuideIcon = {
+                        AppPrefs.setDesktopGuideIconVisible(ctx, true)
+                        Toast.makeText(ctx, "已恢复桌面「使用指南」图标", Toast.LENGTH_SHORT).show()
+                    },
                     onToggleLightDark = {
                         val next = if (isCurrentlyDark) AppPrefs.THEME_LIGHT else AppPrefs.THEME_DARK
                         AppPrefs.setThemeMode(ctx, next)
@@ -1222,72 +1335,99 @@ fun OpalCompositorWorkspace(
     }
 }
 
+private sealed interface DesktopGridItem {
+    data object BuiltinGuide : DesktopGridItem
+    data class App(val entry: InstalledAppEntry) : DesktopGridItem
+}
+
 @Composable
 private fun DesktopShortcutColumn(
     allApps: List<InstalledAppEntry>,
     desktopPkgs: List<String>,
+    showGuideIcon: Boolean = true,
     rowsPerColumn: Int = 5,
+    onOpenGuide: () -> Unit = {},
+    onContextGuide: (Offset) -> Unit = {},
     onLaunch: (InstalledAppEntry) -> Unit,
     onContextApp: (String, Offset) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val ctx = LocalContext.current
-    val shortcuts = remember(allApps, desktopPkgs) {
+    val gridItems = remember(allApps, desktopPkgs, showGuideIcon) {
         val byPkg = allApps.associateBy { it.pkg }
-        desktopPkgs.mapNotNull { byPkg[it] }.take(15)
+        val list = ArrayList<DesktopGridItem>(16)
+        if (showGuideIcon) {
+            list.add(DesktopGridItem.BuiltinGuide)
+        }
+        val maxApps = if (showGuideIcon) 14 else 15
+        desktopPkgs.mapNotNull { byPkg[it] }.take(maxApps).forEach { entry ->
+            list.add(DesktopGridItem.App(entry))
+        }
+        list
     }
 
     // Wrap into adaptive vertical columns based on portrait/landscape canvas height
-    val columns = shortcuts.chunked(rowsPerColumn.coerceIn(3, 8))
+    val columns = gridItems.chunked(rowsPerColumn.coerceIn(3, 8))
     Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        columns.forEach { colApps ->
+        columns.forEach { colItems ->
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                colApps.forEach { app ->
-                    val icon = remember(app.pkg) { AppCatalogRepository.getAppIcon(ctx, app.pkg) }
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .width(74.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .onTapOrContextAction(
-                                app.pkg,
-                                onPrimaryTap = { onLaunch(app) },
-                                onContextAction = { rootPos -> onContextApp(app.pkg, rootPos) },
+                colItems.forEach { gridItem ->
+                    when (gridItem) {
+                        DesktopGridItem.BuiltinGuide -> {
+                            io.github.lengsukq.opaldesk.ui.OpalGuideDesktopIconTile(
+                                onOpen = onOpenGuide,
+                                onContextMenu = onContextGuide,
                             )
-                            .padding(vertical = 6.dp, horizontal = 4.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .shadow(8.dp, RoundedCornerShape(13.dp))
-                                .clip(RoundedCornerShape(13.dp))
-                                .background(OpalPalette.GlassSurface),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (icon != null) {
-                                Image(
-                                    bitmap = icon,
-                                    contentDescription = app.label,
-                                    modifier = Modifier.fillMaxSize(),
-                                )
-                            } else {
-                                OpalText(text = app.label.take(1), fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                            }
                         }
-                        Spacer(Modifier.height(5.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(7.dp))
-                                .background(OpalPalette.GlassSurface.copy(alpha = if (OpalPalette.isDark) 0.52f else 0.72f))
-                                .padding(horizontal = 6.dp, vertical = 1.5.dp),
-                        ) {
-                            OpalText(
-                                text = app.label,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = OpalPalette.TextPrimary,
-                                maxLines = 1,
-                            )
+                        is DesktopGridItem.App -> {
+                            val app = gridItem.entry
+                            val icon = remember(app.pkg) { AppCatalogRepository.getAppIcon(ctx, app.pkg) }
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .width(74.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .onTapOrContextAction(
+                                        app.pkg,
+                                        onPrimaryTap = { onLaunch(app) },
+                                        onContextAction = { rootPos -> onContextApp(app.pkg, rootPos) },
+                                    )
+                                    .padding(vertical = 6.dp, horizontal = 4.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .shadow(8.dp, RoundedCornerShape(13.dp))
+                                        .clip(RoundedCornerShape(13.dp))
+                                        .background(OpalPalette.GlassSurface),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (icon != null) {
+                                        Image(
+                                            bitmap = icon,
+                                            contentDescription = app.label,
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    } else {
+                                        OpalText(text = app.label.take(1), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                Spacer(Modifier.height(5.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(7.dp))
+                                        .background(OpalPalette.GlassSurface.copy(alpha = if (OpalPalette.isDark) 0.52f else 0.72f))
+                                        .padding(horizontal = 6.dp, vertical = 1.5.dp),
+                                ) {
+                                    OpalText(
+                                        text = app.label,
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = OpalPalette.TextPrimary,
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
                         }
                     }
                 }

@@ -73,6 +73,7 @@ object AppPrefs {
     private const val KEY_DOCK_SCALE = "dock_scale_v1"
     private const val KEY_GLOBAL_SHORTCUTS_ENABLED = "global_shortcuts_enabled_v1"
     private const val KEY_DISABLED_SHORTCUT_IDS = "disabled_shortcut_ids_v1"
+    private const val KEY_SHOW_DESKTOP_GUIDE_ICON = "show_desktop_guide_icon_v1"
 
     private val DEFAULT_PINNED = listOf(
         "com.android.chrome",
@@ -160,6 +161,9 @@ object AppPrefs {
     private val _disabledShortcutIdsFlow = MutableStateFlow<Set<String>>(emptySet())
     val disabledShortcutIdsFlow: StateFlow<Set<String>> = _disabledShortcutIdsFlow.asStateFlow()
 
+    private val _showDesktopGuideIconFlow = MutableStateFlow(true)
+    val showDesktopGuideIconFlow: StateFlow<Boolean> = _showDesktopGuideIconFlow.asStateFlow()
+
     private fun prefs(ctx: Context?) =
         ctx?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -208,6 +212,7 @@ object AppPrefs {
         _disabledShortcutIdsFlow.value = io.github.lengsukq.opaldesk.ui.WorkstationShortcutCatalog.parseDisabledIds(
             p.getString(KEY_DISABLED_SHORTCUT_IDS, null),
         )
+        _showDesktopGuideIconFlow.value = p.getBoolean(KEY_SHOW_DESKTOP_GUIDE_ICON, true)
     }
 
     private fun loadPkgList(p: android.content.SharedPreferences, key: String, fallbackKey: String): List<String> {
@@ -640,6 +645,16 @@ object AppPrefs {
             ?.apply()
         _globalShortcutsEnabledFlow.value = true
         _disabledShortcutIdsFlow.value = emptySet()
+    }
+
+    fun isDesktopGuideIconVisible(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _showDesktopGuideIconFlow.value
+    }
+
+    fun setDesktopGuideIconVisible(ctx: Context?, visible: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_SHOW_DESKTOP_GUIDE_ICON, visible)?.apply()
+        _showDesktopGuideIconFlow.value = visible
     }
 
     fun createFeedbackQuotaStorage(ctx: Context): FeedbackQuotaStorage {

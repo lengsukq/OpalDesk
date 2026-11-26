@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-11-26",
+  "headline": "OpalDesk 使用指南",
+  "subtitle": "免 Root · 120fps 多窗合成工作站 · 云端热更新文档",
+  "announcement": {
+    "badge": "v1.0.17 亮点",
+    "title": "物理键盘中文候选栏、快捷键面板与外接屏直投升级",
+    "body": "接入蓝牙或 USB 键盘后自动在当前应用窗口内显示中文输入法候选栏；新增快捷键速查与按项关闭开关，并强化 Android 16 外接显示器直投稳定性。"
+  },
+  "sections": [
+    {
+      "id": "features",
+      "title": "核心特性",
+      "items": [
+        {
+          "badge": "120fps",
+          "accent": "blue",
+          "title": "真多窗桌面与一键分屏",
+          "body": "支持自由拖拽缩放、边缘八向贴边、2~8 窗一键分屏排版与 5 套持久化桌面配置槽位。",
+          "action": "open_tiling",
+          "actionLabel": "分屏布局"
+        },
+        {
+          "badge": "实时预览",
+          "accent": "cyan",
+          "title": "全局与单应用独立 DPI",
+          "body": "在 DeX 桌面内直接拖动滑块实时调节全局或单个应用的显示密度，松手即生效且随槽位保存。",
+          "action": "open_dpi",
+          "actionLabel": "调节 DPI"
+        },
+        {
+          "badge": "键鼠优化",
+          "accent": "emerald",
+          "title": "物理键盘输入法与快捷键",
+          "body": "连接物理键盘时直接显示系统中文候选栏；所有桌面快捷键可随时查看、总开关关闭或单项禁用。",
+          "action": "open_shortcuts",
+          "actionLabel": "查看快捷键"
+        },
+        {
+          "badge": "外接大屏",
+          "accent": "amber",
+          "title": "有线显示器 & 无线电视投屏",
+          "body": "支持 USB-C / HDMI 外接屏高刷输出与 Miracast 无线电视独立投射，搭配手机精准触控板与一键息屏省电。",
+          "action": "open_control_center",
+          "actionLabel": "控制中心"
+        },
+        {
+          "badge": "跨端协同",
+          "accent": "blue",
+          "title": "Mac / Windows / Web 投屏与音频分流",
+          "body": "支持局域网与 USB 跨端投屏桌面或独立应用小窗，默认开启手机与 DeX 按应用独立音频分流。",
+          "action": "open_console",
+          "actionLabel": "打开控制台"
+        },
+        {
+          "badge": "个性化",
+          "accent": "cyan",
+          "title": "Dock 自定义与下拉快捷磁贴",
+          "body": "支持隐藏底部 Dock、调节透明度与缩放比例；系统下拉控制中心支持添加「进入 DeX / 息屏 / 无线投屏」磁贴。",
+          "action": "open_dock_settings",
+          "actionLabel": "自定义 Dock"
+        }
+      ]
+    },
+    {
+      "id": "tips",
+      "title": "实用技巧与排障",
+      "items": [
+        {
+          "badge": "输入法",
+          "accent": "emerald",
+          "title": "物理键盘中英文切换与冲突处理",
+          "body": "物理键盘模式下可直接用 Shift+Space、Ctrl+Space 或地球键切换中英文；若 Ctrl+W / Alt+Tab / Esc 与浏览器、终端或游戏冲突，可在快捷键面板中单独关闭。",
+          "action": "open_shortcuts",
+          "actionLabel": "快捷键设置"
+        },
+        {
+          "badge": "外接屏",
+          "accent": "blue",
+          "title": "外接显示器分辨率与直投提示",
+          "body": "有线 USB-C / HDMI 建议保持「自动（推荐）」模式以优先 Shell 直投原生分辨率；电视画面被裁切时可在手机触控板或设置中调节 0–6% 过扫描边距。",
+          "action": "open_console",
+          "actionLabel": "显示设置"
+        },
+        {
+          "badge": "触控注入",
+          "accent": "amber",
+          "title": "如遇个别机型点击无响应",
+          "body": "部分 ROM 限制系统输入注入时，可在主控制台「设置 → 引擎配置」中将输入后端切换为「/dev/uhid 内核通道」，立即恢复多点触控与键鼠响应。",
+          "action": "open_console",
+          "actionLabel": "引擎设置"
+        },
+        {
+          "badge": "问题反馈",
+          "accent": "cyan",
+          "title": "一键上报诊断日志与交流群",
+          "body": "遇到偶发闪退或外接屏适配问题，可在主控制台「日志」页一键上报脱敏日志（不截屏），或加入 QQ 群 1042317917 获取最新版与实时反馈。",
+          "action": "join_qq",
+          "actionLabel": "加入 QQ 群"
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "label": "GitHub 仓库",
+      "url": "https://github.com/lengsukq/OpalDesk",
+      "action": "open_url"
+    },
+    {
+      "label": "项目官网",
+      "url": "https://lengsukq.github.io/OpalDesk/",
+      "action": "open_url"
+    },
+    {
+      "label": "加入 QQ 群",
+      "url": "",
+      "action": "join_qq"
+    }
+  ]
+}

@@ -965,6 +965,7 @@ fun MacControlCenterPopover(
     dockScale: Float = DockAppearancePolicy.DEFAULT_SCALE,
     globalShortcutsEnabled: Boolean = true,
     disabledShortcutIds: Set<String> = emptySet(),
+    showDesktopGuideIcon: Boolean = true,
     maxHeight: Dp = 640.dp,
     initialTab: Int = 0,
     onToggleDockVisible: (Boolean) -> Unit = {},
@@ -984,6 +985,7 @@ fun MacControlCenterPopover(
     onSelectMouseTarget: (Int) -> Unit,
     onOpenDpiSettings: () -> Unit = {},
     onOpenKeyboardShortcuts: () -> Unit = {},
+    onOpenFeatureGuide: () -> Unit = {},
     onApplyTilingLayout: (WindowTilingLayout) -> Unit,
     onMinimizeAll: () -> Unit,
     onCloseAll: () -> Unit,
@@ -1852,6 +1854,36 @@ fun MacControlCenterPopover(
                         )
                     }
 
+                    // Compact Single-Row Built-in Feature Guide Entry (always accessible even if desktop icon is hidden)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(infoCardShape)
+                            .background(OpalPalette.ChipFill)
+                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
+                            .clickable(onClick = onOpenFeatureGuide)
+                            .padding(horizontal = 11.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            OpalText(text = "使用指南与特性", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            OpalText(
+                                text = if (showDesktopGuideIcon) "云端热更新 · 桌面图标显示中" else "云端热更新 · 桌面图标已隐藏",
+                                fontSize = 10.sp,
+                                color = OpalPalette.TextSecondary,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        OpalButton(
+                            label = "打开",
+                            compact = true,
+                            filled = false,
+                            accent = OpalPalette.AccentBlue,
+                            onClick = onOpenFeatureGuide,
+                        )
+                    }
+
                     if (isExternalMonitor) {
                         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                             OpalText(text = "界面缩放", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = OpalPalette.TextSecondary)
@@ -2192,6 +2224,7 @@ fun DesktopWallpaperContextMenu(
     hasCustomWallpaper: Boolean,
     showPhoneTrackpadAction: Boolean = false,
     phoneTrackpadVisible: Boolean = false,
+    showDesktopGuideIcon: Boolean = true,
     onTogglePhoneTrackpad: () -> Unit = {},
     onSelectPreset: (Int) -> Unit,
     onPickCustomWallpaper: () -> Unit,
@@ -2199,6 +2232,8 @@ fun DesktopWallpaperContextMenu(
     onOpenTilingMenu: () -> Unit,
     onOpenDockSettings: () -> Unit = {},
     onOpenAppDrawer: () -> Unit,
+    onOpenFeatureGuide: () -> Unit = {},
+    onRestoreDesktopGuideIcon: () -> Unit = {},
     onToggleLightDark: () -> Unit,
     onOpenConsole: () -> Unit,
     onDismiss: () -> Unit,
@@ -2294,6 +2329,16 @@ fun DesktopWallpaperContextMenu(
         ContextMenuRow("打开应用抽屉") {
             onDismiss()
             onOpenAppDrawer()
+        }
+        ContextMenuRow("打开 OpalDesk 使用指南") {
+            onDismiss()
+            onOpenFeatureGuide()
+        }
+        if (!showDesktopGuideIcon) {
+            ContextMenuRow("恢复桌面「使用指南」图标", textColor = OpalPalette.AccentBlue) {
+                onRestoreDesktopGuideIcon()
+                onDismiss()
+            }
         }
         ContextMenuRow(if (isDark) "切换为浅色液态毛玻璃" else "切换为深色液态毛玻璃") {
             onToggleLightDark()
