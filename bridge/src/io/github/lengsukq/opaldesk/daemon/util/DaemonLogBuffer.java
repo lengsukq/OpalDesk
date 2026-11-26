@@ -1,14 +1,17 @@
 package io.github.lengsukq.opaldesk.daemon.util;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -17,13 +20,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Bounded, thread-safe in-memory ring buffer capturing daemon stdout/stderr lines so the Helper
  * client can pull live daemon diagnostics over cert-pinned Binder IPC without direct filesystem
- * access to {@code /data/local/tmp/opaldesk.log}.
+ * access to {@code /data/local/tmp/opaldesk.log}. Also surfaces bounded previous-session crash
+ * tails rotated to {@code /data/local/tmp/opaldesk.prev.log} on unexpected termination.
  */
 public final class DaemonLogBuffer {
     public static final int DEFAULT_MAX_LINES = 500;
     public static final int MAX_STICKY_LINES = 8;
+    public static final int MAX_PREV_CRASH_LINES = 48;
     public static final int MAX_LINE_CHARS = 1024;
     public static final int MAX_SNAPSHOT_CHARS = 96 * 1024;
+    public static final String CLEAN_SHUTDOWN_MARKER = "OPALDESK_DAEMON_SHUTDOWN_CLEAN";
 
     private static final class StickyEntry {
         final String formattedLine;
@@ -38,6 +44,7 @@ public final class DaemonLogBuffer {
     private static final Object LOCK = new Object();
     private static final ArrayDeque<String> RING = new ArrayDeque<>(DEFAULT_MAX_LINES);
     private static final List<StickyEntry> STICKY_HEADERS = new ArrayList<>(MAX_STICKY_LINES);
+    private static final List<String> PREV_CRASH_LINES = new ArrayList<>(MAX_PREV_CRASH_LINES);
     private static final AtomicBoolean TEE_INSTALLED = new AtomicBoolean(false);
     private static final SimpleDateFormat TIME_FMT = new SimpleDateFormat("HH:mm:ss.SSS", Locale.US);
 
@@ -103,15 +110,93 @@ public final class DaemonLogBuffer {
         }
     }
 
+    /**
+     * Loads and retains a bounded tail from {@code prevFile} (e.g. {@code /data/local/tmp/opaldesk.prev.log})
+     * when the previous daemon process terminated without emitting {@link #CLEAN_SHUTDOWN_MARKER}.
+     */
+    public static int loadPreviousAbnormalLogFile(File prevFile, int maxLines) {
+        if (prevFile == null) return 0;
+        try {
+            if (!prevFile.isFile() || Files.isSymbolicLink(prevFile.toPath())) return 0;
+            long len = prevFile.length();
+            if (len <= 0L || len > 512L * 1024L) {
+                if (len <= 0L) return 0;
+            }
+            List<String> allLines = Files.readAllLines(prevFile.toPath(), StandardCharsets.UTF_8);
+            int limit = Math.max(1, Math.min(maxLines, MAX_PREV_CRASH_LINES));
+            List<String> tail = extractPreviousAbnormalTail(allLines, limit);
+            if (tail.isEmpty()) return 0;
+            synchronized (LOCK) {
+                PREV_CRASH_LINES.clear();
+                PREV_CRASH_LINES.addAll(tail);
+            }
+            return tail.size();
+        } catch (Throwable ignored) {
+            return 0;
+        }
+    }
+
+    /**
+     * Pure JVM-testable extractor that returns formatted {@code [PREV_CRASH]} lines when the prior
+     * daemon log did not end with {@link #CLEAN_SHUTDOWN_MARKER} (or ended with an uncaught exception).
+     */
+    public static List<String> extractPreviousAbnormalTail(List<String> rawLines, int maxLines) {
+        if (rawLines == null || rawLines.isEmpty() || maxLines <= 0) return Collections.emptyList();
+        List<String> cleaned = new ArrayList<>();
+        String startupLine = null;
+        int lastCleanIdx = -1;
+        int lastUncaughtIdx = -1;
+        for (String line : rawLines) {
+            if (line == null) continue;
+            String s = stripTrailingCr(line).trim();
+            if (s.isEmpty()) continue;
+            if (s.length() > MAX_LINE_CHARS) {
+                s = s.substring(0, MAX_LINE_CHARS) + "...";
+            }
+            int idx = cleaned.size();
+            if (startupLine == null && s.contains("OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED")) {
+                startupLine = s;
+            }
+            if (s.contains(CLEAN_SHUTDOWN_MARKER)) {
+                lastCleanIdx = idx;
+            }
+            if (s.contains("OPALDESK_UNCAUGHT_EXCEPTION") || s.contains("FATAL")) {
+                lastUncaughtIdx = idx;
+            }
+            cleaned.add(s);
+        }
+        if (cleaned.isEmpty()) return Collections.emptyList();
+        if (lastCleanIdx >= 0 && lastCleanIdx > lastUncaughtIdx) {
+            return Collections.emptyList();
+        }
+        int limit = Math.min(maxLines, MAX_PREV_CRASH_LINES);
+        List<String> out = new ArrayList<>(limit);
+        int tailBudget = limit;
+        int start = Math.max(0, cleaned.size() - tailBudget);
+        if (startupLine != null && start > 0 && limit >= 2) {
+            out.add("[PREV_CRASH] " + startupLine);
+            tailBudget = limit - 1;
+            start = Math.max(0, cleaned.size() - tailBudget);
+        }
+        for (int i = start; i < cleaned.size(); i++) {
+            String ln = cleaned.get(i);
+            if (ln.equals(startupLine) && !out.isEmpty()) continue;
+            out.add(ln.startsWith("[PREV_CRASH]") ? ln : ("[PREV_CRASH] " + ln));
+        }
+        return out;
+    }
+
     /** Returns up to {@code requestedLines} most recent lines joined by newlines. */
     public static String snapshotTail(int requestedLines) {
         int limit = (requestedLines <= 0) ? DEFAULT_MAX_LINES : Math.min(requestedLines, DEFAULT_MAX_LINES);
         String[] tailLines;
         List<StickyEntry> stickyCopy;
+        List<String> prevCopy;
         synchronized (LOCK) {
             stickyCopy = STICKY_HEADERS.isEmpty() ? null : new ArrayList<>(STICKY_HEADERS);
+            prevCopy = PREV_CRASH_LINES.isEmpty() ? null : new ArrayList<>(PREV_CRASH_LINES);
             int total = RING.size();
-            if (total == 0 && stickyCopy == null) return "";
+            if (total == 0 && stickyCopy == null && prevCopy == null) return "";
             int skip = Math.max(0, total - limit);
             tailLines = new String[total - skip];
             int idx = 0;
@@ -122,9 +207,9 @@ public final class DaemonLogBuffer {
                 }
             }
         }
-        List<String> combined = new ArrayList<>(tailLines.length + (stickyCopy != null ? stickyCopy.size() : 0));
+        List<String> missingSticky = Collections.emptyList();
         if (stickyCopy != null) {
-            List<String> missingSticky = new ArrayList<>(stickyCopy.size());
+            missingSticky = new ArrayList<>(stickyCopy.size());
             for (StickyEntry sticky : stickyCopy) {
                 boolean alreadyInTail = false;
                 for (String ln : tailLines) {
@@ -137,21 +222,30 @@ public final class DaemonLogBuffer {
                     missingSticky.add(sticky.formattedLine);
                 }
             }
-            if (!missingSticky.isEmpty()) {
-                combined.addAll(missingSticky);
-                int tailStart = Math.max(0, tailLines.length - Math.max(0, limit - missingSticky.size()));
-                for (int i = tailStart; i < tailLines.length; i++) {
-                    if (tailLines[i] != null) combined.add(tailLines[i]);
-                }
-            } else {
-                for (String ln : tailLines) {
-                    if (ln != null) combined.add(ln);
-                }
+        }
+        int stickyCount = Math.min(missingSticky.size(), limit);
+        int remainingAfterSticky = Math.max(0, limit - stickyCount);
+        int prevCount = 0;
+        if (prevCopy != null && !prevCopy.isEmpty() && remainingAfterSticky > 0) {
+            int liveReserve = Math.min(tailLines.length, Math.max(10, limit / 2));
+            int prevBudget = Math.max(0, remainingAfterSticky - liveReserve);
+            prevCount = Math.min(prevCopy.size(), prevBudget);
+        }
+        int liveCount = Math.min(tailLines.length, Math.max(0, remainingAfterSticky - prevCount));
+        int tailStart = Math.max(0, tailLines.length - liveCount);
+
+        List<String> combined = new ArrayList<>(stickyCount + prevCount + liveCount);
+        for (int i = 0; i < stickyCount; i++) {
+            combined.add(missingSticky.get(i));
+        }
+        if (prevCount > 0 && prevCopy != null) {
+            int prevStart = Math.max(0, prevCopy.size() - prevCount);
+            for (int i = prevStart; i < prevCopy.size(); i++) {
+                combined.add(prevCopy.get(i));
             }
-        } else {
-            for (String ln : tailLines) {
-                if (ln != null) combined.add(ln);
-            }
+        }
+        for (int i = tailStart; i < tailLines.length; i++) {
+            if (tailLines[i] != null) combined.add(tailLines[i]);
         }
 
         StringBuilder sb = new StringBuilder(Math.min(MAX_SNAPSHOT_CHARS, combined.size() * 80));
@@ -184,6 +278,7 @@ public final class DaemonLogBuffer {
         synchronized (LOCK) {
             RING.clear();
             STICKY_HEADERS.clear();
+            PREV_CRASH_LINES.clear();
         }
     }
 

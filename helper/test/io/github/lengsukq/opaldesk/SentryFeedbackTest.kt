@@ -286,4 +286,20 @@ class SentryFeedbackTest {
             ),
         )
     }
+
+    @Test
+    fun sanitizerPreservesStickyPreviousCrashExceptionsWhenTrimmingDaemonLogs() {
+        val lines = buildList {
+            add("09:00:00.000 I/Daemon: [STARTUP] OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=2000 api=31")
+            add("[PREV_CRASH] OPALDESK_UNCAUGHT_EXCEPTION thread=main: java.lang.SecurityException: denied")
+            for (i in 1..240) {
+                add("09:01:00.000 I/Daemon: live-line-$i")
+            }
+        }
+        val selected = DiagnosticSanitizer.selectDaemonLinesPreservingStartup(lines, maxDaemonLines = 40)
+        assertEquals(40, selected.size)
+        assertTrue(selected.any { it.contains("[STARTUP]") })
+        assertTrue(selected.any { it.contains("[PREV_CRASH] OPALDESK_UNCAUGHT_EXCEPTION") })
+        assertTrue(selected.last().contains("live-line-240"))
+    }
 }

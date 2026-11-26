@@ -29,8 +29,20 @@ object AdbBootstrap {
     private const val DIAG_ROOT = 1
     private const val DIAG_SHIZUKU = 2
 
+    @Volatile
+    private var lastActivationMethod: Int = -1
+
+    @Volatile
+    private var lastWirelessHost: String = ""
+
+    @Volatile
+    private var lastWirelessPort: Int = 0
+
+    fun wasRootActivatedRecently(): Boolean = lastActivationMethod == DIAG_ROOT
+
     private val PAIR_SPLIT_REGEX = Regex("[\\s:]+")
     private val exec = Executors.newSingleThreadExecutor()
+    private val bootstrapActiveCount = java.util.concurrent.atomic.AtomicInteger(0)
     private val mainHandler = Handler(Looper.getMainLooper())
 
     class DiscoveryState {
@@ -76,6 +88,43 @@ object AdbBootstrap {
     fun setAutoRootEnabled(ctx: Context?, enabled: Boolean) = AppPrefs.setAutoRootEnabled(ctx, enabled)
     fun isAutoShizukuEnabled(ctx: Context?): Boolean = AppPrefs.isAutoShizukuEnabled(ctx)
     fun setAutoShizukuEnabled(ctx: Context?, enabled: Boolean) = AppPrefs.setAutoShizukuEnabled(ctx, enabled)
+
+    internal fun tryRunPostmortemOverWirelessSync(ctx: Context, shellCmd: String): String? {
+        val appCtx = ctx.applicationContext
+        if (!AdbProcessRunner.isNativeAdbAvailable(appCtx) || bootstrapActiveCount.get() > 0) return null
+        val ds = getDiscoveryState()
+        val host = when {
+            lastWirelessHost.isNotBlank() && lastWirelessPort > 0 -> lastWirelessHost
+            ds.connectPort > 0 -> ds.connectHost.ifEmpty { getLocalIpv4() }
+            else -> ""
+        }
+        val port = when {
+            lastWirelessHost.isNotBlank() && lastWirelessPort > 0 -> lastWirelessPort
+            ds.connectPort > 0 -> ds.connectPort
+            else -> 0
+        }
+        if (port !in 1..65535 || !AdbProcessRunner.isAllowedLocalHost(host)) return null
+        val fut = exec.submit<String?> {
+            if (bootstrapActiveCount.get() > 0) return@submit null
+            try {
+                val startRes = AdbProcessRunner.runAdb(appCtx, 3000L, "start-server")
+                if (startRes.code != 0) return@submit null
+                val (target, _) = AdbProcessRunner.connectAdbTarget(appCtx, host, port, timeoutMs = 2500L)
+                if (target == null) return@submit null
+                AdbProcessRunner.runAdb(appCtx, 3000L, "-s", target, "shell", shellCmd).output.takeIf { it.isNotBlank() }
+            } catch (_: Throwable) {
+                null
+            } finally {
+                AdbProcessRunner.stopLocalAdbServerSync(appCtx)
+            }
+        }
+        return try {
+            fut.get(8500L, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (_: Throwable) {
+            fut.cancel(true)
+            null
+        }
+    }
 
     fun killLocalAdbServerAsync(ctx: Context?) {
         val appCtx = ctx?.applicationContext ?: return
@@ -162,6 +211,7 @@ object AdbBootstrap {
             postResult(listener, false, hint); return@submitBootstrap
         }
         if (markAutoRoot) setAutoRootEnabled(appCtx, true)
+        lastActivationMethod = DIAG_ROOT
         awaitDaemonBinderReady(appCtx, DIAG_ROOT, listener, "Root 一键激活成功，OpalDesk 服务已就绪！")
     }
 
@@ -199,6 +249,7 @@ object AdbBootstrap {
                 return@submitBootstrap
             }
             if (markAutoShizuku) setAutoShizukuEnabled(appCtx, true)
+            lastActivationMethod = DIAG_SHIZUKU
             awaitDaemonBinderReady(appCtx, DIAG_SHIZUKU, listener, "Shizuku 一键激活成功，OpalDesk 服务已就绪！")
         }
 
@@ -209,12 +260,15 @@ object AdbBootstrap {
         BridgeService.sUserStopping = false
         BridgeService.ensureStarted(appCtx)
         OpalLogStore.i("ADB", "Bootstrap started: $label")
+        bootstrapActiveCount.incrementAndGet()
         exec.execute {
             try { block(appCtx) }
             catch (t: Throwable) {
                 Log.e(TAG, "$label failed", t)
                 OpalLogStore.e("ADB", "$label threw exception", t)
                 postResult(listener, false, "执行异常: ${t.message}")
+            } finally {
+                bootstrapActiveCount.decrementAndGet()
             }
         }
     }
@@ -282,6 +336,9 @@ object AdbBootstrap {
             postResult(listener, false, "连接无线调试失败 ($host:$connectPort):\n$errOut\n若为新设备，请先用「配对码」完成配对并确认连接端口已更新。")
             return
         }
+        lastActivationMethod = DIAG_WIRELESS
+        lastWirelessHost = host
+        lastWirelessPort = connectPort
 
         postStep(listener, "已连接！正在直推 opaldesk.jar 并授权启动守护进程...")
         val staged = DaemonBootstrapScripts.stageBridgeJarWithSha256(appCtx)

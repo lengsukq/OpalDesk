@@ -60,6 +60,7 @@ public final class PerDisplayInputRouter {
     private long lastDownUptimeMs = 0L;
     private boolean tapMovedTooFar = false;
     private volatile boolean activeMouseTouchEmulation = false;
+    private volatile boolean activeSideNavMouseSuppression = false;
 
     public PerDisplayInputRouter(AndroidServices services, DaemonConfig config) {
         this.services = services;
@@ -153,6 +154,25 @@ public final class PerDisplayInputRouter {
             return true;
         }
 
+        boolean isMouse = (source & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE
+                || (toolTypes.length > 0 && toolTypes[0] == MotionEvent.TOOL_TYPE_MOUSE);
+        if (MouseRoutingPolicy.shouldSuppressSideNavigationMouseTouch(
+                masked, isMouse, buttonState, activeSideNavMouseSuppression)) {
+            if (masked == MotionEvent.ACTION_DOWN) {
+                activeSideNavMouseSuppression = true;
+                activeMouseTouchEmulation = false;
+                lastDownWinId = -1;
+            } else if (masked == MotionEvent.ACTION_UP || masked == MotionEvent.ACTION_CANCEL) {
+                activeSideNavMouseSuppression = false;
+            }
+            return true;
+        }
+        if (masked == MotionEvent.ACTION_DOWN
+                || masked == MotionEvent.ACTION_UP
+                || masked == MotionEvent.ACTION_CANCEL) {
+            activeSideNavMouseSuppression = false;
+        }
+
         int count = pointerIds.length;
         MotionEvent.PointerProperties[] props = new MotionEvent.PointerProperties[count];
         MotionEvent.PointerCoords[] coords = new MotionEvent.PointerCoords[count];
@@ -174,8 +194,6 @@ public final class PerDisplayInputRouter {
             coords[i] = c;
         }
 
-        boolean isMouse = (source & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE
-                || (toolTypes.length > 0 && toolTypes[0] == MotionEvent.TOOL_TYPE_MOUSE);
         boolean triggerTapUpCheck = false;
         long tapDownTs = 0L;
         if (masked == MotionEvent.ACTION_DOWN) {

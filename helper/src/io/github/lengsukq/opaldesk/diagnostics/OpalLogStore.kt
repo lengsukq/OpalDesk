@@ -197,7 +197,38 @@ object OpalLogFilter {
             upper.contains("FAIL") ||
             upper.contains("EXCEPTION") ||
             upper.contains("FATAL") ||
+            upper.contains("SIGSEGV") ||
+            upper.contains("SIGABRT") ||
+            upper.contains("UNCAUGHT") ||
+            upper.contains("DIED") ||
             upper.contains("REJECT")
+    }
+
+    /**
+     * Merges cached/live daemon lines with a newly captured [postmortemBlock] while replacing any
+     * stale `[POSTMORTEM]` section from an earlier offline collection pass and keeping total lines
+     * bounded with `[STARTUP]` / critical `[PREV_CRASH]` headers preserved.
+     */
+    fun mergeDaemonAndPostmortemLogs(
+        existingDaemonText: String,
+        postmortemBlock: String,
+        maxLines: Int = 350,
+    ): String {
+        val cleanPost = postmortemBlock.trimEnd()
+        if (cleanPost.isBlank()) return existingDaemonText.trimEnd()
+        val postLines = cleanPost.lineSequence()
+            .map { it.trimEnd() }
+            .filter { it.isNotBlank() }
+            .toList()
+        val preLines = existingDaemonText.lineSequence()
+            .map { it.trimEnd() }
+            .filter { it.isNotBlank() && !it.startsWith(PostmortemLogParser.POSTMORTEM_PREFIX) }
+            .toList()
+        if (preLines.isEmpty()) {
+            return DiagnosticSanitizer.selectDaemonLinesPreservingStartup(postLines, maxLines).joinToString("\n")
+        }
+        val combined = preLines + postLines
+        return DiagnosticSanitizer.selectDaemonLinesPreservingStartup(combined, maxLines).joinToString("\n")
     }
 
     fun inputBackendModeLabel(mode: Int): String = when (mode) {
@@ -285,10 +316,14 @@ object OpalLogStore {
     private const val LOGCAT_TAG_PREFIX = "OpalDesk"
     private const val LOG_DIR_NAME = "logs"
     private const val LOG_FILE_NAME = "opaldesk_helper.log"
+    private const val DAEMON_LOG_FILE_NAME = "opaldesk_daemon_last.log"
     private const val MAX_FILE_BYTES = 192 * 1024L
+    private const val MAX_DAEMON_FILE_BYTES = 128 * 1024L
     private const val KEEP_FILE_TAIL_LINES = 350
+    private const val KEEP_DAEMON_FILE_TAIL_LINES = 350
 
     private val ring = LogRingStore(LogRingStore.DEFAULT_MAX_ENTRIES)
+    private val daemonLock = Any()
     private val fileExec = Executors.newSingleThreadExecutor { r ->
         Thread(r, "OpalLogDisk").apply { isDaemon = true }
     }
@@ -307,6 +342,9 @@ object OpalLogStore {
 
     @Volatile
     private var logFile: File? = null
+
+    @Volatile
+    private var daemonLogFile: File? = null
 
     @Volatile
     var entryListener: ((OpalLogEntry) -> Unit)? = null
@@ -373,9 +411,12 @@ object OpalLogStore {
                 if (!exists()) mkdirs()
             }
             val target = File(dir, LOG_FILE_NAME)
+            val daemonTarget = File(dir, DAEMON_LOG_FILE_NAME)
             logFile = target
+            daemonLogFile = daemonTarget
             fileExec.execute {
                 loadTailFromDisk(target)
+                loadDaemonTailFromDisk(daemonTarget)
             }
         }
     }
@@ -397,12 +438,36 @@ object OpalLogStore {
 
     fun updateDaemonLogs(rawText: String) {
         val trimmed = rawText.trimEnd()
-        _daemonLogsFlow.value = stripUploadedDaemonPrefix(trimmed, lastUploadedDaemonTail)
+        if (trimmed.isBlank()) return
+        val updated = synchronized(daemonLock) {
+            val filtered = stripUploadedDaemonPrefix(trimmed, lastUploadedDaemonTail)
+            if (filtered == _daemonLogsFlow.value) return@synchronized null
+            _daemonLogsFlow.value = filtered
+            filtered
+        } ?: return
+        persistDaemonTextAsync(updated)
+    }
+
+    fun mergePostmortemDaemonLogs(postmortemBlock: String) {
+        val cleanPost = postmortemBlock.trimEnd()
+        if (cleanPost.isBlank()) return
+        val updated = synchronized(daemonLock) {
+            val merged = OpalLogFilter.mergeDaemonAndPostmortemLogs(
+                existingDaemonText = _daemonLogsFlow.value,
+                postmortemBlock = cleanPost,
+                maxLines = KEEP_DAEMON_FILE_TAIL_LINES,
+            )
+            val filtered = stripUploadedDaemonPrefix(merged, lastUploadedDaemonTail)
+            if (filtered == _daemonLogsFlow.value) return@synchronized null
+            _daemonLogsFlow.value = filtered
+            filtered
+        } ?: return
+        persistDaemonTextAsync(updated)
     }
 
     /**
-     * Clears local helper logs and records a daemon-log watermark after a confirmed upload so
-     * reporting a second issue right afterwards only includes newly generated logs.
+     * Clears local helper & cached daemon logs and records a daemon-log watermark after a confirmed
+     * upload so reporting a second issue right afterwards only includes newly generated logs.
      */
     fun clearAfterConfirmedUpload(uploadedDaemonText: String) {
         val tailLines = uploadedDaemonText
@@ -411,11 +476,31 @@ object OpalLogStore {
             .filter { it.isNotBlank() }
             .toList()
             .takeLast(5)
-        if (tailLines.isNotEmpty()) {
-            lastUploadedDaemonTail = tailLines
+        synchronized(daemonLock) {
+            if (tailLines.isNotEmpty()) {
+                lastUploadedDaemonTail = tailLines
+            }
         }
-        _daemonLogsFlow.value = ""
+        clearDaemonLogs(resetWatermark = false)
         clearHelperLogs()
+    }
+
+    fun clearDaemonLogs(resetWatermark: Boolean = false) {
+        synchronized(daemonLock) {
+            if (resetWatermark) {
+                lastUploadedDaemonTail = emptyList()
+            }
+            _daemonLogsFlow.value = ""
+        }
+        daemonLogFile?.let { file ->
+            fileExec.execute {
+                runCatching {
+                    if (file.exists()) {
+                        FileOutputStream(file, false).use { }
+                    }
+                }
+            }
+        }
     }
 
     internal fun stripUploadedDaemonPrefix(rawText: String, uploadedTail: List<String>): String {
@@ -554,6 +639,41 @@ object OpalLogStore {
             }
             if (file.length() > MAX_FILE_BYTES) {
                 file.writeText(tail.joinToString("\n") + "\n", StandardCharsets.UTF_8)
+            }
+        }
+    }
+
+    private fun loadDaemonTailFromDisk(file: File) {
+        if (!file.isFile || file.length() <= 0L) return
+        runCatching {
+            val rawLines = file.readLines(StandardCharsets.UTF_8)
+                .map { it.trimEnd() }
+                .filter { it.isNotBlank() }
+            if (rawLines.isEmpty()) return
+            val kept = DiagnosticSanitizer.selectDaemonLinesPreservingStartup(rawLines, KEEP_DAEMON_FILE_TAIL_LINES)
+            val text = kept.joinToString("\n")
+            synchronized(daemonLock) {
+                if (_daemonLogsFlow.value.isBlank() && text.isNotBlank()) {
+                    _daemonLogsFlow.value = stripUploadedDaemonPrefix(text, lastUploadedDaemonTail)
+                }
+            }
+            if (file.length() > MAX_DAEMON_FILE_BYTES) {
+                file.writeText(if (text.isNotEmpty()) "$text\n" else "", StandardCharsets.UTF_8)
+            }
+        }
+    }
+
+    private fun persistDaemonTextAsync(text: String) {
+        val file = daemonLogFile ?: return
+        fileExec.execute {
+            runCatching {
+                val lines = text.lineSequence()
+                    .map { it.trimEnd() }
+                    .filter { it.isNotBlank() }
+                    .toList()
+                val kept = DiagnosticSanitizer.selectDaemonLinesPreservingStartup(lines, KEEP_DAEMON_FILE_TAIL_LINES)
+                val out = kept.joinToString("\n")
+                file.writeText(if (out.isNotEmpty()) "$out\n" else "", StandardCharsets.UTF_8)
             }
         }
     }

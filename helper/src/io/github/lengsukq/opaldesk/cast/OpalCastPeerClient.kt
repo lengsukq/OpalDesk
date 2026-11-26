@@ -14,6 +14,7 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.Surface
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
+import io.github.lengsukq.opaldesk.protocol.CompositorGeometry
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -138,6 +139,7 @@ class OpalCastPeerClient(
     private val outQueue = LinkedBlockingQueue<OutPacket>(256)
     private val audioQueue = LinkedBlockingQueue<Pair<ByteArray, Long>>(8)
     private val textSeq = AtomicLong(1L)
+    private val sideNavTouchFilter = CompositorGeometry.SideNavigationTouchFilter()
 
     @Volatile
     private var outputSurface: Surface? = null
@@ -354,11 +356,14 @@ class OpalCastPeerClient(
 
     fun sendMouseEvent(ev: MotionEvent, viewW: Int, viewH: Int) {
         if (viewW <= 0 || viewH <= 0) return
+        val masked = ev.actionMasked
+        if (sideNavTouchFilter.shouldSuppress(masked, isMouseMotion(ev), ev.buttonState)) {
+            return
+        }
         val rw = remoteWidth.coerceAtLeast(2).toFloat()
         val rh = remoteHeight.coerceAtLeast(2).toFloat()
         val rx = (ev.x * (rw / viewW)).coerceIn(0f, rw - 1f)
         val ry = (ev.y * (rh / viewH)).coerceIn(0f, rh - 1f)
-        val masked = ev.actionMasked
         val mouseAction = when (masked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_BUTTON_PRESS -> 1 // MOUSE_BUTTON_DOWN
             MotionEvent.ACTION_UP, MotionEvent.ACTION_BUTTON_RELEASE -> 2 // MOUSE_BUTTON_UP

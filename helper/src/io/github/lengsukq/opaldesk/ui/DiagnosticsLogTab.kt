@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.BridgeClient
+import io.github.lengsukq.opaldesk.diagnostics.DaemonPostmortemCollector
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackRateLimiter
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogFilter
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogLevel
@@ -83,7 +84,15 @@ fun ConsoleLogsTab(
 
     fun refreshDaemonLogs() {
         if (!status.connected) {
-            Toast.makeText(ctx, "守护进程未连接，当前仅显示客户端日志", Toast.LENGTH_SHORT).show()
+            refreshing = true
+            Toast.makeText(ctx, "守护进程未连接，正在尝试补采崩溃与系统缓存日志", Toast.LENGTH_SHORT).show()
+            DaemonPostmortemCollector.collectIfDisconnectedAsync(
+                ctx = ctx,
+                triggerReason = "manual_refresh",
+                force = true,
+            ) {
+                refreshing = false
+            }
             return
         }
         refreshing = true
@@ -96,6 +105,14 @@ fun ConsoleLogsTab(
         if (status.connected) {
             refreshing = true
             BridgeClient.fetchDaemonLogsAsync(maxLines = 400) {
+                refreshing = false
+            }
+        } else {
+            refreshing = true
+            DaemonPostmortemCollector.collectIfDisconnectedAsync(
+                ctx = ctx,
+                triggerReason = "diagnostics_tab",
+            ) {
                 refreshing = false
             }
         }

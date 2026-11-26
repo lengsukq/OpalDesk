@@ -4,8 +4,13 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -77,5 +82,46 @@ public class DaemonLogBufferTest {
         assertEquals(20, lines.length);
         assertTrue(lines[0].contains("[STARTUP] " + banner));
         assertTrue(lines[lines.length - 1].contains("noise-" + (overflow - 1)));
+    }
+
+    @Test
+    public void previousAbnormalTailSkipsCleanStopAndRetainsCrashContext() throws Exception {
+        List<String> cleanLog = Arrays.asList(
+                "OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=2000 api=31",
+                "OPALDESK_VD_CREATED name=OpalWin-1 displayId=2",
+                DaemonLogBuffer.CLEAN_SHUTDOWN_MARKER + " reason=ctl_stop"
+        );
+        assertTrue(DaemonLogBuffer.extractPreviousAbnormalTail(cleanLog, 20).isEmpty());
+
+        List<String> crashedLog = Arrays.asList(
+                "OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=2000 api=31",
+                "OPALDESK_VD_CREATED name=OpalWin-1 displayId=2",
+                "OPALDESK_UNCAUGHT_EXCEPTION thread=main: java.lang.SecurityException: denied",
+                "OPALDESK_UNCAUGHT_END"
+        );
+        List<String> extracted = DaemonLogBuffer.extractPreviousAbnormalTail(crashedLog, 10);
+        assertEquals(4, extracted.size());
+        assertTrue(extracted.get(0).contains("[PREV_CRASH] OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED"));
+        assertTrue(extracted.get(2).contains("OPALDESK_UNCAUGHT_EXCEPTION"));
+
+        File tmpDir = Files.createTempDirectory("opaldesk-logbuf").toFile();
+        tmpDir.deleteOnExit();
+        File prevFile = new File(tmpDir, "opaldesk.prev.log");
+        Files.write(prevFile.toPath(), crashedLog, StandardCharsets.UTF_8);
+        prevFile.deleteOnExit();
+
+        int loaded = DaemonLogBuffer.loadPreviousAbnormalLogFile(prevFile, 20);
+        assertEquals(4, loaded);
+        DaemonLogBuffer.recordLine(false, "OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=2000 api=31");
+        String snap = DaemonLogBuffer.snapshotTail(40);
+        assertTrue(snap.contains("[PREV_CRASH] OPALDESK_UNCAUGHT_EXCEPTION"));
+        assertTrue(snap.contains("OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=2000 api=31"));
+
+        // Symlinked log files must be refused fail-closed.
+        DaemonLogBuffer.clear();
+        File linkFile = new File(tmpDir, "sym.prev.log");
+        linkFile.deleteOnExit();
+        Files.createSymbolicLink(linkFile.toPath(), prevFile.toPath());
+        assertEquals(0, DaemonLogBuffer.loadPreviousAbnormalLogFile(linkFile, 20));
     }
 }

@@ -1308,7 +1308,7 @@ fun ConsoleDisplaySettingsTab(
                 options = listOf("100%", "125%", "150%", "175% TV", "200% TV"),
                 selectedIndex = scaleIdx,
                 onSelect = { idx ->
-                    io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.setWorkingExternalUiScale(ctx, scaleOpts[idx])
+                    AppPrefs.setExternalUiScale(ctx, scaleOpts[idx])
                 },
             )
 

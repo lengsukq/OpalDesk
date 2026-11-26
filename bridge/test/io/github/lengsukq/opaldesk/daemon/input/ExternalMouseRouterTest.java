@@ -212,4 +212,40 @@ public class ExternalMouseRouterTest {
         assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(true, false, false));
         assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(true, false, true));
     }
+
+    @Test
+    public void sideNavigationMouseButtonTouchSequenceIsSuppressed() {
+        assertTrue(MouseRoutingPolicy.isSideNavigationOnlyButtonState(MouseRoutingPolicy.BUTTON_BACK));
+        assertTrue(MouseRoutingPolicy.isSideNavigationOnlyButtonState(MouseRoutingPolicy.BUTTON_FORWARD));
+        assertTrue(MouseRoutingPolicy.isSideNavigationOnlyButtonState(
+                MouseRoutingPolicy.BUTTON_BACK | MouseRoutingPolicy.BUTTON_FORWARD));
+        assertFalse(MouseRoutingPolicy.isSideNavigationOnlyButtonState(0));
+        assertFalse(MouseRoutingPolicy.isSideNavigationOnlyButtonState(MouseRoutingPolicy.BUTTON_PRIMARY));
+        assertFalse(MouseRoutingPolicy.isSideNavigationOnlyButtonState(MouseRoutingPolicy.BUTTON_SECONDARY));
+        assertFalse(MouseRoutingPolicy.isSideNavigationOnlyButtonState(MouseRoutingPolicy.BUTTON_TERTIARY));
+        assertFalse(MouseRoutingPolicy.isSideNavigationOnlyButtonState(
+                MouseRoutingPolicy.BUTTON_PRIMARY | MouseRoutingPolicy.BUTTON_BACK));
+
+        // Standalone BUTTON_BACK / BUTTON_FORWARD click sequence must be suppressed across DOWN -> MOVE -> UP
+        assertTrue(MouseRoutingPolicy.shouldSuppressSideNavigationMouseTouch(
+                MouseRoutingPolicy.ACTION_DOWN, true, MouseRoutingPolicy.BUTTON_BACK, false));
+        assertTrue(MouseRoutingPolicy.shouldSuppressSideNavigationMouseTouch(
+                MouseRoutingPolicy.ACTION_MOVE, true, MouseRoutingPolicy.BUTTON_BACK, true));
+        assertTrue(MouseRoutingPolicy.shouldSuppressSideNavigationMouseTouch(
+                MouseRoutingPolicy.ACTION_UP, true, 0, true));
+        assertTrue(MouseRoutingPolicy.shouldSuppressSideNavigationMouseTouch(
+                MouseRoutingPolicy.ACTION_CANCEL, true, 0, true));
+
+        // Non-mouse touch, hover/scroll, and primary/secondary mouse clicks remain unaffected
+        assertFalse(MouseRoutingPolicy.shouldSuppressSideNavigationMouseTouch(
+                MouseRoutingPolicy.ACTION_DOWN, false, MouseRoutingPolicy.BUTTON_BACK, false));
+        assertFalse(MouseRoutingPolicy.shouldSuppressSideNavigationMouseTouch(
+                MouseRoutingPolicy.ACTION_DOWN, true, MouseRoutingPolicy.BUTTON_PRIMARY, false));
+        assertFalse(MouseRoutingPolicy.shouldSuppressSideNavigationMouseTouch(
+                MouseRoutingPolicy.ACTION_DOWN, true, MouseRoutingPolicy.BUTTON_SECONDARY, false));
+        assertFalse(MouseRoutingPolicy.shouldSuppressSideNavigationMouseTouch(
+                MouseRoutingPolicy.ACTION_HOVER_MOVE, true, MouseRoutingPolicy.BUTTON_BACK, true));
+        assertFalse(MouseRoutingPolicy.shouldSuppressSideNavigationMouseTouch(
+                MouseRoutingPolicy.ACTION_SCROLL, true, MouseRoutingPolicy.BUTTON_BACK, true));
+    }
 }

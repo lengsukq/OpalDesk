@@ -6,6 +6,7 @@ import io.github.lengsukq.opaldesk.diagnostics.OpalLogEntry
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogFilter
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogLevel
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
+import io.github.lengsukq.opaldesk.diagnostics.PostmortemLogParser
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorScene
 import io.github.lengsukq.opaldesk.protocol.CompositorWindow
@@ -181,6 +182,71 @@ class OpalLogStoreTest {
         } finally {
             OpalLogStore.entryListener = prevListener
             OpalLogStore.clearHelperLogs()
+        }
+    }
+
+    @Test
+    fun postmortemLogParserFiltersThirdPartyCrashesAndPreservesDaemonAndAppProcessCrashes() {
+        val raw = """
+            ===OPAL_DAEMON_ALIVE===
+            0
+            ===OPAL_CRASH_LOGCAT===
+            --------- beginning of crash
+            11-26 17:00:00.100 E AndroidRuntime: FATAL EXCEPTION: main
+            11-26 17:00:00.100 E AndroidRuntime: Process: com.example.unrelatedapp, PID: 9999
+            11-26 17:00:00.100 E AndroidRuntime: java.lang.NullPointerException: ignore me
+            --------- beginning of crash
+            11-26 17:05:11.200 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+            11-26 17:05:11.201 F DEBUG   : Cmdline: /system/bin/app_process /data/local/tmp io.github.lengsukq.opaldesk.daemon.OpalDeskDaemon
+            11-26 17:05:11.202 F DEBUG   : signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0
+            11-26 17:05:11.203 F DEBUG   :     #00 pc 0000000000012345  /system/lib64/libandroid_runtime.so
+            ===OPAL_CUR_LOG===
+            OPALDESK_VD_CREATED name=OpalWin-1 displayId=2
+            192.168.31.88 bearer abcdef123456
+            ===OPAL_PREV_LOG===
+            OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=2000 api=31
+            OPALDESK_DAEMON_SHUTDOWN_CLEAN reason=ctl_stop
+        """.trimIndent()
+
+        val formatted = PostmortemLogParser.formatReportBlock(
+            rawOutput = raw,
+            channel = "shizuku",
+            triggerReason = "link_to_death",
+        )
+        assertTrue(formatted.contains("[POSTMORTEM] collected trigger=link_to_death channel=shizuku daemonAlive=0"))
+        assertTrue(formatted.contains("signal 11 (SIGSEGV)"))
+        assertTrue(formatted.contains("OpalDeskDaemon"))
+        assertTrue(formatted.contains("OPALDESK_VD_CREATED name=OpalWin-1"))
+        // Unrelated third-party app crashes and clean previous restart logs must be excluded; PII redacted.
+        assertFalse(formatted.contains("com.example.unrelatedapp"))
+        assertFalse(formatted.contains("OPALDESK_DAEMON_SHUTDOWN_CLEAN"))
+        assertFalse(formatted.contains("192.168.31.88"))
+        assertFalse(formatted.contains("abcdef123456"))
+    }
+
+    @Test
+    fun mergeDaemonLogsPreservesCachedLinesAcrossEmptyFetchAndReplacesOldPostmortemSection() {
+        try {
+            OpalLogStore.clearDaemonLogs(resetWatermark = true)
+            OpalLogStore.updateDaemonLogs("17:00:00.000 I/Daemon: [STARTUP] OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED\n17:00:01.000 I/Daemon: live-1")
+            // Simulated failed/empty Binder IPC fetch must NOT erase cached live daemon logs
+            OpalLogStore.updateDaemonLogs("")
+            assertTrue(OpalLogStore.daemonLogsFlow.value.contains("live-1"))
+
+            OpalLogStore.mergePostmortemDaemonLogs("[POSTMORTEM] old-capture")
+            assertTrue(OpalLogStore.daemonLogsFlow.value.contains("live-1"))
+            assertTrue(OpalLogStore.daemonLogsFlow.value.contains("old-capture"))
+
+            // Subsequent post-mortem collection replaces stale [POSTMORTEM] block while keeping cached live lines
+            OpalLogStore.mergePostmortemDaemonLogs("[POSTMORTEM] fresh-capture\n[POSTMORTEM] Fatal signal 11")
+            val merged = OpalLogStore.daemonLogsFlow.value
+            assertTrue(merged.contains("[STARTUP] OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED"))
+            assertTrue(merged.contains("live-1"))
+            assertFalse(merged.contains("old-capture"))
+            assertTrue(merged.contains("fresh-capture"))
+            assertTrue(OpalLogFilter.isDaemonWarningOrError("[POSTMORTEM] Fatal signal 11"))
+        } finally {
+            OpalLogStore.clearDaemonLogs(resetWatermark = true)
         }
     }
 }

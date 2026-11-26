@@ -217,6 +217,17 @@ class AdbHelperLogicTest {
         assertFalse(wireless.contains("adb_wifi_enabled"))
         assertFalse(postPush.contains("adb_wifi_enabled"))
         assertFalse(DaemonBootstrapScripts.buildPcAdbCommand().contains("adb_wifi_enabled"))
+
+        // Bootstrap scripts rotate opaldesk.log -> opaldesk.prev.log with symlink guards, and postmortem stays bounded + symlink-safe.
+        assertTrue(DaemonBootstrapScripts.buildPcAdbCommand().contains("/data/local/tmp/opaldesk.prev.log"))
+        assertTrue(DaemonBootstrapScripts.buildShellSwapAndLaunchScript("'/data/local/tmp/t.jar'", validSha).contains("/data/local/tmp/opaldesk.prev.log"))
+        val postmortemCmd = DaemonBootstrapScripts.buildPostmortemDiagCommand()
+        assertTrue(postmortemCmd.contains("===OPAL_DAEMON_ALIVE==="))
+        assertTrue(postmortemCmd.contains("===OPAL_CRASH_LOGCAT==="))
+        assertTrue(postmortemCmd.contains("===OPAL_CUR_LOG==="))
+        assertTrue(postmortemCmd.contains("===OPAL_PREV_LOG==="))
+        assertTrue(postmortemCmd.contains("[ ! -L /data/local/tmp/opaldesk.log ]"))
+        assertTrue(postmortemCmd.contains("[ ! -L /data/local/tmp/opaldesk.prev.log ]"))
     }
 
     @Test

@@ -101,7 +101,15 @@ object DiagnosticSanitizer {
     ): List<String> {
         if (maxDaemonLines <= 0) return emptyList()
         if (daemonLines.size <= maxDaemonLines) return daemonLines
-        val sticky = daemonLines.filter { isStickyStartupLine(it) }.take(minOf(4, maxDaemonLines / 4))
+        val budgetCap = (maxDaemonLines / 4).coerceAtLeast(1)
+        val stickyStartup = daemonLines.filter { isStickyStartupLine(it) }.take(minOf(4, budgetCap))
+        val prevCrashBudget = (budgetCap - stickyStartup.size).coerceAtLeast(0)
+        val stickyPrevCrash = if (prevCrashBudget > 0) {
+            daemonLines.filter { isStickyPrevCrashLine(it) }.takeLast(prevCrashBudget)
+        } else {
+            emptyList()
+        }
+        val sticky = stickyStartup + stickyPrevCrash
         if (sticky.isEmpty()) return daemonLines.takeLast(maxDaemonLines)
         val tailBudget = (maxDaemonLines - sticky.size).coerceAtLeast(0)
         val tail = if (tailBudget > 0) daemonLines.takeLast(tailBudget) else emptyList()
@@ -114,6 +122,15 @@ object DiagnosticSanitizer {
 
     private fun isStickyStartupLine(line: String): Boolean =
         line.contains("[STARTUP]") || line.contains("OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED")
+
+    private fun isStickyPrevCrashLine(line: String): Boolean =
+        line.contains("[PREV_CRASH]") && (
+            line.contains("STARTED") ||
+                line.contains("UNCAUGHT") ||
+                line.contains("FATAL") ||
+                line.contains("Exception") ||
+                line.contains("Error")
+            )
 
     fun gzipCompress(
         text: String,

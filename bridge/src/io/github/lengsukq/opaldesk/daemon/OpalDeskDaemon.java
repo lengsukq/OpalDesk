@@ -28,6 +28,7 @@ import io.github.lengsukq.opaldesk.daemon.platform.TaskStackObserver;
 import io.github.lengsukq.opaldesk.daemon.stream.OpalCastCompositorBridge;
 import io.github.lengsukq.opaldesk.daemon.util.DaemonLogBuffer;
 
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -66,6 +67,7 @@ public final class OpalDeskDaemon implements Runnable {
     private final AtomicBoolean shutdownDone = new AtomicBoolean(false);
     private final AtomicLong imeProbeGen = new AtomicLong(0L);
     private final AtomicInteger lastHandledImmsShowSeq = new AtomicInteger(-1);
+    private volatile boolean explicitControlShutdown = false;
     private volatile long lastNeedBinderRxMs = 0L;
 
     private OpalDeskDaemon(AndroidServices services, RootEnhancer.EnhancementReport rootReport) {
@@ -188,6 +190,12 @@ public final class OpalDeskDaemon implements Runnable {
                 return;
             }
             DaemonLogBuffer.installSystemStreamTee();
+            int restoredPrevLines = DaemonLogBuffer.loadPreviousAbnormalLogFile(
+                    new File("/data/local/tmp/opaldesk.prev.log"),
+                    DaemonLogBuffer.MAX_PREV_CRASH_LINES);
+            if (restoredPrevLines > 0) {
+                System.err.println("OPALDESK_PREV_ABNORMAL_LOG_RESTORED lines=" + restoredPrevLines);
+            }
             Looper.prepareMainLooper();
             installUncaughtExceptionHandler();
 
@@ -195,7 +203,10 @@ public final class OpalDeskDaemon implements Runnable {
             DaemonControlSocket.bindHandlers(
                     () -> daemon.config.shuttingDown,
                     daemon.helperBridge::isTrustedCaller,
-                    daemon::performShutdownCleanup,
+                    () -> {
+                        daemon.explicitControlShutdown = true;
+                        daemon.performShutdownCleanup();
+                    },
                     () -> daemon.helperBridge.enqueuePushBinder(false));
             daemon.start();
             Looper.loop();
@@ -418,6 +429,10 @@ public final class OpalDeskDaemon implements Runnable {
             }
         } catch (RuntimeException ignored) {
         }
+        if (explicitControlShutdown) {
+            System.out.println(DaemonLogBuffer.CLEAN_SHUTDOWN_MARKER + " reason=ctl_stop");
+            System.out.flush();
+        }
     }
 
     private void registerNeedBinderReceiver() {
@@ -522,7 +537,10 @@ public final class OpalDeskDaemon implements Runnable {
         Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
             System.err.println("OPALDESK_UNCAUGHT_EXCEPTION thread="
                     + (thread != null ? thread.getName() : "unknown") + ": " + throwable);
-            if (throwable != null) throwable.printStackTrace();
+            if (throwable != null) throwable.printStackTrace(System.err);
+            System.err.println("OPALDESK_UNCAUGHT_END");
+            System.err.flush();
+            System.out.flush();
             if (thread == mainThread && prev != null) prev.uncaughtException(thread, throwable);
         });
     }

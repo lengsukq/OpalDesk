@@ -374,9 +374,35 @@ fun WindowSurfaceHost(
                             }
                         }
 
+                        val sideNavTouchFilter = CompositorGeometry.SideNavigationTouchFilter()
                         setOnTouchListener { v, ev ->
                             if (ev?.actionMasked == MotionEvent.ACTION_DOWN) {
                                 v.parent?.requestDisallowInterceptTouchEvent(true)
+                            }
+                            if (ev == null || v.width <= 0 || v.height <= 0) return@setOnTouchListener false
+                            val masked = ev.actionMasked
+                            val isMouse = isMouseMotionEvent(ev)
+                            if (masked == MotionEvent.ACTION_DOWN && isMouse &&
+                                CompositorGeometry.isSideNavigationOnlyMouseButton(ev.buttonState)
+                            ) {
+                                val canvasX = currentWin.frame.left + ev.x
+                                val canvasY = currentWin.frame.top + currentHeaderPx + ev.y
+                                if (CompositorGeometry.isPointOccludedByHigherWindow(
+                                        target = currentWin,
+                                        canvasX = canvasX,
+                                        canvasY = canvasY,
+                                        visibleWindows = BridgeClient.sceneFlow.value.visibleWindows,
+                                    )
+                                ) {
+                                    sideNavTouchFilter.reset()
+                                    return@setOnTouchListener false
+                                }
+                            }
+                            if (sideNavTouchFilter.shouldSuppress(masked, isMouse, ev.buttonState)) {
+                                if (masked == MotionEvent.ACTION_DOWN && !currentWin.focused) {
+                                    currentFocusCb()
+                                }
+                                return@setOnTouchListener true
                             }
                             forwardMotionEventToWindow(
                                 v.width, v.height, ev, currentWin, currentHeaderPx, currentCropTopPx, currentFocusCb,

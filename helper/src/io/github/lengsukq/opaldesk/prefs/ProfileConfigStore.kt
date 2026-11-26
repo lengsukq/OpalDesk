@@ -61,6 +61,7 @@ data class WorkspaceProfileConfig(
     val globalCustomDpi: Int = 0, // 0 = auto, 120..560 = fixed global custom DPI
     val windowDpiScalePct: Int = 100, // 70..160 when globalCustomDpi == 0
     val targetFps: Int = 0, // 0 = auto, 60/90/100/120
+    // Retained for v1 JSON compatibility; live UI scale is persisted globally in AppPrefs.
     val externalUiScale: Float = 1.25f,
     val maxVdCount: Int = 6,
     val inputBackendMode: Int = BridgeProtocol.InputBackend.AUTO,
@@ -254,11 +255,13 @@ object ProfileConfigStore {
 
     /**
      * Loads a saved slot (`0..4`) into [workingConfig] and remembers it as the active slot.
+     * Note: [AppPrefs.externalUiScaleFlow] is intentionally NOT overwritten here so desktop UI scale
+     * persists across exits, slot switches, and display target changes.
      */
     fun loadSlot(ctx: Context?, slotId: Int): WorkspaceProfileConfig {
         hydrate(ctx)
         val clamped = slotId.coerceIn(0, SLOT_COUNT - 1)
-        val loaded = synchronized(lock) {
+        return synchronized(lock) {
             val cur = _stateFlow.value
             val target = cur.slots.firstOrNull { it.id == clamped } ?: cur.slots.first()
             val next = cur.copy(
@@ -269,8 +272,6 @@ object ProfileConfigStore {
             persistSlotsLocked(ctx, next)
             target
         }
-        AppPrefs.setExternalUiScale(ctx, loaded.externalUiScale)
-        return loaded
     }
 
     /**
@@ -315,12 +316,6 @@ object ProfileConfigStore {
             val valid = if (fps == 0 || fps in 30..165) fps else 0
             it.copy(targetFps = valid)
         }
-
-    fun setWorkingExternalUiScale(ctx: Context?, scale: Float): WorkspaceProfileConfig {
-        val clamped = scale.coerceIn(0.85f, 2.0f)
-        AppPrefs.setExternalUiScale(ctx, clamped)
-        return updateWorkingConfig { it.copy(externalUiScale = clamped) }
-    }
 
     fun setWorkingMaxVdCount(maxVd: Int): WorkspaceProfileConfig =
         updateWorkingConfig { it.copy(maxVdCount = maxVd.coerceIn(2, 12)) }

@@ -348,6 +348,31 @@ class CompositorGeometryAndSceneTest {
         assertFalse("Subsequent onTextureDestroyed must not duplicate detach", gate.onTextureDestroyed(42, 103L))
     }
 
+    @Test
+    fun sideNavigationMouseTouchFilterSuppressesSideButtonClickSequenceOnly() {
+        val filter = CompositorGeometry.SideNavigationTouchFilter()
+
+        // Mouse BUTTON_BACK press-drag-release sequence is suppressed across DOWN -> MOVE -> UP
+        assertTrue(filter.shouldSuppress(CompositorGeometry.MOUSE_ACTION_DOWN, true, CompositorGeometry.MOUSE_BUTTON_BACK))
+        assertTrue(filter.isSuppressing)
+        assertTrue(filter.shouldSuppress(CompositorGeometry.MOUSE_ACTION_MOVE, true, CompositorGeometry.MOUSE_BUTTON_BACK))
+        assertTrue(filter.shouldSuppress(CompositorGeometry.MOUSE_ACTION_UP, true, 0))
+        assertFalse(filter.isSuppressing)
+
+        // Mouse BUTTON_FORWARD followed by CANCEL resets cleanly
+        assertTrue(filter.shouldSuppress(CompositorGeometry.MOUSE_ACTION_DOWN, true, CompositorGeometry.MOUSE_BUTTON_FORWARD))
+        assertTrue(filter.shouldSuppress(CompositorGeometry.MOUSE_ACTION_CANCEL, true, 0))
+        assertFalse(filter.isSuppressing)
+
+        // Hover/scroll events pass through without starting suppression; primary & secondary clicks stay live
+        assertFalse(filter.shouldSuppress(7 /* ACTION_HOVER_MOVE */, true, CompositorGeometry.MOUSE_BUTTON_BACK))
+        assertFalse(filter.shouldSuppress(8 /* ACTION_SCROLL */, true, 0))
+        assertFalse(filter.shouldSuppress(CompositorGeometry.MOUSE_ACTION_DOWN, true, 1 /* BUTTON_PRIMARY */))
+        assertFalse(filter.shouldSuppress(CompositorGeometry.MOUSE_ACTION_DOWN, true, 2 /* BUTTON_SECONDARY */))
+        assertFalse(filter.shouldSuppress(CompositorGeometry.MOUSE_ACTION_DOWN, true, 1 or CompositorGeometry.MOUSE_BUTTON_BACK))
+        assertFalse(filter.shouldSuppress(CompositorGeometry.MOUSE_ACTION_DOWN, false, CompositorGeometry.MOUSE_BUTTON_BACK))
+    }
+
     private fun sampleWin(id: Int, state: String, z: Int, focused: Boolean) = CompositorWindow(
         windowId = id,
         pkg = "com.example.w$id",

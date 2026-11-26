@@ -16,6 +16,7 @@ import android.util.LruCache
 import android.view.Surface
 import androidx.compose.ui.geometry.Offset
 import io.github.lengsukq.opaldesk.cast.OpalPeerCastMutex
+import io.github.lengsukq.opaldesk.diagnostics.DaemonPostmortemCollector
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
@@ -92,6 +93,12 @@ object BridgeClient {
     private val _imeBridgeRequestFlow = MutableStateFlow<ImeBridgeRequest?>(null)
     val imeBridgeRequestFlow: StateFlow<ImeBridgeRequest?> = _imeBridgeRequestFlow.asStateFlow()
 
+    private val daemonLogSyncLock = Any()
+    private val surfaceLogSyncGen = java.util.concurrent.atomic.AtomicLong(0L)
+
+    @Volatile
+    private var lastDaemonLogSyncMs = 0L
+
     private val _remoteTrackpadCursorFlow = MutableStateFlow<Offset?>(null)
     val remoteTrackpadCursorFlow: StateFlow<Offset?> = _remoteTrackpadCursorFlow.asStateFlow()
 
@@ -146,12 +153,14 @@ object BridgeClient {
         if (binder === next) return
         binder = next
         OpalLogStore.i("IPC", "Daemon Binder connected")
+        DaemonPostmortemCollector.onDaemonBinderConnected()
         try {
             next.linkToDeath({
                 if (binder === next) {
                     binder = null
                     _statusFlow.value = DaemonStatus(connected = false)
                     OpalLogStore.w("IPC", "Daemon Binder died (linkToDeath)")
+                    DaemonPostmortemCollector.onUnexpectedDaemonDeathAsync(appContext)
                     io.github.lengsukq.opaldesk.service.BaseOpalTileService.requestAllTilesUpdate(appContext)
                 }
             }, 0)
@@ -190,6 +199,7 @@ object BridgeClient {
             refreshRemoteStatus()
             refreshTrustedPeers()
             refreshPendingPairing()
+            syncDaemonLogsThrottledLocked(minIntervalMs = 0L, maxLines = 400)
             io.github.lengsukq.opaldesk.service.BaseOpalTileService.requestAllTilesUpdate(appContext)
         }
         binderReadyListeners.forEach { mainHandler.post(it) }
@@ -1037,6 +1047,7 @@ object BridgeClient {
         ) { it.readInt() } ?: -1
         if (winId > 0) {
             OpalLogStore.i("Window", "openWindow($pkg) -> wid=$winId")
+            scheduleWindowLifecycleLogSync(delaysMs = longArrayOf(400L), minIntervalMs = 2000L)
         } else {
             OpalLogStore.w("Window", "openWindow($pkg) failed (wid=$winId)")
         }
@@ -1071,6 +1082,7 @@ object BridgeClient {
         ) { it.readInt() } ?: -1
         if (displayId > 0) {
             OpalLogStore.i("Surface", "attachWindowSurface wid=$windowId -> displayId=$displayId (${contentW}x${contentH}@${dpi}dpi)")
+            scheduleWindowLifecycleLogSync(delaysMs = longArrayOf(280L, 1100L), minIntervalMs = 900L)
         } else {
             OpalLogStore.e("Surface", "attachWindowSurface FAILED wid=$windowId (${contentW}x${contentH}@${dpi}dpi)")
         }
@@ -1333,8 +1345,32 @@ object BridgeClient {
             oneway = false,
             writeArgs = { d -> d.writeInt(maxLines.coerceIn(20, 500)) },
         ) { it.readString().orEmpty() }.orEmpty()
-        OpalLogStore.updateDaemonLogs(logs)
+        if (logs.isNotBlank()) {
+            OpalLogStore.updateDaemonLogs(logs)
+            lastDaemonLogSyncMs = android.os.SystemClock.uptimeMillis()
+        }
         return logs
+    }
+
+    private fun syncDaemonLogsThrottledLocked(minIntervalMs: Long, maxLines: Int = 350) {
+        val now = android.os.SystemClock.uptimeMillis()
+        synchronized(daemonLogSyncLock) {
+            if (minIntervalMs > 0L && now - lastDaemonLogSyncMs < minIntervalMs) return
+            lastDaemonLogSyncMs = now
+        }
+        fetchDaemonLogs(maxLines)
+    }
+
+    private fun scheduleWindowLifecycleLogSync(delaysMs: LongArray, minIntervalMs: Long) {
+        val gen = surfaceLogSyncGen.incrementAndGet()
+        delaysMs.forEach { delayMs ->
+            mainHandler.postDelayed({
+                if (surfaceLogSyncGen.get() != gen || !isBinderAliveFast()) return@postDelayed
+                ioExec.execute {
+                    syncDaemonLogsThrottledLocked(minIntervalMs = minIntervalMs, maxLines = 350)
+                }
+            }, delayMs)
+        }
     }
 
     fun fetchDaemonLogsAsync(maxLines: Int = 300, onDone: ((String) -> Unit)? = null) {

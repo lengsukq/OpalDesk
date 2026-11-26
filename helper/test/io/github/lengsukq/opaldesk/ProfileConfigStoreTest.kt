@@ -1,5 +1,6 @@
 package io.github.lengsukq.opaldesk
 
+import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.prefs.ProfileConfigStore
 import io.github.lengsukq.opaldesk.prefs.ProfileStoreState
 import io.github.lengsukq.opaldesk.prefs.SavedAppWindowBounds
@@ -149,5 +150,39 @@ class ProfileConfigStoreTest {
         ProfileConfigStore.saveWorkingToSlot(null, targetSlotId = 2, bindTargetKey = mac.key)
         assertEquals(2, ProfileConfigStore.resolveSlotIdForTarget(mac))
         assertFalse(ProfileConfigStore.stateFlow.value.slots[4].boundTargets.contains(mac.key))
+    }
+
+    @Test
+    fun externalUiScalePersistsAcrossSlotLoadsAndAutoMatch() {
+        val originalScale = AppPrefs.externalUiScaleFlow.value
+        try {
+            ProfileConfigStore.setAutoMatchTargetSlot(null, true)
+            ProfileConfigStore.loadSlot(null, 0)
+
+            // User picks 100% (1.0f) in display settings
+            AppPrefs.setExternalUiScale(null, 1.0f)
+            assertEquals(1.0f, AppPrefs.externalUiScaleFlow.value, 0.001f)
+            assertFalse(ProfileConfigStore.stateFlow.value.hasUnsavedChanges)
+
+            // Switching slots manually or via display target auto-match must NOT revert UI scale
+            ProfileConfigStore.loadSlot(null, 1)
+            assertEquals(1.0f, AppPrefs.externalUiScaleFlow.value, 0.001f)
+
+            val macTarget = ProfileConfigStore.resolveDisplayTarget(
+                isExternalMonitor = false,
+                remoteConnected = true,
+                remotePeerName = "MacBook Pro",
+            )
+            ProfileConfigStore.autoSelectSlotForTarget(null, macTarget)
+            assertEquals(1.0f, AppPrefs.externalUiScaleFlow.value, 0.001f)
+
+            // Switching to 175% TV and saving without touching slot UI scale preserves 1.75f
+            AppPrefs.setExternalUiScale(null, 1.75f)
+            ProfileConfigStore.saveWorkingToSlot(null, targetSlotId = 0, scene = null, saveCurrentLayout = false)
+            ProfileConfigStore.loadSlot(null, 3)
+            assertEquals(1.75f, AppPrefs.externalUiScaleFlow.value, 0.001f)
+        } finally {
+            AppPrefs.setExternalUiScale(null, originalScale)
+        }
     }
 }

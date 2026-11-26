@@ -161,6 +161,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
+        AppPrefs.hydrateFlows(applicationContext)
         BridgeService.sUserStopping = false
         BridgeService.ensureStarted(this)
         BridgeClient.requestBinder(this)

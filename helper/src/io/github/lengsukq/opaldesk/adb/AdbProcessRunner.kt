@@ -98,13 +98,14 @@ object AdbProcessRunner {
     }
 
     /** Connects to `host:port` via local ADB with automatic `127.0.0.1` fallback. Returns `(connectedTarget, errorOutput)`. */
-    fun connectAdbTarget(appCtx: Context, host: String, port: Int): Pair<String?, String> {
+    fun connectAdbTarget(appCtx: Context, host: String, port: Int, timeoutMs: Long = 12000L): Pair<String?, String> {
         val primary = "$host:$port"
-        val primaryOut = runAdb(appCtx, 12000, "connect", primary).output.trim()
+        val primaryOut = runAdb(appCtx, timeoutMs, "connect", primary).output.trim()
         if (isAdbConnectSuccess(primaryOut)) return primary to ""
         if (host != "127.0.0.1") {
             val fallback = "127.0.0.1:$port"
-            if (isAdbConnectSuccess(runAdb(appCtx, 10000, "connect", fallback).output.trim())) {
+            val fbTimeout = timeoutMs.coerceAtMost(10000L)
+            if (isAdbConnectSuccess(runAdb(appCtx, fbTimeout, "connect", fallback).output.trim())) {
                 return fallback to ""
             }
         }

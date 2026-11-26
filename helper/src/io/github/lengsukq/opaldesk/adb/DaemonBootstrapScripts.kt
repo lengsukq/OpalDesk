@@ -25,6 +25,7 @@ object DaemonBootstrapScripts {
     private const val DAEMON_CLASS = "io.github.lengsukq.opaldesk.daemon.OpalDeskDaemon"
     private const val DST_JAR = "/data/local/tmp/opaldesk.jar"
     private const val DST_LOG = "/data/local/tmp/opaldesk.log"
+    private const val DST_PREV_LOG = "/data/local/tmp/opaldesk.prev.log"
     private const val PROC_PAT_SHORT = "^app_process.*OpalDeskDaemon"
     private const val PROC_PAT_FULL = "^/system/bin/app_process.*OpalDeskDaemon"
     private val SHA256_HEX_REGEX = Regex("^[0-9a-f]{64}$")
@@ -147,6 +148,9 @@ object DaemonBootstrapScripts {
             "mv -f $newJar $DST_JAR && " +
             "test -s $DST_JAR && " +
             "$grants && " +
+            "rm -f $DST_PREV_LOG && " +
+            "((test -f $DST_LOG && test ! -L $DST_LOG && test -s $DST_LOG && umask 022 && (set -C; tail -n 240 $DST_LOG > $DST_PREV_LOG) && chmod 644 $DST_PREV_LOG) 2>/dev/null || rm -f $DST_PREV_LOG) && " +
+            "rm -f $DST_LOG && " +
             "(CLASSPATH=$DST_JAR nohup app_process /data/local/tmp $DAEMON_CLASS >$DST_LOG 2>&1 </dev/null &)\""
     }
 
@@ -331,9 +335,14 @@ object DaemonBootstrapScripts {
             "rm -f $tmpJarExpr; echo ERR_SWAP_JAR; exit 22; fi; " +
             postSwapShaGuard +
             "chown -h 2000:2000 $DST_JAR 2>/dev/null; " +
+            "rm -f $DST_PREV_LOG 2>/dev/null; " +
+            "if [ -f $DST_LOG ] && [ ! -L $DST_LOG ] && [ -s $DST_LOG ]; then " +
+            "if (umask 022; set -C; tail -n 240 $DST_LOG > $DST_PREV_LOG) 2>/dev/null && [ -f $DST_PREV_LOG ] && [ ! -L $DST_PREV_LOG ]; then " +
+            "chmod 644 $DST_PREV_LOG 2>/dev/null; chown -h 2000:2000 $DST_PREV_LOG 2>/dev/null || true; " +
+            "else rm -f $DST_PREV_LOG 2>/dev/null; fi; fi; " +
             "LOG_DST=/dev/null; rm -f $DST_LOG 2>/dev/null; " +
             "if (umask 022; set -C; : > $DST_LOG) 2>/dev/null && [ -f $DST_LOG ] && [ ! -L $DST_LOG ]; then " +
-            "chown -h 2000:2000 $DST_LOG 2>/dev/null; LOG_DST=$DST_LOG; fi; " +
+            "chmod 644 $DST_LOG 2>/dev/null; chown -h 2000:2000 $DST_LOG 2>/dev/null; LOG_DST=$DST_LOG; fi; " +
             "$shellGrants; " +
             "CUR_CTX=\$(id -Z 2>/dev/null || echo ''); " +
             "case \"\$CUR_CTX\" in " +
@@ -347,5 +356,22 @@ object DaemonBootstrapScripts {
             "if ! $aliveExpr; then " +
             "(CLASSPATH=$DST_JAR nohup app_process /data/local/tmp $daemonArgs </dev/null >>\"\$LOG_DST\" 2>&1 &); sleep 0.6; fi; " +
             "if $aliveExpr; then echo LAUNCH_DONE; else echo ERR_DAEMON_DIED; [ \"\$LOG_DST\" != \"/dev/null\" ] && cat \"\$LOG_DST\" 2>/dev/null; exit 24; fi"
+    }
+
+    /**
+     * Read-only diagnostic tail command executed over an already-authorized shell channel
+     * (Shizuku, local Wireless ADB, or opted-in Root) when Binder IPC dies or fails, bounded so
+     * stdout fits well inside the 8 KiB shell runner capture budget.
+     */
+    fun buildPostmortemDiagCommand(): String {
+        val aliveExpr = "(pgrep -f '$PROC_PAT_SHORT' >/dev/null 2>&1 || pgrep -f '$PROC_PAT_FULL' >/dev/null 2>&1)"
+        return "echo '===OPAL_DAEMON_ALIVE==='; " +
+            "if $aliveExpr; then echo 1; else echo 0; fi; " +
+            "echo '===OPAL_CRASH_LOGCAT==='; " +
+            "(logcat -b crash -d -v threadtime -t 60 2>/dev/null || true); " +
+            "echo '===OPAL_CUR_LOG==='; " +
+            "if [ -f $DST_LOG ] && [ ! -L $DST_LOG ]; then tail -n 60 $DST_LOG 2>/dev/null || true; fi; " +
+            "echo '===OPAL_PREV_LOG==='; " +
+            "if [ -f $DST_PREV_LOG ] && [ ! -L $DST_PREV_LOG ]; then tail -n 40 $DST_PREV_LOG 2>/dev/null || true; fi"
     }
 }

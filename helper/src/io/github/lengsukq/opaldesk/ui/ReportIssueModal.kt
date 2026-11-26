@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import io.github.lengsukq.opaldesk.diagnostics.DaemonPostmortemCollector
 import io.github.lengsukq.opaldesk.diagnostics.DiagnosticSanitizer
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackQuotaSnapshot
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackRateLimiter
@@ -49,6 +50,7 @@ import io.github.lengsukq.opaldesk.diagnostics.ManualReportOutcome
 import io.github.lengsukq.opaldesk.diagnostics.ManualReportSubmitGuard
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogEntry
 import io.github.lengsukq.opaldesk.diagnostics.OpalSentry
+import io.github.lengsukq.opaldesk.diagnostics.PostmortemLogParser
 import io.github.lengsukq.opaldesk.diagnostics.ReportVersionCheckPolicy
 import io.github.lengsukq.opaldesk.diagnostics.ReportVersionDecision
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
@@ -97,8 +99,14 @@ fun ReportIssueModal(
     val isCheckingVersion = updateState is AppUpdateManager.UpdateState.Checking
     val isBusy = submitting || awaitingVersionCheck
 
-    // Silently check for latest release when the report modal opens (bypassing ignored-version tag).
+    // Silently trigger post-mortem daemon log harvest when disconnected & check for latest release.
     LaunchedEffect(Unit) {
+        if (!status.connected && !daemonLogText.contains(PostmortemLogParser.POSTMORTEM_PREFIX)) {
+            DaemonPostmortemCollector.collectIfDisconnectedAsync(
+                ctx = ctx,
+                triggerReason = "report_modal",
+            )
+        }
         val st = AppUpdateManager.stateFlow.value
         val hasKnownUpdate = st is AppUpdateManager.UpdateState.UpdateAvailable ||
             st is AppUpdateManager.UpdateState.Downloading ||

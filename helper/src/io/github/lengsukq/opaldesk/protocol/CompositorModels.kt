@@ -761,4 +761,77 @@ object CompositorGeometry {
         }
         return preferredX.coerceIn(margin, maxX) to preferredY.coerceIn(topMin, maxY)
     }
+
+    const val MOUSE_ACTION_DOWN = 0
+    const val MOUSE_ACTION_UP = 1
+    const val MOUSE_ACTION_MOVE = 2
+    const val MOUSE_ACTION_CANCEL = 3
+    const val MOUSE_BUTTON_BACK = 8
+    const val MOUSE_BUTTON_FORWARD = 16
+
+    /**
+     * Returns true when [buttonState] consists solely of auxiliary mouse side-navigation buttons
+     * ([MOUSE_BUTTON_BACK] / [MOUSE_BUTTON_FORWARD]) without primary, secondary, tertiary, or
+     * other pointer buttons held.
+     */
+    fun isSideNavigationOnlyMouseButton(buttonState: Int): Boolean {
+        val sideNavMask = MOUSE_BUTTON_BACK or MOUSE_BUTTON_FORWARD
+        return (buttonState and sideNavMask) != 0 && (buttonState and sideNavMask.inv()) == 0
+    }
+
+    /**
+     * Decides whether a mouse touch event sequence (`ACTION_DOWN` .. `ACTION_UP/CANCEL`) originated
+     * from a side navigation button and must be suppressed from VirtualDisplay / PeerCast pointer
+     * injection because side-button navigation is already handled once via `ACTION_BUTTON_PRESS`.
+     */
+    fun shouldSuppressSideNavigationMouseTouch(
+        actionMasked: Int,
+        isMouseSource: Boolean,
+        buttonState: Int,
+        activeSuppression: Boolean,
+    ): Boolean {
+        if (!isMouseSource) return false
+        if (actionMasked == MOUSE_ACTION_DOWN) {
+            return isSideNavigationOnlyMouseButton(buttonState)
+        }
+        if (!activeSuppression) return false
+        return actionMasked == MOUSE_ACTION_MOVE ||
+            actionMasked == MOUSE_ACTION_UP ||
+            actionMasked == MOUSE_ACTION_CANCEL
+    }
+
+    /**
+     * Per-surface stateful tracker wrapping [shouldSuppressSideNavigationMouseTouch] so DeX window
+     * hosts and PeerCast clients share identical side-button touch suppression without duplicating
+     * `DOWN -> MOVE -> UP/CANCEL` transition logic.
+     */
+    class SideNavigationTouchFilter {
+        var isSuppressing: Boolean = false
+            private set
+
+        fun shouldSuppress(
+            actionMasked: Int,
+            isMouseSource: Boolean,
+            buttonState: Int,
+        ): Boolean {
+            if (shouldSuppressSideNavigationMouseTouch(actionMasked, isMouseSource, buttonState, isSuppressing)) {
+                isSuppressing = when (actionMasked) {
+                    MOUSE_ACTION_UP, MOUSE_ACTION_CANCEL -> false
+                    else -> true
+                }
+                return true
+            }
+            if (actionMasked == MOUSE_ACTION_DOWN ||
+                actionMasked == MOUSE_ACTION_UP ||
+                actionMasked == MOUSE_ACTION_CANCEL
+            ) {
+                isSuppressing = false
+            }
+            return false
+        }
+
+        fun reset() {
+            isSuppressing = false
+        }
+    }
 }
