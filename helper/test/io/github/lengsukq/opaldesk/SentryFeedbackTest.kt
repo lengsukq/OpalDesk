@@ -4,6 +4,7 @@ import io.github.lengsukq.opaldesk.diagnostics.DiagnosticSanitizer
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackQuotaStorage
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackRateLimiter
 import io.github.lengsukq.opaldesk.diagnostics.ManualReportPayload
+import io.github.lengsukq.opaldesk.diagnostics.ManualReportSubmitGuard
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogEntry
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogLevel
 import io.github.lengsukq.opaldesk.diagnostics.SentryEnvelopeTransport
@@ -163,5 +164,53 @@ class SentryFeedbackTest {
             SentryEnvelopeTransport.extractEventId("""{"id":"a1b2c3d4e5f64789a0b1c2d3e4f56789"}"""),
         )
         assertEquals("A1B2C3D4", SentryEnvelopeTransport.formatShortCode("a1b2c3d4e5f64789a0b1c2d3e4f56789"))
+    }
+
+    @Test
+    fun manualReportSubmitGuardBlocksDuplicateClickUntilDescriptionChanges() {
+        assertTrue(
+            ManualReportSubmitGuard.isSubmitAllowed(
+                submitting = false,
+                quotaExhausted = false,
+                sentryConfigured = true,
+                lastUploadSucceeded = false,
+                currentDescription = "触控异常",
+                lastSubmittedDescription = null,
+            ),
+        )
+        assertFalse(
+            ManualReportSubmitGuard.isSubmitAllowed(
+                submitting = false,
+                quotaExhausted = false,
+                sentryConfigured = true,
+                lastUploadSucceeded = true,
+                currentDescription = " 触控异常 ",
+                lastSubmittedDescription = "触控异常",
+            ),
+        )
+        assertTrue(
+            ManualReportSubmitGuard.isSubmitAllowed(
+                submitting = false,
+                quotaExhausted = false,
+                sentryConfigured = true,
+                lastUploadSucceeded = true,
+                currentDescription = "另一个新问题",
+                lastSubmittedDescription = "触控异常",
+            ),
+        )
+    }
+
+    @Test
+    fun sanitizerPreservesStickyDaemonStartupLineWhenTruncatingLongDaemonLogs() {
+        val lines = buildList {
+            add("09:00:00.000 I/Daemon: [STARTUP] OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=2000 api=37 injector=IIM_TARGET uhidRw=true")
+            for (i in 1..260) {
+                add("09:01:00.000 I/Daemon: runtime-event-$i")
+            }
+        }
+        val selected = DiagnosticSanitizer.selectDaemonLinesPreservingStartup(lines, maxDaemonLines = 50)
+        assertEquals(50, selected.size)
+        assertTrue(selected.first().contains("[STARTUP] OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED"))
+        assertTrue(selected.last().contains("runtime-event-260"))
     }
 }

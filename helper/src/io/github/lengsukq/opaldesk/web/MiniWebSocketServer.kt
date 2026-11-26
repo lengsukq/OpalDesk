@@ -1,6 +1,7 @@
 package io.github.lengsukq.opaldesk.web
 
 import android.util.Log
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -207,7 +208,7 @@ class MiniWebSocketServer(
                 }
             } catch (t: Throwable) {
                 if (running.get() && !ss.isClosed) {
-                    Log.w(TAG, "Accept error: ${t.message}")
+                    OpalLogStore.w(TAG, "Accept error", t)
                 }
             }
         }

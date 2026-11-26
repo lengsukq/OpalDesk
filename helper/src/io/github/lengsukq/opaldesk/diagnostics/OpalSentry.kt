@@ -4,12 +4,17 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.BuildConfig
+import io.github.lengsukq.opaldesk.cast.PeerFloatingAppService
+import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.CompositorScene
 import io.github.lengsukq.opaldesk.protocol.DaemonStatus
 import io.github.lengsukq.opaldesk.protocol.RemoteStreamStatus
+import io.sentry.Breadcrumb
 import io.sentry.Sentry
+import io.sentry.SentryLevel
 import io.sentry.SentryOptions
 import io.sentry.android.core.SentryAndroid
 import io.sentry.protocol.User
@@ -66,11 +71,38 @@ object OpalSentry {
                     options.isAttachScreenshot = false
                     options.isAttachViewHierarchy = false
                     options.isEnableAutoSessionTracking = true
+                    options.isAnrEnabled = true
+                    options.isAttachThreads = true
                     options.beforeSend = SentryOptions.BeforeSendCallback { event, _ ->
                         event.setTag("installation_id", installationId)
                         event.message?.let { msg ->
                             msg.formatted = msg.formatted?.let(DiagnosticSanitizer::sanitizeText)
                             msg.message = msg.message?.let(DiagnosticSanitizer::sanitizeText)
+                        }
+                        runCatching {
+                            val st = BridgeClient.statusFlow.value
+                            val sc = BridgeClient.sceneFlow.value
+                            val ext = ExternalTrackpadBridge.sessionFlow.value
+                            val floating = PeerFloatingAppService.activeFlow.value
+                            event.setTag("daemon_connected", st.connected.toString())
+                            event.setTag("input_mode", OpalLogFilter.inputBackendModeLabel(st.inputBackendMode))
+                            event.setTag("inject_status", st.injectStatus.toString())
+                            event.setTag("window_count", sc.windows.size.toString())
+                            event.setTag("external_mode", ext.mode.name)
+                            event.setTag("floating_active", (floating != null).toString())
+                            val helperTail = OpalLogStore.recentTailLines(45).joinToString("\n")
+                            if (helperTail.isNotBlank()) {
+                                event.setExtra("recent_helper_logs", DiagnosticSanitizer.sanitizeText(helperTail))
+                            }
+                            val daemonTail = OpalLogStore.daemonLogsFlow.value
+                                .lineSequence()
+                                .filter { it.isNotBlank() }
+                                .toList()
+                                .takeLast(25)
+                                .joinToString("\n")
+                            if (daemonTail.isNotBlank()) {
+                                event.setExtra("recent_daemon_logs", DiagnosticSanitizer.sanitizeText(daemonTail))
+                            }
                         }
                         event
                     }
@@ -84,6 +116,18 @@ object OpalSentry {
                             username = savedName
                         }
                     }
+                }
+                OpalLogStore.entryListener = { entry ->
+                    val crumb = Breadcrumb().apply {
+                        category = entry.tag
+                        message = DiagnosticSanitizer.sanitizeText(entry.message)
+                        level = when (entry.level) {
+                            OpalLogLevel.ERROR -> SentryLevel.ERROR
+                            OpalLogLevel.WARN -> SentryLevel.WARNING
+                            OpalLogLevel.INFO -> SentryLevel.INFO
+                        }
+                    }
+                    Sentry.addBreadcrumb(crumb)
                 }
                 OpalLogStore.i("Sentry", "Sentry initialized (env=$environment, release=$release)")
             }.onFailure { t ->
@@ -137,6 +181,7 @@ object OpalSentry {
             val generatedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(now)
             val fileStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(now)
 
+            val env = OpalLogStore.captureEnvironmentSnapshot(appCtx)
             val sanitizedReport = DiagnosticSanitizer.buildSanitizedReportText(
                 appVersion = appVersion,
                 deviceSummary = deviceSummary,
@@ -148,6 +193,7 @@ object OpalSentry {
                 helperEntries = helperEntries,
                 daemonLogText = daemonLogText,
                 generatedAtText = generatedAt,
+                env = env,
             )
             val gzipBytes = DiagnosticSanitizer.gzipCompress(sanitizedReport)
             val installationId = limiter.installationId()

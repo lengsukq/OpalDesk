@@ -53,4 +53,29 @@ public class DaemonLogBufferTest {
         assertTrue(buffered.contains("E/Daemon: OPALDESK_VD_CREATE_FAIL 中文测试"));
         assertTrue(buffered.contains("E/Daemon: partial-line"));
     }
+
+    @Test
+    public void stickyHeaderSurvivesRingOverflowWithoutDuplicatingWhenStillPresent() {
+        String banner = "OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=2000 api=37 injector=IIM_TARGET uhidRw=true";
+        DaemonLogBuffer.recordStickyHeader(banner);
+        DaemonLogBuffer.recordLine(false, banner);
+        DaemonLogBuffer.recordLine(false, "normal-line-1");
+
+        // While startup line is still inside the tail slice, it should appear once (no duplicate).
+        String initial = DaemonLogBuffer.snapshotTail(10);
+        assertEquals(2, initial.split("\n").length);
+        assertTrue(initial.contains(banner));
+        assertFalse(initial.contains("[STARTUP]"));
+
+        // After flooding past ring capacity, snapshotTail must prepend the sticky [STARTUP] line.
+        int overflow = DaemonLogBuffer.DEFAULT_MAX_LINES + 60;
+        for (int i = 0; i < overflow; i++) {
+            DaemonLogBuffer.recordLine(false, "noise-" + i);
+        }
+        String afterFlood = DaemonLogBuffer.snapshotTail(20);
+        String[] lines = afterFlood.split("\n");
+        assertEquals(20, lines.length);
+        assertTrue(lines[0].contains("[STARTUP] " + banner));
+        assertTrue(lines[lines.length - 1].contains("noise-" + (overflow - 1)));
+    }
 }

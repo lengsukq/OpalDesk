@@ -16,9 +16,9 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
-import android.util.Log
 import android.view.Surface
 import android.view.WindowManager
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -136,7 +136,7 @@ internal class PeerCameraCapturer(
             return false
         }
         val gen = openGen.incrementAndGet()
-        Log.i(
+        OpalLogStore.i(
             TAG,
             "Opening cameraId=$cameraId reqFacing=$currentFacing actualFront=$isFront " +
                 "sensorOrient=$sensorOrientation size=${captureW}x${captureH}",
@@ -198,6 +198,7 @@ internal class PeerCameraCapturer(
                             try { camera.close() } catch (_: Throwable) {}
                             return
                         }
+                        OpalLogStore.w(TAG, "CameraDevice.onError code=$error")
                         stop()
                         onError("打开本机摄像头失败 (code=$error)")
                     }
@@ -206,6 +207,7 @@ internal class PeerCameraCapturer(
             )
             true
         } catch (t: Throwable) {
+            OpalLogStore.w(TAG, "openCamera failed", t)
             stopLocked()
             onError("启动本机摄像头失败：${t.message ?: t.javaClass.simpleName}")
             false
@@ -239,7 +241,7 @@ internal class PeerCameraCapturer(
                             try {
                                 session.setRepeatingRequest(builder.build(), null, handler)
                             } catch (t: Throwable) {
-                                Log.w(TAG, "setRepeatingRequest failed: ${t.message}")
+                                OpalLogStore.w(TAG, "setRepeatingRequest failed", t)
                                 stopLocked()
                                 onError("摄像头预览流启动失败")
                             }
@@ -248,6 +250,7 @@ internal class PeerCameraCapturer(
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         if (openGen.get() != gen) return
+                        OpalLogStore.w(TAG, "CameraCaptureSession onConfigureFailed")
                         stop()
                         onError("摄像头会话配置失败")
                     }

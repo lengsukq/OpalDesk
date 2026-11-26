@@ -10,6 +10,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntPredicate;
 
@@ -19,7 +20,11 @@ import java.util.function.IntPredicate;
  * and dispatching {@code SHUTDOWN -> DONE} and {@code NEED_BINDER -> OK}.
  */
 public final class DaemonControlSocket {
+    private static final long BROKEN_PIPE_LOG_INTERVAL_MS = 60_000L;
+
     private static volatile LocalServerSocket sServerSocket;
+    private static volatile long sLastBrokenPipeLogMs = 0L;
+    private static final AtomicInteger sSuppressedBrokenPipeCount = new AtomicInteger(0);
 
     private static volatile BooleanSupplier sIsShuttingDown;
     private static volatile IntPredicate sIsTrustedCaller;
@@ -116,7 +121,21 @@ public final class DaemonControlSocket {
             sock.getOutputStream().write((reply + "\n").getBytes(StandardCharsets.UTF_8));
             sock.getOutputStream().flush();
         } catch (IOException e) {
-            System.err.println("OPALDESK_CTL_REPLY_WARN: " + e.getMessage());
+            String msg = e.getMessage();
+            if (msg != null && (msg.contains("Broken pipe") || msg.contains("EPIPE"))) {
+                long now = SystemClock.uptimeMillis();
+                long prev = sLastBrokenPipeLogMs;
+                if (prev != 0L && now - prev < BROKEN_PIPE_LOG_INTERVAL_MS) {
+                    sSuppressedBrokenPipeCount.incrementAndGet();
+                    return;
+                }
+                sLastBrokenPipeLogMs = now;
+                int suppressed = sSuppressedBrokenPipeCount.getAndSet(0);
+                System.err.println("OPALDESK_CTL_REPLY_WARN: " + msg
+                        + (suppressed > 0 ? " (suppressed=" + suppressed + ")" : ""));
+                return;
+            }
+            System.err.println("OPALDESK_CTL_REPLY_WARN: " + msg);
         }
     }
 }

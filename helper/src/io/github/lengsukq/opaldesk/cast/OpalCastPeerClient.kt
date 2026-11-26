@@ -10,10 +10,10 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.Surface
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -429,9 +429,16 @@ class OpalCastPeerClient(
         return ssl to fp
     }
 
+    private val lastVideoDecodeErrLogMs = AtomicLong(0L)
+
     private fun ioLoop() {
         var disconnectReason = "已断开连接"
         try {
+            OpalLogStore.i(
+                TAG,
+                "Connecting role=$sessionRole port=$port ${reqWidth}x${reqHeight}@${reqFps}fps " +
+                    "audio=$audioEnabled pkg=${appPackage.ifBlank { "-" }}",
+            )
             val (ssl, peerFp) = openTlsSocket()
             socket = ssl
             val input = BufferedInputStream(ssl.inputStream, 131_072)
@@ -500,7 +507,7 @@ class OpalCastPeerClient(
         } catch (t: Throwable) {
             if (!closed.get()) {
                 val msg = t.message ?: t.javaClass.simpleName
-                Log.w(TAG, "Peer cast session error: $msg")
+                OpalLogStore.w(TAG, "Peer cast session error (role=$sessionRole): $msg")
                 disconnectReason = msg
                 listener.onError(msg)
             }
@@ -556,9 +563,11 @@ class OpalCastPeerClient(
                     val token = obj.optString("authToken", "")
                     val permanent = obj.optBoolean("permanent", token.isNotEmpty())
                     val fp = obj.optString("certFingerprint", peerFp)
+                    OpalLogStore.i(TAG, "Authenticated role=$sessionRole peer=$peerName permanent=$permanent")
                     listener.onAuthenticated(peerName, token, permanent, fp)
                 } else {
                     val err = obj.optString("message", "对方拒绝了连接请求")
+                    OpalLogStore.w(TAG, "Authentication rejected role=$sessionRole: $err")
                     listener.onError(err)
                     stop()
                 }
@@ -597,7 +606,7 @@ class OpalCastPeerClient(
             }
             listener.onAppListReceived(out)
         } catch (t: Throwable) {
-            Log.w(TAG, "Failed to parse APP_LIST: ${t.message}")
+            OpalLogStore.w(TAG, "Failed to parse APP_LIST", t)
         }
     }
 
@@ -607,10 +616,10 @@ class OpalCastPeerClient(
             val obj = JSONObject(String(payload, StandardCharsets.UTF_8))
             val show = obj.optBoolean("show", true)
             val inputType = obj.optInt("inputType", 0)
-            Log.i(TAG, "RX IME_REQUEST show=$show inputType=0x${inputType.toString(16)}")
+            OpalLogStore.i(TAG, "RX IME_REQUEST show=$show inputType=0x${inputType.toString(16)}")
             listener.onRemoteImeRequest(show, inputType)
         } catch (t: Throwable) {
-            Log.w(TAG, "Failed to parse IME_REQUEST: ${t.message}")
+            OpalLogStore.w(TAG, "Failed to parse IME_REQUEST", t)
         }
     }
 
@@ -621,10 +630,10 @@ class OpalCastPeerClient(
             val active = obj.optBoolean("active", false)
             val supported = obj.optBoolean("supported", false)
             val message = obj.optString("message", "")
-            Log.i(TAG, "RX MIC_STATE active=$active supported=$supported msg=$message")
+            OpalLogStore.i(TAG, "RX MIC_STATE active=$active supported=$supported msg=$message")
             listener.onRemoteMicState(active, supported, message)
         } catch (t: Throwable) {
-            Log.w(TAG, "Failed to parse MIC_STATE: ${t.message}")
+            OpalLogStore.w(TAG, "Failed to parse MIC_STATE", t)
         }
     }
 
@@ -637,10 +646,10 @@ class OpalCastPeerClient(
             val rootRequired = obj.optBoolean("rootRequired", true)
             val message = obj.optString("message", "")
             val facing = obj.optString("facing", "")
-            Log.i(TAG, "RX CAMERA_STATE active=$active supported=$supported rootReq=$rootRequired facing=$facing msg=$message")
+            OpalLogStore.i(TAG, "RX CAMERA_STATE active=$active supported=$supported rootReq=$rootRequired facing=$facing msg=$message")
             listener.onRemoteCameraState(active, supported, rootRequired, message, facing)
         } catch (t: Throwable) {
-            Log.w(TAG, "Failed to parse CAMERA_STATE: ${t.message}")
+            OpalLogStore.w(TAG, "Failed to parse CAMERA_STATE", t)
         }
     }
 
@@ -751,7 +760,7 @@ class OpalCastPeerClient(
                 }
             }
         }
-        Log.w(TAG, "Video decoder configure failed ($mime ${width}x${height}): ${lastErr?.message}")
+        OpalLogStore.w(TAG, "Video decoder configure failed ($mime ${width}x${height})", lastErr)
         releaseVideoDecoderLocked()
     }
 
@@ -833,7 +842,13 @@ class OpalCastPeerClient(
                 }
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "Video decode frame error: ${t.message}")
+            val nowMs = SystemClock.uptimeMillis()
+            val prevMs = lastVideoDecodeErrLogMs.get()
+            if (prevMs == 0L || nowMs - prevMs >= 5_000L) {
+                if (lastVideoDecodeErrLogMs.compareAndSet(prevMs, nowMs)) {
+                    OpalLogStore.w(TAG, "Video decode frame error", t)
+                }
+            }
             synchronized(videoLock) {
                 if (videoCodec === codec) {
                     releaseVideoDecoderLocked()
@@ -887,7 +902,7 @@ class OpalCastPeerClient(
                 audioCodec = codec
                 audioTrack = track
             } catch (t: Throwable) {
-                Log.w(TAG, "Audio decoder init failed: ${t.message}")
+                OpalLogStore.w(TAG, "Audio decoder init failed", t)
                 releaseAudioDecoderLocked()
             }
         }

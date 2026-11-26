@@ -248,6 +248,7 @@ fun ConsoleLogsTab(
                             remote = remote,
                             helperEntries = filteredHelper,
                             daemonLogText = filteredDaemon.joinToString("\n"),
+                            env = OpalLogStore.captureEnvironmentSnapshot(ctx),
                         )
                         copyReportToClipboard(ctx, report)
                     },
@@ -266,6 +267,7 @@ fun ConsoleLogsTab(
                             remote = remote,
                             helperEntries = filteredHelper,
                             daemonLogText = filteredDaemon.joinToString("\n"),
+                            env = OpalLogStore.captureEnvironmentSnapshot(ctx),
                         )
                         if (!OpalLogStore.shareDiagnosticReport(ctx, report)) {
                             Toast.makeText(ctx, "导出日志文件失败", Toast.LENGTH_SHORT).show()

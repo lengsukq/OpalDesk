@@ -4,7 +4,7 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.util.Log
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -58,12 +58,14 @@ internal class PeerMicCapturer(
                 .setBufferSizeInBytes(bufSize)
                 .build()
         } catch (t: Throwable) {
+            OpalLogStore.w(TAG, "AudioRecord build failed", t)
             running.set(false)
             onError("无法初始化本地麦克风：${t.message ?: t.javaClass.simpleName}")
             return false
         }
 
         if (rec.state != AudioRecord.STATE_INITIALIZED) {
+            OpalLogStore.w(TAG, "AudioRecord state not initialized: state=${rec.state}")
             try { rec.release() } catch (_: Throwable) {}
             running.set(false)
             onError("本地麦克风初始化失败，请检查录音权限")
@@ -83,6 +85,7 @@ internal class PeerMicCapturer(
             thread = t
             true
         } catch (t: Throwable) {
+            OpalLogStore.w(TAG, "AudioRecord startRecording failed", t)
             try { rec.release() } catch (_: Throwable) {}
             recorder = null
             running.set(false)
@@ -113,12 +116,13 @@ internal class PeerMicCapturer(
             val n = try {
                 rec.read(buf, 0, buf.size)
             } catch (t: Throwable) {
-                Log.w(TAG, "Mic read error: ${t.message}")
+                OpalLogStore.w(TAG, "Mic read error", t)
                 break
             }
             if (n < 0) {
                 consecutiveErrors++
                 if (consecutiveErrors >= 5) {
+                    OpalLogStore.w(TAG, "Mic capture stopped after consecutive errors: err=$n")
                     onError("麦克风采集异常 (err=$n)")
                     break
                 }

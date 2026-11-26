@@ -2,6 +2,7 @@ package io.github.lengsukq.opaldesk.adb
 
 import android.content.Context
 import android.util.Log
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileInputStream
@@ -168,6 +169,7 @@ object AdbProcessRunner {
                 started.destroyForcibly()
                 writer?.join(300)
                 reader.join(500)
+                OpalLogStore.w(TAG, "$timeoutLabel (${timeoutMs}ms)")
                 return CmdResult(-1, "$timeoutLabel (${timeoutMs}ms)\n$sb")
             }
             writer?.join(500)
@@ -175,7 +177,7 @@ object AdbProcessRunner {
             CmdResult(started.exitValue(), sb.toString())
         } catch (t: Throwable) {
             proc?.let { runLogged("destroy process") { it.destroyForcibly() } }
-            Log.w(TAG, "$errorPrefix: ${t.message}", t)
+            OpalLogStore.w(TAG, errorPrefix, t)
             CmdResult(-1, "$errorPrefix: ${t.message}")
         }
     }
@@ -221,7 +223,7 @@ object AdbProcessRunner {
                 }
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "Failed to enumerate local IPv4 interfaces", t)
+            OpalLogStore.w(TAG, "Failed to enumerate local IPv4 interfaces", t)
         }
         return best ?: fallback ?: "127.0.0.1"
     }

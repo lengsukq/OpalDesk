@@ -2,9 +2,17 @@ package io.github.lengsukq.opaldesk.diagnostics
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.FileProvider
+import io.github.lengsukq.opaldesk.cast.OpalPeerDiscovery
+import io.github.lengsukq.opaldesk.cast.PeerFloatingAppService
+import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
+import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorScene
 import io.github.lengsukq.opaldesk.protocol.DaemonStatus
 import io.github.lengsukq.opaldesk.protocol.RemoteStreamStatus
@@ -42,6 +50,17 @@ data class OpalLogEntry(
 ) {
     fun formatLine(): String = "$timeText ${level.code}/$tag: $message"
 }
+
+/**
+ * Pure JVM-testable snapshot of runtime display, external monitor, network, and overlay state
+ * included in diagnostic report headers to speed up root-cause triage.
+ */
+data class DiagnosticEnvironmentSnapshot(
+    val displaySummary: String = "",
+    val externalDisplaySummary: String = "",
+    val networkSummary: String = "",
+    val floatingOverlaySummary: String = "",
+)
 
 /**
  * Bounded thread-safe ring buffer for structured client diagnostic entries.
@@ -181,6 +200,13 @@ object OpalLogFilter {
             upper.contains("REJECT")
     }
 
+    fun inputBackendModeLabel(mode: Int): String = when (mode) {
+        BridgeProtocol.InputBackend.AUTO -> "AUTO"
+        BridgeProtocol.InputBackend.SYSTEM -> "SYSTEM"
+        BridgeProtocol.InputBackend.UHID -> "UHID"
+        else -> "UNKNOWN($mode)"
+    }
+
     fun buildDiagnosticReport(
         appVersion: String,
         deviceSummary: String,
@@ -190,6 +216,7 @@ object OpalLogFilter {
         helperEntries: List<OpalLogEntry>,
         daemonLogText: String,
         generatedAtText: String,
+        env: DiagnosticEnvironmentSnapshot = DiagnosticEnvironmentSnapshot(),
     ): String = buildString(8192) {
         appendLine("=== OpalDesk 诊断日志报告 ===")
         appendLine("生成时间: $generatedAtText")
@@ -203,12 +230,25 @@ object OpalLogFilter {
         appendLine(
             "画布与输入: ${status.canvasWidth}x${status.canvasHeight}@${status.canvasDpi}dpi | " +
                 "targetFps=${status.targetFps} | dpiScale=${status.windowDpiScalePct}% | " +
-                "input=${status.injectBackendLabel}",
+                "inputMode=${inputBackendModeLabel(status.inputBackendMode)} | " +
+                "inject=${status.injectBackendLabel} (status=${status.injectStatus})",
         )
         appendLine(
             "投屏状态: connected=${remote.connected} | channel=${remote.channelLabel} | " +
                 "wifi=${remote.wifiEnabled}:${remote.wifiPort} | lanIp=${remote.lanIp.ifBlank { "-" }}",
         )
+        if (env.displaySummary.isNotBlank() || env.externalDisplaySummary.isNotBlank()) {
+            appendLine(
+                "主屏与外屏: ${env.displaySummary.ifBlank { "-" }} | " +
+                    "ext=${env.externalDisplaySummary.ifBlank { "none" }}",
+            )
+        }
+        if (env.networkSummary.isNotBlank() || env.floatingOverlaySummary.isNotBlank()) {
+            appendLine(
+                "网络与悬浮: net=${env.networkSummary.ifBlank { "-" }} | " +
+                    "floating=${env.floatingOverlaySummary.ifBlank { "none" }}",
+            )
+        }
         if (scene.windows.isNotEmpty()) {
             appendLine("--- 当前窗口列表 (${scene.windows.size}) ---")
             scene.windows.forEach { w ->
@@ -267,6 +307,62 @@ object OpalLogStore {
 
     @Volatile
     private var logFile: File? = null
+
+    @Volatile
+    var entryListener: ((OpalLogEntry) -> Unit)? = null
+
+    fun recentTailLines(maxLines: Int = 45): List<String> =
+        ring.snapshot().takeLast(maxLines.coerceAtLeast(1)).map { it.formatLine() }
+
+    fun captureEnvironmentSnapshot(ctx: Context): DiagnosticEnvironmentSnapshot {
+        val appCtx = ctx.applicationContext
+        val displaySummary = runCatching {
+            val dm = appCtx.resources.displayMetrics
+            val orient = if (appCtx.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                "LANDSCAPE"
+            } else {
+                "PORTRAIT"
+            }
+            "${dm.widthPixels}x${dm.heightPixels}@${String.format(Locale.US, "%.2f", dm.density)}x($orient)"
+        }.getOrDefault("")
+
+        val externalSummary = runCatching {
+            val ext = ExternalTrackpadBridge.sessionFlow.value
+            if (ext.isActive) {
+                "${ext.mode}(d=${ext.displayId} ${ext.widthPx}x${ext.heightPx}@${ext.refreshRateHz}Hz " +
+                    "wireless=${ext.isWirelessDisplay} cast=${ext.isRemoteCastDisplay})"
+            } else {
+                "none"
+            }
+        }.getOrDefault("none")
+
+        val networkSummary = runCatching {
+            val wm = appCtx.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            val wifiEnabled = runCatching { wm?.isWifiEnabled == true }.getOrDefault(false)
+            val cm = appCtx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val caps = cm?.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+            val wifiConn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            val ethConn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
+            val localNetPerm = OpalPeerDiscovery.hasLocalNetworkPermission(appCtx)
+            "wifiEnabled=$wifiEnabled wifiConn=$wifiConn eth=$ethConn localNetPerm=$localNetPerm"
+        }.getOrDefault("")
+
+        val floatingSummary = runCatching {
+            val active = PeerFloatingAppService.activeFlow.value
+            if (active != null) {
+                "active(pkg=${active.appPackage} peer=${active.peerName})"
+            } else {
+                "none"
+            }
+        }.getOrDefault("none")
+
+        return DiagnosticEnvironmentSnapshot(
+            displaySummary = displaySummary,
+            externalDisplaySummary = externalSummary,
+            networkSummary = networkSummary,
+            floatingOverlaySummary = floatingSummary,
+        )
+    }
 
     fun init(ctx: Context) {
         if (initialized) return
@@ -373,6 +469,7 @@ object OpalLogStore {
         remote: RemoteStreamStatus,
         helperEntries: List<OpalLogEntry> = _entriesFlow.value,
         daemonLogText: String = _daemonLogsFlow.value,
+        env: DiagnosticEnvironmentSnapshot = DiagnosticEnvironmentSnapshot(),
     ): String {
         val deviceSummary = "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
         val generatedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
@@ -385,6 +482,7 @@ object OpalLogStore {
             helperEntries = helperEntries,
             daemonLogText = daemonLogText,
             generatedAtText = generatedAt,
+            env = env,
         )
     }
 
@@ -422,6 +520,9 @@ object OpalLogStore {
     private fun record(level: OpalLogLevel, tag: String, message: String) {
         val entry = ring.append(level, tag, message)
         _entriesFlow.value = ring.snapshot()
+        entryListener?.let { listener ->
+            runCatching { listener(entry) }
+        }
         val file = logFile ?: return
         val line = entry.formatLine() + "\n"
         fileExec.execute {

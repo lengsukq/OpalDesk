@@ -8,7 +8,9 @@ import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -19,11 +21,23 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class DaemonLogBuffer {
     public static final int DEFAULT_MAX_LINES = 500;
+    public static final int MAX_STICKY_LINES = 8;
     public static final int MAX_LINE_CHARS = 1024;
     public static final int MAX_SNAPSHOT_CHARS = 96 * 1024;
 
+    private static final class StickyEntry {
+        final String formattedLine;
+        final String rawPayload;
+
+        StickyEntry(String formattedLine, String rawPayload) {
+            this.formattedLine = formattedLine;
+            this.rawPayload = rawPayload;
+        }
+    }
+
     private static final Object LOCK = new Object();
     private static final ArrayDeque<String> RING = new ArrayDeque<>(DEFAULT_MAX_LINES);
+    private static final List<StickyEntry> STICKY_HEADERS = new ArrayList<>(MAX_STICKY_LINES);
     private static final AtomicBoolean TEE_INSTALLED = new AtomicBoolean(false);
     private static final SimpleDateFormat TIME_FMT = new SimpleDateFormat("HH:mm:ss.SSS", Locale.US);
 
@@ -65,26 +79,84 @@ public final class DaemonLogBuffer {
         }
     }
 
+    /**
+     * Records a sticky startup capability line that survives ring eviction so long-running daemon
+     * snapshots always retain startup environment metadata without duplicating when still in tail.
+     */
+    public static void recordStickyHeader(String rawLine) {
+        if (rawLine == null) return;
+        String clean = stripTrailingCr(rawLine);
+        if (clean.isEmpty()) return;
+        if (clean.length() > MAX_LINE_CHARS) {
+            clean = clean.substring(0, MAX_LINE_CHARS) + "...";
+        }
+        synchronized (LOCK) {
+            for (StickyEntry existing : STICKY_HEADERS) {
+                if (existing.rawPayload.equals(clean)) return;
+            }
+            String ts = TIME_FMT.format(new Date());
+            String formatted = ts + " I/Daemon: [STARTUP] " + clean;
+            if (STICKY_HEADERS.size() >= MAX_STICKY_LINES) {
+                STICKY_HEADERS.remove(0);
+            }
+            STICKY_HEADERS.add(new StickyEntry(formatted, clean));
+        }
+    }
+
     /** Returns up to {@code requestedLines} most recent lines joined by newlines. */
     public static String snapshotTail(int requestedLines) {
         int limit = (requestedLines <= 0) ? DEFAULT_MAX_LINES : Math.min(requestedLines, DEFAULT_MAX_LINES);
-        String[] lines;
+        String[] tailLines;
+        List<StickyEntry> stickyCopy;
         synchronized (LOCK) {
+            stickyCopy = STICKY_HEADERS.isEmpty() ? null : new ArrayList<>(STICKY_HEADERS);
             int total = RING.size();
-            if (total == 0) return "";
+            if (total == 0 && stickyCopy == null) return "";
             int skip = Math.max(0, total - limit);
-            lines = new String[total - skip];
+            tailLines = new String[total - skip];
             int idx = 0;
             int pos = 0;
             for (String s : RING) {
                 if (idx++ >= skip) {
-                    lines[pos++] = s;
+                    tailLines[pos++] = s;
                 }
             }
         }
-        StringBuilder sb = new StringBuilder(Math.min(MAX_SNAPSHOT_CHARS, lines.length * 80));
-        for (int i = 0; i < lines.length; i++) {
-            String ln = lines[i];
+        List<String> combined = new ArrayList<>(tailLines.length + (stickyCopy != null ? stickyCopy.size() : 0));
+        if (stickyCopy != null) {
+            List<String> missingSticky = new ArrayList<>(stickyCopy.size());
+            for (StickyEntry sticky : stickyCopy) {
+                boolean alreadyInTail = false;
+                for (String ln : tailLines) {
+                    if (ln != null && ln.endsWith(sticky.rawPayload)) {
+                        alreadyInTail = true;
+                        break;
+                    }
+                }
+                if (!alreadyInTail) {
+                    missingSticky.add(sticky.formattedLine);
+                }
+            }
+            if (!missingSticky.isEmpty()) {
+                combined.addAll(missingSticky);
+                int tailStart = Math.max(0, tailLines.length - Math.max(0, limit - missingSticky.size()));
+                for (int i = tailStart; i < tailLines.length; i++) {
+                    if (tailLines[i] != null) combined.add(tailLines[i]);
+                }
+            } else {
+                for (String ln : tailLines) {
+                    if (ln != null) combined.add(ln);
+                }
+            }
+        } else {
+            for (String ln : tailLines) {
+                if (ln != null) combined.add(ln);
+            }
+        }
+
+        StringBuilder sb = new StringBuilder(Math.min(MAX_SNAPSHOT_CHARS, combined.size() * 80));
+        for (int i = 0; i < combined.size(); i++) {
+            String ln = combined.get(i);
             if (ln == null) continue;
             if (sb.length() + ln.length() + 1 > MAX_SNAPSHOT_CHARS) {
                 // Keep the newest lines when hitting IPC parcel safety cap
@@ -111,6 +183,7 @@ public final class DaemonLogBuffer {
     public static void clear() {
         synchronized (LOCK) {
             RING.clear();
+            STICKY_HEADERS.clear();
         }
     }
 

@@ -7,7 +7,7 @@ import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -98,10 +98,10 @@ object OpalPeerDiscovery {
             }
             val listener = object : NsdManager.RegistrationListener {
                 override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
-                    Log.i(TAG, "Advertised ${serviceInfo.serviceName} on :$port")
+                    OpalLogStore.i(TAG, "Advertised ${serviceInfo.serviceName} on :$port")
                 }
                 override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                    Log.w(TAG, "NSD advertise failed code=$errorCode")
+                    OpalLogStore.w(TAG, "NSD advertise failed code=$errorCode")
                 }
                 override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) = Unit
                 override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = Unit
@@ -112,7 +112,7 @@ object OpalPeerDiscovery {
                 registeredPort = port
                 registeredFp = shortFingerprint
             } catch (t: Throwable) {
-                Log.w(TAG, "registerService failed: ${t.message}")
+                OpalLogStore.w(TAG, "registerService failed", t)
             }
         }
     }
@@ -151,6 +151,7 @@ object OpalPeerDiscovery {
             val listener = object : NsdManager.DiscoveryListener {
                 override fun onDiscoveryStarted(regType: String) = Unit
                 override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                    OpalLogStore.w(TAG, "NSD browse start failed code=$errorCode")
                     nsdExec.execute { discListener = null }
                 }
                 override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
@@ -170,7 +171,7 @@ object OpalPeerDiscovery {
                 mgr.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
                 discListener = listener
             } catch (t: Throwable) {
-                Log.w(TAG, "discoverServices failed: ${t.message}")
+                OpalLogStore.w(TAG, "discoverServices failed", t)
             }
         }
     }
@@ -219,7 +220,7 @@ object OpalPeerDiscovery {
             }
             val cb = object : NsdManager.ServiceInfoCallback {
                 override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
-                    Log.w(TAG, "registerServiceInfoCallback failed key=$key code=$errorCode")
+                    OpalLogStore.w(TAG, "registerServiceInfoCallback failed key=$key code=$errorCode")
                     synchronized(activeInfoCallbacks) { activeInfoCallbacks.remove(key) }
                 }
 
@@ -241,7 +242,7 @@ object OpalPeerDiscovery {
                 mgr.registerServiceInfoCallback(service, mainExecutor, cb)
             } catch (t: Throwable) {
                 activeInfoCallbacks.remove(key)
-                Log.w(TAG, "registerServiceInfoCallback threw for $key: ${t.message}")
+                OpalLogStore.w(TAG, "registerServiceInfoCallback threw for $key", t)
             }
         }
     }

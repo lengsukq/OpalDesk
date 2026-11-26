@@ -8,7 +8,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
-import android.util.Log
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import moe.shizuku.server.IRemoteProcess
 import moe.shizuku.server.IShizukuService
 import rikka.shizuku.Shizuku
@@ -40,11 +40,13 @@ object ShizukuBootstrap {
     data class ShellResult(val code: Int, val output: String)
 
     private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
+        OpalLogStore.i(TAG, "Shizuku binder received (uid=${getRemoteUid()}, granted=${isPermissionGranted()})")
         val obs = stateObserver
         if (obs != null) mainHandler.post(obs)
     }
 
     private val binderDeadListener = Shizuku.OnBinderDeadListener {
+        OpalLogStore.w(TAG, "Shizuku binder dead")
         val obs = stateObserver
         if (obs != null) mainHandler.post(obs)
     }
@@ -52,6 +54,7 @@ object ShizukuBootstrap {
     private val permResultListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
         if (requestCode != REQUEST_CODE_PERMISSION) return@OnRequestPermissionResultListener
         val granted = grantResult == PackageManager.PERMISSION_GRANTED
+        OpalLogStore.i(TAG, "Shizuku permission result: granted=$granted")
         mainHandler.post {
             stateObserver?.invoke()
             permCallback?.invoke(granted)
@@ -69,7 +72,7 @@ object ShizukuBootstrap {
                 Shizuku.addRequestPermissionResultListener(permResultListener)
                 listenersAttached = true
             } catch (t: Throwable) {
-                Log.w(TAG, "Failed to attach Shizuku listeners", t)
+                OpalLogStore.w(TAG, "Failed to attach Shizuku listeners", t)
             }
         } else {
             mainHandler.post(onStateChanged)
@@ -157,7 +160,7 @@ object ShizukuBootstrap {
             }
         }
     } catch (t: Throwable) {
-        Log.w(TAG, "requestPermission failed", t)
+        OpalLogStore.w(TAG, "requestPermission failed", t)
         false
     }
 
@@ -294,7 +297,7 @@ object ShizukuBootstrap {
             closeQuietly(pfdErr)
             return ShellResult(exitHolder.get(), mergeOutErr(outBuf, errBuf))
         } catch (t: Throwable) {
-            Log.e(TAG, "execShell failed", t)
+            OpalLogStore.e(TAG, "execShell failed", t)
             closeQuietly(pfdIn)
             closeQuietly(pfdOut)
             closeQuietly(pfdErr)

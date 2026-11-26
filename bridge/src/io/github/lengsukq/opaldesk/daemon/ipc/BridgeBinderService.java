@@ -66,7 +66,9 @@ public final class BridgeBinderService extends Binder {
             return true;
         }
         if (!helperBridge.isTrustedCaller(Binder.getCallingUid())) {
-            throw new SecurityException("Untrusted OpalDesk caller uid=" + Binder.getCallingUid());
+            int callerUid = Binder.getCallingUid();
+            System.err.println("OPALDESK_BINDER_REJECTED uid=" + callerUid + " code=" + code);
+            throw new SecurityException("Untrusted OpalDesk caller uid=" + callerUid);
         }
         if (code >= 10 && code <= 99) {
             if (data == null) return false;
@@ -252,21 +254,28 @@ public final class BridgeBinderService extends Binder {
                 int canvasH = data.readInt();
                 int canvasDpi = data.readInt();
                 int prevInputMode = config.getInputBackendMode();
+                int prevMaxVd = config.getMaxActiveDisplays();
                 config.updateRuntimeConfig(inputMode, maxVd, canvasW, canvasH, canvasDpi);
                 if (maxVd >= DaemonConfig.MIN_MAX_VD && maxVd <= DaemonConfig.HARD_MAX_VD) {
                     compositor.setConfiguredMaxDisplays(config.getMaxActiveDisplays());
                 }
                 int nextInputMode = config.getInputBackendMode();
+                int nextMaxVd = config.getMaxActiveDisplays();
                 int status = (inputMode >= BridgeProtocol.INPUT_BACKEND_AUTO
                         && inputMode <= BridgeProtocol.INPUT_BACKEND_UHID
                         && (nextInputMode != prevInputMode || nextInputMode == BridgeProtocol.INPUT_BACKEND_UHID))
                         ? inputRouter.onInputBackendConfigChanged(nextInputMode)
                         : inputRouter.getLastInjectStatus();
+                if (nextInputMode != prevInputMode || nextMaxVd != prevMaxVd) {
+                    System.out.println("OPALDESK_CFG_UPDATE inputMode=" + prevInputMode + "->" + nextInputMode
+                            + " injectStatus=" + status + " maxVd=" + prevMaxVd + "->" + nextMaxVd);
+                }
                 if (reply != null) reply.writeInt(status);
                 return true;
             }
             case BridgeProtocol.TX_CLOSE_ALL_WINDOWS: {
                 boolean removeTasks = data.readInt() != 0;
+                System.out.println("OPALDESK_CLOSE_ALL_WINDOWS removeTasks=" + removeTasks);
                 compositor.closeAllWindows(removeTasks);
                 if (reply != null) reply.writeInt(1);
                 return true;
@@ -299,6 +308,8 @@ public final class BridgeBinderService extends Binder {
                 RemoteStreamServer.WifiConfigStatus st = (remoteBridge != null)
                         ? remoteBridge.configureWifi(enable, port)
                         : new RemoteStreamServer.WifiConfigStatus(false, 0, "");
+                System.out.println("OPALDESK_WIFI_STREAM_CFG reqEnable=" + enable
+                        + " effective=" + st.enabled + " port=" + st.port);
                 if (reply != null) {
                     reply.writeInt(st.enabled ? 1 : 0);
                     reply.writeInt(st.port);
@@ -332,6 +343,8 @@ public final class BridgeBinderService extends Binder {
                     ok = services != null
                             && services.setExternalDisplayMode(displayId, reqW, reqH, reqFps);
                 }
+                System.out.println("OPALDESK_EXT_DISPLAY_MODE displayId=" + displayId
+                        + " req=" + reqW + "x" + reqH + "@" + reqFps + " ok=" + ok);
                 if (reply != null) reply.writeInt(ok ? 1 : 0);
                 return true;
             }
@@ -491,6 +504,7 @@ public final class BridgeBinderService extends Binder {
                 return true;
             }
             case BridgeProtocol.TX_SHUTDOWN: {
+                System.out.println("OPALDESK_SHUTDOWN_REQUESTED");
                 shutdownTrigger.run();
                 if (reply != null) reply.writeInt(1);
                 new Thread(() -> {

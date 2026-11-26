@@ -141,6 +141,9 @@ public final class VirtualDisplayPool {
         // tighten dynamicRuntimeCeiling, hibernate one more LRU window, and retry once.
         if (created == null && activeLeases.size() >= 2) {
             dynamicRuntimeCeiling = activeLeases.size();
+            System.err.println("OPALDESK_VD_QUOTA_ADAPT wid=" + target.windowId
+                    + " newCeiling=" + dynamicRuntimeCeiling
+                    + " active=" + activeLeases.size());
             if (evictOldestBackgroundLocked(target.windowId, allSessions, evictionListener)) {
                 created = driver.createVirtualDisplay(
                         vdName, width, height, dpi, fps, surface, allowSecureFlag);
@@ -148,6 +151,9 @@ public final class VirtualDisplayPool {
         }
 
         if (created == null || created.displayId <= 0) {
+            System.err.println("OPALDESK_VD_LEASE_FAIL wid=" + target.windowId
+                    + " active=" + activeLeases.size()
+                    + " ceiling=" + getEffectiveMaxDisplays());
             return null;
         }
 
@@ -179,6 +185,8 @@ public final class VirtualDisplayPool {
         DisplayDriver.CreatedDisplay created = driver.createVirtualDisplay(
                 vdName, width, height, dpi, fps, surface, allowSecureFlag);
         if (created == null || created.displayId <= 0) {
+            System.err.println("OPALDESK_VD_RECREATE_ROLLBACK wid=" + target.windowId
+                    + " oldDisplayId=" + oldLease.displayId);
             driver.setVirtualDisplaySurface(oldLease.handle, surface);
             return null;
         }
@@ -256,6 +264,10 @@ public final class VirtualDisplayPool {
         if (lease != null) {
             driver.releaseVirtualDisplay(lease.handle, lease.displayId);
         }
+        System.out.println("OPALDESK_VD_LRU_HIBERNATE victimWid=" + victim.windowId
+                + " pkg=" + victim.pkg
+                + " displayId=" + (lease != null ? lease.displayId : -1)
+                + " snapBytes=" + (snap != null ? snap.length : 0));
         if (listener != null) {
             listener.onWindowHibernated(victim, snap);
         }

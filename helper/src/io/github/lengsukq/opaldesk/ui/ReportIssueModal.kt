@@ -44,6 +44,7 @@ import io.github.lengsukq.opaldesk.diagnostics.DiagnosticSanitizer
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackQuotaSnapshot
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackRateLimiter
 import io.github.lengsukq.opaldesk.diagnostics.ManualReportOutcome
+import io.github.lengsukq.opaldesk.diagnostics.ManualReportSubmitGuard
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogEntry
 import io.github.lengsukq.opaldesk.diagnostics.OpalSentry
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
@@ -74,7 +75,20 @@ fun ReportIssueModal(
     var submitting by remember { mutableStateOf(false) }
     var validationError by remember { mutableStateOf("") }
     var lastOutcome by remember { mutableStateOf<ManualReportOutcome?>(null) }
+    var lastSubmittedDescription by remember { mutableStateOf<String?>(null) }
     val sentryConfigured = remember { OpalSentry.isConfigured() }
+
+    val submitAllowed = ManualReportSubmitGuard.isSubmitAllowed(
+        submitting = submitting,
+        quotaExhausted = quota.isExhausted,
+        sentryConfigured = sentryConfigured,
+        lastUploadSucceeded = lastOutcome?.success == true,
+        currentDescription = problemDescription,
+        lastSubmittedDescription = lastSubmittedDescription,
+    )
+    val alreadySubmittedSameReport = lastOutcome?.success == true &&
+        lastSubmittedDescription != null &&
+        problemDescription.trim() == lastSubmittedDescription
 
     val helperCount = helperEntries.size.coerceAtMost(DiagnosticSanitizer.DEFAULT_MAX_HELPER_ENTRIES)
     val daemonCount = remember(daemonLogText) {
@@ -83,12 +97,13 @@ fun ReportIssueModal(
     }
 
     fun submitReport() {
-        if (submitting || quota.isExhausted) return
+        if (!submitAllowed) return
         if (reporterName.trim().isEmpty()) {
             validationError = "请先填写你的用户名或称呼，便于后续定位回复"
             return
         }
-        if (problemDescription.trim().isEmpty()) {
+        val trimmedDesc = problemDescription.trim()
+        if (trimmedDesc.isEmpty()) {
             validationError = "请简单描述遇到的问题或复现步骤"
             return
         }
@@ -98,7 +113,7 @@ fun ReportIssueModal(
         OpalSentry.submitManualReportAsync(
             ctx = ctx,
             reporterName = reporterName,
-            problemDescription = problemDescription,
+            problemDescription = trimmedDesc,
             appVersion = appVersion,
             status = status,
             scene = scene,
@@ -108,6 +123,9 @@ fun ReportIssueModal(
         ) { outcome ->
             submitting = false
             lastOutcome = outcome
+            if (outcome.success) {
+                lastSubmittedDescription = trimmedDesc
+            }
             onQuotaChanged(outcome.quota)
         }
     }
@@ -317,7 +335,8 @@ fun ReportIssueModal(
                 ) {
                     OpalButton(
                         label = if (lastOutcome?.success == true) "完成" else "取消",
-                        filled = false,
+                        filled = alreadySubmittedSameReport,
+                        accent = if (alreadySubmittedSameReport) OpalPalette.AccentEmerald else OpalPalette.AccentBlue,
                         enabled = !submitting,
                         onClick = onDismiss,
                         modifier = Modifier.weight(1f),
@@ -325,10 +344,11 @@ fun ReportIssueModal(
                     OpalButton(
                         label = when {
                             submitting -> "上传中…"
+                            alreadySubmittedSameReport -> "已上传"
                             quota.isExhausted -> "今日已达上限"
                             else -> "确认上传"
                         },
-                        enabled = !submitting && !quota.isExhausted && sentryConfigured,
+                        enabled = submitAllowed,
                         accent = OpalPalette.AccentBlue,
                         onClick = ::submitReport,
                         modifier = Modifier.weight(1.3f),

@@ -10,7 +10,6 @@ import android.hardware.display.DisplayManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import android.view.Display
 import android.view.Gravity
 import android.view.KeyEvent
@@ -46,6 +45,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.lengsukq.opaldesk.compositor.OpalCompositorWorkspace
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import io.github.lengsukq.opaldesk.external.DexTrackpadScreen
 import io.github.lengsukq.opaldesk.external.DirectExternalTrackpadSink
 import io.github.lengsukq.opaldesk.external.ExternalDesktopMode
@@ -140,6 +140,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         }
         override fun onDisplayRemoved(displayId: Int) {
             if (targetDisplayId > Display.DEFAULT_DISPLAY && displayId == targetDisplayId) {
+                OpalLogStore.i(TAG, "External display removed: displayId=$displayId, closing workstation")
                 dismissPresentation()
                 finish()
             }
@@ -199,8 +200,13 @@ class ExternalDesktopActivity : ComponentActivity() {
                     ),
                 )
                 syncExternalMouseRouting(targetExternal.displayId)
+                OpalLogStore.i(
+                    TAG,
+                    "Started PRESENTATION mode: targetDisplayId=${targetExternal.displayId} " +
+                        "${pres.displayWidthPx}x${pres.displayHeightPx}@${pres.refreshRateHz}Hz wireless=$isWireless",
+                )
             } catch (t: Throwable) {
-                Log.w(TAG, "Presentation.show failed, falling back to direct render: ${t.message}")
+                OpalLogStore.w(TAG, "Presentation.show failed, falling back to direct render", t)
                 runningInPresentationMode = false
                 ExternalTrackpadBridge.clearSessionIfOwner(this)
             }
@@ -209,6 +215,12 @@ class ExternalDesktopActivity : ComponentActivity() {
             val session = publishDirectSession(currentDisplayId, requestedWireless)
             activeIsWirelessDisplay = session.isWirelessDisplay
             syncExternalMouseRouting(currentDisplayId)
+            OpalLogStore.i(
+                TAG,
+                "Started DIRECT_EXTENDED mode: displayId=$currentDisplayId " +
+                    "${session.widthPx}x${session.heightPx}@${session.refreshRateHz}Hz " +
+                    "wireless=${session.isWirelessDisplay} cast=${session.isRemoteCastDisplay}",
+            )
             if (ExternalTrackpadPolicy.shouldAutoLaunchPhoneTrackpad(
                     session = session,
                     autoShowEnabled = AppPrefs.isAutoShowPhoneTrackpadEnabled(this),

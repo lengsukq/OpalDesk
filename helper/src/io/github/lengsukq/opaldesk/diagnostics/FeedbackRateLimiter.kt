@@ -82,3 +82,27 @@ class FeedbackRateLimiter(
             "今日日志上传次数已达上限（$maxDailyReports/$maxDailyReports），请明天再试"
         }
 }
+
+/**
+ * Pure JVM-testable guard preventing accidental duplicate manual report submissions
+ * right after a confirmed upload while the modal remains open displaying the feedback code.
+ */
+object ManualReportSubmitGuard {
+    fun isSubmitAllowed(
+        submitting: Boolean,
+        quotaExhausted: Boolean,
+        sentryConfigured: Boolean,
+        lastUploadSucceeded: Boolean,
+        currentDescription: String,
+        lastSubmittedDescription: String?,
+    ): Boolean {
+        if (submitting || quotaExhausted || !sentryConfigured) return false
+        if (lastUploadSucceeded &&
+            lastSubmittedDescription != null &&
+            currentDescription.trim() == lastSubmittedDescription
+        ) {
+            return false
+        }
+        return true
+    }
+}

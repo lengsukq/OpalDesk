@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.util.Log
 import io.github.lengsukq.opaldesk.AdbBootstrap
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.MainActivity
@@ -20,6 +19,7 @@ import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.adb.AdbProcessRunner
 import io.github.lengsukq.opaldesk.adb.ShizukuBootstrap
 import io.github.lengsukq.opaldesk.cast.OpalPeerDiscovery
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -95,7 +95,7 @@ class WebActivationService : Service(), MiniWebSocketServer.Listener {
                     appCtx.startService(intent)
                 }
             } catch (t: Throwable) {
-                Log.w(TAG, "Failed to start WebActivationService: ${t.message}")
+                OpalLogStore.w(TAG, "Failed to start WebActivationService", t)
             }
         }
 
@@ -125,7 +125,7 @@ class WebActivationService : Service(), MiniWebSocketServer.Listener {
     private var autoStopScheduled: Boolean = false
 
     private val expireRunnable = Runnable {
-        Log.i(TAG, "WebActivationService auto-expired after 5 minutes")
+        OpalLogStore.i(TAG, "WebActivationService auto-expired after 5 minutes")
         stopSelf()
     }
 
@@ -219,9 +219,9 @@ class WebActivationService : Service(), MiniWebSocketServer.Listener {
                     mainHandler.removeCallbacks(discoveryPollRunnable)
                     mainHandler.postDelayed(discoveryPollRunnable, 500L)
                 }
-                Log.i(TAG, "WebActivationService listening on https://$lanIp:$port fp=${identity.shortFingerprint}")
+                OpalLogStore.i(TAG, "WebActivationService listening on https://$lanIp:$port fp=${identity.shortFingerprint}")
             } catch (t: Throwable) {
-                Log.e(TAG, "Failed to start WebActivationService", t)
+                OpalLogStore.e(TAG, "Failed to start WebActivationService", t)
                 _stateFlow.value = State(
                     running = false,
                     lastMessage = "启动局域网激活服务失败: ${t.message}",

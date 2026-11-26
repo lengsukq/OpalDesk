@@ -10,6 +10,7 @@ import android.os.Looper
 import android.util.Log
 import io.github.lengsukq.opaldesk.AdbBootstrap
 import io.github.lengsukq.opaldesk.cast.OpalPeerDiscovery
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.util.ArrayDeque
@@ -65,7 +66,7 @@ internal object AdbMdnsDiscovery {
         listener = nextListener
         val appCtx = ctx.applicationContext
         if (!OpalPeerDiscovery.hasLocalNetworkPermission(appCtx)) {
-            Log.i(TAG, "Skipping NSD wireless-ADB scan until ACCESS_LOCAL_NETWORK is granted")
+            OpalLogStore.i(TAG, "Skipping NSD wireless-ADB scan until ACCESS_LOCAL_NETWORK is granted")
             return
         }
         if (nsdManager != null) {
@@ -81,7 +82,7 @@ internal object AdbMdnsDiscovery {
                 }
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "MulticastLock unavailable", t)
+            OpalLogStore.w(TAG, "MulticastLock unavailable", t)
         }
 
         try {
@@ -94,7 +95,7 @@ internal object AdbMdnsDiscovery {
             nsd.discoverServices(SERVICE_PAIRING, NsdManager.PROTOCOL_DNS_SD, pairDisc)
             nsd.discoverServices(SERVICE_CONNECT, NsdManager.PROTOCOL_DNS_SD, connDisc)
         } catch (t: Throwable) {
-            Log.e(TAG, "startDiscovery failed", t)
+            OpalLogStore.e(TAG, "startDiscovery failed", t)
         }
     }
 
@@ -136,7 +137,7 @@ internal object AdbMdnsDiscovery {
         object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(regType: String?) = Unit
             override fun onStartDiscoveryFailed(serviceType: String?, errorCode: Int) {
-                Log.w(TAG, "onStartDiscoveryFailed type=$serviceType code=$errorCode")
+                OpalLogStore.w(TAG, "onStartDiscoveryFailed type=$serviceType code=$errorCode")
             }
 
             override fun onStopDiscoveryFailed(serviceType: String?, errorCode: Int) = Unit
@@ -185,7 +186,7 @@ internal object AdbMdnsDiscovery {
             }
             val cb = object : NsdManager.ServiceInfoCallback {
                 override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
-                    Log.w(TAG, "registerServiceInfoCallback failed key=$key code=$errorCode")
+                    OpalLogStore.w(TAG, "registerServiceInfoCallback failed key=$key code=$errorCode")
                     synchronized(activeInfoCallbacks) { activeInfoCallbacks.remove(key) }
                 }
 
@@ -218,7 +219,7 @@ internal object AdbMdnsDiscovery {
                 nsd.registerServiceInfoCallback(info, mainExecutor, cb)
             } catch (t: Throwable) {
                 activeInfoCallbacks.remove(key)
-                Log.w(TAG, "registerServiceInfoCallback threw for $key", t)
+                OpalLogStore.w(TAG, "registerServiceInfoCallback threw for $key", t)
             }
         }
     }
@@ -259,7 +260,7 @@ internal object AdbMdnsDiscovery {
                 }
             })
         } catch (t: Throwable) {
-            Log.w(TAG, "resolveService failed", t)
+            OpalLogStore.w(TAG, "resolveService failed", t)
             resolving = false
             pumpResolveLocked()
         }

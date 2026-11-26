@@ -217,10 +217,25 @@ public final class OpalDeskDaemon implements Runnable {
         registerNeedBinderReceiver();
         Runtime.getRuntime().addShutdownHook(new Thread(this::performShutdownCleanup, "OpalShutdownHook"));
 
-        System.out.println("OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=" + android.os.Process.myUid()
+        String injectorKind = (services != null && services.systemInputInjector != null)
+                ? services.systemInputInjector.kind.name()
+                : "NONE";
+        boolean uhidRw = probeUhidReadWrite();
+        String svcFlags = (services == null) ? "null"
+                : ("im=" + (services.iInputManager != null ? 1 : 0)
+                + ",wm=" + (services.iWindowManager != null ? 1 : 0)
+                + ",atm=" + (services.iActivityTaskManager != null ? 1 : 0)
+                + ",idm=" + (services.iDisplayManager != null ? 1 : 0));
+        String startupBanner = "OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED uid=" + android.os.Process.myUid()
+                + " api=" + Build.VERSION.SDK_INT
                 + " maxVd=" + config.getMaxActiveDisplays()
                 + " rootEnhanced=" + config.isRootEnhanced()
-                + " ctx=" + readSeLinuxContextQuietly());
+                + " injector=" + injectorKind
+                + " uhidRw=" + uhidRw
+                + " svc=" + svcFlags
+                + " ctx=" + readSeLinuxContextQuietly();
+        DaemonLogBuffer.recordStickyHeader(startupBanner);
+        System.out.println(startupBanner);
         System.out.flush();
 
         bgExec.execute(helperBridge::grantHelperPrivileges);
@@ -428,6 +443,16 @@ public final class OpalDeskDaemon implements Runnable {
                 }
             }
         } catch (ReflectiveOperationException | RuntimeException ignored) {
+        }
+    }
+
+    private static boolean probeUhidReadWrite() {
+        try {
+            return android.system.Os.access("/dev/uhid",
+                    android.system.OsConstants.R_OK | android.system.OsConstants.W_OK);
+        } catch (Throwable ignored) {
+            java.io.File f = new java.io.File("/dev/uhid");
+            return f.canRead() && f.canWrite();
         }
     }
 

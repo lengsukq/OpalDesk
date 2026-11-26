@@ -63,6 +63,7 @@ object DiagnosticSanitizer {
         generatedAtText: String,
         maxHelperEntries: Int = DEFAULT_MAX_HELPER_ENTRIES,
         maxDaemonLines: Int = DEFAULT_MAX_DAEMON_LINES,
+        env: DiagnosticEnvironmentSnapshot = DiagnosticEnvironmentSnapshot(),
     ): String {
         val recentHelper = if (helperEntries.size > maxHelperEntries) {
             helperEntries.takeLast(maxHelperEntries)
@@ -73,11 +74,7 @@ object DiagnosticSanitizer {
             .map { it.trimEnd() }
             .filter { it.isNotBlank() }
             .toList()
-        val recentDaemon = if (daemonLines.size > maxDaemonLines) {
-            daemonLines.takeLast(maxDaemonLines)
-        } else {
-            daemonLines
-        }
+        val recentDaemon = selectDaemonLinesPreservingStartup(daemonLines, maxDaemonLines)
         val baseReport = OpalLogFilter.buildDiagnosticReport(
             appVersion = appVersion,
             deviceSummary = deviceSummary,
@@ -87,6 +84,7 @@ object DiagnosticSanitizer {
             helperEntries = recentHelper,
             daemonLogText = recentDaemon.joinToString("\n"),
             generatedAtText = generatedAtText,
+            env = env,
         )
         val header = buildString {
             appendLine("=== 用户反馈信息 ===")
@@ -96,6 +94,26 @@ object DiagnosticSanitizer {
         }
         return sanitizeText(header + baseReport)
     }
+
+    internal fun selectDaemonLinesPreservingStartup(
+        daemonLines: List<String>,
+        maxDaemonLines: Int,
+    ): List<String> {
+        if (maxDaemonLines <= 0) return emptyList()
+        if (daemonLines.size <= maxDaemonLines) return daemonLines
+        val sticky = daemonLines.filter { isStickyStartupLine(it) }.take(minOf(4, maxDaemonLines / 4))
+        if (sticky.isEmpty()) return daemonLines.takeLast(maxDaemonLines)
+        val tailBudget = (maxDaemonLines - sticky.size).coerceAtLeast(0)
+        val tail = if (tailBudget > 0) daemonLines.takeLast(tailBudget) else emptyList()
+        val tailSet = tail.toHashSet()
+        val missingSticky = sticky.filterNot { it in tailSet }
+        if (missingSticky.isEmpty()) return daemonLines.takeLast(maxDaemonLines)
+        val trimmedTail = daemonLines.takeLast((maxDaemonLines - missingSticky.size).coerceAtLeast(0))
+        return missingSticky + trimmedTail
+    }
+
+    private fun isStickyStartupLine(line: String): Boolean =
+        line.contains("[STARTUP]") || line.contains("OPALDESK_UNIVERSAL_COMPOSITOR_DAEMON_STARTED")
 
     fun gzipCompress(
         text: String,

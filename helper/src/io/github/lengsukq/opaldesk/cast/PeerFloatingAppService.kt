@@ -24,7 +24,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
 import android.text.TextUtils
-import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
@@ -46,6 +45,7 @@ import android.widget.Toast
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.MainActivity
 import io.github.lengsukq.opaldesk.R
+import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -187,12 +187,14 @@ class PeerFloatingAppService : Service() {
         startForegroundNotification(nextAppLabel.ifBlank { "远程应用" }, nextPeerLabel.ifBlank { "远端设备" })
 
         if (!Settings.canDrawOverlays(this)) {
+            OpalLogStore.w(TAG, "Aborting start: SYSTEM_ALERT_WINDOW permission not granted")
             Toast.makeText(this, "请先授予 OpalDesk 悬浮窗权限", Toast.LENGTH_SHORT).show()
             stopForegroundAndSelf()
             return START_NOT_STICKY
         }
 
         if (nextHost.isEmpty() || nextPkg.isEmpty()) {
+            OpalLogStore.w(TAG, "Aborting start: missing host or appPackage (pkg='$nextPkg')")
             stopForegroundAndSelf()
             return START_NOT_STICKY
         }
@@ -206,6 +208,7 @@ class PeerFloatingAppService : Service() {
             selfLanIp = remoteSt.lanIp,
         )
         if (!check.allowed || !OpalPeerCastMutex.beginReceiving(nextHost, nextPort, nextPeerLabel, MUTEX_TAG)) {
+            OpalLogStore.w(TAG, "Aborting start: cast mutex rejected (${check.reason.ifBlank { "busy" }})")
             Toast.makeText(this, check.reason.ifBlank { "当前不可启动远程悬浮窗" }, Toast.LENGTH_LONG).show()
             stopForegroundAndSelf()
             return START_NOT_STICKY
@@ -315,12 +318,14 @@ class PeerFloatingAppService : Service() {
                 }
 
                 override fun onError(message: String) {
+                    OpalLogStore.w(TAG, "Remote standalone app error (pkg=$appPackage): $message")
                     mainHandler.post {
                         updateOverlayStatus(message, dotColor = 0xFFEF4444.toInt(), showRetry = true)
                     }
                 }
 
                 override fun onDisconnected(reason: String) {
+                    OpalLogStore.i(TAG, "Remote standalone app disconnected (pkg=$appPackage): $reason")
                     mainHandler.post {
                         if (reason == "app_exited" || reason == "Session closed") {
                             stopSelf()
@@ -668,8 +673,14 @@ class PeerFloatingAppService : Service() {
             windowManager.addView(container, lp)
             rootView = container
             layoutParams = lp
+            OpalLogStore.i(
+                TAG,
+                "Attached overlay ${expandedW}x${expandedH} at ($savedX,$savedY) " +
+                    "screen=${resources.displayMetrics.widthPixels}x${resources.displayMetrics.heightPixels} " +
+                    "density=${resources.displayMetrics.density} landscape=$isLandscape pkg=$appPackage",
+            )
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed to attach floating overlay: ${t.message}")
+            OpalLogStore.e(TAG, "Failed to attach floating overlay", t)
             Toast.makeText(this, "无法创建悬浮窗：${t.message}", Toast.LENGTH_SHORT).show()
             stopSelf()
         }
@@ -872,7 +883,7 @@ class PeerFloatingAppService : Service() {
         val rv = rootView ?: return
         val bar = imeInputBar ?: return
         val edit = imeEditText ?: return
-        Log.i(TAG, "Opening floating IME bar on receiver")
+        OpalLogStore.i(TAG, "Opening floating IME bar on receiver")
         isImeBarVisible = true
         bar.visibility = View.VISIBLE
         lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
@@ -1103,7 +1114,7 @@ class PeerFloatingAppService : Service() {
                 startForeground(NOTIF_ID, notif)
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "Floating foreground warning: ${t.message}")
+            OpalLogStore.w(TAG, "Floating foreground warning", t)
         }
     }
 }
