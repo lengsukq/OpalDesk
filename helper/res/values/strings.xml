@@ -1,6 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OpalDesk</string>
-    <string name="shortcut_workstation_short">进入桌面</string>
-    <string name="shortcut_workstation_long">打开 OpalDesk 桌面工作站</string>
+    <string name="shortcut_workstation_short">进入 DeX</string>
+    <string name="shortcut_workstation_long">进入 OpalDesk 桌面工作站</string>
+    <string name="shortcut_landscape_short">横屏 DeX</string>
+    <string name="shortcut_landscape_long">强制横屏进入 DeX 桌面</string>
+    <string name="shortcut_activate_short">激活引擎</string>
+    <string name="shortcut_activate_long">打开多窗引擎激活引导</string>
+    <string name="shortcut_console_short">控制台</string>
+    <string name="shortcut_console_long">直接打开 OpalDesk 控制台</string>
+    <string name="tile_enter_dex_label">OpalDesk 桌面</string>
+    <string name="tile_host_screen_label">物理息屏</string>
+    <string name="tile_wifi_share_label">无线共享</string>
 </resources>

@@ -41,6 +41,7 @@ object AppPrefs {
     private const val KEY_AUTO_ROOT = "auto_root"
     private const val KEY_AUTO_SHIZUKU = "auto_shizuku"
     private const val KEY_ROOT_ENHANCE = "root_enhance_optional"
+    private const val KEY_AUTO_ENTER_DEX = "auto_enter_dex_on_launch_v1"
     private const val KEY_AUTO_EXT_DISPLAY = "auto_project_ext_display"
     private const val KEY_AUTO_SHOW_PHONE_TRACKPAD = "auto_show_phone_trackpad_on_external"
     private const val KEY_EXTERNAL_PROJECTION_MODE = "external_projection_mode_v1"
@@ -119,6 +120,9 @@ object AppPrefs {
     private val _autoShowPhoneTrackpadFlow = MutableStateFlow(true)
     val autoShowPhoneTrackpadFlow: StateFlow<Boolean> = _autoShowPhoneTrackpadFlow.asStateFlow()
 
+    private val _autoEnterDexFlow = MutableStateFlow(false)
+    val autoEnterDexFlow: StateFlow<Boolean> = _autoEnterDexFlow.asStateFlow()
+
     private val _externalProjectionModeFlow = MutableStateFlow(PROJECTION_MODE_AUTO)
     val externalProjectionModeFlow: StateFlow<Int> = _externalProjectionModeFlow.asStateFlow()
 
@@ -169,6 +173,7 @@ object AppPrefs {
         _appLaunchCountsFlow.value = parseLaunchCounts(p.getString(KEY_APP_LAUNCH_COUNTS, null))
         _autoCheckUpdateFlow.value = p.getBoolean(KEY_AUTO_CHECK_UPDATE, true)
         _autoShowPhoneTrackpadFlow.value = p.getBoolean(KEY_AUTO_SHOW_PHONE_TRACKPAD, true)
+        _autoEnterDexFlow.value = p.getBoolean(KEY_AUTO_ENTER_DEX, false)
         _externalProjectionModeFlow.value = p.getInt(KEY_EXTERNAL_PROJECTION_MODE, PROJECTION_MODE_AUTO)
             .coerceIn(PROJECTION_MODE_AUTO, PROJECTION_MODE_PRESENTATION)
         _externalOverscanPctFlow.value = p.getFloat(KEY_EXTERNAL_OVERSCAN_PCT, DEFAULT_OVERSCAN_PCT)
@@ -236,6 +241,16 @@ object AppPrefs {
     fun setAutoShowPhoneTrackpadEnabled(ctx: Context?, enabled: Boolean) {
         prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_SHOW_PHONE_TRACKPAD, enabled)?.apply()
         _autoShowPhoneTrackpadFlow.value = enabled
+    }
+
+    fun isAutoEnterDexEnabled(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _autoEnterDexFlow.value
+    }
+
+    fun setAutoEnterDexEnabled(ctx: Context?, enabled: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_ENTER_DEX, enabled)?.apply()
+        _autoEnterDexFlow.value = enabled
     }
 
     fun getExternalProjectionMode(ctx: Context?): Int {

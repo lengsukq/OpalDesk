@@ -3,12 +3,45 @@
     <shortcut
         android:shortcutId="open_workstation"
         android:enabled="true"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@drawable/ic_shortcut_dex"
         android:shortcutShortLabel="@string/shortcut_workstation_short"
         android:shortcutLongLabel="@string/shortcut_workstation_long">
         <intent
-            android:action="android.intent.action.VIEW"
+            android:action="io.github.lengsukq.opaldesk.action.ENTER_DEX"
             android:targetPackage="io.github.lengsukq.opaldesk"
-            android:targetClass="io.github.lengsukq.opaldesk.DesktopActivity" />
+            android:targetClass="io.github.lengsukq.opaldesk.service.QuickActionActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="enter_landscape_dex"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_landscape"
+        android:shortcutShortLabel="@string/shortcut_landscape_short"
+        android:shortcutLongLabel="@string/shortcut_landscape_long">
+        <intent
+            android:action="io.github.lengsukq.opaldesk.action.ENTER_LANDSCAPE_DEX"
+            android:targetPackage="io.github.lengsukq.opaldesk"
+            android:targetClass="io.github.lengsukq.opaldesk.service.QuickActionActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="open_activation"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_activate"
+        android:shortcutShortLabel="@string/shortcut_activate_short"
+        android:shortcutLongLabel="@string/shortcut_activate_long">
+        <intent
+            android:action="io.github.lengsukq.opaldesk.action.OPEN_ACTIVATION"
+            android:targetPackage="io.github.lengsukq.opaldesk"
+            android:targetClass="io.github.lengsukq.opaldesk.service.QuickActionActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="open_console"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_console"
+        android:shortcutShortLabel="@string/shortcut_console_short"
+        android:shortcutLongLabel="@string/shortcut_console_long">
+        <intent
+            android:action="io.github.lengsukq.opaldesk.action.OPEN_CONSOLE"
+            android:targetPackage="io.github.lengsukq.opaldesk"
+            android:targetClass="io.github.lengsukq.opaldesk.service.QuickActionActivity" />
     </shortcut>
 </shortcuts>

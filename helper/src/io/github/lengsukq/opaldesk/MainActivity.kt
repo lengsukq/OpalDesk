@@ -1,6 +1,7 @@
 package io.github.lengsukq.opaldesk
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -61,6 +62,10 @@ import io.github.lengsukq.opaldesk.external.ExternalTrackpadLauncher
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
 import io.github.lengsukq.opaldesk.service.DisplayLaunchHelper
+import io.github.lengsukq.opaldesk.service.QuickEntryPolicy
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import io.github.lengsukq.opaldesk.ui.ActivationModal
 import io.github.lengsukq.opaldesk.ui.AppUpdateModal
 import io.github.lengsukq.opaldesk.ui.ConsoleDashboardTab
@@ -88,9 +93,28 @@ import io.github.lengsukq.opaldesk.update.AppUpdateManager
  * 4. Display Resolution / EDID Refresh Rate / FPS / DPI / Auto-Adapt & Engine Pool Tuning
  */
 class MainActivity : ComponentActivity() {
+    companion object {
+        const val EXTRA_FROM_DESKTOP = "from_desktop"
+        const val EXTRA_BYPASS_AUTO_ENTER_DEX = "bypass_auto_enter_dex"
+        const val EXTRA_OPEN_ACTIVATION = "open_activation"
+
+        fun createLaunchIntent(
+            ctx: Context,
+            fromDesktop: Boolean = false,
+            bypassAutoEnterDex: Boolean = false,
+            openActivation: Boolean = false,
+        ): Intent = Intent(ctx, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            if (fromDesktop) putExtra(EXTRA_FROM_DESKTOP, true)
+            if (bypassAutoEnterDex) putExtra(EXTRA_BYPASS_AUTO_ENTER_DEX, true)
+            if (openActivation) putExtra(EXTRA_OPEN_ACTIVATION, true)
+        }
+    }
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var localNetworkPermGranted by mutableStateOf(true)
+    private var autoEnterDexArmed by mutableStateOf(false)
+    private var openActivationPulse by mutableIntStateOf(0)
     private val notifPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { _ -> }
@@ -132,6 +156,7 @@ class MainActivity : ComponentActivity() {
         BridgeService.ensureStarted(this)
         BridgeClient.requestBinder(this)
         scheduleSilentAutoBootstrapIfConfigured()
+        applyLaunchIntentFlags(intent, isColdCreate = savedInstanceState == null)
 
         setContent {
             OpalTheme {
@@ -143,6 +168,9 @@ class MainActivity : ComponentActivity() {
                 }
                 OpalConsoleScreen(
                     needsLocalNetworkPerm = !localNetworkPermGranted,
+                    autoEnterDexArmed = autoEnterDexArmed,
+                    openActivationPulse = openActivationPulse,
+                    onDisarmAutoEnterDex = { autoEnterDexArmed = false },
                     onRequestLocalNetworkPerm = {
                         if (Build.VERSION.SDK_INT >= 37) {
                             localNetPermLauncher.launch(OpalPeerDiscovery.PERMISSION_ACCESS_LOCAL_NETWORK)
@@ -163,6 +191,26 @@ class MainActivity : ComponentActivity() {
                     },
                 )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        applyLaunchIntentFlags(intent, isColdCreate = false)
+    }
+
+    private fun applyLaunchIntentFlags(launchIntent: Intent?, isColdCreate: Boolean) {
+        val fromDesktop = launchIntent?.getBooleanExtra(EXTRA_FROM_DESKTOP, false) == true
+        val bypassAutoEnter = launchIntent?.getBooleanExtra(EXTRA_BYPASS_AUTO_ENTER_DEX, false) == true
+        val openActivation = launchIntent?.getBooleanExtra(EXTRA_OPEN_ACTIVATION, false) == true
+        if (fromDesktop || bypassAutoEnter || openActivation) {
+            autoEnterDexArmed = false
+        } else if (isColdCreate) {
+            autoEnterDexArmed = AppPrefs.isAutoEnterDexEnabled(this)
+        }
+        if (openActivation) {
+            openActivationPulse++
         }
     }
 
@@ -192,6 +240,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        autoEnterDexArmed = false
         OpalPeerDiscovery.stopBrowsing()
         super.onStop()
     }
@@ -302,6 +351,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun OpalConsoleScreen(
     needsLocalNetworkPerm: Boolean,
+    autoEnterDexArmed: Boolean,
+    openActivationPulse: Int,
+    onDisarmAutoEnterDex: () -> Unit,
     onRequestLocalNetworkPerm: () -> Unit,
     onEnterDesktop: () -> Unit,
     onEnterLandscapeMirrorDesktop: () -> Unit,
@@ -333,6 +385,50 @@ private fun OpalConsoleScreen(
 
     LaunchedEffect(Unit) {
         AppUpdateManager.maybeSilentCheckOnStartup(ctx)
+    }
+
+    LaunchedEffect(openActivationPulse) {
+        if (openActivationPulse > 0) {
+            onDisarmAutoEnterDex()
+            showActivationModal = true
+        }
+    }
+
+    LaunchedEffect(autoEnterDexArmed) {
+        if (!autoEnterDexArmed) return@LaunchedEffect
+        val autoShizukuCandidate = AppPrefs.isAutoShizukuEnabled(ctx) && ShizukuBootstrap.isShizukuInstalled(ctx)
+        val autoRootCandidate = AppPrefs.isAutoRootEnabled(ctx) && AdbBootstrap.hasSuBinaryHint()
+        val waitBudgetMs = QuickEntryPolicy.computeStartupWaitBudgetMs(
+            autoShizukuCandidate = autoShizukuCandidate,
+            autoRootCandidate = autoRootCandidate,
+        )
+        delay(waitBudgetMs)
+        onDisarmAutoEnterDex()
+    }
+
+    LaunchedEffect(autoEnterDexArmed, status.connected) {
+        if (!autoEnterDexArmed || !status.connected) return@LaunchedEffect
+        val freshRemote = withContext(Dispatchers.IO) {
+            BridgeClient.refreshRemoteStatus()
+        }
+        val decision = QuickEntryPolicy.evaluateAutoEnterDex(
+            QuickEntryPolicy.AutoEnterDexInput(
+                autoEnterEnabled = AppPrefs.isAutoEnterDexEnabled(ctx),
+                isColdLaunch = true,
+                launchedFromDesktop = false,
+                bypassAutoEnter = false,
+                userManuallyCancelled = !autoEnterDexArmed,
+                userStopping = BridgeService.sUserStopping,
+                engineConnected = status.connected,
+                remoteCastConnected = freshRemote.connected,
+                physicalExternalActive = ExternalTrackpadBridge.sessionFlow.value.isPhysicalActive,
+                hasPendingPairing = BridgeClient.pendingPairingFlow.value != null,
+            ),
+        )
+        onDisarmAutoEnterDex()
+        if (decision == QuickEntryPolicy.AutoEnterDecision.ENTER_DEX) {
+            onEnterDesktop()
+        }
     }
 
     val availableReleaseTag = when (val st = updateState) {
@@ -370,8 +466,14 @@ private fun OpalConsoleScreen(
                         rootEnhanced = status.rootEnhanced,
                         availableReleaseTag = availableReleaseTag,
                         readyToInstallUpdate = updateState is AppUpdateManager.UpdateState.ReadyToInstall,
-                        onOpenActivation = { showActivationModal = true },
-                        onOpenUpdate = { showUpdateModal = true },
+                        onOpenActivation = {
+                            onDisarmAutoEnterDex()
+                            showActivationModal = true
+                        },
+                        onOpenUpdate = {
+                            onDisarmAutoEnterDex()
+                            showUpdateModal = true
+                        },
                     )
 
                     when (selectedTab) {
@@ -383,8 +485,14 @@ private fun OpalConsoleScreen(
                             detectedExtDisplays = detectedExtDisplays,
                             needsLocalNetworkPerm = needsLocalNetworkPerm,
                             onRequestLocalNetworkPerm = onRequestLocalNetworkPerm,
-                            onEnterLocalDesktop = onEnterDesktop,
-                            onEnterLandscapeMirrorDesktop = onEnterLandscapeMirrorDesktop,
+                            onEnterLocalDesktop = {
+                                onDisarmAutoEnterDex()
+                                onEnterDesktop()
+                            },
+                            onEnterLandscapeMirrorDesktop = {
+                                onDisarmAutoEnterDex()
+                                onEnterLandscapeMirrorDesktop()
+                            },
                             onOpenRemoteTrackpad = onOpenRemoteTrackpad,
                             onOpenExternalOrTrackpad = onProjectExternalOrTrackpad,
                             onProjectSpecificDisplay = onProjectSpecificDisplay,
@@ -402,8 +510,14 @@ private fun OpalConsoleScreen(
                                     floatingPickerTarget = Triple(host, port, label)
                                 }
                             },
-                            onOpenActivation = { showActivationModal = true },
-                            onRequestCompleteExit = { showExitConfirmModal = true },
+                            onOpenActivation = {
+                                onDisarmAutoEnterDex()
+                                showActivationModal = true
+                            },
+                            onRequestCompleteExit = {
+                                onDisarmAutoEnterDex()
+                                showExitConfirmModal = true
+                            },
                         )
                         1 -> ConsoleDisplaySettingsTab(
                             status = status,
@@ -416,15 +530,24 @@ private fun OpalConsoleScreen(
                         2 -> ConsoleEngineSettingsTab(
                             status = status,
                             scene = scene,
-                            onOpenActivation = { showActivationModal = true },
-                            onOpenUpdateModal = { showUpdateModal = true },
+                            onOpenActivation = {
+                                onDisarmAutoEnterDex()
+                                showActivationModal = true
+                            },
+                            onOpenUpdateModal = {
+                                onDisarmAutoEnterDex()
+                                showUpdateModal = true
+                            },
                             onStopEngine = onStopEngine,
                         )
                         else -> ConsoleLogsTab(
                             status = status,
                             scene = scene,
                             remote = remote,
-                            onOpenUpdateModal = { showUpdateModal = true },
+                            onOpenUpdateModal = {
+                                onDisarmAutoEnterDex()
+                                showUpdateModal = true
+                            },
                         )
                     }
                 }
@@ -432,7 +555,10 @@ private fun OpalConsoleScreen(
 
             OpalConsoleBottomBar(
                 selectedTab = selectedTab,
-                onSelectTab = { selectedTab = it },
+                onSelectTab = {
+                    onDisarmAutoEnterDex()
+                    selectedTab = it
+                },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }

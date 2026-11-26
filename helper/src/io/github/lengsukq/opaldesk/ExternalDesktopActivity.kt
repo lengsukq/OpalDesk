@@ -659,9 +659,7 @@ class ExternalDesktopActivity : ComponentActivity() {
     }
 
     private fun openConsoleOnPrimaryDisplay() {
-        val intent = Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        }
+        val intent = MainActivity.createLaunchIntent(this, fromDesktop = true)
         try {
             val opts = ActivityOptions.makeBasic().setLaunchDisplayId(Display.DEFAULT_DISPLAY)
             startActivity(intent, opts.toBundle())

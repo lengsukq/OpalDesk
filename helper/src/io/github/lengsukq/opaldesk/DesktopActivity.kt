@@ -313,9 +313,7 @@ class DesktopActivity : ComponentActivity() {
 
     private fun openConsole() {
         startActivity(
-            Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            },
+            MainActivity.createLaunchIntent(this, fromDesktop = true),
         )
     }
 

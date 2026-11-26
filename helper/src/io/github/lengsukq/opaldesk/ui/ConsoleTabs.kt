@@ -1595,6 +1595,7 @@ fun ConsoleEngineSettingsTab(
     onStopEngine: () -> Unit,
 ) {
     val ctx = LocalContext.current
+    val autoEnterDex by AppPrefs.autoEnterDexFlow.collectAsState()
     val sortByUsage by AppPrefs.sortAppsByUsageFlow.collectAsState()
     val autoCheckUpdate by AppPrefs.autoCheckUpdateFlow.collectAsState()
     val updateState by AppUpdateManager.stateFlow.collectAsState()
@@ -1803,8 +1804,16 @@ fun ConsoleEngineSettingsTab(
             }
         }
         MacGlassSectionCard {
-            OpalText(text = "应用列表与启动器", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            OpalText(text = "启动行为与应用列表", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
+            OpalSwitchRow(
+                title = "打开应用自动进入 DeX 模式",
+                subtitle = "仅冷启动时检测多窗引擎；引擎已激活（或 Shizuku / Root 自动激活完成）后直接进入本机 DeX 桌面，未激活或投屏中留在控制台",
+                checked = autoEnterDex,
+                onCheckedChange = { enabled ->
+                    AppPrefs.setAutoEnterDexEnabled(ctx, enabled)
+                },
+            )
             OpalSwitchRow(
                 title = "应用列表按打开次数排序",
                 subtitle = "默认开启；同步作用于 DeX 应用抽屉与远程独立应用小窗，关闭后按名称排序",

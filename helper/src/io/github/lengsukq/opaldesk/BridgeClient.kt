@@ -62,6 +62,7 @@ object BridgeClient {
         val app = ctx?.applicationContext ?: return
         appContext = app
         io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.hydrate(app)
+        io.github.lengsukq.opaldesk.prefs.AppPrefs.hydrateFlows(app)
     }
 
     private val _statusFlow = MutableStateFlow(DaemonStatus())
@@ -150,6 +151,7 @@ object BridgeClient {
                     binder = null
                     _statusFlow.value = DaemonStatus(connected = false)
                     OpalLogStore.w("IPC", "Daemon Binder died (linkToDeath)")
+                    io.github.lengsukq.opaldesk.service.BaseOpalTileService.requestAllTilesUpdate(appContext)
                 }
             }, 0)
         } catch (_: Throwable) {
@@ -187,6 +189,7 @@ object BridgeClient {
             refreshRemoteStatus()
             refreshTrustedPeers()
             refreshPendingPairing()
+            io.github.lengsukq.opaldesk.service.BaseOpalTileService.requestAllTilesUpdate(appContext)
         }
         binderReadyListeners.forEach { mainHandler.post(it) }
     }
@@ -260,6 +263,69 @@ object BridgeClient {
                 }
             }
         }
+    }
+
+    /**
+     * Synchronously attempts to bind to an already-running daemon over [BridgeProtocol.CTL_SOCKET_NAME]
+     * within [timeoutMs] and returns the refreshed [DaemonStatus] (also hydrating scene and remote flows).
+     */
+    fun connectAndRefreshStatusSync(ctx: Context?, timeoutMs: Long = 900L): DaemonStatus {
+        bindAppContext(ctx)
+        if (getService() != null) {
+            val st = refreshStatus()
+            if (st.connected) {
+                refreshSceneSnapshot()
+                refreshRemoteStatus()
+                return st
+            }
+        }
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val listener = Runnable { latch.countDown() }
+        binderReadyListeners.add(listener)
+        try {
+            if (getService() == null) {
+                var daemonListening = false
+                try {
+                    LocalSocket().use { sock ->
+                        sock.connect(
+                            LocalSocketAddress(
+                                BridgeProtocol.CTL_SOCKET_NAME,
+                                LocalSocketAddress.Namespace.ABSTRACT,
+                            ),
+                        )
+                        sock.soTimeout = timeoutMs.toInt().coerceIn(250, 1500)
+                        sock.outputStream.write("NEED_BINDER\n".toByteArray(StandardCharsets.UTF_8))
+                        sock.outputStream.flush()
+                        sock.inputStream.read()
+                        daemonListening = true
+                    }
+                } catch (_: Throwable) {
+                }
+                val appCtx = ctx?.applicationContext ?: appContext
+                if (appCtx != null) {
+                    try {
+                        appCtx.sendBroadcast(Intent(BridgeProtocol.ACTION_NEED_BINDER))
+                    } catch (_: Throwable) {
+                    }
+                }
+                if (getService() == null) {
+                    val waitMs = if (daemonListening) timeoutMs.coerceAtLeast(300L) else minOf(timeoutMs, 260L)
+                    try {
+                        latch.await(waitMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                    }
+                }
+            }
+        } finally {
+            binderReadyListeners.remove(listener)
+        }
+        val st = refreshStatus()
+        if (st.connected) {
+            refreshSceneSnapshot()
+            refreshRemoteStatus()
+        }
+        return st
     }
 
     fun getStatus(): DaemonStatus = refreshStatus()
@@ -1253,6 +1319,7 @@ object BridgeClient {
         _remoteStatusFlow.value = RemoteStreamStatus()
         _pendingPairingFlow.value = null
         _trustedPeersFlow.value = emptyList()
+        io.github.lengsukq.opaldesk.service.BaseOpalTileService.requestAllTilesUpdate(appContext)
     }
 
     private fun sendControlSocketShutdown(timeoutMs: Int): Boolean {
