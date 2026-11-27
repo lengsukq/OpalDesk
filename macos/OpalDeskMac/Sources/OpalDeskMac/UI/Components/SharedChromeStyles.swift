@@ -29,9 +29,11 @@ struct StatusBadgeView: View {
     }
 }
 
-/// Translucent floating notification pill displayed over the display canvas.
+/// Translucent floating notification pill displayed over the display canvas or hub.
 struct ToastPillView: View {
     let message: String
+    var actionTitle: String? = nil
+    var onAction: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 8) {
@@ -40,6 +42,13 @@ struct ToastPillView: View {
                 .foregroundStyle(Color.accentColor)
             Text(message)
                 .font(.system(size: 12, weight: .medium))
+                .lineLimit(2)
+
+            if let actionTitle, let onAction {
+                Button(actionTitle, action: onAction)
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)

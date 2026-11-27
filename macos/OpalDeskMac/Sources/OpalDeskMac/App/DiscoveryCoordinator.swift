@@ -26,6 +26,12 @@ public final class DiscoveryCoordinator {
     @ObservationIgnored
     private var usbPollTask: Task<Void, Never>?
 
+    @ObservationIgnored
+    public var onBonjourDevicesChanged: (@MainActor ([DiscoveredBonjourDevice]) -> Void)?
+
+    @ObservationIgnored
+    public var onTrustedDevicesChanged: (@MainActor ([TrustedDevice]) -> Void)?
+
     public init(customAdbPath: String) {
         let store = TrustStore()
         let adb = AdbManager(customAdbPath: customAdbPath)
@@ -43,7 +49,11 @@ public final class DiscoveryCoordinator {
     ) {
         refreshAdbPath(customPath: customAdbPath())
         bonjourBrowser.start { [weak self] devices in
-            Task { @MainActor [weak self] in self?.bonjourDevices = devices }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.bonjourDevices = devices
+                self.onBonjourDevicesChanged?(devices)
+            }
         }
         usbPollTask?.cancel()
         usbPollTask = Task { [weak self] in
@@ -94,6 +104,7 @@ public final class DiscoveryCoordinator {
 
     public func refreshTrustedDevices() {
         trustedDevices = trustStore.allDevices()
+        onTrustedDevicesChanged?(trustedDevices)
     }
 
     public func refreshUsbTetherDevices(enabled: Bool) async {

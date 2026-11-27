@@ -169,6 +169,7 @@ public final class CompanionConnectionManager: Sendable {
         var authRejectedTokenByFingerprint: [String: String] = [:]
         var lastRemoteClipboardSeq: Int64 = 0
         var lastClipboardDigest: String = ""
+        var externalFrameRouter: (@Sendable (OpalCastFrame) -> Bool)?
         var callbacks = Callbacks()
     }
 
@@ -265,6 +266,21 @@ public final class CompanionConnectionManager: Sendable {
 
     public func updateCallbacks(_ mutate: @Sendable (inout Callbacks) -> Void) {
         state.withLock { mutate(&$0.callbacks) }
+    }
+
+    /// Installs an optional external control-frame router (e.g. active main desktop session preferred,
+    /// falling back to this companion session) used by subcomponents (`fileBrowserClient`,
+    /// `notificationBridge`, `mediaBridge`).
+    public func setExternalFrameRouter(_ router: (@Sendable (OpalCastFrame) -> Bool)?) {
+        state.withLock { $0.externalFrameRouter = router }
+    }
+
+    private func routeControlFrame(_ frame: OpalCastFrame) -> Bool {
+        let external = state.withLock { $0.externalFrameRouter }
+        if let external {
+            return external(frame)
+        }
+        return sendFrame(frame)
     }
 
     // MARK: - Configuration & Discovery Integration
@@ -366,8 +382,9 @@ public final class CompanionConnectionManager: Sendable {
         let onStateChanged: (@Sendable (CompanionConnectionState) -> Void)?
         let hadTopApp: Bool
         let onTopAppChanged: (@Sendable (HostTopAppState) -> Void)?
+        let mainActive: Bool
 
-        (onStateChanged, hadTopApp, onTopAppChanged) = state.withLock { s in
+        (onStateChanged, hadTopApp, onTopAppChanged, mainActive) = state.withLock { s in
             s.activeGeneration &+= 1
             s.isManuallyDisconnected = true
             s.isAuthenticated = false
@@ -376,13 +393,15 @@ public final class CompanionConnectionManager: Sendable {
             s.deviceState = DeviceStatePayload()
             let prevTop = s.hostTopApp
             s.hostTopApp = HostTopAppState()
-            return (s.callbacks.onStateChanged, !prevTop.isEmpty, s.callbacks.onHostTopAppChanged)
+            return (s.callbacks.onStateChanged, !prevTop.isEmpty, s.callbacks.onHostTopAppChanged, s.isMainSessionActive)
         }
 
         transport.disconnect()
-        fileBrowserClient.handleSessionDisconnected(reason: "用户手动断开连接")
-        notificationBridge.clearLocalState(removeDelivered: true)
-        mediaBridge.stop()
+        if !mainActive {
+            fileBrowserClient.handleSessionDisconnected(reason: "用户手动断开连接")
+            notificationBridge.clearLocalState(removeDelivered: true)
+            mediaBridge.stop()
+        }
 
         onStateChanged?(.disconnected)
         if hadTopApp {
@@ -410,7 +429,7 @@ public final class CompanionConnectionManager: Sendable {
     @discardableResult
     public func sendNotificationAction(_ payload: NotificationActionPayload) -> Bool {
         do {
-            return sendFrame(try OpalCastFrame.notificationAction(payload))
+            return routeControlFrame(try OpalCastFrame.notificationAction(payload))
         } catch {
             Self.logger.error("Failed to encode NOTIFICATION_ACTION: \(error.localizedDescription, privacy: .public)")
             return false
@@ -443,7 +462,7 @@ public final class CompanionConnectionManager: Sendable {
     @discardableResult
     public func sendMediaAction(_ payload: MediaActionPayload) -> Bool {
         do {
-            return sendFrame(try OpalCastFrame.mediaAction(payload))
+            return routeControlFrame(try OpalCastFrame.mediaAction(payload))
         } catch {
             Self.logger.error("Failed to encode MEDIA_ACTION: \(error.localizedDescription, privacy: .public)")
             return false
@@ -561,7 +580,7 @@ public final class CompanionConnectionManager: Sendable {
     }
 
     private func startConnection(to target: CompanionTargetDevice, clearManualSuppression: Bool) {
-        let (generation, onStateChanged): (UInt64, (@Sendable (CompanionConnectionState) -> Void)?) = state.withLock { s in
+        let (generation, onStateChanged, mainActive): (UInt64, (@Sendable (CompanionConnectionState) -> Void)?, Bool) = state.withLock { s in
             s.activeGeneration &+= 1
             if clearManualSuppression {
                 s.isManuallyDisconnected = false
@@ -572,10 +591,12 @@ public final class CompanionConnectionManager: Sendable {
             s.isAuthenticated = false
             s.connectionState = .connecting(deviceName: target.deviceName)
             s.lastRemoteClipboardSeq = 0
-            return (s.activeGeneration, s.callbacks.onStateChanged)
+            return (s.activeGeneration, s.callbacks.onStateChanged, s.isMainSessionActive)
         }
 
-        fileBrowserClient.handleSessionDisconnected(reason: "正在切换伴侣连接")
+        if !mainActive {
+            fileBrowserClient.handleSessionDisconnected(reason: "正在切换伴侣连接")
+        }
         onStateChanged?(.connecting(deviceName: target.deviceName))
 
         transport.connect(to: target.endpoint) { [weak self] event in
@@ -634,21 +655,24 @@ public final class CompanionConnectionManager: Sendable {
             sendCompanionHello(for: target)
 
         case .reconnecting(let attempt):
-            let (name, cb): (String, (@Sendable (CompanionConnectionState) -> Void)?) = state.withLock { s in
+            let (name, cb, mainActive): (String, (@Sendable (CompanionConnectionState) -> Void)?, Bool) = state.withLock { s in
                 s.isAuthenticated = false
                 let deviceName = s.activeTarget?.deviceName ?? ""
                 s.connectionState = .reconnecting(deviceName: deviceName, attempt: attempt)
-                return (deviceName, s.callbacks.onStateChanged)
+                return (deviceName, s.callbacks.onStateChanged, s.isMainSessionActive)
             }
-            fileBrowserClient.handleSessionDisconnected(reason: "连接重连中")
+            if !mainActive {
+                fileBrowserClient.handleSessionDisconnected(reason: "连接重连中")
+            }
             cb?(.reconnecting(deviceName: name, attempt: attempt))
 
         case .failed(let reason):
             let now = nowProvider()
-            let (cb, hadTopApp, onTopApp): (
+            let (cb, hadTopApp, onTopApp, mainActive): (
                 (@Sendable (CompanionConnectionState) -> Void)?,
                 Bool,
-                (@Sendable (HostTopAppState) -> Void)?
+                (@Sendable (HostTopAppState) -> Void)?,
+                Bool
             ) = state.withLock { s in
                 s.isAuthenticated = false
                 s.connectionState = .failed(reason)
@@ -662,29 +686,34 @@ public final class CompanionConnectionManager: Sendable {
                 }
                 let prevTop = s.hostTopApp
                 s.hostTopApp = HostTopAppState()
-                return (s.callbacks.onStateChanged, !prevTop.isEmpty, s.callbacks.onHostTopAppChanged)
+                return (s.callbacks.onStateChanged, !prevTop.isEmpty, s.callbacks.onHostTopAppChanged, s.isMainSessionActive)
             }
-            fileBrowserClient.handleSessionDisconnected(reason: reason)
-            mediaBridge.stop()
+            if !mainActive {
+                fileBrowserClient.handleSessionDisconnected(reason: reason)
+                mediaBridge.stop()
+            }
             cb?(.failed(reason))
             if hadTopApp {
                 onTopApp?(HostTopAppState())
             }
 
         case .disconnected:
-            let (cb, hadTopApp, onTopApp): (
+            let (cb, hadTopApp, onTopApp, mainActive): (
                 (@Sendable (CompanionConnectionState) -> Void)?,
                 Bool,
-                (@Sendable (HostTopAppState) -> Void)?
+                (@Sendable (HostTopAppState) -> Void)?,
+                Bool
             ) = state.withLock { s in
                 s.isAuthenticated = false
                 s.connectionState = .disconnected
                 let prevTop = s.hostTopApp
                 s.hostTopApp = HostTopAppState()
-                return (s.callbacks.onStateChanged, !prevTop.isEmpty, s.callbacks.onHostTopAppChanged)
+                return (s.callbacks.onStateChanged, !prevTop.isEmpty, s.callbacks.onHostTopAppChanged, s.isMainSessionActive)
             }
-            fileBrowserClient.handleSessionDisconnected(reason: "连接已断开")
-            mediaBridge.stop()
+            if !mainActive {
+                fileBrowserClient.handleSessionDisconnected(reason: "连接已断开")
+                mediaBridge.stop()
+            }
             cb?(.disconnected)
             if hadTopApp {
                 onTopApp?(HostTopAppState())
@@ -824,22 +853,25 @@ public final class CompanionConnectionManager: Sendable {
     private func handleAuthResult(_ auth: AuthResultPayload, generation: UInt64) {
         guard auth.ok else {
             let reason = auth.message.isEmpty ? "后台伴侣认证失败，授权可能已在手机端撤销" : auth.message
-            let (onState, onError): (
+            let (onState, onError, mainActive): (
                 (@Sendable (CompanionConnectionState) -> Void)?,
-                (@Sendable (String) -> Void)?
+                (@Sendable (String) -> Void)?,
+                Bool
             ) = state.withLock { s in
-                guard s.activeGeneration == generation else { return (nil, nil) }
+                guard s.activeGeneration == generation else { return (nil, nil, s.isMainSessionActive) }
                 s.activeGeneration &+= 1
                 s.isAuthenticated = false
                 s.connectionState = .failed(reason)
                 if let target = s.activeTarget, !target.certFingerprint.isEmpty {
                     s.authRejectedTokenByFingerprint[target.certFingerprint] = target.authToken
                 }
-                return (s.callbacks.onStateChanged, s.callbacks.onError)
+                return (s.callbacks.onStateChanged, s.callbacks.onError, s.isMainSessionActive)
             }
             transport.disconnect()
-            fileBrowserClient.handleSessionDisconnected(reason: reason)
-            mediaBridge.stop()
+            if !mainActive {
+                fileBrowserClient.handleSessionDisconnected(reason: reason)
+                mediaBridge.stop()
+            }
             onError?(reason)
             onState?(.failed(reason))
             return
@@ -968,7 +1000,7 @@ public final class CompanionConnectionManager: Sendable {
 
     private func wireSubcomponents() {
         fileBrowserClient.setFrameSender { [weak self] frame in
-            self?.sendFrame(frame) ?? false
+            self?.routeControlFrame(frame) ?? false
         }
 
         notificationBridge.updateCallbacks { cb in

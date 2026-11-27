@@ -20,12 +20,14 @@ public struct SettingsView: View {
                 .tabItem { Label("画面与布局", systemImage: "display") }
             inputAndSyncTab
                 .tabItem { Label("输入与同步", systemImage: "keyboard") }
+            companionSettingsTab
+                .tabItem { Label("伴侣联动", systemImage: "iphone.radiowaves.left.and.right") }
             adbSettingsTab
                 .tabItem { Label("有线 ADB", systemImage: "cable.connector") }
             trustedDevicesTab
                 .tabItem { Label("已信任设备", systemImage: "lock.shield") }
         }
-        .frame(width: 560, height: 470)
+        .frame(width: 600, height: 480)
     }
 
     // MARK: - Tab 1: Stream, High-FPS & Adaptive Single Layout
@@ -103,6 +105,54 @@ public struct SettingsView: View {
                 Toggle("自动同步 Mac 与 Android 之间的文本及 PNG 图片剪贴板", isOn: $prefs.clipboardSyncEnabled)
                     .onChange(of: prefs.clipboardSyncEnabled) { _, _ in model.applyClipboardSyncPreference() }
                 Text("支持 256 KiB 以内纯文本与 8 MiB 以内 PNG/TIFF 截图自动压缩同步，内置 SHA-256 防回环去重。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - Tab 2.5: Companion Auto-Connect, Notifications, Media & Edge Gestures
+
+    private var companionSettingsTab: some View {
+        @Bindable var prefs = model.preferences
+
+        return Form {
+            Section("后台轻连接（免投屏跨端联动）") {
+                Toggle("自动连接局域网中已信任的手机（后台伴侣）", isOn: $prefs.companionAutoConnectEnabled)
+                    .onChange(of: prefs.companionAutoConnectEnabled) { _, _ in
+                        model.applyCompanionPreferences()
+                    }
+                Text("不创建虚拟屏幕、零视频编码开销，静默维持双向剪贴板、通知、媒体播控、前台应用接力与文件管理通道。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("手机通知同步与验证码") {
+                Toggle("同步 Android 手机通知至 macOS 通知中心与菜单栏", isOn: $prefs.notificationsSyncEnabled)
+                    .onChange(of: prefs.notificationsSyncEnabled) { _, _ in
+                        model.applyCompanionPreferences()
+                    }
+                Toggle("收到短信 / 应用验证码时自动复制到 Mac 剪贴板", isOn: $prefs.autoCopyOtpEnabled)
+                    .disabled(!prefs.notificationsSyncEnabled)
+                    .onChange(of: prefs.autoCopyOtpEnabled) { _, _ in
+                        model.applyCompanionPreferences()
+                    }
+                Text("支持点击通知直接弹出对应手机应用小窗，以及在通知横幅和菜单栏中行内快捷回复。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("媒体播控联动") {
+                Toggle("同步手机媒体播放信息至 macOS 播放中心（支持硬件媒体键控制）", isOn: $prefs.mediaRemoteControlEnabled)
+                    .onChange(of: prefs.mediaRemoteControlEnabled) { _, _ in
+                        model.applyCompanionPreferences()
+                    }
+            }
+
+            Section("触控板边缘导航手势与双指旋转") {
+                Toggle("启用触控板四边双指导航手势（返回 / 桌面 / 通知栏）与双指旋转", isOn: $prefs.enableEdgeNavigationGestures)
+                    .onChange(of: prefs.enableEdgeNavigationGestures) { _, _ in
+                        model.applyCompanionPreferences()
+                    }
+                Text("在 MacBook 触控板左右边缘双指内滑触发 Android 预测返回，底边上滑返回桌面，顶边下滑拉出通知中心。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

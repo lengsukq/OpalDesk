@@ -34,6 +34,7 @@ public final class PopoutAppController: Identifiable {
     public let streamBridge: StreamSessionBridge
     public let videoRenderer: VideoDisplayRenderer
     public let audioPlayer: AudioStreamPlayer
+    public let screenRecorder = WindowScreenRecorder()
 
     public var sessionState: OpalCastSessionState = .idle
     public var isAuthenticated: Bool = false
@@ -49,7 +50,13 @@ public final class PopoutAppController: Identifiable {
     public var windowOpacity: Double = DisplayPresets.popoutOpacityRange.upperBound
     public var activePreset: PopoutAspectPreset? = .phone
     public var mapCommandToCtrl: Bool
+    public var enableEdgeNavigationGestures: Bool
     public var canReturnToDesktop: Bool
+
+    public var isRecording: Bool = false
+    public var recordingDurationSeconds: TimeInterval = 0
+    public var toastNotice: String?
+    public var toastRevealURL: URL?
 
     public weak var hostWindow: NSWindow?
     public var onRequestClose: (() -> Void)?
@@ -59,6 +66,7 @@ public final class PopoutAppController: Identifiable {
     @ObservationIgnored private var connectionContext: PopoutConnectionContext
     @ObservationIgnored private var resizeDebounceTask: Task<Void, Never>?
     @ObservationIgnored private var firstFrameNudgeTask: Task<Void, Never>?
+    @ObservationIgnored private var toastClearTask: Task<Void, Never>?
     @ObservationIgnored private var lastSentGeometry: PopoutStreamGeometry?
     @ObservationIgnored private var lastCanvasSize: CGSize = PopoutAspectPreset.phone.windowSize
     @ObservationIgnored private var lastBackingScale: CGFloat = 2.0
@@ -87,6 +95,7 @@ public final class PopoutAppController: Identifiable {
         self.canReturnToDesktop = canReturnToDesktop
         self.connectionContext = connectionContext
         self.mapCommandToCtrl = connectionContext.mapCommandToCtrl
+        self.enableEdgeNavigationGestures = connectionContext.enableEdgeNavigationGestures
         self.isAudioMuted = !connectionContext.audioEnabled
         self.session = castSession
         self.streamBridge = StreamSessionBridge(session: castSession, logger: OpalDeskLog.popout)
@@ -256,6 +265,105 @@ public final class PopoutAppController: Identifiable {
         streamBridge.sendRequestIDR()
     }
 
+    // MARK: - Popout Window Screenshot & MP4 Recording
+
+    public var formattedRecordingDuration: String {
+        AppModel.formatRecordingDuration(recordingDurationSeconds)
+    }
+
+    public func captureScreenshot() {
+        guard isAuthenticated else { return }
+        let renderer = videoRenderer
+        let cleanLabel = appLabel
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        let prefix = "OpalDesk-\(cleanLabel)-Screenshot"
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let image = await renderer.captureCurrentFrameCGImageAsync(timeoutSeconds: 2.0) else {
+                self.showToast("当前暂无可截取画面")
+                return
+            }
+            do {
+                let savedURL = try WindowMediaCapture.saveImageToFile(image, prefix: prefix)
+                _ = try? WindowMediaCapture.writeImageToClipboard(image)
+                self.showToast("已截图至桌面并复制", revealURL: savedURL)
+            } catch {
+                self.showToast("截图失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    public func toggleRecording() {
+        if isRecording {
+            stopRecording()
+        } else {
+            startRecording()
+        }
+    }
+
+    public func startRecording() {
+        guard isAuthenticated, !screenRecorder.isRecording else { return }
+        let cleanLabel = appLabel
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        let prefix = "OpalDesk-\(cleanLabel)-Recording"
+        do {
+            _ = try screenRecorder.start(
+                renderer: videoRenderer,
+                prefix: prefix,
+                format: .mp4,
+                onMetricsUpdate: { [weak self] metrics in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.recordingDurationSeconds = metrics.durationSeconds
+                        self.isRecording = metrics.state == .waitingForKeyframe || metrics.state == .recording
+                    }
+                }
+            )
+            isRecording = true
+            recordingDurationSeconds = 0
+            showToast("开始录制小窗 MP4")
+        } catch {
+            isRecording = false
+            showToast("录屏启动失败：\(error.localizedDescription)")
+        }
+    }
+
+    public func stopRecording() {
+        guard screenRecorder.isRecording else {
+            isRecording = false
+            recordingDurationSeconds = 0
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.screenRecorder.stop()
+                self.isRecording = false
+                self.recordingDurationSeconds = 0
+                let dur = AppModel.formatRecordingDuration(result.durationSeconds)
+                self.showToast("录屏已保存（\(dur)）", revealURL: result.url)
+            } catch {
+                self.isRecording = false
+                self.recordingDurationSeconds = 0
+                self.showToast("录屏停止失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    public func showToast(_ message: String, revealURL: URL? = nil, durationSeconds: Double = 3.2) {
+        toastClearTask?.cancel()
+        toastNotice = message
+        toastRevealURL = revealURL
+        let duration = revealURL != nil ? max(durationSeconds, 5.5) : durationSeconds
+        toastClearTask = Task { [weak self] in
+            guard await sleepCancellable(nanoseconds: UInt64(duration * 1_000_000_000)) else { return }
+            self?.toastNotice = nil
+            self?.toastRevealURL = nil
+        }
+    }
+
     public func returnToDesktop() {
         guard !isClosing else { return }
         Task { [weak self] in
@@ -278,6 +386,13 @@ public final class PopoutAppController: Identifiable {
         resizeDebounceTask = nil
         firstFrameNudgeTask?.cancel()
         firstFrameNudgeTask = nil
+        toastClearTask?.cancel()
+        toastClearTask = nil
+        if screenRecorder.isRecording {
+            screenRecorder.cancel()
+        }
+        isRecording = false
+        recordingDurationSeconds = 0
 
         if sendDisconnect {
             streamBridge.sendSystemAction(.disconnect, isAuthenticated: isAuthenticated)

@@ -129,7 +129,8 @@ extension AppModel {
             targetFPS: min(preferences.targetFPS, 60),
             bitrateKbps: min(effectiveBitrateKbps(), 10_000),
             mapCommandToCtrl: preferences.mapCommandToCtrl,
-            audioEnabled: preferences.audioEnabled
+            audioEnabled: preferences.audioEnabled,
+            enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
         )
 
         let historyTemplate = PopoutHistoryEntry(
@@ -195,9 +196,310 @@ extension AppModel {
             targetFPS: min(preferences.targetFPS, 60),
             bitrateKbps: min(effectiveBitrateKbps(), 10_000),
             mapCommandToCtrl: preferences.mapCommandToCtrl,
-            audioEnabled: preferences.audioEnabled
+            audioEnabled: preferences.audioEnabled,
+            enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
         )
         popoutManager.migrateConnectionContext(to: upgraded)
+    }
+
+    /// Resolves the best matching online Android host (active main session, active companion, USB/Bonjour/Trusted)
+    /// and opens a standalone popout window for `packageName` (used by deep links, notifications, and handoff).
+    func resolveAndOpenAppPopout(
+        packageName: String,
+        activityClass: String = "",
+        appLabel: String = "",
+        preferredDeviceKey: String? = nil,
+        preferredDeviceName: String? = nil,
+        waitForDiscoveryIfNeeded: Bool = false
+    ) async {
+        let cleanPkg = packageName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanPkg.isEmpty else { return }
+        let displayLabel = appLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? cleanPkg : appLabel
+
+        if let existing = popoutManager.existingController(for: cleanPkg) {
+            popoutManager.focusWindow(id: existing.id)
+            return
+        }
+
+        if popoutManager.controllers.count >= PopoutWindowManager.maxConcurrentWindows {
+            let msg = "最多同时打开 \(PopoutWindowManager.maxConcurrentWindows) 个悬浮小窗，请先关闭一个已有小窗"
+            bannerError = msg
+            showToast(msg)
+            return
+        }
+
+        statusMessage = "正在定位在线手机并打开「\(displayLabel)」…"
+        defer { statusMessage = nil }
+
+        let maxAttempts = waitForDiscoveryIfNeeded ? 10 : 1
+        for attempt in 0..<maxAttempts {
+            if let resolved = await tryResolveOnlinePopoutTarget(
+                packageName: cleanPkg,
+                activityClass: activityClass,
+                appLabel: displayLabel,
+                preferredDeviceKey: preferredDeviceKey,
+                preferredDeviceName: preferredDeviceName
+            ) {
+                let result = openPopoutImmediate(entry: resolved.entry, context: resolved.context, forceReload: false)
+                switch result {
+                case .opened:
+                    showToast("已打开「\(displayLabel)」悬浮小窗（\(popoutManager.controllers.count)/\(PopoutWindowManager.maxConcurrentWindows)）")
+                case .alreadyOpen(let existingId, _):
+                    popoutManager.focusWindow(id: existingId)
+                case .limitReached(let maxCount):
+                    let msg = "最多同时打开 \(maxCount) 个悬浮小窗，请先关闭一个已有小窗"
+                    bannerError = msg
+                    showToast(msg)
+                case .invalidPackage:
+                    showToast("无效的应用包名")
+                }
+                return
+            }
+            if attempt + 1 < maxAttempts {
+                guard await sleepCancellable(nanoseconds: 250_000_000) else { return }
+            }
+        }
+
+        let targetHint = preferredDeviceName ?? "Android 设备"
+        let msg = "未找到在线的「\(targetHint)」，无法启动「\(displayLabel)」悬浮小窗"
+        onRequestOpenMainWindow?()
+        NSApp.activate(ignoringOtherApps: true)
+        bannerError = msg
+        showToast(msg)
+    }
+
+    private func tryResolveOnlinePopoutTarget(
+        packageName: String,
+        activityClass: String,
+        appLabel: String,
+        preferredDeviceKey: String?,
+        preferredDeviceName: String?
+    ) async -> (context: PopoutConnectionContext, entry: PopoutHistoryEntry)? {
+        let keyMatches: (String?, String?, String?) -> Bool = { serial, fp, name in
+            guard let prefKey = preferredDeviceKey, !prefKey.isEmpty else {
+                if let prefName = preferredDeviceName, !prefName.isEmpty, let name, !name.isEmpty {
+                    return name == prefName
+                }
+                return true
+            }
+            if prefKey.hasPrefix("adb:"), let serial, !serial.isEmpty {
+                return String(prefKey.dropFirst(4)) == serial
+            }
+            if prefKey.hasPrefix("fp:"), let fp, !fp.isEmpty {
+                return FingerprintUtil.matches(actualFullHex: fp, expected: String(prefKey.dropFirst(3)))
+            }
+            if let serial, serial == prefKey { return true }
+            if let fp, !fp.isEmpty, FingerprintUtil.matches(actualFullHex: fp, expected: prefKey) { return true }
+            if let name, !name.isEmpty, name == prefKey { return true }
+            return false
+        }
+
+        // 1. Active main desktop session
+        if isAuthenticated, let endpoint = activeSessionEndpoint, let conn = activeConnection {
+            let serial: String?
+            let host: String?
+            let port: UInt16?
+            let kind: String
+            switch conn.transport {
+            case .wiredUSB(let s, _), .wirelessADB(let s, _):
+                serial = s; host = nil; port = nil; kind = "usb"
+            case .wirelessWiFi(_, let h, let p):
+                serial = nil; host = h; port = p; kind = "wifi"
+            }
+            if keyMatches(serial, conn.fingerprint, conn.deviceName) {
+                let devKey = serial.map { "adb:\($0)" }
+                    ?? (conn.fingerprint.isEmpty ? conn.deviceName : "fp:\(conn.fingerprint.prefix(16))")
+                let ctx = PopoutConnectionContext(
+                    endpoint: endpoint,
+                    transportHint: conn.transport.transportHint,
+                    clientId: discovery.trustStore.clientId,
+                    authToken: pendingAuth.authToken,
+                    preferredCodec: preferences.preferredCodec,
+                    targetFPS: min(preferences.targetFPS, 60),
+                    bitrateKbps: min(effectiveBitrateKbps(), 10_000),
+                    mapCommandToCtrl: preferences.mapCommandToCtrl,
+                    audioEnabled: preferences.audioEnabled,
+                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                )
+                let entry = PopoutHistoryEntry(
+                    appPackage: packageName,
+                    appActivity: activityClass,
+                    appLabel: appLabel,
+                    deviceKey: devKey,
+                    deviceName: conn.deviceName,
+                    transportKind: kind,
+                    adbSerial: serial,
+                    host: host,
+                    port: port,
+                    certFingerprint: conn.fingerprint.isEmpty ? nil : conn.fingerprint
+                )
+                return (ctx, entry)
+            }
+        }
+
+        // 2. Active background companion session
+        if companionManager.isAuthenticated, let target = companionManager.activeTarget,
+           keyMatches(nil, target.certFingerprint, target.deviceName)
+        {
+            let ctx = PopoutConnectionContext(
+                endpoint: target.endpoint,
+                transportHint: target.endpoint.security == .wiredLocalhostPlaintext ? .usb : .wifiTls,
+                clientId: discovery.trustStore.clientId,
+                authToken: target.authToken,
+                preferredCodec: preferences.preferredCodec,
+                targetFPS: min(preferences.targetFPS, 60),
+                bitrateKbps: min(preferences.bitrateKbps, 10_000),
+                mapCommandToCtrl: preferences.mapCommandToCtrl,
+                audioEnabled: preferences.audioEnabled,
+                enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+            )
+            let devKey = target.certFingerprint.isEmpty ? target.deviceName : "fp:\(target.certFingerprint.prefix(16))"
+            let entry = PopoutHistoryEntry(
+                appPackage: packageName,
+                appActivity: activityClass,
+                appLabel: appLabel,
+                deviceKey: devKey,
+                deviceName: target.deviceName,
+                transportKind: "bonjour",
+                host: target.lastHost,
+                port: target.lastPort,
+                certFingerprint: target.certFingerprint.isEmpty ? nil : target.certFingerprint
+            )
+            return (ctx, entry)
+        }
+
+        // 3. Ready USB / wireless ADB device
+        if let usbDev = discovery.usbDevices.first(where: { $0.isReady && keyMatches($0.serial, nil, $0.displayName) })
+            ?? (preferredDeviceKey == nil ? discovery.usbDevices.first(where: \.isReady) : nil)
+        {
+            if let forward = try? await ensureAdbForwardForPopout(serial: usbDev.serial) {
+                let ep = OpalCastEndpoint(
+                    target: .hostPort(host: "127.0.0.1", port: forward.localPort),
+                    security: .wiredLocalhostPlaintext,
+                    autoReconnect: true
+                )
+                let ctx = PopoutConnectionContext(
+                    endpoint: ep,
+                    transportHint: usbDev.isWirelessAdb ? .wifiAdb : .usb,
+                    clientId: discovery.trustStore.clientId,
+                    authToken: "",
+                    preferredCodec: preferences.preferredCodec,
+                    targetFPS: min(preferences.targetFPS, 60),
+                    bitrateKbps: min(preferences.bitrateKbps, 10_000),
+                    mapCommandToCtrl: preferences.mapCommandToCtrl,
+                    audioEnabled: preferences.audioEnabled,
+                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                )
+                let entry = PopoutHistoryEntry(
+                    appPackage: packageName,
+                    appActivity: activityClass,
+                    appLabel: appLabel,
+                    deviceKey: "adb:\(usbDev.serial)",
+                    deviceName: usbDev.displayName,
+                    transportKind: "usb",
+                    adbSerial: usbDev.serial
+                )
+                return (ctx, entry)
+            }
+        }
+
+        // 4. Discovered trusted Bonjour device
+        let bonjourMatch = discovery.bonjourDevices.first(where: { dev in
+            let trusted = discovery.trustStore.find(byFingerprint: dev.fingerprintPrefix)
+            let fp = trusted?.certFingerprint ?? dev.fingerprintPrefix
+            let svcMatch = (preferredDeviceKey == "bonjour:\(dev.serviceName)")
+            return (svcMatch || keyMatches(nil, fp, dev.displayName)) && (trusted != nil || !dev.fingerprintPrefix.isEmpty)
+        }) ?? (preferredDeviceKey == nil ? discovery.bonjourDevices.first(where: { discovery.isTrusted($0) }) : nil)
+
+        if let bonjour = bonjourMatch {
+            let trusted = discovery.trustStore.find(byFingerprint: bonjour.fingerprintPrefix)
+            let pin = trusted?.certFingerprint ?? bonjour.fingerprintPrefix
+            if pin.count >= FingerprintUtil.minimumPrefixHexLength {
+                let ep = OpalCastEndpoint(
+                    target: .bonjour(serviceName: bonjour.serviceName, domain: bonjour.domain),
+                    security: .tlsPinned(expectedFingerprint: pin),
+                    autoReconnect: true
+                )
+                let ctx = PopoutConnectionContext(
+                    endpoint: ep,
+                    transportHint: .wifiTls,
+                    clientId: discovery.trustStore.clientId,
+                    authToken: trusted?.authToken ?? "",
+                    preferredCodec: preferences.preferredCodec,
+                    targetFPS: min(preferences.targetFPS, 60),
+                    bitrateKbps: min(preferences.bitrateKbps, 10_000),
+                    mapCommandToCtrl: preferences.mapCommandToCtrl,
+                    audioEnabled: preferences.audioEnabled,
+                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                )
+                let entry = PopoutHistoryEntry(
+                    appPackage: packageName,
+                    appActivity: activityClass,
+                    appLabel: appLabel,
+                    deviceKey: "fp:\(pin.prefix(16))",
+                    deviceName: bonjour.displayName,
+                    transportKind: "bonjour",
+                    certFingerprint: pin,
+                    bonjourServiceName: bonjour.serviceName,
+                    bonjourDomain: bonjour.domain
+                )
+                return (ctx, entry)
+            }
+        }
+
+        // 5. Fallback to active main or companion even when preferredDeviceKey didn't match (e.g. rotated device key)
+        if preferredDeviceKey != nil {
+            if isAuthenticated, let endpoint = activeSessionEndpoint, let conn = activeConnection {
+                let ctx = PopoutConnectionContext(
+                    endpoint: endpoint,
+                    transportHint: conn.transport.transportHint,
+                    clientId: discovery.trustStore.clientId,
+                    authToken: pendingAuth.authToken,
+                    preferredCodec: preferences.preferredCodec,
+                    targetFPS: min(preferences.targetFPS, 60),
+                    bitrateKbps: min(effectiveBitrateKbps(), 10_000),
+                    mapCommandToCtrl: preferences.mapCommandToCtrl,
+                    audioEnabled: preferences.audioEnabled,
+                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                )
+                let entry = PopoutHistoryEntry(
+                    appPackage: packageName,
+                    appActivity: activityClass,
+                    appLabel: appLabel,
+                    deviceKey: conn.deviceName,
+                    deviceName: conn.deviceName,
+                    transportKind: "wifi",
+                    certFingerprint: conn.fingerprint.isEmpty ? nil : conn.fingerprint
+                )
+                return (ctx, entry)
+            }
+            if companionManager.isAuthenticated, let target = companionManager.activeTarget {
+                let ctx = PopoutConnectionContext(
+                    endpoint: target.endpoint,
+                    transportHint: .wifiTls,
+                    clientId: discovery.trustStore.clientId,
+                    authToken: target.authToken,
+                    preferredCodec: preferences.preferredCodec,
+                    targetFPS: min(preferences.targetFPS, 60),
+                    bitrateKbps: min(preferences.bitrateKbps, 10_000),
+                    mapCommandToCtrl: preferences.mapCommandToCtrl,
+                    audioEnabled: preferences.audioEnabled,
+                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                )
+                let entry = PopoutHistoryEntry(
+                    appPackage: packageName,
+                    appActivity: activityClass,
+                    appLabel: appLabel,
+                    deviceKey: "fp:\(target.certFingerprint.prefix(16))",
+                    deviceName: target.deviceName,
+                    transportKind: "bonjour",
+                    certFingerprint: target.certFingerprint
+                )
+                return (ctx, entry)
+            }
+        }
+
+        return nil
     }
 
     /// Releases any standalone ADB forwards that are no longer used by open popout windows or the main desktop session.
@@ -297,7 +599,7 @@ extension AppModel {
                 )
             },
             onFilesDropped: { [weak self] urls in
-                self?.sendFiles(urls)
+                self?.handleDroppedFiles(urls)
             }
         )
         if case .opened = res {
@@ -359,7 +661,8 @@ extension AppModel {
                     targetFPS: min(preferences.targetFPS, 60),
                     bitrateKbps: min(effectiveBitrateKbps(), 10_000),
                     mapCommandToCtrl: preferences.mapCommandToCtrl,
-                    audioEnabled: preferences.audioEnabled
+                    audioEnabled: preferences.audioEnabled,
+                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
                 )
                 return (ctx, nextEntry)
             }
@@ -384,7 +687,8 @@ extension AppModel {
                 targetFPS: min(preferences.targetFPS, 60),
                 bitrateKbps: min(preferences.bitrateKbps, 10_000),
                 mapCommandToCtrl: preferences.mapCommandToCtrl,
-                audioEnabled: preferences.audioEnabled
+                audioEnabled: preferences.audioEnabled,
+                enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
             )
             return (ctx, nextEntry)
         }
@@ -419,7 +723,8 @@ extension AppModel {
                 targetFPS: min(preferences.targetFPS, 60),
                 bitrateKbps: min(preferences.bitrateKbps, 10_000),
                 mapCommandToCtrl: preferences.mapCommandToCtrl,
-                audioEnabled: preferences.audioEnabled
+                audioEnabled: preferences.audioEnabled,
+                enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
             )
             return (ctx, nextEntry)
         }
@@ -444,7 +749,8 @@ extension AppModel {
                 targetFPS: min(preferences.targetFPS, 60),
                 bitrateKbps: min(preferences.bitrateKbps, 10_000),
                 mapCommandToCtrl: preferences.mapCommandToCtrl,
-                audioEnabled: preferences.audioEnabled
+                audioEnabled: preferences.audioEnabled,
+                enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
             )
             return (ctx, nextEntry)
         }

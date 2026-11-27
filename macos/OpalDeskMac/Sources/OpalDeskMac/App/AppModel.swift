@@ -47,6 +47,11 @@ public final class AppModel {
     public let cameraCapturer: CameraStreamCapturer
     public let clipboardSync: ClipboardSyncManager
     public let fileSender: FileSender
+    public let companionManager: CompanionConnectionManager
+    public let notificationBridge: NotificationBridgeManager
+    public let mediaBridge: MediaRemoteBridge
+    public let fileBrowserClient: RemoteFileBrowserClient
+    public let screenRecorder: WindowScreenRecorder
     public let popoutManager: PopoutWindowManager
     public let popoutHistoryStore: PopoutHistoryStore
     public let remoteAppCatalogFetcher: RemoteAppCatalogFetcher
@@ -71,6 +76,35 @@ public final class AppModel {
     public var selectedPreset: DisplayResolutionPreset = .matchWindow
     public var selectedDPI: Int = DisplayPresets.defaultDPI
 
+    // Background companion, notifications, media remote & phone handoff
+    public var companionState: CompanionConnectionState = .idle
+    public var companionTarget: CompanionTargetDevice?
+    public var hostTopApp = HostTopAppState()
+    public var remoteNotifications: [RemoteNotificationItem] = []
+    public var mediaState: MediaStatePayload?
+    public var cachedCompanionApps: [RemoteAppInfo] = []
+
+    // Screen recording & rich toast action state
+    public var isMainWindowRecording: Bool = false
+    public var mainRecordingDurationSeconds: TimeInterval = 0
+    public var toastActionTitle: String?
+    public var toastActionURL: URL?
+
+    // Remote file browser & storage analyzer state
+    public var fileBrowserCurrentPath: String = "/sdcard"
+    public var fileBrowserItems: [RemoteFileItem] = []
+    public var isLoadingFileBrowser: Bool = false
+    public var fileBrowserError: String?
+    public var fileBrowserStorageReport: RemoteStorageReport?
+    public var isScanningRemoteStorage: Bool = false
+    public var fileBrowserStorageError: String?
+    public var fileBrowserTransfers: [RemoteFileTransferItem] = []
+
+    // APK installer & Spotlight shortcut manager sheet state
+    public var apkInstallerContext: ApkInstallerContext?
+    public var apkInstallState: ApkInstallState = .idle
+    public var isShortcutManagerPresented: Bool = false
+
     // Standalone floating app windows & history
     public var popoutHistory: [PopoutHistoryEntry] = []
     public var remoteAppPickerContext: RemoteAppPickerContext?
@@ -93,6 +127,24 @@ public final class AppModel {
     public var toastNotice: String?
     public var disconnectReason: String?
 
+    @ObservationIgnored public lazy var finderServicesProvider: FinderServicesProvider = makeFinderServicesProvider()
+    @ObservationIgnored let mainSessionAuthLock = OSAllocatedUnfairLock<Bool>(initialState: false)
+    @ObservationIgnored var isClipboardSyncRunning: Bool = false
+    @ObservationIgnored var nextCompanionClipboardSeq: Int64 = 1
+    @ObservationIgnored var fileBrowserThumbnailCache: [String: Data] = [:]
+    @ObservationIgnored var inFlightThumbnailPaths: Set<String> = []
+    @ObservationIgnored var fileBrowserDirectoryTask: Task<Void, Never>?
+    @ObservationIgnored var fileBrowserStorageTask: Task<Void, Never>?
+    @ObservationIgnored var fileBrowserDownloadTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored var fileBrowserUploadTransferMap: [UInt32: (transferItemId: String, remoteDirectory: String)] = [:]
+    @ObservationIgnored var pendingFileTransferAckWaiters: [UInt32: CheckedContinuation<String, Error>] = [:]
+    @ObservationIgnored var pendingFileTransferProgressHandlers: [UInt32: @MainActor (FileTransferProgress) -> Void] = [:]
+    @ObservationIgnored var activeApkInstallTask: Task<Void, Never>?
+    @ObservationIgnored var activeApkUploadTransferId: UInt32?
+    @ObservationIgnored var recentIncomingURLTimestamps: [String: Date] = [:]
+    @ObservationIgnored public var onRequestOpenMainWindow: (@MainActor () -> Void)?
+    @ObservationIgnored public var onRequestOpenFileBrowserWindow: (@MainActor () -> Void)?
+
     @ObservationIgnored var isUserInitiatedDisconnect: Bool = false
     @ObservationIgnored var activeSessionGeneration: UInt64 = 0
 
@@ -112,6 +164,16 @@ public final class AppModel {
         let prefs = PreferencesStore()
         let discoveryCoord = DiscoveryCoordinator(customAdbPath: prefs.customAdbPath)
         let extSession = OpalCastSession(trustStore: discoveryCoord.trustStore)
+        let notifBridge = NotificationBridgeManager()
+        let mediaRemoteBridge = MediaRemoteBridge()
+        let remoteFileClient = RemoteFileBrowserClient()
+        let companionMgr = CompanionConnectionManager(
+            trustStore: discoveryCoord.trustStore,
+            fileBrowserClient: remoteFileClient,
+            notificationBridge: notifBridge,
+            mediaBridge: mediaRemoteBridge
+        )
+        let recorder = WindowScreenRecorder()
         let popoutMgr = PopoutWindowManager()
         let popoutStore = PopoutHistoryStore()
         let catalogFetcher = RemoteAppCatalogFetcher()
@@ -131,6 +193,11 @@ public final class AppModel {
         self.cameraCapturer = CameraStreamCapturer()
         self.clipboardSync = ClipboardSyncManager()
         self.fileSender = FileSender()
+        self.companionManager = companionMgr
+        self.notificationBridge = notifBridge
+        self.mediaBridge = mediaRemoteBridge
+        self.fileBrowserClient = remoteFileClient
+        self.screenRecorder = recorder
         self.popoutManager = popoutMgr
         self.popoutHistoryStore = popoutStore
         self.remoteAppCatalogFetcher = catalogFetcher
@@ -148,6 +215,7 @@ public final class AppModel {
 
         applyInitialSessionPreferences()
         configureCallbacks()
+        configureCompanionSubsystem()
         OpalLogStore.shared.setEntriesObserver { [weak self] entries in
             Task { @MainActor [weak self] in
                 self?.logEntries = entries
@@ -155,6 +223,13 @@ public final class AppModel {
         }
         popoutMgr.onControllersChanged = { [weak self] in
             self?.cleanupUnusedPopoutAdbForwards()
+        }
+        discoveryCoord.onBonjourDevicesChanged = { [weak self] devices in
+            self?.companionManager.updateDiscoveredDevices(devices)
+        }
+        discoveryCoord.onTrustedDevicesChanged = { [weak self] _ in
+            guard let self else { return }
+            self.companionManager.updateDiscoveredDevices(self.discovery.bonjourDevices)
         }
         OpalDeskLog.info("app", "OpalDesk macOS v\(fbConfig.appVersion) initialized")
         discoveryCoord.start(
@@ -195,16 +270,48 @@ public final class AppModel {
     public func setUsbTetherDiscoveryEnabled(_ enabled: Bool) {
         Task { await discovery.refreshUsbTetherDevices(enabled: enabled) }
     }
-    public func revokeTrustedDevice(_ device: TrustedDevice) { if let err = discovery.revokeTrustedDevice(device) { bannerError = err } }
-    public func revokeAllTrustedDevices() { if let err = discovery.revokeAllTrustedDevices() { bannerError = err } }
-    public func applyClipboardSyncPreference() { clipboardSync.isEnabled = preferences.clipboardSyncEnabled }
+    public func revokeTrustedDevice(_ device: TrustedDevice) {
+        if let err = discovery.revokeTrustedDevice(device) {
+            bannerError = err
+            return
+        }
+        if let activeFp = companionManager.activeTarget?.certFingerprint,
+           FingerprintUtil.matches(actualFullHex: device.certFingerprint, expected: activeFp)
+        {
+            companionManager.disconnect()
+        }
+    }
+    public func revokeAllTrustedDevices() {
+        if let err = discovery.revokeAllTrustedDevices() {
+            bannerError = err
+            return
+        }
+        if companionState.isActiveOrAttempting {
+            companionManager.disconnect()
+        }
+    }
+    public func applyClipboardSyncPreference() {
+        clipboardSync.isEnabled = preferences.clipboardSyncEnabled
+        companionManager.clipboardSyncEnabled = preferences.clipboardSyncEnabled
+        updateClipboardSyncLifecycle()
+    }
 
-    public func showToast(_ message: String, durationSeconds: Double = 3.2) {
+    public func showToast(
+        _ message: String,
+        durationSeconds: Double = 3.2,
+        actionTitle: String? = nil,
+        revealURL: URL? = nil
+    ) {
         toastClearTask?.cancel()
         toastNotice = message
+        toastActionTitle = actionTitle
+        toastActionURL = revealURL
+        let effectiveDuration = (revealURL != nil) ? max(durationSeconds, 5.5) : durationSeconds
         toastClearTask = Task { [weak self] in
-            guard await sleepCancellable(nanoseconds: UInt64(durationSeconds * 1_000_000_000)) else { return }
+            guard await sleepCancellable(nanoseconds: UInt64(effectiveDuration * 1_000_000_000)) else { return }
             self?.toastNotice = nil
+            self?.toastActionTitle = nil
+            self?.toastActionURL = nil
         }
     }
 
@@ -388,10 +495,32 @@ public final class AppModel {
 
         resizeDebounceTask?.cancel()
         toastClearTask?.cancel()
+        fileBrowserDirectoryTask?.cancel()
+        fileBrowserStorageTask?.cancel()
+        for task in fileBrowserDownloadTasks.values { task.cancel() }
+        fileBrowserDownloadTasks.removeAll()
+        activeApkInstallTask?.cancel()
+        activeApkInstallTask = nil
+        cancelPendingFileTransferWaiters(reason: "应用正在退出")
+
+        if screenRecorder.isRecording {
+            screenRecorder.cancel()
+        }
+        isMainWindowRecording = false
+        mainRecordingDurationSeconds = 0
+
         remoteAppCatalogFetcher.cancel()
         popoutManager.closeAll(sendDisconnect: true)
         discovery.stop()
         clipboardSync.stop()
+        isClipboardSyncRunning = false
+        mainSessionAuthLock.withLock { $0 = false }
+        companionManager.setMainSessionActive(false)
+        companionManager.disconnect()
+        notificationBridge.stop(clearDelivered: false)
+        mediaBridge.stop()
+        fileBrowserClient.handleSessionDisconnected(reason: "应用正在退出")
+
         micCapturer.stop()
         isMicEnabled = false
         cameraCapturer.stop()

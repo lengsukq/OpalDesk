@@ -7,6 +7,7 @@ import SwiftUI
 /// file-drop target, and disconnect/reconnect recovery notices.
 public struct DisplayWindowView: View {
     @Bindable public var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     @State private var isDragOverCanvas: Bool = false
     @State private var isInjectWarningDismissed: Bool = false
@@ -74,12 +75,13 @@ public struct DisplayWindowView: View {
                     mapCommandToCtrl: model.preferences.mapCommandToCtrl,
                     isCanvasInteractive: model.isAuthenticated && model.videoMetrics.totalFramesDecoded > 0,
                     focusGeneration: canvasFocusGeneration,
-                    hideLocalCursor: model.preferences.hideLocalCursor
+                    hideLocalCursor: model.preferences.hideLocalCursor,
+                    enableEdgeNavigationGestures: model.preferences.enableEdgeNavigationGestures
                 ),
                 callbacks: model.streamBridge.makeCanvasCallbacks(
                     isAuthenticated: { model.isAuthenticated },
                     toolbar: nil,
-                    onFilesDropped: { model.sendFiles($0) },
+                    onFilesDropped: { model.handleDroppedFiles($0) },
                     onDragHoverChange: { hovering in
                         withAnimation(.easeInOut(duration: 0.15)) { isDragOverCanvas = hovering }
                     },
@@ -96,6 +98,18 @@ public struct DisplayWindowView: View {
             }
 
             topHoverControlBar
+
+            if model.isMainWindowRecording && !isHoveringTopEdge {
+                VStack {
+                    HStack {
+                        recordingStatusPill
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                .transition(.opacity)
+            }
 
             if model.preferences.showHUDStats && model.isAuthenticated {
                 VStack {
@@ -175,6 +189,55 @@ public struct DisplayWindowView: View {
                         .tint(model.isCameraEnabled ? .green : nil)
                         .controlSize(.small)
                         .help(model.isCameraEnabled ? "关闭摄像头" : "开启摄像头")
+
+                        topBarDivider
+
+                        Button {
+                            model.captureMainWindowScreenshot()
+                        } label: {
+                            Image(systemName: "camera")
+                                .font(.system(size: 11.5, weight: .medium))
+                                .frame(width: 16, height: 14)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(!model.isAuthenticated || model.videoMetrics.totalFramesDecoded == 0)
+                        .help("一键截图（保存桌面并复制剪贴板 ⌘⇧S）")
+
+                        Button {
+                            model.toggleMainWindowRecording()
+                        } label: {
+                            if model.isMainWindowRecording {
+                                HStack(spacing: 4) {
+                                    Circle()
+                                        .fill(Color.red)
+                                        .frame(width: 7, height: 7)
+                                    Text(model.formattedRecordingDuration)
+                                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                                }
+                            } else {
+                                Image(systemName: "record.circle")
+                                    .font(.system(size: 11.5, weight: .medium))
+                                    .frame(width: 16, height: 14)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(model.isMainWindowRecording ? .red : nil)
+                        .controlSize(.small)
+                        .disabled(!model.isAuthenticated || (!model.isMainWindowRecording && model.videoMetrics.totalFramesDecoded == 0))
+                        .help(model.isMainWindowRecording ? "点击停止录屏并保存 MP4" : "开始录制 MP4 屏幕录像 (⌘⇧V)")
+
+                        Button {
+                            openWindow(id: WindowID.fileBrowser)
+                            NSApp.activate(ignoringOtherApps: true)
+                        } label: {
+                            Image(systemName: "folder")
+                                .font(.system(size: 11.5, weight: .medium))
+                                .frame(width: 16, height: 14)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("打开手机文件与存储管理 (⌘⇧F)")
 
                         topBarDivider
 
@@ -287,6 +350,29 @@ public struct DisplayWindowView: View {
             .frame(width: 1, height: 14)
     }
 
+    private var recordingStatusPill: some View {
+        Button {
+            model.stopMainWindowRecording()
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 8, height: 8)
+                Text("REC \(model.formattedRecordingDuration)")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white)
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.red)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .floatingCapsuleChrome(strokeColor: Color.red.opacity(0.65), lineWidth: 1.0, shadowRadius: 8, shadowY: 3, shadowOpacity: 0.35)
+        }
+        .buttonStyle(.plain)
+        .help("点击停止录制并保存 MP4")
+    }
+
     // MARK: - Optional Top-Right Performance HUD
 
     private var compactCornerHUD: some View {
@@ -329,8 +415,14 @@ public struct DisplayWindowView: View {
             Spacer()
 
             if let toast = model.toastNotice {
-                ToastPillView(message: toast)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                ToastPillView(
+                    message: toast,
+                    actionTitle: model.toastActionTitle,
+                    onAction: model.toastActionURL.map { url in
+                        { model.revealInFinder(url) }
+                    }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             if model.isAuthenticated && model.injectStatus == .denied && !isInjectWarningDismissed {
