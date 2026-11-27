@@ -25,4 +25,6 @@ plugins {
 }
 
 rootProject.name = "OpalDesk"
-include(":bridge", ":helper")
+include(":bridge", ":helper", ":receiver")
+
+

@@ -1,0 +1,153 @@
+name: Build & Publish OpalCast Receiver Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Target GitHub Release tag to attach OpalCast APK to (leave empty for receiver versionName)'
+        required: false
+        default: ''
+        type: string
+      publish_release:
+        description: 'Attach signed OpalCast APK to GitHub Release (false = Actions artifact only)'
+        required: false
+        default: true
+        type: boolean
+      prerelease:
+        description: 'Mark newly created release as pre-release (ignored when attaching to an existing release)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish-receiver:
+    name: Build & Publish OpalCast Receiver APK (32/64-bit, Android 5.0–17)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+
+      - name: Setup JDK 21 & Gradle Cache
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Ensure Android SDK Build-Tools & Platform 37.0
+        shell: bash
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
+            echo "::error::ANDROID_HOME / ANDROID_SDK_ROOT not found on runner"
+            exit 1
+          fi
+          if [ ! -f "$SDK/platforms/android-37.0/android.jar" ] || [ ! -x "$SDK/build-tools/37.0.0/apksigner" ]; then
+            SDKMGR="$(find "$SDK/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1 || true)"
+            if [ -n "$SDKMGR" ]; then
+              yes | "$SDKMGR" --sdk_root="$SDK" "platforms;android-37.0" "build-tools;37.0.0" || true
+            fi
+          fi
+          test -f "$SDK/platforms/android-37.0/android.jar"
+          test -x "$SDK/build-tools/37.0.0/apksigner"
+
+      - name: Stage OpalCast receiver keystore (never export password to GITHUB_ENV)
+        shell: bash
+        env:
+          KS_B64_RECEIVER: ${{ secrets.OPALCAST_KEYSTORE_BASE64 }}
+          HAS_RECEIVER_PASS: ${{ secrets.OPALCAST_KEYSTORE_PASS != '' && '1' || '0' }}
+        run: |
+          echo "OPALCAST_REQUIRE_RELEASE_KEY=1" >> "$GITHUB_ENV"
+          if [ -z "$KS_B64_RECEIVER" ] || [ "$HAS_RECEIVER_PASS" != "1" ]; then
+            echo "::error title=Missing OpalCast Signing Secrets::请在仓库 Settings -> Secrets and variables -> Actions 中配置 OPALCAST_KEYSTORE_BASE64 与 OPALCAST_KEYSTORE_PASS。"
+            exit 1
+          fi
+          KS_PATH="$RUNNER_TEMP/opalcast-receiver.p12"
+          python3 - "$KS_PATH" <<'PY'
+          import base64, os, re, sys
+          raw = os.environ.get("KS_B64_RECEIVER") or ""
+          m = re.search(r"MII[A-Za-z0-9+/=\s\-_]{400,}", raw)
+          cand = m.group(0) if m else raw
+          clean = re.sub(r"\s+", "", cand).replace("-", "+").replace("_", "/").strip("\"'")
+          rem = len(clean) % 4
+          if rem == 2:
+              clean += "=="
+          elif rem == 3:
+              clean += "="
+          data = base64.b64decode(clean, validate=True)
+          if len(data) < 500 or data[0] != 0x30:
+              raise ValueError(f"Decoded bytes length={len(data)} is not a valid PKCS#12 archive")
+          with open(sys.argv[1], "wb") as f:
+              f.write(data)
+          os.chmod(sys.argv[1], 0o600)
+          print(f"Staged OpalCast receiver keystore ({len(data)} bytes).")
+          PY
+          echo "OPALCAST_KEYSTORE=$KS_PATH" >> "$GITHUB_ENV"
+
+      - name: Build, Test, Lint & Verify OpalCast Receiver APK
+        id: build_receiver
+        shell: bash
+        env:
+          OPALCAST_KEYSTORE_PASS: ${{ secrets.OPALCAST_KEYSTORE_PASS }}
+          OPALCAST_EXPECTED_CERT_SHA256: ${{ secrets.OPALCAST_EXPECTED_CERT_SHA256 }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          chmod +x scripts/build-receiver.sh
+          VER="$(sed -nE 's/.*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' receiver/build.gradle.kts | head -n 1)"
+          VER="${VER:-0.0.1}"
+          TAG="${INPUT_TAG:-v${VER}}"
+          echo "TARGET_TAG=$TAG" >> "$GITHUB_ENV"
+          ./scripts/build-receiver.sh --no-daemon --output-dir build/out --tag "$TAG"
+
+      - name: Cleanup temporary receiver keystore
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/opalcast-receiver.p12"
+
+      - name: Upload OpalCast Build Artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: OpalCast-Android_${{ env.TARGET_TAG }}
+          path: |
+            ${{ steps.build_receiver.outputs.receiver_apk_path }}
+            ${{ steps.build_receiver.outputs.receiver_apk_path }}.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload OpalCast APK to GitHub Release
+        if: ${{ inputs.publish_release == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          APK_PATH: ${{ steps.build_receiver.outputs.receiver_apk_path }}
+          IS_SIGNED: ${{ steps.build_receiver.outputs.receiver_is_signed }}
+          IS_PRERELEASE: ${{ inputs.prerelease && '1' || '0' }}
+        shell: bash
+        run: |
+          if [ "$IS_SIGNED" != "true" ]; then
+            echo "::error::Refusing to publish unsigned OpalCast APK."
+            exit 1
+          fi
+          if gh release view "$TARGET_TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TARGET_TAG" "$APK_PATH" --clobber --repo "$REPO"
+          else
+            CREATE_ARGS=(
+              "$TARGET_TAG"
+              "$APK_PATH"
+              --repo "$REPO"
+              --title "OpalCast ${TARGET_TAG}"
+              --generate-notes
+            )
+            if [ "$IS_PRERELEASE" = "1" ]; then
+              CREATE_ARGS+=(--prerelease)
+            fi
+            gh release create "${CREATE_ARGS[@]}"
+          fi
