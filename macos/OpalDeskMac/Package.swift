@@ -32,6 +32,8 @@ let package = Package(
                 .linkedFramework("CoreImage"),
                 .linkedFramework("ImageIO"),
                 .linkedFramework("AppKit"),
+                .linkedFramework("UserNotifications"),
+                .linkedFramework("MediaPlayer"),
                 .linkedLibrary("z")
             ]
         ),
