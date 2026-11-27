@@ -26,7 +26,35 @@ public final class FileTransferPathGuard {
         }
         int lastSlash = normalized.lastIndexOf('/');
         String base = (lastSlash >= 0) ? normalized.substring(lastSlash + 1) : normalized;
-        base = base.trim();
+        return sanitizeSingleSegment(base);
+    }
+
+    /**
+     * Sanitizes a relative nested file path such as {@code "sub/dir/photo.png"} while rejecting
+     * null bytes, path traversal ({@code ..}), hidden dot-segments, and excessive nesting.
+     */
+    public static String sanitizeRelativeSubpath(String raw) {
+        if (raw == null || raw.indexOf('\0') >= 0) return null;
+        String normalized = raw.replace('\\', '/').trim();
+        while (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        if (normalized.isEmpty() || normalized.endsWith("/")) return null;
+        String[] parts = normalized.split("/");
+        if (parts.length == 0 || parts.length > 16) return null;
+        StringBuilder out = new StringBuilder(normalized.length());
+        for (int i = 0; i < parts.length; i++) {
+            String cleanSeg = sanitizeSingleSegment(parts[i]);
+            if (cleanSeg == null) return null;
+            if (i > 0) out.append('/');
+            out.append(cleanSeg);
+        }
+        return out.toString();
+    }
+
+    private static String sanitizeSingleSegment(String rawSegment) {
+        if (rawSegment == null) return null;
+        String base = rawSegment.trim();
         if (base.isEmpty() || ".".equals(base) || "..".equals(base) || base.startsWith(".")) {
             return null;
         }
@@ -48,7 +76,11 @@ public final class FileTransferPathGuard {
     }
 
     public static File resolveUniqueSafeFile(File canonicalBase, String safeName) throws IOException {
-        File candidate = new File(canonicalBase, safeName);
+        return resolveUniqueSafeFile(canonicalBase, canonicalBase, safeName);
+    }
+
+    public static File resolveUniqueSafeFile(File canonicalBase, File targetDir, String safeName) throws IOException {
+        File candidate = new File(targetDir, safeName);
         verifyInsideBaseDir(canonicalBase, candidate);
         if (!candidate.exists()) {
             return candidate;
@@ -57,7 +89,7 @@ public final class FileTransferPathGuard {
         String stem = (dot > 0) ? safeName.substring(0, dot) : safeName;
         String ext = (dot > 0) ? safeName.substring(dot) : "";
         for (int i = 1; i <= 999; i++) {
-            File alt = new File(canonicalBase, String.format(Locale.US, "%s (%d)%s", stem, i, ext));
+            File alt = new File(targetDir, String.format(Locale.US, "%s (%d)%s", stem, i, ext));
             verifyInsideBaseDir(canonicalBase, alt);
             if (!alt.exists()) {
                 return alt;
@@ -69,6 +101,18 @@ public final class FileTransferPathGuard {
     public static void verifyInsideBaseDir(File canonicalBase, File target) throws IOException {
         String basePath = canonicalBase.getCanonicalPath();
         String targetPath = target.getCanonicalPath();
+        String prefix = basePath.endsWith(File.separator) ? basePath : (basePath + File.separator);
+        if (!targetPath.startsWith(prefix)) {
+            throw new SecurityException("Path traversal blocked: " + targetPath);
+        }
+    }
+
+    public static void verifyInsideOrEqualBaseDir(File canonicalBase, File target) throws IOException {
+        String basePath = canonicalBase.getCanonicalPath();
+        String targetPath = target.getCanonicalPath();
+        if (basePath.equals(targetPath)) {
+            return;
+        }
         String prefix = basePath.endsWith(File.separator) ? basePath : (basePath + File.separator);
         if (!targetPath.startsWith(prefix)) {
             throw new SecurityException("Path traversal blocked: " + targetPath);

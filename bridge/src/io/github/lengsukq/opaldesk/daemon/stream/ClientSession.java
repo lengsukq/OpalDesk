@@ -185,6 +185,39 @@ final class ClientSession {
         enqueue(type, flags, timestampUs, payload, len, null);
     }
 
+    /**
+     * Enqueues a streaming data control frame (e.g. {@code TYPE_FILE_PULL_CHUNK}) with bounded
+     * backpressure so large multi-megabyte file pulls never trigger {@link #MAX_TOTAL_QUEUED_FRAMES}
+     * overflow disconnects on slow Wi-Fi links.
+     *
+     * @return {@code true} if queued, {@code false} if the session closed or timed out while waiting.
+     */
+    boolean enqueueBackpressured(int type, int flags, long timestampUs, byte[] payload, long timeoutMs) {
+        if (closed.get()) return false;
+        int len = (payload != null) ? payload.length : 0;
+        QueuedFrame qf = new QueuedFrame(type, flags, timestampUs, payload, len, null);
+        long deadlineMs = monotonicClockMs.getAsLong() + Math.max(100L, timeoutMs);
+        int highWater = Math.max(8, MAX_TOTAL_QUEUED_FRAMES / 2);
+        synchronized (queueLock) {
+            while (!closed.get() && totalQueuedLocked() >= highWater) {
+                long remaining = deadlineMs - monotonicClockMs.getAsLong();
+                if (remaining <= 0L) {
+                    return false;
+                }
+                try {
+                    queueLock.wait(Math.min(remaining, 250L));
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            if (closed.get()) return false;
+            priorityQueue.addLast(qf);
+            queueLock.notifyAll();
+            return true;
+        }
+    }
+
     void enqueue(int type, int flags, long timestampUs, byte[] payload, int payloadLength, Consumer<byte[]> onRelease) {
         if (closed.get()) {
             if (onRelease != null && payload != null) onRelease.accept(payload);
@@ -351,6 +384,7 @@ final class ClientSession {
                     if (next == null) continue;
                     if (next.isVideo) queuedVideoFrames = Math.max(0, queuedVideoFrames - 1);
                     if (next.isAudio) queuedAudioFrames = Math.max(0, queuedAudioFrames - 1);
+                    queueLock.notifyAll();
                     shouldFlush = (priorityQueue.isEmpty() && videoQueue.isEmpty())
                             || next.isVideo
                             || (next.isAudio && priorityQueue.isEmpty())
@@ -360,6 +394,11 @@ final class ClientSession {
                             || next.type == OpalCastProtocol.TYPE_IME_REQUEST
                             || next.type == OpalCastProtocol.TYPE_MIC_STATE
                             || next.type == OpalCastProtocol.TYPE_CAMERA_STATE
+                            || next.type == OpalCastProtocol.TYPE_NOTIFICATION_EVENT
+                            || next.type == OpalCastProtocol.TYPE_MEDIA_STATE
+                            || next.type == OpalCastProtocol.TYPE_FILE_OP_RESPONSE
+                            || next.type == OpalCastProtocol.TYPE_FILE_PULL_CHUNK
+                            || next.type == OpalCastProtocol.TYPE_APK_INSTALL_STATUS
                             || next.type == OpalCastProtocol.TYPE_PONG;
                 }
                 try {

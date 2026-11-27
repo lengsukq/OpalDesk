@@ -42,6 +42,8 @@ public final class BridgeProtocol {
     public static final String PROVIDER_METHOD_IME_COMMIT_TEXT = "imeCommitText";
     public static final String PROVIDER_METHOD_REMOTE_STATE_CHANGED = "remoteStateChanged";
     public static final String PROVIDER_METHOD_PLUGIN_IME_SYNC = "pluginImeSync";
+    public static final String PROVIDER_METHOD_NOTIFICATION_ACTION = "notificationAction";
+    public static final String PROVIDER_METHOD_MEDIA_ACTION = "mediaAction";
 
     public static final String EXTRA_SYNC_SCENE_JSON = "sceneJson";
     public static final String EXTRA_SYNC_STATE_SEQ = "stateSeq";
@@ -51,6 +53,11 @@ public final class BridgeProtocol {
     public static final String EXTRA_IME_INPUT_TYPE = "inputType";
     public static final String EXTRA_IME_COMMIT_TEXT = "text";
     public static final String EXTRA_IME_COMMITTED = "committed";
+    public static final String EXTRA_NOTIF_ACTION_OP = "op";
+    public static final String EXTRA_NOTIF_ACTION_KEY = "key";
+    public static final String EXTRA_NOTIF_ACTION_REPLY_TEXT = "replyText";
+    public static final String EXTRA_MEDIA_ACTION_OP = "op";
+    public static final String EXTRA_MEDIA_ACTION_POSITION_MS = "positionMs";
 
     public static final String CTL_CMD_SHUTDOWN = "SHUTDOWN";
     public static final String CTL_CMD_NEED_BINDER = "NEED_BINDER";
@@ -98,6 +105,8 @@ public final class BridgeProtocol {
     public static final int TX_SET_DEX_IME_SESSION_ACTIVE = 47;
     public static final int TX_GET_SYSTEM_IME_STATE = 48;
     public static final int TX_NOTIFY_BRIDGE_IME_EVENT = 49;
+    public static final int TX_SYNC_NOTIFICATIONS = 50;
+    public static final int TX_SYNC_MEDIA_STATE = 51;
     public static final int TX_SHUTDOWN = 99;
 
     // ---- Built-in / Companion Plugin IME Event Codes (TX_NOTIFY_BRIDGE_IME_EVENT) ----

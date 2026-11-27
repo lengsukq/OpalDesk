@@ -49,6 +49,8 @@ class BridgeProvider : ContentProvider() {
             BridgeProtocol.PROVIDER_METHOD_IME_REQUEST -> handleImeRequest(extras)
             BridgeProtocol.PROVIDER_METHOD_IME_COMMIT_TEXT -> handleImeCommitText(extras)
             BridgeProtocol.PROVIDER_METHOD_REMOTE_STATE_CHANGED -> handleRemoteStateChanged()
+            BridgeProtocol.PROVIDER_METHOD_NOTIFICATION_ACTION -> handleNotificationAction(extras)
+            BridgeProtocol.PROVIDER_METHOD_MEDIA_ACTION -> handleMediaAction(extras)
             else -> Bundle()
         }
     }
@@ -131,6 +133,36 @@ class BridgeProvider : ContentProvider() {
     private fun handleRemoteStateChanged(): Bundle {
         if (!BridgeService.sUserStopping) {
             BridgeClient.onPushedRemoteStateChanged()
+        }
+        return Bundle().apply { putBoolean("ok", true) }
+    }
+
+    private fun handleNotificationAction(extras: Bundle?): Bundle {
+        if (!BridgeService.sUserStopping && extras != null) {
+            val op = extras.getString(BridgeProtocol.EXTRA_NOTIF_ACTION_OP).orEmpty()
+            val key = extras.getString(BridgeProtocol.EXTRA_NOTIF_ACTION_KEY).orEmpty()
+            val replyText = extras.getString(BridgeProtocol.EXTRA_NOTIF_ACTION_REPLY_TEXT).orEmpty()
+            if (op.isNotEmpty()) {
+                io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.handleRemoteAction(
+                    op = op,
+                    key = key,
+                    replyText = replyText,
+                )
+            }
+        }
+        return Bundle().apply { putBoolean("ok", true) }
+    }
+
+    private fun handleMediaAction(extras: Bundle?): Bundle {
+        if (!BridgeService.sUserStopping && extras != null) {
+            val op = extras.getString(BridgeProtocol.EXTRA_MEDIA_ACTION_OP).orEmpty()
+            val positionMs = extras.getLong(BridgeProtocol.EXTRA_MEDIA_ACTION_POSITION_MS, 0L)
+            if (op.isNotEmpty()) {
+                io.github.lengsukq.opaldesk.notifications.OpalMediaSessionMonitor.handleRemoteAction(
+                    op = op,
+                    positionMs = positionMs,
+                )
+            }
         }
         return Bundle().apply { putBoolean("ok", true) }
     }

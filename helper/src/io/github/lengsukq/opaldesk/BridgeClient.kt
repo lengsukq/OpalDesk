@@ -55,6 +55,9 @@ object BridgeClient {
             priority = Thread.MAX_PRIORITY
         }
     }
+    private val companionSyncExec = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "OpalCompanionSync").apply { isDaemon = true }
+    }
 
     @Volatile
     private var binder: IBinder? = null
@@ -217,6 +220,8 @@ object BridgeClient {
             refreshPendingPairing()
             refreshDexImeState()
             syncDaemonLogsThrottledLocked(minIntervalMs = 0L, maxLines = 400)
+            io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.pushSnapshotToDaemon()
+            io.github.lengsukq.opaldesk.notifications.OpalMediaSessionMonitor.pushCurrentStateToDaemon()
             io.github.lengsukq.opaldesk.service.BaseOpalTileService.requestAllTilesUpdate(appContext)
         }
         binderReadyListeners.forEach { mainHandler.post(it) }
@@ -1448,6 +1453,32 @@ object BridgeClient {
      * Reports a 0ms event from [io.github.lengsukq.opaldesk.ime.OpalDeskImeService] to the daemon
      * so remote OpalCast clients receive instant keyboard show/hide triggers without polling.
      */
+    fun syncNotificationsAsync(json: String) {
+        if (json.isBlank()) return
+        companionSyncExec.execute {
+            val svc = getService() ?: return@execute
+            transact(
+                svc,
+                BridgeProtocol.Tx.SYNC_NOTIFICATIONS,
+                oneway = false,
+                writeArgs = { d -> d.writeString(json) },
+            ) { it.readInt() }
+        }
+    }
+
+    fun syncMediaStateAsync(json: String) {
+        if (json.isBlank()) return
+        companionSyncExec.execute {
+            val svc = getService() ?: return@execute
+            transact(
+                svc,
+                BridgeProtocol.Tx.SYNC_MEDIA_STATE,
+                oneway = false,
+                writeArgs = { d -> d.writeString(json) },
+            ) { it.readInt() }
+        }
+    }
+
     fun notifyBridgeImeEventAsync(
         eventType: Int,
         imeDisplayId: Int,

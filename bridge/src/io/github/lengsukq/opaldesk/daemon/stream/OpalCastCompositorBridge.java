@@ -41,10 +41,12 @@ import io.github.lengsukq.opaldesk.daemon.sink.RemoteStreamSink;
 import io.github.lengsukq.opaldesk.daemon.video.RootCameraBridge;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -134,6 +136,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         final int sessionId;
         final int sinkType;
         final boolean standalone;
+        final boolean companion;
         final String appPackage;
         final String appActivity;
         final String clientPlatform;
@@ -176,17 +179,24 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         volatile boolean closed = false;
 
         ActiveRemoteSession(
-                int sessionId, int sinkType, boolean standalone, String pkg, String cls, String clientPlatform) {
+                int sessionId,
+                int sinkType,
+                boolean standalone,
+                boolean companion,
+                String pkg,
+                String cls,
+                String clientPlatform) {
             this.sessionId = sessionId;
             this.sinkType = sinkType;
             this.standalone = standalone;
+            this.companion = companion;
             this.appPackage = pkg != null ? pkg : "";
             this.appActivity = cls != null ? cls : "";
             this.clientPlatform = clientPlatform != null ? clientPlatform : "";
         }
 
         boolean isMirror() {
-            return !standalone && displayMode == OpalCastProtocol.DISPLAY_MODE_MIRROR;
+            return !standalone && !companion && displayMode == OpalCastProtocol.DISPLAY_MODE_MIRROR;
         }
 
         int inputTargetDisplayId() {
@@ -219,8 +229,27 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         t.setDaemon(true);
         return t;
     });
+    private final ExecutorService fileIoWorker = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "OpalCastFileIo");
+        t.setDaemon(true);
+        return t;
+    });
+    private final ExecutorService apkInstallWorker = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "OpalCastApkInstall");
+        t.setDaemon(true);
+        return t;
+    });
+
+    private final RemoteFileManager fileManager = new RemoteFileManager();
+    private final RemoteApkInstaller apkInstaller = new RemoteApkInstaller();
 
     private final Map<Integer, ActiveRemoteSession> sessions = new ConcurrentHashMap<>();
+    private final Object notificationCacheLock = new Object();
+    private final LinkedHashMap<String, OpalCastProtocol.NotificationItem> cachedNotifications = new LinkedHashMap<>();
+    private volatile byte[] lastMediaStatePayload = null;
+    private final Map<String, String> hostAppLabelCache = new ConcurrentHashMap<>();
+    private volatile String hostTopAppPackage = "";
+    private volatile String hostTopAppLabel = "";
     private volatile int desktopSessionId = -1;
     private volatile boolean localHostTextFieldFocused = false;
     private final Object audioLock = new Object();
@@ -238,10 +267,20 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         boolean tryCommitText(String text);
     }
 
+    public interface NotificationActionConsumer {
+        void accept(String op, String key, String replyText);
+    }
+
+    public interface MediaActionConsumer {
+        void accept(String op, long positionMs);
+    }
+
     private final Object mirrorListenerLock = new Object();
     private DisplayManager.DisplayListener mirrorDisplayListener;
     private volatile Runnable remoteStateChangeListener;
     private volatile DirectImeTextCommitter directImeCommitter;
+    private volatile NotificationActionConsumer notificationActionConsumer;
+    private volatile MediaActionConsumer mediaActionConsumer;
     private volatile java.util.function.BooleanSupplier bridgeImeActiveSupplier = () -> false;
 
     public OpalCastCompositorBridge(
@@ -294,8 +333,161 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         this.directImeCommitter = committer;
     }
 
+    public void setNotificationActionConsumer(NotificationActionConsumer consumer) {
+        this.notificationActionConsumer = consumer;
+    }
+
+    public void setMediaActionConsumer(MediaActionConsumer consumer) {
+        this.mediaActionConsumer = consumer;
+    }
+
     public void setBridgeImeActiveSupplier(java.util.function.BooleanSupplier supplier) {
         this.bridgeImeActiveSupplier = supplier != null ? supplier : () -> false;
+    }
+
+    /**
+     * Ingests a notification event JSON pushed from Helper (Binder TX 50), enriches missing OTP
+     * verification codes via {@link OtpCodeExtractor}, updates the snapshot cache, and broadcasts
+     * {@code 0x19 TYPE_NOTIFICATION_EVENT} to active desktop and companion sessions.
+     */
+    public void onNotificationsSyncedFromHelper(String rawJson) {
+        if (rawJson == null || rawJson.trim().isEmpty()) return;
+        worker.execute(() -> {
+            try {
+                OpalCastProtocol.NotificationEventMsg decoded =
+                        OpalCastProtocol.decodeNotificationEvent(rawJson.getBytes(StandardCharsets.UTF_8));
+                OpalCastProtocol.NotificationEventMsg outbound;
+                synchronized (notificationCacheLock) {
+                    if ("removed".equals(decoded.action)) {
+                        if (!decoded.key.isEmpty()) {
+                            cachedNotifications.remove(decoded.key);
+                        }
+                        outbound = new OpalCastProtocol.NotificationEventMsg(
+                                "removed", decoded.key, Collections.emptyList());
+                    } else {
+                        List<OpalCastProtocol.NotificationItem> enriched = new ArrayList<>(decoded.items.size());
+                        for (OpalCastProtocol.NotificationItem it : decoded.items) {
+                            if (it == null) continue;
+                            String otp = (it.otpCode != null && !it.otpCode.isEmpty())
+                                    ? it.otpCode
+                                    : OtpCodeExtractor.extract(it.title, it.text);
+                            enriched.add(new OpalCastProtocol.NotificationItem(
+                                    it.key, it.pkg, it.appLabel, it.title, it.text,
+                                    it.postTimeMs, it.clearable, it.canReply, it.replyLabel, otp));
+                        }
+                        if ("snapshot".equals(decoded.action)) {
+                            cachedNotifications.clear();
+                            for (OpalCastProtocol.NotificationItem it : enriched) {
+                                if (!it.key.isEmpty()) {
+                                    cachedNotifications.put(it.key, it);
+                                }
+                            }
+                        } else {
+                            for (OpalCastProtocol.NotificationItem it : enriched) {
+                                if (!it.key.isEmpty()) {
+                                    cachedNotifications.remove(it.key);
+                                    cachedNotifications.put(it.key, it);
+                                }
+                            }
+                            while (cachedNotifications.size() > 40) {
+                                String oldestKey = cachedNotifications.keySet().iterator().next();
+                                cachedNotifications.remove(oldestKey);
+                            }
+                        }
+                        String act = "snapshot".equals(decoded.action) ? "snapshot" : "posted";
+                        outbound = new OpalCastProtocol.NotificationEventMsg(act, "", enriched);
+                    }
+                }
+                server.broadcastNotificationEvent(OpalCastProtocol.encodeNotificationEvent(outbound));
+            } catch (OpalCastProtocol.ProtocolException | RuntimeException e) {
+                System.err.println("OPALDESK_NOTIF_SYNC_WARN: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * Ingests a media playback state JSON pushed from Helper (Binder TX 51), caches the normalized
+     * payload, and broadcasts {@code 0x1A TYPE_MEDIA_STATE} to active desktop and companion sessions.
+     */
+    public void onMediaStateSyncedFromHelper(String rawJson) {
+        if (rawJson == null || rawJson.trim().isEmpty()) return;
+        worker.execute(() -> {
+            try {
+                OpalCastProtocol.MediaStateMsg msg =
+                        OpalCastProtocol.decodeMediaState(rawJson.getBytes(StandardCharsets.UTF_8));
+                byte[] normalized = OpalCastProtocol.encodeMediaState(msg);
+                lastMediaStatePayload = normalized;
+                server.broadcastMediaState(normalized);
+            } catch (OpalCastProtocol.ProtocolException | RuntimeException e) {
+                System.err.println("OPALDESK_MEDIA_SYNC_WARN: " + e.getMessage());
+            }
+        });
+    }
+
+    public boolean hasDesktopOrCompanionSession() {
+        return hasActiveDesktopSession() || server.hasCompanionSession();
+    }
+
+    /**
+     * Probes Display 0's current foreground user app for Mac Handoff and broadcasts updated
+     * {@code DeviceState (0x10)} to active desktop and companion sessions whenever it changes.
+     */
+    public void refreshHostTopAppIfChanged() {
+        if (!hasDesktopOrCompanionSession() || displayDriver == null) return;
+        String pkg = "";
+        try {
+            pkg = displayDriver.findTopVisibleUserAppPackageOnDisplay(Display.DEFAULT_DISPLAY);
+        } catch (RuntimeException ignored) {
+        }
+        if (pkg == null) pkg = "";
+        String label = pkg.isEmpty() ? "" : resolveCachedHostAppLabel(pkg);
+        if (pkg.equals(hostTopAppPackage) && label.equals(hostTopAppLabel)) {
+            return;
+        }
+        hostTopAppPackage = pkg;
+        hostTopAppLabel = label;
+        for (int sid : server.getDesktopAndCompanionSessionIds()) {
+            ActiveRemoteSession s = sessions.get(sid);
+            if (s != null && !s.closed) {
+                pushDeviceState(s);
+            }
+        }
+    }
+
+    private String resolveCachedHostAppLabel(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return "";
+        String cached = hostAppLabelCache.get(pkg);
+        if (cached != null) return cached;
+        String resolved = (displayDriver != null) ? displayDriver.resolveAppLabel(pkg) : pkg;
+        if (resolved == null || resolved.isEmpty()) resolved = pkg;
+        if (hostAppLabelCache.size() < 256) {
+            hostAppLabelCache.put(pkg, resolved);
+        }
+        return resolved;
+    }
+
+    private void pushCachedCompanionSnapshotsToSession(int sessionId) {
+        byte[] snapshotBytes = null;
+        synchronized (notificationCacheLock) {
+            if (!cachedNotifications.isEmpty()) {
+                List<OpalCastProtocol.NotificationItem> items = new ArrayList<>(cachedNotifications.values());
+                items.sort((a, b) -> Long.compare(b.postTimeMs, a.postTimeMs));
+                snapshotBytes = OpalCastProtocol.encodeNotificationEvent(
+                        new OpalCastProtocol.NotificationEventMsg("snapshot", "", items));
+            }
+        }
+        if (snapshotBytes != null) {
+            server.sendNotificationEvent(sessionId, snapshotBytes);
+        } else {
+            NotificationActionConsumer nac = notificationActionConsumer;
+            if (nac != null) {
+                nac.accept("sync", "", "");
+            }
+        }
+        byte[] media = lastMediaStatePayload;
+        if (media != null && media.length > 0) {
+            server.sendMediaState(sessionId, media);
+        }
     }
 
     private boolean isBridgeImeActive() {
@@ -349,8 +541,13 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     public RemoteStatusSnapshot getStatusSnapshot() {
         server.reconcileUsbTetherBindIfNeeded();
         ActiveRemoteSession main = (desktopSessionId > 0) ? sessions.get(desktopSessionId) : null;
-        if (main == null && !sessions.isEmpty()) {
-            main = sessions.values().iterator().next();
+        if (main == null) {
+            for (ActiveRemoteSession candidate : sessions.values()) {
+                if (candidate != null && !candidate.closed && !candidate.companion) {
+                    main = candidate;
+                    break;
+                }
+            }
         }
         boolean active = server.hasActiveSession() && main != null;
         int w = active ? main.width : config.getCanvasWidth();
@@ -431,7 +628,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
 
     public boolean hasAnyActiveSession() {
         for (ActiveRemoteSession s : sessions.values()) {
-            if (s != null && !s.closed) return true;
+            if (s != null && !s.closed && !s.companion) return true;
         }
         return false;
     }
@@ -443,7 +640,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         boolean muteHost = config.isMuteHostImeOnCast();
         boolean bridgeImeActive = isBridgeImeActive();
         for (ActiveRemoteSession s : new ArrayList<>(sessions.values())) {
-            if (s == null || s.closed || s.isMirror() || s.displayId <= 0) continue;
+            if (s == null || s.closed || s.companion || s.isMirror() || s.displayId <= 0) continue;
             int policy = MouseRoutingPolicy.resolveRemoteOuterDisplayImePolicy(
                     mode, muteHost, s.vdTrusted, bridgeImeActive);
             boolean ok = services.setDisplayImePolicy(s.displayId, policy);
@@ -631,6 +828,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     @Override
     public void onSessionDisconnected(int sessionId, int sinkType, String sessionRole, String reason) {
         ActiveRemoteSession s = sessions.remove(sessionId);
+        boolean wasCompanion = (s != null && s.companion)
+                || OpalCastProtocol.SESSION_ROLE_COMPANION.equalsIgnoreCase(sessionRole);
         if (sessionId == micOwnerSessionId) {
             stopRemoteMic(false);
         }
@@ -650,28 +849,32 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         }
         if (s != null) {
             closeSessionResources(s);
-            final boolean wasStandalone = s.standalone;
-            worker.execute(() -> {
-                reconcileAudioOwner();
-                if (wasStandalone) {
-                    onCompositorWindowsChanged();
-                }
-            });
+            if (!wasCompanion) {
+                final boolean wasStandalone = s.standalone;
+                worker.execute(() -> {
+                    reconcileAudioOwner();
+                    if (wasStandalone) {
+                        onCompositorWindowsChanged();
+                    }
+                });
+            }
         }
-        notifyRemoteStateChanged();
+        if (!wasCompanion) {
+            notifyRemoteStateChanged();
+        }
     }
 
     @Override
     public void onResizeConfig(int sessionId, OpalCastProtocol.ResizeConfig cfg) {
         ActiveRemoteSession s = sessions.get(sessionId);
-        if (s == null || cfg == null) return;
+        if (s == null || s.companion || cfg == null) return;
         worker.execute(() -> reconfigureSession(s, cfg));
     }
 
     @Override
     public void onRequestIdr(int sessionId) {
         ActiveRemoteSession s = sessions.get(sessionId);
-        if (s != null && s.sink != null) {
+        if (s != null && !s.companion && s.sink != null) {
             s.sink.requestKeyFrame();
         }
     }
@@ -679,7 +882,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     @Override
     public void onMouseEvent(int sessionId, OpalCastProtocol.MouseEventMsg msg) {
         ActiveRemoteSession s = sessions.get(sessionId);
-        if (s == null || msg == null) return;
+        if (s == null || s.companion || msg == null) return;
         int targetDisplayId = s.inputTargetDisplayId();
         if (targetDisplayId < 0) return;
         int targetW = s.inputTargetWidth();
@@ -752,7 +955,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     @Override
     public void onTouchEvent(int sessionId, OpalCastProtocol.TouchEventMsg msg) {
         ActiveRemoteSession s = sessions.get(sessionId);
-        if (s == null || msg == null || msg.pointers.length == 0) return;
+        if (s == null || s.companion || msg == null || msg.pointers.length == 0) return;
         int targetDisplayId = s.inputTargetDisplayId();
         if (targetDisplayId < 0) return;
         int targetW = s.inputTargetWidth();
@@ -803,7 +1006,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     @Override
     public void onKeyEvent(int sessionId, OpalCastProtocol.KeyEventMsg msg) {
         ActiveRemoteSession s = sessions.get(sessionId);
-        if (s == null || msg == null) return;
+        if (s == null || s.companion || msg == null) return;
         int targetDisplayId = s.inputTargetDisplayId();
         if (targetDisplayId < 0) return;
         int action = (msg.action == OpalCastProtocol.KEY_DOWN) ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP;
@@ -837,7 +1040,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     public void onTextEvent(int sessionId, OpalCastProtocol.TextEventMsg msg) {
         ActiveRemoteSession s = sessions.get(sessionId);
         if (s == null || msg == null || s.clipboard == null) return;
-        if (msg.mode == OpalCastProtocol.TEXT_MODE_COMMIT_PASTE
+        if (!s.companion
+                && msg.mode == OpalCastProtocol.TEXT_MODE_COMMIT_PASTE
                 && msg.text != null
                 && !msg.text.isEmpty()) {
             DirectImeTextCommitter committer = this.directImeCommitter;
@@ -859,6 +1063,12 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     public void onSystemAction(int sessionId, OpalCastProtocol.SystemActionMsg msg) {
         ActiveRemoteSession s = sessions.get(sessionId);
         if (s == null || msg == null) return;
+        if (s.companion) {
+            if (msg.action == OpalCastProtocol.SYS_DISCONNECT) {
+                server.disconnectSession(sessionId, "client_system_disconnect");
+            }
+            return;
+        }
         switch (msg.action) {
             case OpalCastProtocol.SYS_BACK:
                 if (s.isMirror()) {
@@ -1016,6 +1226,60 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     }
 
     @Override
+    public void onNotificationAction(int sessionId, OpalCastProtocol.NotificationActionMsg msg) {
+        if (msg == null || msg.op.isEmpty()) return;
+        String op = msg.op.toLowerCase(Locale.ROOT);
+        if ("sync".equals(op)) {
+            worker.execute(() -> pushCachedCompanionSnapshotsToSession(sessionId));
+        } else if ("dismiss".equals(op) && !msg.key.isEmpty()) {
+            synchronized (notificationCacheLock) {
+                cachedNotifications.remove(msg.key);
+            }
+        } else if ("clear_all".equals(op)) {
+            synchronized (notificationCacheLock) {
+                cachedNotifications.entrySet().removeIf(e -> e.getValue() == null || e.getValue().clearable);
+            }
+        }
+        NotificationActionConsumer nac = notificationActionConsumer;
+        if (nac != null) {
+            nac.accept(op, msg.key, msg.replyText);
+        }
+    }
+
+    @Override
+    public void onMediaAction(int sessionId, OpalCastProtocol.MediaActionMsg msg) {
+        if (msg == null || msg.op.isEmpty()) return;
+        MediaActionConsumer mac = mediaActionConsumer;
+        if (mac != null) {
+            mac.accept(msg.op.toLowerCase(Locale.ROOT), msg.positionMs);
+        }
+    }
+
+    @Override
+    public void onFileOpRequest(int sessionId, OpalCastProtocol.FileOpRequestMsg msg) {
+        ActiveRemoteSession s = sessions.get(sessionId);
+        if (s == null || s.closed || msg == null) return;
+        fileIoWorker.execute(() -> fileManager.executeRequest(
+                msg,
+                resp -> server.sendFileOpResponse(sessionId, resp),
+                chunk -> !s.closed && server.sendFilePullChunk(sessionId, chunk),
+                () -> s.closed));
+    }
+
+    @Override
+    public void onApkInstallRequest(int sessionId, OpalCastProtocol.ApkInstallRequestMsg msg) {
+        ActiveRemoteSession s = sessions.get(sessionId);
+        if (s == null || s.closed || msg == null) return;
+        apkInstallWorker.execute(() -> apkInstaller.install(
+                msg,
+                status -> {
+                    if (!s.closed) {
+                        server.sendApkInstallStatus(sessionId, status);
+                    }
+                }));
+    }
+
+    @Override
     public void onWifiUpgradeEnabled() {
         System.out.println("OPALDESK_REMOTE_WIFI_UPGRADE_ENABLED port=" + server.getWifiPort());
     }
@@ -1120,9 +1384,43 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             System.out.println("OPALDESK_REMOTE_CATALOG_SESSION_READY sid=" + sessionId);
             return;
         }
+        if (hello != null && hello.isCompanion()) {
+            // Background lightweight companion session: zero VirtualDisplay, zero video/audio encoder!
+            ActiveRemoteSession comp = new ActiveRemoteSession(
+                    sessionId, sinkType, false, true, "", "", hello.clientPlatform);
+            synchronized (comp.lock) {
+                comp.width = 0;
+                comp.height = 0;
+                comp.dpi = 0;
+                comp.fps = 0f;
+                comp.bitrateKbps = 0;
+                comp.audioRequested = false;
+                comp.clipboard = new ClipboardSyncService(new ClipboardSyncService.ClipboardHost() {
+                    @Override public void sendClipboardPush(long seq, String text) {
+                        server.sendClipboardPush(sessionId, seq, text);
+                    }
+                    @Override public void sendClipboardImagePush(long seq, byte[] pngData) {
+                        server.sendClipboardImagePush(sessionId, seq, pngData);
+                    }
+                    @Override public void triggerPasteKey() {
+                        // Companion sessions only update the clipboard; never inject synthetic Ctrl+V keys.
+                    }
+                }, null, true);
+                comp.fileReceiver = new FileTransferReceiver((transferId, status, pathOrError) ->
+                        server.sendFileTransferAck(sessionId, transferId, status, pathOrError));
+                sessions.put(sessionId, comp);
+                comp.clipboard.onSessionStarted();
+                refreshHostTopAppIfChanged();
+                pushDeviceState(comp);
+                pushCachedCompanionSnapshotsToSession(sessionId);
+                System.out.println("OPALDESK_REMOTE_COMPANION_SESSION_READY sid=" + sessionId
+                        + " sinkType=" + sinkType);
+            }
+            return;
+        }
         boolean standalone = hello.isStandaloneApp();
         ActiveRemoteSession s = new ActiveRemoteSession(
-                sessionId, sinkType, standalone, hello.appPackage, hello.appActivity, hello.clientPlatform);
+                sessionId, sinkType, standalone, false, hello.appPackage, hello.appActivity, hello.clientPlatform);
         synchronized (s.lock) {
             if (standalone) {
                 int[] spec = resolveStandaloneStreamSpec(s.appPackage, hello.width, hello.height, hello.dpi);
@@ -1342,7 +1640,13 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             reconcileAudioOwner();
 
             s.clipboard.onSessionStarted();
+            if (!standalone) {
+                refreshHostTopAppIfChanged();
+            }
             pushDeviceState(s);
+            if (!standalone) {
+                pushCachedCompanionSnapshotsToSession(sessionId);
+            }
             notifyRemoteStateChanged();
             System.out.println("OPALDESK_REMOTE_SESSION_READY sid=" + sessionId
                     + " role=" + (standalone ? "standalone" : (s.isMirror() ? "mirror" : "desktop"))
@@ -1743,7 +2047,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         synchronized (audioLock) {
             List<AudioRoutingPolicy.AudioSessionCandidate> candidates = new ArrayList<>();
             for (ActiveRemoteSession session : sessions.values()) {
-                if (session != null && !session.closed) {
+                if (session != null && !session.closed && !session.companion) {
                     candidates.add(new AudioRoutingPolicy.AudioSessionCandidate(
                             session.sessionId, session.standalone, session.audioRequested));
                 }
@@ -2154,10 +2458,10 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
 
     private void pushDeviceState(ActiveRemoteSession s) {
         boolean mirror = s.isMirror();
-        String fsTitle = (s.standalone || mirror) ? "" : compositor.getFullscreenWindowTitle();
+        String fsTitle = (s.standalone || s.companion || mirror) ? "" : compositor.getFullscreenWindowTitle();
         s.lastPushedFullscreenTitle = fsTitle;
         AudioStreamCapturer cap = audioCapturer;
-        boolean sessionAudioActive = cap != null && cap.isActive() && s.audioRequested;
+        boolean sessionAudioActive = !s.companion && cap != null && cap.isActive() && s.audioRequested;
         OpalCastProtocol.DeviceState state = new OpalCastProtocol.DeviceState(
                 server.getDeviceName(),
                 s.sinkType,
@@ -2174,12 +2478,14 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 inputRouter.getLastInjectStatus(),
                 false,
                 0,
-                mirror ? "MIRROR" : "DEX",
+                s.companion ? "COMPANION" : (mirror ? "MIRROR" : "DEX"),
                 "",
                 "",
                 Collections.emptyList(),
                 Collections.emptyList(),
-                fsTitle);
+                fsTitle,
+                hostTopAppPackage,
+                hostTopAppLabel);
         server.sendDeviceState(s.sessionId, state);
     }
 
@@ -2187,7 +2493,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         synchronized (s.lock) {
             if (s.closed) return;
             s.closed = true;
-            if (!s.standalone && (desktopSessionId == s.sessionId || desktopSessionId < 0)) {
+            if (!s.standalone && !s.companion && (desktopSessionId == s.sessionId || desktopSessionId < 0)) {
                 unregisterMirrorDisplayListener();
             }
             if (s.clipboard != null) {
