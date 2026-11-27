@@ -215,6 +215,30 @@ public final class TaskApiAdapter {
     }
 
     /**
+     * Returns the package name of the topmost visible non-home/non-recents task on {@code displayId}
+     * (including Display 0 for Mac Handoff), or {@code ""} if none is visible.
+     */
+    public String findTopVisiblePackageOnDisplay(int displayId) {
+        if (displayId < 0) return "";
+        List<?> running = getTasks();
+        if (running == null) return "";
+        for (Object t : running) {
+            if (t == null || readIntField(t, "displayId", -1) != displayId) continue;
+            if (!isTaskVisibleAndActive(t)) continue;
+            int actType = readIntField(t, "topActivityType", -1);
+            // WindowConfiguration: ACTIVITY_TYPE_HOME = 2, ACTIVITY_TYPE_RECENTS = 3, ACTIVITY_TYPE_ASSISTANT = 4
+            if (actType == 2 || actType == 3 || actType == 4) {
+                return "";
+            }
+            String pkg = extractTaskPkg(t);
+            if (pkg != null && !pkg.isEmpty()) {
+                return pkg;
+            }
+        }
+        return "";
+    }
+
+    /**
      * Returns {@code true} if {@code taskId} (or another task on {@code displayId}) is still in
      * {@code getTasks()} with {@code isRunning && numActivities > 0} (e.g. moved to back rather than
      * exited). Ignores {@code getRecentTasks()}, which retains finished/dead tasks indefinitely.

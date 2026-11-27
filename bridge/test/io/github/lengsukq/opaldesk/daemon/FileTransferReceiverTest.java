@@ -105,4 +105,59 @@ public class FileTransferReceiverTest {
         File[] remaining = downloadDir.listFiles();
         assertEquals(0, remaining != null ? remaining.length : 0);
     }
+
+    @Test
+    public void testSubdirStorageRootAndApkStagingUploadsWithTraversalDefense() throws Exception {
+        File storageRoot = tmpDir.newFolder("sdcard_up");
+        File downloadDir = new File(storageRoot, "Download/OpalDesk");
+        File apkStageDir = tmpDir.newFolder("apk_stage");
+        List<RecordedAck> acks = new ArrayList<>();
+        FileTransferReceiver rx = new FileTransferReceiver(
+                (id, status, msg) -> acks.add(new RecordedAck(id, status, msg)),
+                downloadDir,
+                storageRoot,
+                apkStageDir,
+                false);
+
+        byte[] payload = "DATA123".getBytes(StandardCharsets.UTF_8);
+
+        // 1. Safe relative subdirectory under downloadDir
+        rx.handleFileTransferChunk(new OpalCastProtocol.FileTransferChunkMsg(
+                10, OpalCastProtocol.FILE_FLAG_START, "sub/dir/file.png", payload.length, null));
+        rx.handleFileTransferChunk(new OpalCastProtocol.FileTransferChunkMsg(
+                10, OpalCastProtocol.FILE_FLAG_DATA | OpalCastProtocol.FILE_FLAG_END, null, -1, payload));
+        assertEquals(OpalCastProtocol.FILE_ACK_OK, acks.get(0).status);
+        File savedSub = new File(acks.get(0).pathOrError);
+        assertTrue(savedSub.isFile());
+        assertTrue(savedSub.getCanonicalPath().endsWith(File.separator + "sub" + File.separator + "dir" + File.separator + "file.png"));
+
+        // 2. Explicit /sdcard/... path targeting storageRoot
+        rx.handleFileTransferChunk(new OpalCastProtocol.FileTransferChunkMsg(
+                11, OpalCastProtocol.FILE_FLAG_START, "/sdcard/Documents/report.pdf", payload.length, null));
+        rx.handleFileTransferChunk(new OpalCastProtocol.FileTransferChunkMsg(
+                11, OpalCastProtocol.FILE_FLAG_DATA | OpalCastProtocol.FILE_FLAG_END, null, -1, payload));
+        assertEquals(OpalCastProtocol.FILE_ACK_OK, acks.get(1).status);
+        File savedDoc = new File(acks.get(1).pathOrError);
+        assertTrue(savedDoc.isFile());
+        assertTrue(savedDoc.getCanonicalPath().startsWith(new File(storageRoot, "Documents").getCanonicalPath()));
+
+        // 3. Dedicated @apk_stage/ staging target
+        rx.handleFileTransferChunk(new OpalCastProtocol.FileTransferChunkMsg(
+                12, OpalCastProtocol.FILE_FLAG_START, "@apk_stage/demo.apks", payload.length, null));
+        rx.handleFileTransferChunk(new OpalCastProtocol.FileTransferChunkMsg(
+                12, OpalCastProtocol.FILE_FLAG_DATA | OpalCastProtocol.FILE_FLAG_END, null, -1, payload));
+        assertEquals(OpalCastProtocol.FILE_ACK_OK, acks.get(2).status);
+        File savedStage = new File(acks.get(2).pathOrError);
+        assertTrue(savedStage.isFile());
+        assertTrue(savedStage.getCanonicalPath().startsWith(apkStageDir.getCanonicalPath()));
+
+        // 4. Disallowed absolute path & traversal rejected
+        rx.handleFileTransferChunk(new OpalCastProtocol.FileTransferChunkMsg(
+                13, OpalCastProtocol.FILE_FLAG_START, "/etc/evil.conf", payload.length, null));
+        assertEquals(OpalCastProtocol.FILE_ACK_ERR, acks.get(3).status);
+
+        rx.handleFileTransferChunk(new OpalCastProtocol.FileTransferChunkMsg(
+                14, OpalCastProtocol.FILE_FLAG_START, "@apk_stage/../escape.apk", payload.length, null));
+        assertEquals(OpalCastProtocol.FILE_ACK_ERR, acks.get(4).status);
+    }
 }

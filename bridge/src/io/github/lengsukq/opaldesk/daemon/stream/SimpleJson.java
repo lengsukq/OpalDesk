@@ -250,6 +250,11 @@ public final class SimpleJson {
             return out;
         }
 
+        public JsonObjectView getObject(String key) {
+            Object v = fields.get(key);
+            return (v instanceof JsonObjectView) ? (JsonObjectView) v : null;
+        }
+
         public List<JsonObjectView> getObjectList(String key) {
             Object v = fields.get(key);
             if (!(v instanceof List<?>)) return Collections.emptyList();

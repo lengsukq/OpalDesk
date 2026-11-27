@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import io.github.lengsukq.opaldesk.BridgeClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +22,9 @@ data class DesktopNotificationItem(
     val postTimeMs: Long,
     val clearable: Boolean,
     val isOngoing: Boolean,
+    val canReply: Boolean = false,
+    val replyLabel: String = "",
+    val otpCode: String = "",
 ) {
     fun formattedTime(): String {
         if (postTimeMs <= 0L) return ""
@@ -30,8 +34,8 @@ data class DesktopNotificationItem(
 
 /**
  * Pure JVM-testable filtering rules deciding which Android notifications belong in the OpalDesk
- * DeX Notification Center & live heads-up banners (filtering out self-package, ongoing foreground
- * services, group summaries, and empty system placeholders).
+ * DeX Notification Center, live heads-up banners, and OPD1 v1.2 companion notification feed
+ * (filtering out self-package, ongoing foreground services, group summaries, and empty placeholders).
  */
 object OpalNotificationFilter {
     private const val SELF_PKG = "io.github.lengsukq.opaldesk"
@@ -57,8 +61,80 @@ object OpalNotificationFilter {
 }
 
 /**
- * In-process reactive store bridging [OpalNotificationListenerService] and the DeX desktop UI
- * (both Local DeX on Display 0 and External Monitor / Remote Cast workstations).
+ * Pure JVM-testable JSON serializer producing exact OPD1 v1.2 {@code 0x19 TYPE_NOTIFICATION_EVENT}
+ * payloads for Binder TX 50 ({@code TX_SYNC_NOTIFICATIONS}) without depending on Android's org.json stubs.
+ */
+object OpalNotificationJsonCodec {
+    fun encodeSnapshot(items: List<DesktopNotificationItem>): String =
+        encodeEvent(action = "snapshot", items = items)
+
+    fun encodePosted(item: DesktopNotificationItem): String =
+        encodeEvent(action = "posted", items = listOf(item))
+
+    fun encodeRemoved(key: String): String {
+        val sb = StringBuilder(64)
+        sb.append("{\"action\":\"removed\",\"key\":")
+        appendJsonString(sb, key)
+        sb.append('}')
+        return sb.toString()
+    }
+
+    private fun encodeEvent(action: String, items: List<DesktopNotificationItem>): String {
+        val sb = StringBuilder(128 + items.size * 160)
+        sb.append("{\"action\":")
+        appendJsonString(sb, action)
+        sb.append(",\"items\":[")
+        items.forEachIndexed { idx, item ->
+            if (idx > 0) sb.append(',')
+            sb.append("{\"key\":")
+            appendJsonString(sb, item.key)
+            sb.append(",\"pkg\":")
+            appendJsonString(sb, item.packageName)
+            sb.append(",\"appLabel\":")
+            appendJsonString(sb, item.appLabel)
+            sb.append(",\"title\":")
+            appendJsonString(sb, item.title)
+            sb.append(",\"text\":")
+            appendJsonString(sb, item.text)
+            sb.append(",\"postTimeMs\":").append(item.postTimeMs.coerceAtLeast(0L))
+            sb.append(",\"clearable\":").append(item.clearable)
+            sb.append(",\"canReply\":").append(item.canReply)
+            sb.append(",\"replyLabel\":")
+            appendJsonString(sb, item.replyLabel)
+            sb.append(",\"otpCode\":")
+            appendJsonString(sb, item.otpCode)
+            sb.append('}')
+        }
+        sb.append("]}")
+        return sb.toString()
+    }
+
+    internal fun appendJsonString(out: StringBuilder, value: String) {
+        out.append('"')
+        for (i in value.indices) {
+            val c = value[i]
+            when (c) {
+                '"' -> out.append("\\\"")
+                '\\' -> out.append("\\\\")
+                '\b' -> out.append("\\b")
+                '\u000C' -> out.append("\\f")
+                '\n' -> out.append("\\n")
+                '\r' -> out.append("\\r")
+                '\t' -> out.append("\\t")
+                else -> if (c.code < 0x20) {
+                    out.append(String.format(Locale.US, "\\u%04x", c.code))
+                } else {
+                    out.append(c)
+                }
+            }
+        }
+        out.append('"')
+    }
+}
+
+/**
+ * In-process reactive store bridging [OpalNotificationListenerService], the DeX desktop UI,
+ * and the shell daemon companion channel (Binder TX 50 / `notificationAction` callback).
  */
 object OpalNotificationStore {
     private val _notificationsFlow = MutableStateFlow<List<DesktopNotificationItem>>(emptyList())
@@ -97,6 +173,7 @@ object OpalNotificationStore {
         if (curBanner != null && sorted.none { it.key == curBanner.key }) {
             _bannerFlow.value = null
         }
+        syncJsonToDaemonSafe(OpalNotificationJsonCodec.encodeSnapshot(sorted))
     }
 
     fun onPosted(item: DesktopNotificationItem, showBanner: Boolean) {
@@ -107,6 +184,7 @@ object OpalNotificationStore {
         if (showBanner && !_doNotDisturbFlow.value) {
             _bannerFlow.value = item
         }
+        syncJsonToDaemonSafe(OpalNotificationJsonCodec.encodePosted(item))
     }
 
     fun setDoNotDisturb(enabled: Boolean) {
@@ -127,6 +205,9 @@ object OpalNotificationStore {
         if (_bannerFlow.value?.key == key) {
             _bannerFlow.value = null
         }
+        if (key.isNotEmpty()) {
+            syncJsonToDaemonSafe(OpalNotificationJsonCodec.encodeRemoved(key))
+        }
     }
 
     fun dismissBanner(key: String? = null) {
@@ -142,13 +223,53 @@ object OpalNotificationStore {
 
     fun clearAllNotifications() {
         val keys = _notificationsFlow.value.filter { it.clearable }.map { it.key }
-        _notificationsFlow.value = _notificationsFlow.value.filterNot { it.clearable }
+        val remaining = _notificationsFlow.value.filterNot { it.clearable }
+        _notificationsFlow.value = remaining
         _bannerFlow.value = null
         activeService?.cancelNotificationsSafely(keys)
+        syncJsonToDaemonSafe(OpalNotificationJsonCodec.encodeSnapshot(remaining))
+    }
+
+    fun replyToNotification(key: String, replyText: String): Boolean {
+        if (key.isBlank() || replyText.isBlank()) return false
+        return activeService?.replyToNotificationSafely(key, replyText) == true
     }
 
     fun requestSync() {
-        activeService?.syncActiveNotifications()
+        val svc = activeService
+        if (svc != null) {
+            svc.syncActiveNotifications()
+        } else {
+            pushSnapshotToDaemon()
+        }
+    }
+
+    fun pushSnapshotToDaemon() {
+        val snapshot = _notificationsFlow.value
+        syncJsonToDaemonSafe(OpalNotificationJsonCodec.encodeSnapshot(snapshot))
+    }
+
+    /**
+     * Dispatches a remote notification command originating from the daemon
+     * (`BridgeProvider.call("notificationAction")`, backed by OPD1 v1.2 `0x31`).
+     */
+    fun handleRemoteAction(op: String, key: String, replyText: String) {
+        when (op.trim().lowercase(Locale.ROOT)) {
+            "sync" -> requestSync()
+            "dismiss" -> if (key.isNotEmpty()) cancelNotification(key)
+            "clear_all" -> clearAllNotifications()
+            "reply" -> if (key.isNotEmpty() && replyText.isNotBlank()) {
+                replyToNotification(key, replyText)
+            }
+        }
+    }
+
+    private fun syncJsonToDaemonSafe(json: String) {
+        runCatching {
+            if (BridgeClient.isBinderAliveFast()) {
+                BridgeClient.syncNotificationsAsync(json)
+            }
+        }
     }
 
     fun refreshAccessState(ctx: Context): Boolean {

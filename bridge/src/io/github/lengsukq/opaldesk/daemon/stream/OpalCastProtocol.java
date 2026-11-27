@@ -45,6 +45,11 @@ public final class OpalCastProtocol {
     public static final int TYPE_IME_REQUEST = 0x16;
     public static final int TYPE_MIC_STATE = 0x17;
     public static final int TYPE_CAMERA_STATE = 0x18;
+    public static final int TYPE_NOTIFICATION_EVENT = 0x19;
+    public static final int TYPE_MEDIA_STATE = 0x1A;
+    public static final int TYPE_FILE_OP_RESPONSE = 0x1B;
+    public static final int TYPE_FILE_PULL_CHUNK = 0x1C;
+    public static final int TYPE_APK_INSTALL_STATUS = 0x1D;
     public static final int TYPE_PONG = 0x1F;
 
     // Uplink frame types (Mac / Tablet / Web -> Android)
@@ -65,6 +70,10 @@ public final class OpalCastProtocol {
     public static final int TYPE_CAMERA_CONFIG = 0x2E;
     public static final int TYPE_PING = 0x2F;
     public static final int TYPE_CAMERA_FRAME = 0x30;
+    public static final int TYPE_NOTIFICATION_ACTION = 0x31;
+    public static final int TYPE_MEDIA_ACTION = 0x32;
+    public static final int TYPE_FILE_OP_REQUEST = 0x33;
+    public static final int TYPE_APK_INSTALL_REQUEST = 0x34;
 
     // Remote microphone uplink defaults
     public static final String MIC_CODEC_PCM16 = "pcm16";
@@ -90,10 +99,11 @@ public final class OpalCastProtocol {
     // Clipboard / INPUT_TEXT flags
     public static final int FLAG_CLIPBOARD_IMAGE_PNG = 0x01;
 
-    // Session roles & transport hints (OpalCast v1.1 HELLO)
+    // Session roles & transport hints (OpalCast v1.1 / v1.2 HELLO)
     public static final String SESSION_ROLE_DESKTOP = "desktop";
     public static final String SESSION_ROLE_STANDALONE_APP = "standalone_app";
     public static final String SESSION_ROLE_APP_CATALOG = "app_catalog";
+    public static final String SESSION_ROLE_COMPANION = "companion";
     public static final String TRANSPORT_HINT_USB = "usb";
     public static final String TRANSPORT_HINT_USB_TETHER = "usb_tether";
     public static final String TRANSPORT_HINT_WIFI_ADB = "wifi_adb";
@@ -462,6 +472,9 @@ public final class OpalCastProtocol {
         public final List<String> tilingSlots;
         public final List<Integer> tilingRatios;
         public final String fullscreenWindowTitle;
+        // OpalCast v1.2 companion handoff fields (Display 0 foreground app)
+        public final String hostTopAppPackage;
+        public final String hostTopAppLabel;
 
         public DeviceState(
                 String deviceName, int sinkType, int displayMode,
@@ -482,7 +495,7 @@ public final class OpalCastProtocol {
                     bitrateKbps, batteryPct, blackout, audioEnabled,
                     injectStatus, adaptiveSingleEnabled, defaultSingleWidthDp,
                     activeLayoutMode, topAppPackage, topAppLabel,
-                    Collections.emptyList(), Collections.emptyList(), "");
+                    Collections.emptyList(), Collections.emptyList(), "", "", "");
         }
 
         public DeviceState(
@@ -496,7 +509,7 @@ public final class OpalCastProtocol {
                     bitrateKbps, batteryPct, blackout, audioEnabled,
                     injectStatus, adaptiveSingleEnabled, defaultSingleWidthDp,
                     activeLayoutMode, topAppPackage, topAppLabel,
-                    tilingSlots, tilingRatios, "");
+                    tilingSlots, tilingRatios, "", "", "");
         }
 
         public DeviceState(
@@ -507,6 +520,22 @@ public final class OpalCastProtocol {
                 String activeLayoutMode, String topAppPackage, String topAppLabel,
                 List<String> tilingSlots, List<Integer> tilingRatios,
                 String fullscreenWindowTitle) {
+            this(deviceName, sinkType, displayMode, width, height, dpi, fps, rotation,
+                    bitrateKbps, batteryPct, blackout, audioEnabled,
+                    injectStatus, adaptiveSingleEnabled, defaultSingleWidthDp,
+                    activeLayoutMode, topAppPackage, topAppLabel,
+                    tilingSlots, tilingRatios, fullscreenWindowTitle, "", "");
+        }
+
+        public DeviceState(
+                String deviceName, int sinkType, int displayMode,
+                int width, int height, int dpi, double fps, int rotation,
+                int bitrateKbps, int batteryPct, boolean blackout, boolean audioEnabled,
+                int injectStatus, boolean adaptiveSingleEnabled, int defaultSingleWidthDp,
+                String activeLayoutMode, String topAppPackage, String topAppLabel,
+                List<String> tilingSlots, List<Integer> tilingRatios,
+                String fullscreenWindowTitle,
+                String hostTopAppPackage, String hostTopAppLabel) {
             this.deviceName = (deviceName != null) ? deviceName : "Android";
             this.sinkType = sinkType;
             this.displayMode = displayMode;
@@ -545,6 +574,8 @@ public final class OpalCastProtocol {
                 this.tilingRatios = Collections.emptyList();
             }
             this.fullscreenWindowTitle = (fullscreenWindowTitle != null) ? fullscreenWindowTitle : "";
+            this.hostTopAppPackage = (hostTopAppPackage != null) ? hostTopAppPackage : "";
+            this.hostTopAppLabel = (hostTopAppLabel != null) ? hostTopAppLabel : "";
         }
     }
 
@@ -577,6 +608,8 @@ public final class OpalCastProtocol {
                 .put("topAppPackage", s.topAppPackage)
                 .put("topAppLabel", s.topAppLabel)
                 .put("fullscreenWindowTitle", s.fullscreenWindowTitle)
+                .put("hostTopAppPackage", s.hostTopAppPackage)
+                .put("hostTopAppLabel", s.hostTopAppLabel)
                 .putRaw("tilingSlots", slotsArr.build())
                 .putRaw("tilingRatios", ratiosArr.build())
                 .build();
@@ -1061,6 +1094,10 @@ public final class OpalCastProtocol {
         public boolean isAppCatalog() {
             return SESSION_ROLE_APP_CATALOG.equalsIgnoreCase(sessionRole);
         }
+
+        public boolean isCompanion() {
+            return SESSION_ROLE_COMPANION.equalsIgnoreCase(sessionRole);
+        }
     }
 
     public static HelloMsg decodeHello(byte[] payload) throws ProtocolException {
@@ -1471,5 +1508,738 @@ public final class OpalCastProtocol {
             bb.get(data);
         }
         return new FileTransferChunkMsg(transferId, chunkFlags, fileName, totalSize, data);
+    }
+
+    // ---- OPD1 v1.2 Companion, Notification, Media, File Browser & APK Install Codecs ----
+
+    public static final class NotificationItem {
+        public final String key;
+        public final String pkg;
+        public final String appLabel;
+        public final String title;
+        public final String text;
+        public final long postTimeMs;
+        public final boolean clearable;
+        public final boolean canReply;
+        public final String replyLabel;
+        public final String otpCode;
+
+        public NotificationItem(
+                String key,
+                String pkg,
+                String appLabel,
+                String title,
+                String text,
+                long postTimeMs,
+                boolean clearable,
+                boolean canReply,
+                String replyLabel,
+                String otpCode) {
+            this.key = (key != null) ? key : "";
+            this.pkg = (pkg != null) ? pkg : "";
+            this.appLabel = (appLabel != null) ? appLabel : "";
+            this.title = (title != null) ? title : "";
+            this.text = (text != null) ? text : "";
+            this.postTimeMs = Math.max(0L, postTimeMs);
+            this.clearable = clearable;
+            this.canReply = canReply;
+            this.replyLabel = (replyLabel != null) ? replyLabel : "";
+            this.otpCode = (otpCode != null) ? otpCode : "";
+        }
+    }
+
+    public static final class NotificationEventMsg {
+        public final String action; // "snapshot" | "posted" | "removed"
+        public final String key;    // populated for "removed"
+        public final List<NotificationItem> items;
+
+        public NotificationEventMsg(String action, String key, List<NotificationItem> items) {
+            this.action = (action != null) ? action.trim() : "";
+            this.key = (key != null) ? key : "";
+            this.items = (items != null)
+                    ? Collections.unmodifiableList(new ArrayList<>(items))
+                    : Collections.emptyList();
+        }
+    }
+
+    public static byte[] encodeNotificationEvent(NotificationEventMsg msg) {
+        NotificationEventMsg m = (msg != null)
+                ? msg : new NotificationEventMsg("snapshot", "", Collections.emptyList());
+        SimpleJson.ObjectBuilder root = new SimpleJson.ObjectBuilder()
+                .put("action", m.action);
+        if ("removed".equals(m.action)) {
+            root.put("key", m.key);
+        } else {
+            SimpleJson.ArrayBuilder arr = new SimpleJson.ArrayBuilder();
+            for (NotificationItem it : m.items) {
+                if (it == null) continue;
+                arr.addRaw(new SimpleJson.ObjectBuilder()
+                        .put("key", it.key)
+                        .put("pkg", it.pkg)
+                        .put("appLabel", it.appLabel)
+                        .put("title", it.title)
+                        .put("text", it.text)
+                        .put("postTimeMs", it.postTimeMs)
+                        .put("clearable", it.clearable)
+                        .put("canReply", it.canReply)
+                        .put("replyLabel", it.replyLabel)
+                        .put("otpCode", it.otpCode)
+                        .build());
+            }
+            root.putRaw("items", arr.build());
+        }
+        return root.build().getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static NotificationEventMsg decodeNotificationEvent(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("NOTIFICATION_EVENT payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            String action = obj.getString("action", "");
+            String key = obj.getString("key", "");
+            List<SimpleJson.JsonObjectView> rawItems = obj.getObjectList("items");
+            List<NotificationItem> items = new ArrayList<>(rawItems.size());
+            for (SimpleJson.JsonObjectView it : rawItems) {
+                items.add(new NotificationItem(
+                        it.getString("key", ""),
+                        it.getString("pkg", ""),
+                        it.getString("appLabel", ""),
+                        it.getString("title", ""),
+                        it.getString("text", ""),
+                        it.getLong("postTimeMs", 0L),
+                        it.getBoolean("clearable", true),
+                        it.getBoolean("canReply", false),
+                        it.getString("replyLabel", ""),
+                        it.getString("otpCode", "")));
+            }
+            return new NotificationEventMsg(action, key, items);
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid NOTIFICATION_EVENT JSON: " + t.getMessage(), t);
+        }
+    }
+
+    public static final class NotificationActionMsg {
+        public final String op;        // "sync" | "dismiss" | "clear_all" | "reply"
+        public final String key;
+        public final String replyText;
+
+        public NotificationActionMsg(String op, String key, String replyText) {
+            this.op = (op != null) ? op.trim() : "";
+            this.key = (key != null) ? key : "";
+            this.replyText = (replyText != null) ? replyText : "";
+        }
+    }
+
+    public static byte[] encodeNotificationAction(NotificationActionMsg msg) {
+        NotificationActionMsg m = (msg != null) ? msg : new NotificationActionMsg("sync", "", "");
+        return new SimpleJson.ObjectBuilder()
+                .put("op", m.op)
+                .put("key", m.key)
+                .put("replyText", m.replyText)
+                .build()
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static NotificationActionMsg decodeNotificationAction(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("NOTIFICATION_ACTION payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            String op = obj.getString("op", "");
+            if (op.trim().isEmpty()) {
+                throw new ProtocolException("NOTIFICATION_ACTION missing op");
+            }
+            return new NotificationActionMsg(
+                    op,
+                    obj.getString("key", ""),
+                    obj.getString("replyText", ""));
+        } catch (ProtocolException pe) {
+            throw pe;
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid NOTIFICATION_ACTION JSON: " + t.getMessage(), t);
+        }
+    }
+
+    public static final class MediaStateMsg {
+        public final boolean active;
+        public final String pkg;
+        public final String appLabel;
+        public final String title;
+        public final String artist;
+        public final String album;
+        public final boolean playing;
+        public final long positionMs;
+        public final long durationMs;
+        public final String artworkBase64;
+
+        public MediaStateMsg(
+                boolean active,
+                String pkg,
+                String appLabel,
+                String title,
+                String artist,
+                String album,
+                boolean playing,
+                long positionMs,
+                long durationMs,
+                String artworkBase64) {
+            this.active = active;
+            this.pkg = (pkg != null) ? pkg : "";
+            this.appLabel = (appLabel != null) ? appLabel : "";
+            this.title = (title != null) ? title : "";
+            this.artist = (artist != null) ? artist : "";
+            this.album = (album != null) ? album : "";
+            this.playing = playing;
+            this.positionMs = Math.max(0L, positionMs);
+            this.durationMs = Math.max(0L, durationMs);
+            this.artworkBase64 = (artworkBase64 != null) ? artworkBase64 : "";
+        }
+    }
+
+    public static byte[] encodeMediaState(MediaStateMsg msg) {
+        MediaStateMsg m = (msg != null)
+                ? msg : new MediaStateMsg(false, "", "", "", "", "", false, 0L, 0L, "");
+        return new SimpleJson.ObjectBuilder()
+                .put("active", m.active)
+                .put("pkg", m.pkg)
+                .put("appLabel", m.appLabel)
+                .put("title", m.title)
+                .put("artist", m.artist)
+                .put("album", m.album)
+                .put("playing", m.playing)
+                .put("positionMs", m.positionMs)
+                .put("durationMs", m.durationMs)
+                .put("artworkBase64", m.artworkBase64)
+                .build()
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static MediaStateMsg decodeMediaState(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("MEDIA_STATE payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            return new MediaStateMsg(
+                    obj.getBoolean("active", false),
+                    obj.getString("pkg", ""),
+                    obj.getString("appLabel", ""),
+                    obj.getString("title", ""),
+                    obj.getString("artist", ""),
+                    obj.getString("album", ""),
+                    obj.getBoolean("playing", false),
+                    obj.getLong("positionMs", 0L),
+                    obj.getLong("durationMs", 0L),
+                    obj.getString("artworkBase64", ""));
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid MEDIA_STATE JSON: " + t.getMessage(), t);
+        }
+    }
+
+    public static final class MediaActionMsg {
+        public final String op; // "play" | "pause" | "toggle" | "next" | "previous" | "stop" | "seek"
+        public final long positionMs;
+
+        public MediaActionMsg(String op, long positionMs) {
+            this.op = (op != null) ? op.trim() : "";
+            this.positionMs = Math.max(0L, positionMs);
+        }
+    }
+
+    public static byte[] encodeMediaAction(MediaActionMsg msg) {
+        MediaActionMsg m = (msg != null) ? msg : new MediaActionMsg("toggle", 0L);
+        return new SimpleJson.ObjectBuilder()
+                .put("op", m.op)
+                .put("positionMs", m.positionMs)
+                .build()
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static MediaActionMsg decodeMediaAction(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("MEDIA_ACTION payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            String op = obj.getString("op", "");
+            if (op.trim().isEmpty()) {
+                throw new ProtocolException("MEDIA_ACTION missing op");
+            }
+            return new MediaActionMsg(op, obj.getLong("positionMs", 0L));
+        } catch (ProtocolException pe) {
+            throw pe;
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid MEDIA_ACTION JSON: " + t.getMessage(), t);
+        }
+    }
+
+    public static final class FileOpRequestMsg {
+        public final int requestId;
+        public final String op; // "list"|"stat"|"delete"|"rename"|"mkdir"|"storage_scan"|"pull"|"thumbnail"
+        public final String path;
+        public final String newPath;
+        public final int transferId;
+        public final int maxDepth;
+
+        public FileOpRequestMsg(
+                int requestId, String op, String path, String newPath, int transferId, int maxDepth) {
+            this.requestId = requestId;
+            this.op = (op != null) ? op.trim() : "";
+            this.path = (path != null) ? path : "";
+            this.newPath = (newPath != null) ? newPath : "";
+            this.transferId = transferId;
+            this.maxDepth = maxDepth;
+        }
+    }
+
+    public static byte[] encodeFileOpRequest(FileOpRequestMsg msg) {
+        FileOpRequestMsg m = (msg != null) ? msg : new FileOpRequestMsg(0, "list", "", "", 0, 0);
+        return new SimpleJson.ObjectBuilder()
+                .put("requestId", m.requestId)
+                .put("op", m.op)
+                .put("path", m.path)
+                .put("newPath", m.newPath)
+                .put("transferId", m.transferId)
+                .put("maxDepth", m.maxDepth)
+                .build()
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static FileOpRequestMsg decodeFileOpRequest(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("FILE_OP_REQUEST payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            String op = obj.getString("op", "");
+            if (op.trim().isEmpty()) {
+                throw new ProtocolException("FILE_OP_REQUEST missing op");
+            }
+            return new FileOpRequestMsg(
+                    obj.getInt("requestId", 0),
+                    op,
+                    obj.getString("path", ""),
+                    obj.getString("newPath", ""),
+                    obj.getInt("transferId", 0),
+                    obj.getInt("maxDepth", 0));
+        } catch (ProtocolException pe) {
+            throw pe;
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid FILE_OP_REQUEST JSON: " + t.getMessage(), t);
+        }
+    }
+
+    public static final class FileEntry {
+        public final String name;
+        public final String path;
+        public final boolean isDir;
+        public final long size;
+        public final long modifiedMs;
+        public final String mime;
+
+        public FileEntry(String name, String path, boolean isDir, long size, long modifiedMs, String mime) {
+            this.name = (name != null) ? name : "";
+            this.path = (path != null) ? path : "";
+            this.isDir = isDir;
+            this.size = Math.max(0L, size);
+            this.modifiedMs = Math.max(0L, modifiedMs);
+            this.mime = (mime != null) ? mime : "";
+        }
+    }
+
+    public static final class StorageCategory {
+        public final String name;
+        public final long bytes;
+        public final int fileCount;
+
+        public StorageCategory(String name, long bytes, int fileCount) {
+            this.name = (name != null) ? name : "";
+            this.bytes = Math.max(0L, bytes);
+            this.fileCount = Math.max(0, fileCount);
+        }
+    }
+
+    public static final class LargeFileEntry {
+        public final String name;
+        public final String path;
+        public final long size;
+        public final long modifiedMs;
+
+        public LargeFileEntry(String name, String path, long size, long modifiedMs) {
+            this.name = (name != null) ? name : "";
+            this.path = (path != null) ? path : "";
+            this.size = Math.max(0L, size);
+            this.modifiedMs = Math.max(0L, modifiedMs);
+        }
+    }
+
+    public static final class StorageReport {
+        public final long totalBytes;
+        public final long freeBytes;
+        public final long usedBytes;
+        public final List<StorageCategory> categories;
+        public final List<LargeFileEntry> largeFiles;
+
+        public StorageReport(
+                long totalBytes,
+                long freeBytes,
+                long usedBytes,
+                List<StorageCategory> categories,
+                List<LargeFileEntry> largeFiles) {
+            this.totalBytes = Math.max(0L, totalBytes);
+            this.freeBytes = Math.max(0L, freeBytes);
+            this.usedBytes = Math.max(0L, usedBytes);
+            this.categories = (categories != null)
+                    ? Collections.unmodifiableList(new ArrayList<>(categories))
+                    : Collections.emptyList();
+            this.largeFiles = (largeFiles != null)
+                    ? Collections.unmodifiableList(new ArrayList<>(largeFiles))
+                    : Collections.emptyList();
+        }
+    }
+
+    public static final class FileOpResponseMsg {
+        public final int requestId;
+        public final String op;
+        public final boolean ok;
+        public final String error;
+        public final String path;
+        public final List<FileEntry> entries;
+        public final StorageReport storage;
+        public final long totalSize;
+        public final String thumbnailBase64;
+
+        public FileOpResponseMsg(
+                int requestId,
+                String op,
+                boolean ok,
+                String error,
+                String path,
+                List<FileEntry> entries,
+                StorageReport storage,
+                long totalSize,
+                String thumbnailBase64) {
+            this.requestId = requestId;
+            this.op = (op != null) ? op : "";
+            this.ok = ok;
+            this.error = (error != null) ? error : "";
+            this.path = (path != null) ? path : "";
+            this.entries = (entries != null)
+                    ? Collections.unmodifiableList(new ArrayList<>(entries))
+                    : Collections.emptyList();
+            this.storage = storage;
+            this.totalSize = Math.max(0L, totalSize);
+            this.thumbnailBase64 = (thumbnailBase64 != null) ? thumbnailBase64 : "";
+        }
+    }
+
+    public static byte[] encodeFileOpResponse(FileOpResponseMsg msg) {
+        FileOpResponseMsg m = (msg != null)
+                ? msg
+                : new FileOpResponseMsg(0, "", false, "empty", "", Collections.emptyList(), null, 0L, "");
+        SimpleJson.ArrayBuilder entriesArr = new SimpleJson.ArrayBuilder();
+        for (FileEntry e : m.entries) {
+            if (e == null) continue;
+            entriesArr.addRaw(new SimpleJson.ObjectBuilder()
+                    .put("name", e.name)
+                    .put("path", e.path)
+                    .put("isDir", e.isDir)
+                    .put("size", e.size)
+                    .put("modifiedMs", e.modifiedMs)
+                    .put("mime", e.mime)
+                    .build());
+        }
+        SimpleJson.ObjectBuilder root = new SimpleJson.ObjectBuilder()
+                .put("requestId", m.requestId)
+                .put("op", m.op)
+                .put("ok", m.ok)
+                .put("error", m.error)
+                .put("path", m.path)
+                .putRaw("entries", entriesArr.build())
+                .put("totalSize", m.totalSize)
+                .put("thumbnailBase64", m.thumbnailBase64);
+        if (m.storage != null) {
+            SimpleJson.ArrayBuilder catArr = new SimpleJson.ArrayBuilder();
+            for (StorageCategory c : m.storage.categories) {
+                if (c == null) continue;
+                catArr.addRaw(new SimpleJson.ObjectBuilder()
+                        .put("name", c.name)
+                        .put("bytes", c.bytes)
+                        .put("fileCount", c.fileCount)
+                        .build());
+            }
+            SimpleJson.ArrayBuilder largeArr = new SimpleJson.ArrayBuilder();
+            for (LargeFileEntry lf : m.storage.largeFiles) {
+                if (lf == null) continue;
+                largeArr.addRaw(new SimpleJson.ObjectBuilder()
+                        .put("name", lf.name)
+                        .put("path", lf.path)
+                        .put("size", lf.size)
+                        .put("modifiedMs", lf.modifiedMs)
+                        .build());
+            }
+            root.putRaw("storage", new SimpleJson.ObjectBuilder()
+                    .put("totalBytes", m.storage.totalBytes)
+                    .put("freeBytes", m.storage.freeBytes)
+                    .put("usedBytes", m.storage.usedBytes)
+                    .putRaw("categories", catArr.build())
+                    .putRaw("largeFiles", largeArr.build())
+                    .build());
+        }
+        return root.build().getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static FileOpResponseMsg decodeFileOpResponse(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("FILE_OP_RESPONSE payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            List<SimpleJson.JsonObjectView> rawEntries = obj.getObjectList("entries");
+            List<FileEntry> entries = new ArrayList<>(rawEntries.size());
+            for (SimpleJson.JsonObjectView e : rawEntries) {
+                entries.add(new FileEntry(
+                        e.getString("name", ""),
+                        e.getString("path", ""),
+                        e.getBoolean("isDir", false),
+                        e.getLong("size", 0L),
+                        e.getLong("modifiedMs", 0L),
+                        e.getString("mime", "")));
+            }
+            StorageReport storage = null;
+            SimpleJson.JsonObjectView stObj = obj.getObject("storage");
+            if (stObj != null) {
+                List<SimpleJson.JsonObjectView> rawCats = stObj.getObjectList("categories");
+                List<StorageCategory> cats = new ArrayList<>(rawCats.size());
+                for (SimpleJson.JsonObjectView c : rawCats) {
+                    cats.add(new StorageCategory(
+                            c.getString("name", ""),
+                            c.getLong("bytes", 0L),
+                            c.getInt("fileCount", 0)));
+                }
+                List<SimpleJson.JsonObjectView> rawLarge = stObj.getObjectList("largeFiles");
+                List<LargeFileEntry> largeFiles = new ArrayList<>(rawLarge.size());
+                for (SimpleJson.JsonObjectView lf : rawLarge) {
+                    largeFiles.add(new LargeFileEntry(
+                            lf.getString("name", ""),
+                            lf.getString("path", ""),
+                            lf.getLong("size", 0L),
+                            lf.getLong("modifiedMs", 0L)));
+                }
+                storage = new StorageReport(
+                        stObj.getLong("totalBytes", 0L),
+                        stObj.getLong("freeBytes", 0L),
+                        stObj.getLong("usedBytes", 0L),
+                        cats,
+                        largeFiles);
+            }
+            return new FileOpResponseMsg(
+                    obj.getInt("requestId", 0),
+                    obj.getString("op", ""),
+                    obj.getBoolean("ok", false),
+                    obj.getString("error", ""),
+                    obj.getString("path", ""),
+                    entries,
+                    storage,
+                    obj.getLong("totalSize", 0L),
+                    obj.getString("thumbnailBase64", ""));
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid FILE_OP_RESPONSE JSON: " + t.getMessage(), t);
+        }
+    }
+
+    /**
+     * Downlink {@code 0x1C TYPE_FILE_PULL_CHUNK} payload (fixed 15-byte BE header + nameOrPath + raw bytes):
+     * {@code [4B transferId][1B chunkFlags][8B totalSize][2B nameLen][UTF-8 nameOrPath][raw chunk bytes]}.
+     */
+    public static final class FilePullChunkMsg {
+        public final int transferId;
+        public final int chunkFlags;
+        public final long totalSize;
+        public final String nameOrPath;
+        public final byte[] data;
+
+        public FilePullChunkMsg(int transferId, int chunkFlags, long totalSize, String nameOrPath, byte[] data) {
+            this.transferId = transferId;
+            this.chunkFlags = chunkFlags & 0xFF;
+            this.totalSize = Math.max(0L, totalSize);
+            this.nameOrPath = (nameOrPath != null) ? nameOrPath : "";
+            this.data = (data != null) ? data : EMPTY_BYTES;
+        }
+    }
+
+    public static byte[] encodeFilePullChunk(
+            int transferId,
+            int chunkFlags,
+            long totalSize,
+            String nameOrPath,
+            byte[] data,
+            int offset,
+            int length) throws ProtocolException {
+        byte[] nameBytes = (nameOrPath != null && !nameOrPath.isEmpty())
+                ? nameOrPath.getBytes(StandardCharsets.UTF_8) : EMPTY_BYTES;
+        if (nameBytes.length > 0xFFFF) {
+            throw new ProtocolException("FILE_PULL_CHUNK nameOrPath exceeds uint16 length: " + nameBytes.length);
+        }
+        int safeLen = Math.max(0, length);
+        if (safeLen > 0 && (data == null || offset < 0 || offset + safeLen > data.length)) {
+            throw new ProtocolException("FILE_PULL_CHUNK data bounds out of range");
+        }
+        int totalPayloadLen = 15 + nameBytes.length + safeLen;
+        if (totalPayloadLen > MAX_PAYLOAD_LEN) {
+            throw new ProtocolException("FILE_PULL_CHUNK exceeds MAX_PAYLOAD_LEN: " + totalPayloadLen);
+        }
+        ByteBuffer bb = ByteBuffer.allocate(totalPayloadLen).order(ByteOrder.BIG_ENDIAN);
+        bb.putInt(transferId);
+        bb.put((byte) (chunkFlags & 0xFF));
+        bb.putLong(Math.max(0L, totalSize));
+        bb.putShort((short) (nameBytes.length & 0xFFFF));
+        if (nameBytes.length > 0) {
+            bb.put(nameBytes);
+        }
+        if (safeLen > 0) {
+            bb.put(data, offset, safeLen);
+        }
+        return bb.array();
+    }
+
+    public static byte[] encodeFilePullChunk(FilePullChunkMsg msg) throws ProtocolException {
+        if (msg == null) {
+            throw new ProtocolException("FILE_PULL_CHUNK msg is null");
+        }
+        byte[] d = (msg.data != null) ? msg.data : EMPTY_BYTES;
+        return encodeFilePullChunk(msg.transferId, msg.chunkFlags, msg.totalSize, msg.nameOrPath, d, 0, d.length);
+    }
+
+    public static FilePullChunkMsg decodeFilePullChunk(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 15) {
+            throw new ProtocolException("FILE_PULL_CHUNK payload must be at least 15 bytes");
+        }
+        ByteBuffer bb = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
+        int transferId = bb.getInt();
+        int chunkFlags = bb.get() & 0xFF;
+        long totalSize = bb.getLong();
+        int nameLen = bb.getShort() & 0xFFFF;
+        if (bb.remaining() < nameLen) {
+            throw new ProtocolException("FILE_PULL_CHUNK truncated nameOrPath: need " + nameLen);
+        }
+        String nameOrPath = "";
+        if (nameLen > 0) {
+            byte[] nameBytes = new byte[nameLen];
+            bb.get(nameBytes);
+            nameOrPath = new String(nameBytes, StandardCharsets.UTF_8);
+        }
+        byte[] data = EMPTY_BYTES;
+        if (bb.remaining() > 0) {
+            data = new byte[bb.remaining()];
+            bb.get(data);
+        }
+        return new FilePullChunkMsg(transferId, chunkFlags, totalSize, nameOrPath, data);
+    }
+
+    public static final class ApkInstallRequestMsg {
+        public final int installId;
+        public final String filePath;
+        public final String format; // "apk" | "apks" | "apkm" | "xapk"
+        public final boolean replaceExisting;
+        public final boolean allowDowngrade;
+
+        public ApkInstallRequestMsg(
+                int installId,
+                String filePath,
+                String format,
+                boolean replaceExisting,
+                boolean allowDowngrade) {
+            this.installId = installId;
+            this.filePath = (filePath != null) ? filePath.trim() : "";
+            this.format = (format != null) ? format.trim().toLowerCase(java.util.Locale.ROOT) : "";
+            this.replaceExisting = replaceExisting;
+            this.allowDowngrade = allowDowngrade;
+        }
+    }
+
+    public static byte[] encodeApkInstallRequest(ApkInstallRequestMsg msg) {
+        ApkInstallRequestMsg m = (msg != null) ? msg : new ApkInstallRequestMsg(0, "", "apk", true, false);
+        return new SimpleJson.ObjectBuilder()
+                .put("installId", m.installId)
+                .put("filePath", m.filePath)
+                .put("format", m.format)
+                .put("replaceExisting", m.replaceExisting)
+                .put("allowDowngrade", m.allowDowngrade)
+                .build()
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static ApkInstallRequestMsg decodeApkInstallRequest(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("APK_INSTALL_REQUEST payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            String filePath = obj.getString("filePath", "");
+            if (filePath.trim().isEmpty()) {
+                throw new ProtocolException("APK_INSTALL_REQUEST missing filePath");
+            }
+            return new ApkInstallRequestMsg(
+                    obj.getInt("installId", 0),
+                    filePath,
+                    obj.getString("format", ""),
+                    obj.getBoolean("replaceExisting", true),
+                    obj.getBoolean("allowDowngrade", false));
+        } catch (ProtocolException pe) {
+            throw pe;
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid APK_INSTALL_REQUEST JSON: " + t.getMessage(), t);
+        }
+    }
+
+    public static final class ApkInstallStatusMsg {
+        public final int installId;
+        public final String stage; // "uploading"|"extracting"|"installing"|"succeeded"|"failed"
+        public final int progress; // 0..100
+        public final String packageName;
+        public final String message;
+
+        public ApkInstallStatusMsg(
+                int installId, String stage, int progress, String packageName, String message) {
+            this.installId = installId;
+            this.stage = (stage != null) ? stage.trim() : "";
+            this.progress = Math.max(0, Math.min(100, progress));
+            this.packageName = (packageName != null) ? packageName : "";
+            this.message = (message != null) ? message : "";
+        }
+    }
+
+    public static byte[] encodeApkInstallStatus(ApkInstallStatusMsg msg) {
+        ApkInstallStatusMsg m = (msg != null)
+                ? msg : new ApkInstallStatusMsg(0, "failed", 0, "", "empty");
+        return new SimpleJson.ObjectBuilder()
+                .put("installId", m.installId)
+                .put("stage", m.stage)
+                .put("progress", m.progress)
+                .put("packageName", m.packageName)
+                .put("message", m.message)
+                .build()
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static ApkInstallStatusMsg decodeApkInstallStatus(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("APK_INSTALL_STATUS payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            return new ApkInstallStatusMsg(
+                    obj.getInt("installId", 0),
+                    obj.getString("stage", ""),
+                    obj.getInt("progress", 0),
+                    obj.getString("packageName", ""),
+                    obj.getString("message", ""));
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid APK_INSTALL_STATUS JSON: " + t.getMessage(), t);
+        }
     }
 }

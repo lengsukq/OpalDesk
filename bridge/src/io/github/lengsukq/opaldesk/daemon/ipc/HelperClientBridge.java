@@ -494,6 +494,36 @@ public final class HelperClientBridge {
         });
     }
 
+    /** Forwards a Mac/companion notification command ({@code sync|dismiss|clear_all|reply}) to Helper. */
+    public void pushNotificationAction(String op, String key, String replyText) {
+        if (config.shuttingDown || op == null || op.isEmpty()) return;
+        final String safeOp = op;
+        final String safeKey = (key != null) ? key : "";
+        final String safeReply = (replyText != null) ? replyText : "";
+        scenePushExec.execute(() -> {
+            if (config.shuttingDown) return;
+            Bundle extras = new Bundle();
+            extras.putString(BridgeProtocol.EXTRA_NOTIF_ACTION_OP, safeOp);
+            extras.putString(BridgeProtocol.EXTRA_NOTIF_ACTION_KEY, safeKey);
+            extras.putString(BridgeProtocol.EXTRA_NOTIF_ACTION_REPLY_TEXT, safeReply);
+            callHelperProvider(BridgeProtocol.PROVIDER_METHOD_NOTIFICATION_ACTION, extras);
+        });
+    }
+
+    /** Forwards a Mac/companion media transport command ({@code play|pause|toggle|next|previous|stop|seek}) to Helper. */
+    public void pushMediaAction(String op, long positionMs) {
+        if (config.shuttingDown || op == null || op.isEmpty()) return;
+        final String safeOp = op;
+        final long safePos = Math.max(0L, positionMs);
+        scenePushExec.execute(() -> {
+            if (config.shuttingDown) return;
+            Bundle extras = new Bundle();
+            extras.putString(BridgeProtocol.EXTRA_MEDIA_ACTION_OP, safeOp);
+            extras.putLong(BridgeProtocol.EXTRA_MEDIA_ACTION_POSITION_MS, safePos);
+            callHelperProvider(BridgeProtocol.PROVIDER_METHOD_MEDIA_ACTION, extras);
+        });
+    }
+
     public void grantHelperPrivileges() {
         if (getVerifiedHelperUid() <= 0) return;
         String userFlag = (verifiedHelperUserId > 0) ? String.valueOf(verifiedHelperUserId) : null;

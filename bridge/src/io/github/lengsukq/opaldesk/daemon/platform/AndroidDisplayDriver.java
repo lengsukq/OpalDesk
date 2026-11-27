@@ -449,6 +449,36 @@ public final class AndroidDisplayDriver
         return taskApi.findTopVisibleTaskIdOnDisplay(displayId, expectedPkg);
     }
 
+    /**
+     * Returns the foreground user app package on {@code displayId} (e.g. Display 0 for Handoff),
+     * filtering out the current Home launcher and blocked system/self packages.
+     */
+    public String findTopVisibleUserAppPackageOnDisplay(int displayId) {
+        String pkg = taskApi.findTopVisiblePackageOnDisplay(displayId);
+        if (pkg == null || pkg.isEmpty() || PackagePolicy.isBlockedWindowPkg(pkg)) {
+            return "";
+        }
+        String homePkg = resolveDefaultHomePackage();
+        if (!homePkg.isEmpty() && homePkg.equals(pkg)) {
+            return "";
+        }
+        return pkg;
+    }
+
+    private String resolveDefaultHomePackage() {
+        if (services.context == null) return "";
+        try {
+            PackageManager pm = services.context.getPackageManager();
+            Intent homeIntent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+            android.content.pm.ResolveInfo ri = pm.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY);
+            if (ri != null && ri.activityInfo != null && ri.activityInfo.packageName != null) {
+                return ri.activityInfo.packageName;
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return "";
+    }
+
     @Override
     public boolean isTaskRunningWithActivities(int taskId, int displayId) {
         return taskApi.isTaskRunningWithActivities(taskId, displayId);

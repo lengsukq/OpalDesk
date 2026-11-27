@@ -684,6 +684,22 @@ public final class BridgeBinderService extends Binder {
                 }
                 return true;
             }
+            case BridgeProtocol.TX_SYNC_NOTIFICATIONS: {
+                String notifJson = data.readString();
+                if (remoteBridge != null && notifJson != null && !notifJson.isEmpty()) {
+                    remoteBridge.onNotificationsSyncedFromHelper(notifJson);
+                }
+                if (reply != null) reply.writeInt(1);
+                return true;
+            }
+            case BridgeProtocol.TX_SYNC_MEDIA_STATE: {
+                String mediaJson = data.readString();
+                if (remoteBridge != null && mediaJson != null && !mediaJson.isEmpty()) {
+                    remoteBridge.onMediaStateSyncedFromHelper(mediaJson);
+                }
+                if (reply != null) reply.writeInt(1);
+                return true;
+            }
             case BridgeProtocol.TX_SHUTDOWN: {
                 System.out.println("OPALDESK_SHUTDOWN_REQUESTED");
                 shutdownTrigger.run();

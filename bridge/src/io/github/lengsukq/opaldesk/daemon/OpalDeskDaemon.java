@@ -167,6 +167,8 @@ public final class OpalDeskDaemon implements Runnable {
                 inputRouter,
                 mouseRouter);
         this.remoteBridge.setPairingEventConsumer(helperBridge::pushPairingEvent);
+        this.remoteBridge.setNotificationActionConsumer(helperBridge::pushNotificationAction);
+        this.remoteBridge.setMediaActionConsumer(helperBridge::pushMediaAction);
         this.remoteBridge.setDirectImeTextCommitter(helperBridge::commitTextViaBridgeIme);
         this.remoteBridge.setBridgeImeActiveSupplier(this.imeManager::isBridgeImeConfiguredOrActive);
         this.remoteBridge.setRemoteStateChangeListener(() -> {
@@ -189,7 +191,10 @@ public final class OpalDeskDaemon implements Runnable {
         this.taskStackObserver = new TaskStackObserver(
                 services.iActivityTaskManager,
                 mainHandler,
-                () -> bgExec.execute(compositor::reconcileWithSystemTasks));
+                () -> bgExec.execute(() -> {
+                    compositor.reconcileWithSystemTasks();
+                    remoteBridge.refreshHostTopAppIfChanged();
+                }));
 
         BridgeBinderService binderService = new BridgeBinderService(
                 services,
@@ -359,6 +364,9 @@ public final class OpalDeskDaemon implements Runnable {
             vdPool.setConfiguredMaxDisplays(config.getMaxActiveDisplays());
             if (compositor.getWindowCount() > 0) {
                 bgExec.execute(compositor::reconcileWithSystemTasks);
+            }
+            if (remoteBridge.hasDesktopOrCompanionSession()) {
+                bgExec.execute(remoteBridge::refreshHostTopAppIfChanged);
             }
         } catch (Throwable t) {
             System.err.println("OPALDESK_TICK_WARN: " + t.getMessage());

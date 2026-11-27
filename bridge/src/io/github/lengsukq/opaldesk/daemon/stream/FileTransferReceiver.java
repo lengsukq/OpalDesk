@@ -20,6 +20,9 @@ import java.util.concurrent.Executors;
  */
 public final class FileTransferReceiver {
     public static final String DEFAULT_DOWNLOAD_DIR = "/sdcard/Download/OpalDesk";
+    public static final String DEFAULT_STORAGE_ROOT = "/sdcard";
+    public static final String DEFAULT_APK_STAGING_DIR = "/data/local/tmp/opaldesk_apk_stage";
+    public static final String APK_STAGE_PREFIX = "@apk_stage/";
     public static final int MAX_CONCURRENT_TRANSFERS = 4;
     public static final long MAX_TRANSFER_FILE_BYTES = 4L * 1024L * 1024L * 1024L; // 4 GiB
     private static final long MEDIA_SCAN_TIMEOUT_MS = 5000L;
@@ -39,33 +42,54 @@ public final class FileTransferReceiver {
         final File finalFile;
         final long expectedSize;
         final FileOutputStream out;
+        final boolean shouldMediaScan;
         long writtenBytes = 0L;
 
-        ActiveTransfer(File tempFile, File finalFile, long expectedSize, FileOutputStream out) {
+        ActiveTransfer(
+                File tempFile,
+                File finalFile,
+                long expectedSize,
+                FileOutputStream out,
+                boolean shouldMediaScan) {
             this.tempFile = tempFile;
             this.finalFile = finalFile;
             this.expectedSize = expectedSize;
             this.out = out;
+            this.shouldMediaScan = shouldMediaScan;
         }
     }
 
     private final AckListener ackListener;
     private final File downloadDir;
+    private final File storageRoot;
+    private final File apkStagingDir;
     private final boolean triggerMediaScan;
     private final Object transferLock = new Object();
     private final Map<Integer, ActiveTransfer> transfers = new HashMap<>();
 
     public FileTransferReceiver(AckListener ackListener) {
-        this(ackListener, new File(DEFAULT_DOWNLOAD_DIR), true);
+        this(ackListener, new File(DEFAULT_DOWNLOAD_DIR), new File(DEFAULT_STORAGE_ROOT),
+                new File(DEFAULT_APK_STAGING_DIR), true);
     }
 
     public FileTransferReceiver(AckListener ackListener, File downloadDir) {
-        this(ackListener, downloadDir, true);
+        this(ackListener, downloadDir, null, null, true);
     }
 
     public FileTransferReceiver(AckListener ackListener, File downloadDir, boolean triggerMediaScan) {
+        this(ackListener, downloadDir, null, null, triggerMediaScan);
+    }
+
+    public FileTransferReceiver(
+            AckListener ackListener,
+            File downloadDir,
+            File storageRoot,
+            File apkStagingDir,
+            boolean triggerMediaScan) {
         this.ackListener = ackListener;
         this.downloadDir = (downloadDir != null) ? downloadDir : new File(DEFAULT_DOWNLOAD_DIR);
+        this.storageRoot = storageRoot;
+        this.apkStagingDir = apkStagingDir;
         this.triggerMediaScan = triggerMediaScan;
     }
 
@@ -148,30 +172,120 @@ public final class FileTransferReceiver {
             sendAck(tid, OpalCastProtocol.FILE_ACK_ERR, "Invalid or oversized file");
             return false;
         }
-        String safeName = FileTransferPathGuard.sanitizeFileName(msg.fileName);
-        if (safeName == null) {
+        ResolvedUploadTarget resolved = resolveUploadTarget(msg.fileName);
+        if (resolved == null) {
             sendAck(tid, OpalCastProtocol.FILE_ACK_ERR, "Rejected unsafe file name");
             return false;
         }
         try {
-            if (!downloadDir.exists() && !downloadDir.mkdirs()) {
+            if (!resolved.baseDir.exists() && !resolved.baseDir.mkdirs()) {
                 throw new IOException("Cannot create destination directory");
             }
-            File canonicalBase = downloadDir.getCanonicalFile();
-            File finalFile = FileTransferPathGuard.resolveUniqueSafeFile(canonicalBase, safeName);
-            File tempFile = new File(canonicalBase,
+            File canonicalBase = resolved.baseDir.getCanonicalFile();
+            File targetDir = resolved.subDir.isEmpty()
+                    ? canonicalBase
+                    : new File(canonicalBase, resolved.subDir);
+            FileTransferPathGuard.verifyInsideOrEqualBaseDir(canonicalBase, targetDir);
+            if (!targetDir.exists() && !targetDir.mkdirs()) {
+                throw new IOException("Cannot create destination subdirectory");
+            }
+            File canonicalTargetDir = targetDir.getCanonicalFile();
+            FileTransferPathGuard.verifyInsideOrEqualBaseDir(canonicalBase, canonicalTargetDir);
+
+            File finalFile = FileTransferPathGuard.resolveUniqueSafeFile(
+                    canonicalBase, canonicalTargetDir, resolved.fileName);
+            File tempFile = new File(canonicalTargetDir,
                     ".opaldesk_" + Integer.toUnsignedString(tid) + "_" + System.nanoTime() + ".part");
             FileTransferPathGuard.verifyInsideBaseDir(canonicalBase, finalFile);
             FileTransferPathGuard.verifyInsideBaseDir(canonicalBase, tempFile);
 
             FileOutputStream fos = new FileOutputStream(tempFile, false);
-            transfers.put(tid, new ActiveTransfer(tempFile, finalFile, msg.totalSize, fos));
+            transfers.put(tid, new ActiveTransfer(
+                    tempFile, finalFile, msg.totalSize, fos, triggerMediaScan && resolved.allowMediaScan));
             return true;
         } catch (IOException | RuntimeException t) {
             System.err.println("OPALDESK_XFER_START_ERR tid=" + tid + ": " + t.getMessage());
             sendAck(tid, OpalCastProtocol.FILE_ACK_ERR, "Failed to open destination: " + t.getMessage());
             return false;
         }
+    }
+
+    private static final class ResolvedUploadTarget {
+        final File baseDir;
+        final String subDir;
+        final String fileName;
+        final boolean allowMediaScan;
+
+        ResolvedUploadTarget(File baseDir, String subDir, String fileName, boolean allowMediaScan) {
+            this.baseDir = baseDir;
+            this.subDir = subDir;
+            this.fileName = fileName;
+            this.allowMediaScan = allowMediaScan;
+        }
+    }
+
+    private ResolvedUploadTarget resolveUploadTarget(String rawName) {
+        if (rawName == null || rawName.indexOf('\0') >= 0) return null;
+        String normalized = rawName.replace('\\', '/').trim();
+        if (normalized.isEmpty()) return null;
+
+        // 1. Dedicated APK install staging channel ("@apk_stage/foo.apks")
+        if (normalized.startsWith(APK_STAGE_PREFIX)) {
+            if (apkStagingDir == null) return null;
+            String rest = normalized.substring(APK_STAGE_PREFIX.length());
+            if (rest.contains("/")) return null;
+            String safeFile = FileTransferPathGuard.sanitizeFileName(rest);
+            if (safeFile == null) return null;
+            return new ResolvedUploadTarget(apkStagingDir, "", safeFile, false);
+        }
+
+        // 2. Explicit storage-root path ("/sdcard/Documents/a.pdf" or "/storage/emulated/0/...")
+        if (normalized.startsWith("/")) {
+            if (storageRoot == null) return null;
+            String remainder = stripAllowedStoragePrefix(normalized, storageRoot);
+            if (remainder == null) return null;
+            return splitIntoTarget(storageRoot, remainder, true);
+        }
+
+        // 3. Relative subpath ("sub/dir/file.png") or plain filename ("note.txt") under downloadDir
+        if (normalized.contains("/")) {
+            return splitIntoTarget(downloadDir, normalized, true);
+        }
+        String safeFile = FileTransferPathGuard.sanitizeFileName(normalized);
+        if (safeFile == null) return null;
+        return new ResolvedUploadTarget(downloadDir, "", safeFile, true);
+    }
+
+    private static ResolvedUploadTarget splitIntoTarget(File baseDir, String rawRelative, boolean allowMediaScan) {
+        String safeRel = FileTransferPathGuard.sanitizeRelativeSubpath(rawRelative);
+        if (safeRel == null) return null;
+        int lastSlash = safeRel.lastIndexOf('/');
+        String subDir = (lastSlash > 0) ? safeRel.substring(0, lastSlash) : "";
+        String fileName = (lastSlash >= 0) ? safeRel.substring(lastSlash + 1) : safeRel;
+        return new ResolvedUploadTarget(baseDir, subDir, fileName, allowMediaScan);
+    }
+
+    private static String stripAllowedStoragePrefix(String normalizedPath, File storageRoot) {
+        if (normalizedPath.startsWith("/sdcard/")) {
+            return normalizedPath.substring("/sdcard/".length());
+        }
+        if (normalizedPath.startsWith("/storage/emulated/0/")) {
+            return normalizedPath.substring("/storage/emulated/0/".length());
+        }
+        try {
+            String canon = storageRoot.getCanonicalPath();
+            String prefix = canon.endsWith("/") ? canon : (canon + "/");
+            if (normalizedPath.startsWith(prefix)) {
+                return normalizedPath.substring(prefix.length());
+            }
+        } catch (IOException ignored) {
+        }
+        String abs = storageRoot.getAbsolutePath();
+        String absPrefix = abs.endsWith("/") ? abs : (abs + "/");
+        if (normalizedPath.startsWith(absPrefix)) {
+            return normalizedPath.substring(absPrefix.length());
+        }
+        return null;
     }
 
     private boolean handleDataLocked(int tid, OpalCastProtocol.FileTransferChunkMsg msg) {
@@ -230,7 +344,7 @@ public final class FileTransferReceiver {
                 sendAck(tid, OpalCastProtocol.FILE_ACK_ERR, "Failed to finalize file");
                 return;
             }
-            if (triggerMediaScan) {
+            if (tr.shouldMediaScan) {
                 triggerMediaScanAsync(tr.finalFile);
             }
             sendAck(tid, OpalCastProtocol.FILE_ACK_OK, tr.finalFile.getAbsolutePath());
