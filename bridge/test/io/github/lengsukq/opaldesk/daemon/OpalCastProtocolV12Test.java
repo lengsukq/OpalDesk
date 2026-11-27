@@ -61,6 +61,13 @@ public class OpalCastProtocolV12Test {
         assertFalse(hello.isStandaloneApp());
         assertFalse(hello.isAppCatalog());
         assertEquals("companion", hello.sessionRole);
+        assertFalse(hello.companionEvents);
+
+        String desktopOptInJson = "{\"protocolVersion\":1,\"clientName\":\"MacBook\",\"clientId\":\"mac-1\","
+                + "\"sessionRole\":\"desktop\",\"companionEvents\":true}";
+        OpalCastProtocol.HelloMsg desktopOptIn = OpalCastProtocol.decodeHello(desktopOptInJson.getBytes(StandardCharsets.UTF_8));
+        assertFalse(desktopOptIn.isCompanion());
+        assertTrue(desktopOptIn.companionEvents);
     }
 
     @Test

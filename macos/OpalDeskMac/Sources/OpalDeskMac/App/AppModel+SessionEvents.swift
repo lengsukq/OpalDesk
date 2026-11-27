@@ -101,7 +101,8 @@ extension AppModel {
             authToken: pendingAuth.authToken,
             pinCode: "",
             transportHint: (activeConnection?.transport.transportHint ?? .usb).rawValue,
-            sessionRole: OpalCastSessionRole.desktop.rawValue
+            sessionRole: OpalCastSessionRole.desktop.rawValue,
+            companionEvents: true
         ))
     }
 

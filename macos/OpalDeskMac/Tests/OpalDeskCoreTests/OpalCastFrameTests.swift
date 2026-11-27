@@ -100,6 +100,46 @@ struct OpalCastFrameTests {
         }
     }
 
+    @Test("Forward-compatible stream decoder skips unknown future frame types cleanly even when fragmented")
+    func streamDecoderSkipsUnknownFutureFramesForwardCompatibly() throws {
+        let before = OpalCastFrame.ping(101)
+        let after = OpalCastFrame.ping(202)
+        let unknownPayload = Data("{\"futureField\":true}".utf8)
+
+        var unknownWire = Data([0x4F, 0x50, 0x44, 0x31, 0x1E, 0x00]) // hypothetical v1.3 frame type 0x1E
+        var lenBE = UInt32(unknownPayload.count).bigEndian
+        withUnsafeBytes(of: &lenBE) { unknownWire.append(contentsOf: $0) }
+        unknownWire.append(Data(repeating: 0, count: 8))
+        unknownWire.append(unknownPayload)
+
+        var wire = Data()
+        wire.append(try before.encode())
+        wire.append(unknownWire)
+        wire.append(try after.encode())
+
+        // 1-byte fragmented delivery with skipUnknownFrameTypes enabled
+        var decoder = OpalCastStreamDecoder(skipUnknownFrameTypes: true)
+        var decoded: [OpalCastFrame] = []
+        for b in wire {
+            decoder.append(Data([b]))
+            decoded.append(contentsOf: try decoder.decodeAvailableFrames())
+        }
+        #expect(decoded == [before, after])
+        #expect(decoder.bufferedByteCount == 0)
+
+        // Still rejects oversized payload on unknown frame type to prevent OOM DoS
+        let tooBigLen: UInt32 = OpalCastProtocol.maxPayloadLength + 1
+        var oversizedUnknown = Data([0x4F, 0x50, 0x44, 0x31, 0xFE, 0x00])
+        var bigLenBE = tooBigLen.bigEndian
+        withUnsafeBytes(of: &bigLenBE) { oversizedUnknown.append(contentsOf: $0) }
+        oversizedUnknown.append(Data(repeating: 0, count: 8))
+        var d2 = OpalCastStreamDecoder(skipUnknownFrameTypes: true)
+        d2.append(oversizedUnknown)
+        #expect(throws: OpalCastCodecError.payloadTooLarge(tooBigLen)) {
+            _ = try d2.decodeAvailableFrames()
+        }
+    }
+
     @Test("IME_REQUEST 0x16 from Android decodes instead of aborting the session")
     func imeRequestFrameDecodes() throws {
         let payload = Data(#"{"show":true,"inputType":1}"#.utf8)

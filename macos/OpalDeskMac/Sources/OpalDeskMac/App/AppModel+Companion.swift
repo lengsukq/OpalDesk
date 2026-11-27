@@ -221,7 +221,9 @@ extension AppModel {
 
         if authenticated {
             ensureSharedBridgesStarted()
-            _ = sendNotificationActionOnActiveChannel(.sync())
+            if preferences.notificationsSyncEnabled {
+                _ = sendNotificationActionOnActiveChannel(.sync())
+            }
             updateClipboardSyncLifecycle()
         } else {
             updateClipboardSyncLifecycle()

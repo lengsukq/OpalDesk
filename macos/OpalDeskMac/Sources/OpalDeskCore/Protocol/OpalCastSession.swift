@@ -44,7 +44,7 @@ public final class OpalCastSession: Sendable {
     private struct MutableState {
         var endpoint: OpalCastEndpoint?
         var connection: NWConnection?
-        var decoder = OpalCastStreamDecoder()
+        var decoder = OpalCastStreamDecoder(skipUnknownFrameTypes: true)
         var sessionState: OpalCastSessionState = .idle
         var eventHandler: (@Sendable (OpalCastSessionEvent) -> Void)?
         var inFlightBytes: Int = 0

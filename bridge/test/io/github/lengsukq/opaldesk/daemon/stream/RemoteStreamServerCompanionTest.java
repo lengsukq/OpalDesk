@@ -121,7 +121,7 @@ public class RemoteStreamServerCompanionTest {
 
         OpalCastProtocol.HelloMsg desktopHello = new OpalCastProtocol.HelloMsg(
                 1, "MacDesktop", "mac-desk", "hevc", 1920, 1080, 240, 60, 12000, 0, true, "", "",
-                "wifi_tls", OpalCastProtocol.SESSION_ROLE_DESKTOP, "", "", "macos");
+                "wifi_tls", OpalCastProtocol.SESSION_ROLE_DESKTOP, "", "", "macos", true);
         OpalCastProtocol.HelloMsg standaloneHello = new OpalCastProtocol.HelloMsg(
                 1, "MacApp", "mac-desk", "hevc", 800, 1400, 320, 60, 8000, 0, false, "", "",
                 "wifi_tls", OpalCastProtocol.SESSION_ROLE_STANDALONE_APP, "com.tencent.mm", "", "macos");
@@ -201,6 +201,121 @@ public class RemoteStreamServerCompanionTest {
         comp2.close();
         comp1Replaced.close();
         assertNotNull(disconnectedRoles);
+    }
+
+    @Test
+    public void testLegacyDesktopDoesNotReceiveCompanionFramesUntilSubscribed() throws Exception {
+        CountDownLatch connected2 = new CountDownLatch(2);
+        CountDownLatch notifActLatch = new CountDownLatch(1);
+        RemoteStreamServer server = new RemoteStreamServer(
+                new RemoteStreamServer.SessionListener() {
+                    @Override public void onSessionConnected(int sid, int st, String cid, String cn, OpalCastProtocol.HelloMsg h) { connected2.countDown(); }
+                    @Override public void onSessionDisconnected(int sid, int st, String role, String reason) {}
+                    @Override public void onResizeConfig(int sid, OpalCastProtocol.ResizeConfig cfg) {}
+                    @Override public void onRequestIdr(int sid) {}
+                    @Override public void onMouseEvent(int sid, OpalCastProtocol.MouseEventMsg m) {}
+                    @Override public void onTouchEvent(int sid, OpalCastProtocol.TouchEventMsg m) {}
+                    @Override public void onKeyEvent(int sid, OpalCastProtocol.KeyEventMsg m) {}
+                    @Override public void onTextEvent(int sid, OpalCastProtocol.TextEventMsg m) {}
+                    @Override public void onImageClipboardEvent(int sid, OpalCastProtocol.ImageClipboardEventMsg m) {}
+                    @Override public void onSystemAction(int sid, OpalCastProtocol.SystemActionMsg m) {}
+                    @Override public void onFileTransferChunk(int sid, OpalCastProtocol.FileTransferChunkMsg m) {}
+                    @Override public void onListApps(int sid) {}
+                    @Override public void onWindowAction(int sid, OpalCastProtocol.WindowActionMsg m) {}
+                    @Override public void onNotificationAction(int sid, OpalCastProtocol.NotificationActionMsg m) { notifActLatch.countDown(); }
+                    @Override public void onWifiUpgradeEnabled() {}
+                    @Override public void onVideoCongestion(int sid) {}
+                    @Override public void onVideoQueueHealthy(int sid) {}
+                },
+                new TrustStoreManager(),
+                null,
+                "TestPhone");
+
+        // Legacy desktop client (companionEvents defaults to false) + companion client
+        OpalCastProtocol.HelloMsg legacyDesktopHello = new OpalCastProtocol.HelloMsg(
+                1, "OldMac", "old-mac", "hevc", 1920, 1080, 240, 60, 12000, 0, true, "", "",
+                "wifi_tls", OpalCastProtocol.SESSION_ROLE_DESKTOP, "", "", "macos");
+        OpalCastProtocol.HelloMsg companionHello = new OpalCastProtocol.HelloMsg(
+                1, "CompMac", "comp-mac", "hevc", 0, 0, 0, 0, 0, 0, false, "", "",
+                "wifi_tls", OpalCastProtocol.SESSION_ROLE_COMPANION, "", "", "macos");
+
+        TestPeer legacyDesk = new TestPeer(server, "old-mac", "OldMac", legacyDesktopHello);
+        TestPeer comp = new TestPeer(server, "comp-mac", "CompMac", companionHello);
+        assertTrue(connected2.await(2, TimeUnit.SECONDS));
+
+        // Only companion is subscribed initially; legacy desktop must NOT receive 0x19/0x1A broadcasts
+        assertEquals(1, server.getCompanionEventSubscriberSessionIds().size());
+        byte[] notifPayload = "{\"action\":\"removed\",\"key\":\"k1\"}".getBytes(StandardCharsets.UTF_8);
+        byte[] mediaPayload = OpalCastProtocol.encodeMediaState(
+                new OpalCastProtocol.MediaStateMsg(true, "com.music", "Music", "Song", "Artist", "", true, 0L, 100L, ""));
+        server.broadcastNotificationEvent(notifPayload);
+        server.broadcastMediaState(mediaPayload);
+
+        waitUntil(() -> comp.serverWrites.size() >= (OpalCastProtocol.HEADER_SIZE * 2 + notifPayload.length + mediaPayload.length), 1500);
+        Thread.sleep(80L);
+        assertEquals("Legacy desktop must receive zero 0x19/0x1A frames before opting in", 0, legacyDesk.serverWrites.size());
+
+        // Once desktop sends a 0x31 frame, it dynamically subscribes and receives subsequent broadcasts
+        legacyDesk.sendUplink(OpalCastProtocol.TYPE_NOTIFICATION_ACTION,
+                OpalCastProtocol.encodeNotificationAction(new OpalCastProtocol.NotificationActionMsg("sync", "", "")));
+        assertTrue(notifActLatch.await(2, TimeUnit.SECONDS));
+        assertEquals(2, server.getCompanionEventSubscriberSessionIds().size());
+
+        server.broadcastNotificationEvent(notifPayload);
+        waitUntil(() -> legacyDesk.serverWrites.size() >= OpalCastProtocol.HEADER_SIZE + notifPayload.length, 1500);
+        assertTrue(legacyDesk.serverWrites.size() >= OpalCastProtocol.HEADER_SIZE + notifPayload.length);
+
+        server.shutdown();
+        legacyDesk.close();
+        comp.close();
+    }
+
+    @Test
+    public void testEmptyCacheNotificationSyncActionTriggersSingleHelperSyncAndEnrichesOtp() throws Exception {
+        List<byte[]> directPushes = new CopyOnWriteArrayList<>();
+        List<byte[]> broadcasts = new CopyOnWriteArrayList<>();
+        java.util.concurrent.atomic.AtomicInteger syncCalls = new java.util.concurrent.atomic.AtomicInteger(0);
+
+        CompanionNotificationRelay relay = new CompanionNotificationRelay(
+                new CompanionNotificationRelay.OutboundSender() {
+                    @Override
+                    public void sendNotificationEventToSession(int sessionId, byte[] jsonUtf8) {
+                        directPushes.add(jsonUtf8);
+                    }
+
+                    @Override
+                    public void broadcastNotificationEvent(byte[] jsonUtf8) {
+                        broadcasts.add(jsonUtf8);
+                    }
+                });
+        relay.setActionForwarder((op, key, replyText) -> {
+            if ("sync".equals(op)) {
+                syncCalls.incrementAndGet();
+            }
+        });
+
+        // Empty cache + op=sync must trigger helper sync EXACTLY once (not twice!)
+        relay.handleRemoteAction(1, new OpalCastProtocol.NotificationActionMsg("sync", "", ""));
+        assertEquals("op=sync with empty cache must invoke helper sync exactly once", 1, syncCalls.get());
+        assertEquals(0, directPushes.size());
+
+        // Helper posts notification without otpCode -> relay enriches otpCode and caches it
+        String incoming = "{\"action\":\"posted\",\"items\":[{\"key\":\"k1\",\"pkg\":\"com.sms\","
+                + "\"appLabel\":\"短信\",\"title\":\"验证码\",\"text\":\"您的登录验证码为 618429，5分钟内有效\","
+                + "\"postTimeMs\":1000,\"clearable\":true,\"canReply\":false,\"replyLabel\":\"\",\"otpCode\":\"\"}]}";
+        relay.onNotificationsSyncedFromHelper(incoming);
+        assertEquals(1, broadcasts.size());
+        OpalCastProtocol.NotificationEventMsg bcastDec = OpalCastProtocol.decodeNotificationEvent(broadcasts.get(0));
+        assertEquals("618429", bcastDec.items.get(0).otpCode);
+
+        // Subsequent op=sync pushes cached snapshot immediately AND forwards sync once
+        relay.handleRemoteAction(2, new OpalCastProtocol.NotificationActionMsg("sync", "", ""));
+        assertEquals(2, syncCalls.get());
+        assertEquals(1, directPushes.size());
+        OpalCastProtocol.NotificationEventMsg snapDec = OpalCastProtocol.decodeNotificationEvent(directPushes.get(0));
+        assertEquals("snapshot", snapDec.action);
+        assertEquals(1, snapDec.items.size());
+        assertEquals("618429", snapDec.items.get(0).otpCode);
     }
 
     private static void waitUntil(java.util.function.BooleanSupplier cond, long timeoutMs) throws InterruptedException {

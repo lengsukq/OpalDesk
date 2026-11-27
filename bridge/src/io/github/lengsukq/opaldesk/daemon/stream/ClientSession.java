@@ -96,6 +96,7 @@ final class ClientSession {
     private final java.util.function.LongSupplier monotonicClockMs;
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
+    private volatile boolean companionEventsSubscribed = false;
     volatile String closeReason = "";
     private Thread senderThread;
 
@@ -163,6 +164,14 @@ final class ClientSession {
 
     boolean isClosed() {
         return closed.get();
+    }
+
+    boolean isCompanionEventsSubscribed() {
+        return companionEventsSubscribed;
+    }
+
+    void setCompanionEventsSubscribed(boolean subscribed) {
+        this.companionEventsSubscribed = subscribed;
     }
 
     void setTargetFps(float targetFps) {

@@ -748,7 +748,8 @@ public final class CompanionConnectionManager: Sendable {
             pinCode: "",
             transportHint: transportHint.rawValue,
             clientPlatform: "macos",
-            sessionRole: OpalCastSessionRole.companion.rawValue
+            sessionRole: OpalCastSessionRole.companion.rawValue,
+            companionEvents: true
         )
 
         do {

@@ -498,6 +498,7 @@ struct CompanionProtocolTests {
         #expect(helloFrame.type == .hello)
         let helloJSON = try #require(JSONSerialization.jsonObject(with: helloFrame.payload) as? [String: Any])
         #expect(helloJSON["sessionRole"] as? String == "companion")
+        #expect(helloJSON["companionEvents"] as? Bool == true)
         #expect(helloJSON["authToken"] as? String == "perm_token_1")
         #expect(helloJSON["width"] as? Int == 0)
         #expect(helloJSON["audioEnabled"] as? Bool == false)

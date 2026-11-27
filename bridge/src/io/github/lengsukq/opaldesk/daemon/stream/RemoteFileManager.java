@@ -248,11 +248,19 @@ public final class RemoteFileManager {
     private OpalCastProtocol.FileOpResponseMsg handleDelete(OpalCastProtocol.FileOpRequestMsg req) {
         try {
             File canonicalRoot = storageRoot.getCanonicalFile();
-            File target = resolveSafePath(req.path);
-            if (target.equals(canonicalRoot)) {
-                return errorResponse(req.requestId, "delete", toDisplayPath(target), "Cannot delete storage root");
+            Path rawTarget = resolveUnfollowedPath(req.path, canonicalRoot);
+            if (rawTarget.equals(canonicalRoot.toPath())) {
+                return errorResponse(req.requestId, "delete", toDisplayPath(canonicalRoot), "Cannot delete storage root");
             }
-            if (!target.exists() && !Files.isSymbolicLink(target.toPath())) {
+            if (Files.isSymbolicLink(rawTarget)) {
+                String displayPath = toUnfollowedDisplayPath(canonicalRoot, rawTarget);
+                Files.delete(rawTarget);
+                return new OpalCastProtocol.FileOpResponseMsg(
+                        req.requestId, "delete", true, "", displayPath, Collections.emptyList(), null, 0L, "");
+            }
+            File target = rawTarget.toFile().getCanonicalFile();
+            FileTransferPathGuard.verifyInsideBaseDir(canonicalRoot, target);
+            if (!target.exists()) {
                 return errorResponse(req.requestId, "delete", req.path, "Path not found");
             }
             String displayPath = toDisplayPath(target);
@@ -264,6 +272,67 @@ public final class RemoteFileManager {
         } catch (IOException | SecurityException e) {
             return errorResponse(req.requestId, "delete", req.path, safeErrorMessage(e));
         }
+    }
+
+    /**
+     * Resolves {@code rawPath} while canonicalizing ONLY parent directories (keeping the final
+     * path segment un-dereferenced) so symlink deletion unlinks the symlink itself rather than
+     * following internal symlinks to real files/directories or failing on dangling symlinks.
+     */
+    private Path resolveUnfollowedPath(String rawPath, File canonicalRoot) throws IOException {
+        if (rawPath == null) {
+            return canonicalRoot.toPath();
+        }
+        if (rawPath.indexOf('\0') >= 0) {
+            throw new SecurityException("Path contains null byte");
+        }
+        String normalized = rawPath.replace('\\', '/').trim();
+        if (normalized.isEmpty() || "/".equals(normalized)) {
+            return canonicalRoot.toPath();
+        }
+        for (String seg : normalized.split("/")) {
+            if ("..".equals(seg)) {
+                throw new SecurityException("Path traversal '..' blocked: " + rawPath);
+            }
+        }
+        String relative;
+        if (normalized.startsWith("/")) {
+            relative = stripAllowedRootPrefix(normalized, canonicalRoot);
+            if (relative == null) {
+                throw new SecurityException("Path outside storage root: " + rawPath);
+            }
+        } else {
+            relative = normalized;
+        }
+        List<String> cleanSegs = new ArrayList<>();
+        for (String seg : relative.split("/")) {
+            if (seg.isEmpty() || ".".equals(seg)) continue;
+            if ("..".equals(seg)) {
+                throw new SecurityException("Path traversal '..' blocked: " + rawPath);
+            }
+            cleanSegs.add(seg);
+        }
+        if (cleanSegs.isEmpty()) {
+            return canonicalRoot.toPath();
+        }
+        File parent = canonicalRoot;
+        for (int i = 0; i < cleanSegs.size() - 1; i++) {
+            parent = new File(parent, cleanSegs.get(i));
+        }
+        verifyExistingAncestorsInsideRoot(canonicalRoot, parent);
+        File canonicalParent = parent.getCanonicalFile();
+        FileTransferPathGuard.verifyInsideOrEqualBaseDir(canonicalRoot, canonicalParent);
+        return canonicalParent.toPath().resolve(cleanSegs.get(cleanSegs.size() - 1));
+    }
+
+    private String toUnfollowedDisplayPath(File canonicalRoot, Path rawTarget) throws IOException {
+        Path parent = rawTarget.getParent();
+        String basePrefix = (parent != null)
+                ? toDisplayPath(parent.toFile())
+                : toDisplayPath(canonicalRoot);
+        String leaf = (rawTarget.getFileName() != null) ? rawTarget.getFileName().toString() : "";
+        if (leaf.isEmpty()) return basePrefix;
+        return basePrefix.endsWith("/") ? (basePrefix + leaf) : (basePrefix + "/" + leaf);
     }
 
     private OpalCastProtocol.FileOpResponseMsg handleRename(OpalCastProtocol.FileOpRequestMsg req) {

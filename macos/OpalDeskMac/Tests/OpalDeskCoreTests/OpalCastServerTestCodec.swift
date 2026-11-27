@@ -233,6 +233,7 @@ extension HelloPayload {
         let sessionRole: String?
         let appPackage: String?
         let appActivity: String?
+        let companionEvents: Bool?
     }
 
     static func decode(from data: Data) throws -> HelloPayload {
@@ -254,7 +255,8 @@ extension HelloPayload {
             transportHint: dto.transportHint ?? OpalCastTransportHint.usb.rawValue,
             sessionRole: dto.sessionRole ?? OpalCastSessionRole.desktop.rawValue,
             appPackage: dto.appPackage ?? "",
-            appActivity: dto.appActivity ?? ""
+            appActivity: dto.appActivity ?? "",
+            companionEvents: dto.companionEvents ?? false
         )
     }
 }
