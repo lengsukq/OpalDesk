@@ -275,6 +275,8 @@ public class RemoteStreamServerCompanionTest {
         List<byte[]> directPushes = new CopyOnWriteArrayList<>();
         List<byte[]> broadcasts = new CopyOnWriteArrayList<>();
         java.util.concurrent.atomic.AtomicInteger syncCalls = new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicReference<String> lastOp = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicInteger lastActionIndex = new java.util.concurrent.atomic.AtomicInteger(-99);
 
         CompanionNotificationRelay relay = new CompanionNotificationRelay(
                 new CompanionNotificationRelay.OutboundSender() {
@@ -288,7 +290,9 @@ public class RemoteStreamServerCompanionTest {
                         broadcasts.add(jsonUtf8);
                     }
                 });
-        relay.setActionForwarder((op, key, replyText) -> {
+        relay.setActionForwarder((op, key, replyText, actionIndex) -> {
+            lastOp.set(op);
+            lastActionIndex.set(actionIndex);
             if ("sync".equals(op)) {
                 syncCalls.incrementAndGet();
             }
@@ -299,16 +303,20 @@ public class RemoteStreamServerCompanionTest {
         assertEquals("op=sync with empty cache must invoke helper sync exactly once", 1, syncCalls.get());
         assertEquals(0, directPushes.size());
 
-        // Helper posts notification without otpCode -> relay enriches otpCode and caches it
+        // Helper posts notification without otpCode and with custom actions -> relay enriches otpCode & preserves actions
         String incoming = "{\"action\":\"posted\",\"items\":[{\"key\":\"k1\",\"pkg\":\"com.sms\","
                 + "\"appLabel\":\"短信\",\"title\":\"验证码\",\"text\":\"您的登录验证码为 618429，5分钟内有效\","
-                + "\"postTimeMs\":1000,\"clearable\":true,\"canReply\":false,\"replyLabel\":\"\",\"otpCode\":\"\"}]}";
+                + "\"postTimeMs\":1000,\"clearable\":true,\"canReply\":false,\"replyLabel\":\"\",\"otpCode\":\"\","
+                + "\"actions\":[{\"index\":0,\"label\":\"标记已读\"},{\"index\":1,\"label\":\"删除\"}]}]}";
         relay.onNotificationsSyncedFromHelper(incoming);
         assertEquals(1, broadcasts.size());
         OpalCastProtocol.NotificationEventMsg bcastDec = OpalCastProtocol.decodeNotificationEvent(broadcasts.get(0));
         assertEquals("618429", bcastDec.items.get(0).otpCode);
+        assertEquals(2, bcastDec.items.get(0).actions.size());
+        assertEquals("标记已读", bcastDec.items.get(0).actions.get(0).label);
+        assertEquals(1, bcastDec.items.get(0).actions.get(1).index);
 
-        // Subsequent op=sync pushes cached snapshot immediately AND forwards sync once
+        // Subsequent op=sync pushes cached snapshot immediately (preserving actions) AND forwards sync once
         relay.handleRemoteAction(2, new OpalCastProtocol.NotificationActionMsg("sync", "", ""));
         assertEquals(2, syncCalls.get());
         assertEquals(1, directPushes.size());
@@ -316,6 +324,12 @@ public class RemoteStreamServerCompanionTest {
         assertEquals("snapshot", snapDec.action);
         assertEquals(1, snapDec.items.size());
         assertEquals("618429", snapDec.items.get(0).otpCode);
+        assertEquals(2, snapDec.items.get(0).actions.size());
+
+        // invoke_action forwards actionIndex cleanly
+        relay.handleRemoteAction(2, new OpalCastProtocol.NotificationActionMsg("invoke_action", "k1", "", 1));
+        assertEquals("invoke_action", lastOp.get());
+        assertEquals(1, lastActionIndex.get());
     }
 
     private static void waitUntil(java.util.function.BooleanSupplier cond, long timeoutMs) throws InterruptedException {

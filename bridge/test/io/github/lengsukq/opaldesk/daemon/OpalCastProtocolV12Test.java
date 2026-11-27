@@ -49,10 +49,12 @@ public class OpalCastProtocolV12Test {
         assertEquals(0x1B, OpalCastProtocol.TYPE_FILE_OP_RESPONSE);
         assertEquals(0x1C, OpalCastProtocol.TYPE_FILE_PULL_CHUNK);
         assertEquals(0x1D, OpalCastProtocol.TYPE_APK_INSTALL_STATUS);
+        assertEquals(0x1E, OpalCastProtocol.TYPE_CALL_STATE);
         assertEquals(0x31, OpalCastProtocol.TYPE_NOTIFICATION_ACTION);
         assertEquals(0x32, OpalCastProtocol.TYPE_MEDIA_ACTION);
         assertEquals(0x33, OpalCastProtocol.TYPE_FILE_OP_REQUEST);
         assertEquals(0x34, OpalCastProtocol.TYPE_APK_INSTALL_REQUEST);
+        assertEquals(0x35, OpalCastProtocol.TYPE_CALL_ACTION);
 
         String helloJson = "{\"protocolVersion\":1,\"clientName\":\"MacBook\",\"clientId\":\"mac-1\","
                 + "\"sessionRole\":\"companion\",\"transportHint\":\"wifi_tls\",\"clientPlatform\":\"macos\"}";
@@ -272,6 +274,117 @@ public class OpalCastProtocolV12Test {
             fail("Missing filePath must throw ProtocolException");
         } catch (OpalCastProtocol.ProtocolException expected) {
             assertTrue(expected.getMessage().contains("filePath"));
+        }
+    }
+
+    @Test
+    public void testV13NotificationActionsInvokeActionStorageFoldersAppsAndCallCodecs() throws Exception {
+        // 1. NotificationItem with actions + backward-compat decode when actions absent
+        OpalCastProtocol.NotificationItem withActions = new OpalCastProtocol.NotificationItem(
+                "k-act", "com.tencent.mm", "微信", "李四", "收到请回复", 1730000100000L,
+                true, true, "回复", "",
+                Arrays.asList(
+                        new OpalCastProtocol.NotificationActionItem(0, "标记已读"),
+                        new OpalCastProtocol.NotificationActionItem(1, "归档")));
+        OpalCastProtocol.Frame nf = roundTrip(
+                OpalCastProtocol.TYPE_NOTIFICATION_EVENT, 0, 5001L,
+                OpalCastProtocol.encodeNotificationEvent(
+                        new OpalCastProtocol.NotificationEventMsg("posted", "", Collections.singletonList(withActions))));
+        OpalCastProtocol.NotificationEventMsg nDec = OpalCastProtocol.decodeNotificationEvent(nf.payload);
+        assertEquals(1, nDec.items.size());
+        assertEquals(2, nDec.items.get(0).actions.size());
+        assertEquals(0, nDec.items.get(0).actions.get(0).index);
+        assertEquals("标记已读", nDec.items.get(0).actions.get(0).label);
+        assertEquals(1, nDec.items.get(0).actions.get(1).index);
+        assertEquals("归档", nDec.items.get(0).actions.get(1).label);
+
+        String legacyNotifJson = "{\"action\":\"posted\",\"items\":[{\"key\":\"old\",\"pkg\":\"p\",\"appLabel\":\"A\","
+                + "\"title\":\"T\",\"text\":\"B\",\"postTimeMs\":1,\"clearable\":true,\"canReply\":false}]}";
+        OpalCastProtocol.NotificationEventMsg legacyNotif =
+                OpalCastProtocol.decodeNotificationEvent(legacyNotifJson.getBytes(StandardCharsets.UTF_8));
+        assertTrue(legacyNotif.items.get(0).actions.isEmpty());
+
+        // 2. NotificationActionMsg invoke_action + actionIndex + legacy default -1
+        OpalCastProtocol.NotificationActionMsg invokeAct = new OpalCastProtocol.NotificationActionMsg(
+                "invoke_action", "k-act", "", 1);
+        OpalCastProtocol.Frame naf = roundTrip(
+                OpalCastProtocol.TYPE_NOTIFICATION_ACTION, 0, 5002L,
+                OpalCastProtocol.encodeNotificationAction(invokeAct));
+        OpalCastProtocol.NotificationActionMsg invokeDec = OpalCastProtocol.decodeNotificationAction(naf.payload);
+        assertEquals("invoke_action", invokeDec.op);
+        assertEquals("k-act", invokeDec.key);
+        assertEquals(1, invokeDec.actionIndex);
+
+        OpalCastProtocol.NotificationActionMsg legacyAct = OpalCastProtocol.decodeNotificationAction(
+                "{\"op\":\"dismiss\",\"key\":\"k1\",\"replyText\":\"\"}".getBytes(StandardCharsets.UTF_8));
+        assertEquals(-1, legacyAct.actionIndex);
+
+        // 3. StorageReport folders & apps roundtrip + legacy decode without folders/apps
+        OpalCastProtocol.StorageReport reportV13 = new OpalCastProtocol.StorageReport(
+                128_000L, 48_000L, 80_000L,
+                Collections.singletonList(new OpalCastProtocol.StorageCategory("videos", 50_000L, 4)),
+                Collections.singletonList(new OpalCastProtocol.LargeFileEntry("a.mp4", "/sdcard/Movies/a.mp4", 30_000L, 100L)),
+                Collections.singletonList(new OpalCastProtocol.FolderStorageEntry("/sdcard/Movies", "Movies", 50_000L, 4)),
+                Collections.singletonList(new OpalCastProtocol.AppStorageEntry("com.tencent.mm", "微信", 400L, 2000L, 300L, 2700L)));
+        OpalCastProtocol.Frame sf = roundTrip(
+                OpalCastProtocol.TYPE_FILE_OP_RESPONSE, 0, 5003L,
+                OpalCastProtocol.encodeFileOpResponse(new OpalCastProtocol.FileOpResponseMsg(
+                        7, "storage_scan", true, "", "/sdcard", Collections.emptyList(), reportV13, 80_000L, "")));
+        OpalCastProtocol.FileOpResponseMsg sDec = OpalCastProtocol.decodeFileOpResponse(sf.payload);
+        assertNotNull(sDec.storage);
+        assertEquals(1, sDec.storage.folders.size());
+        assertEquals("/sdcard/Movies", sDec.storage.folders.get(0).path);
+        assertEquals(50_000L, sDec.storage.folders.get(0).bytes);
+        assertEquals(4, sDec.storage.folders.get(0).fileCount);
+        assertEquals(1, sDec.storage.apps.size());
+        assertEquals("com.tencent.mm", sDec.storage.apps.get(0).pkg);
+        assertEquals("微信", sDec.storage.apps.get(0).appLabel);
+        assertEquals(2700L, sDec.storage.apps.get(0).totalBytes);
+
+        String legacyStorageJson = "{\"requestId\":8,\"op\":\"storage_scan\",\"ok\":true,\"error\":\"\",\"path\":\"/sdcard\","
+                + "\"entries\":[],\"totalSize\":10,\"thumbnailBase64\":\"\","
+                + "\"storage\":{\"totalBytes\":100,\"freeBytes\":90,\"usedBytes\":10,\"categories\":[],\"largeFiles\":[]}}";
+        OpalCastProtocol.FileOpResponseMsg legacyResp =
+                OpalCastProtocol.decodeFileOpResponse(legacyStorageJson.getBytes(StandardCharsets.UTF_8));
+        assertNotNull(legacyResp.storage);
+        assertTrue(legacyResp.storage.folders.isEmpty());
+        assertTrue(legacyResp.storage.apps.isEmpty());
+
+        // 4. CallStateMsg (0x1E) & CallActionMsg (0x35) roundtrip
+        OpalCastProtocol.CallStateMsg callState = new OpalCastProtocol.CallStateMsg(
+                "ringing", "+8613800138000", "张三", 1730000200000L,
+                false, true, true, true, true, "telecom");
+        OpalCastProtocol.Frame cf = roundTrip(
+                OpalCastProtocol.TYPE_CALL_STATE, 0, 5004L,
+                OpalCastProtocol.encodeCallState(callState));
+        OpalCastProtocol.CallStateMsg callDec = OpalCastProtocol.decodeCallState(cf.payload);
+        assertEquals("ringing", callDec.state);
+        assertEquals("+8613800138000", callDec.number);
+        assertEquals("张三", callDec.contactName);
+        assertEquals(1730000200000L, callDec.startedAtMs);
+        assertFalse(callDec.isMuted);
+        assertTrue(callDec.isSpeakerOn);
+        assertTrue(callDec.canAnswer);
+        assertTrue(callDec.canReject);
+        assertTrue(callDec.canDial);
+        assertEquals("telecom", callDec.source);
+        assertTrue(callDec.isActiveOrRinging());
+
+        OpalCastProtocol.CallActionMsg callAct = new OpalCastProtocol.CallActionMsg(
+                "reject_with_sms", "+8613800138000", "稍后回电");
+        OpalCastProtocol.Frame caf = roundTrip(
+                OpalCastProtocol.TYPE_CALL_ACTION, 0, 5005L,
+                OpalCastProtocol.encodeCallAction(callAct));
+        OpalCastProtocol.CallActionMsg callActDec = OpalCastProtocol.decodeCallAction(caf.payload);
+        assertEquals("reject_with_sms", callActDec.op);
+        assertEquals("+8613800138000", callActDec.number);
+        assertEquals("稍后回电", callActDec.smsText);
+
+        try {
+            OpalCastProtocol.decodeCallAction("{\"number\":\"10086\"}".getBytes(StandardCharsets.UTF_8));
+            fail("Missing op in CALL_ACTION must throw ProtocolException");
+        } catch (OpalCastProtocol.ProtocolException expected) {
+            assertTrue(expected.getMessage().contains("op"));
         }
     }
 }

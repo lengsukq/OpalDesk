@@ -20,7 +20,7 @@ final class CompanionNotificationRelay {
     }
 
     interface HelperActionForwarder {
-        void forwardNotificationAction(String op, String key, String replyText);
+        void forwardNotificationAction(String op, String key, String replyText, int actionIndex);
     }
 
     private final Object cacheLock = new Object();
@@ -58,7 +58,7 @@ final class CompanionNotificationRelay {
                                 : OtpCodeExtractor.extract(it.title, it.text);
                         enriched.add(new OpalCastProtocol.NotificationItem(
                                 it.key, it.pkg, it.appLabel, it.title, it.text,
-                                it.postTimeMs, it.clearable, it.canReply, it.replyLabel, otp));
+                                it.postTimeMs, it.clearable, it.canReply, it.replyLabel, otp, it.actions));
                     }
                     if ("snapshot".equals(decoded.action)) {
                         cachedNotifications.clear();
@@ -113,7 +113,7 @@ final class CompanionNotificationRelay {
         if (!pushCachedSnapshotToSession(sessionId)) {
             HelperActionForwarder fwd = actionForwarder;
             if (fwd != null) {
-                fwd.forwardNotificationAction("sync", "", "");
+                fwd.forwardNotificationAction("sync", "", "", -1);
             }
         }
     }
@@ -139,7 +139,7 @@ final class CompanionNotificationRelay {
         }
         HelperActionForwarder fwd = actionForwarder;
         if (fwd != null) {
-            fwd.forwardNotificationAction(op, msg.key, msg.replyText);
+            fwd.forwardNotificationAction(op, msg.key, msg.replyText, msg.actionIndex);
         }
     }
 

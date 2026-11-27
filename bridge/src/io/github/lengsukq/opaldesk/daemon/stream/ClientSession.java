@@ -408,6 +408,7 @@ final class ClientSession {
                             || next.type == OpalCastProtocol.TYPE_FILE_OP_RESPONSE
                             || next.type == OpalCastProtocol.TYPE_FILE_PULL_CHUNK
                             || next.type == OpalCastProtocol.TYPE_APK_INSTALL_STATUS
+                            || next.type == OpalCastProtocol.TYPE_CALL_STATE
                             || next.type == OpalCastProtocol.TYPE_PONG;
                 }
                 try {

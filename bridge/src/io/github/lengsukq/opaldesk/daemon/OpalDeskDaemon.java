@@ -167,8 +167,9 @@ public final class OpalDeskDaemon implements Runnable {
                 inputRouter,
                 mouseRouter);
         this.remoteBridge.setPairingEventConsumer(helperBridge::pushPairingEvent);
-        this.remoteBridge.setNotificationActionConsumer(helperBridge::pushNotificationAction);
+        this.remoteBridge.setNotificationActionConsumer(helperBridge::dispatchNotificationAction);
         this.remoteBridge.setMediaActionConsumer(helperBridge::pushMediaAction);
+        this.remoteBridge.setCallActionConsumer(helperBridge::dispatchCallAction);
         this.remoteBridge.setDirectImeTextCommitter(helperBridge::commitTextViaBridgeIme);
         this.remoteBridge.setBridgeImeActiveSupplier(this.imeManager::isBridgeImeConfiguredOrActive);
         this.remoteBridge.setRemoteStateChangeListener(() -> {
