@@ -381,11 +381,7 @@ extension RemoteFileBrowserWindowView {
     }
 
     private func appStorageRow(_ app: AppStorageEntry, rank: Int, maxTotalBytes: Int64) -> some View {
-        let totalDouble = Double(max(app.totalBytes, 1))
         let overallFraction = min(max(Double(app.totalBytes) / Double(maxTotalBytes), 0.03), 1.0)
-        let apkRatio = Double(app.apkBytes) / totalDouble
-        let dataRatio = Double(app.dataBytes) / totalDouble
-        let cacheRatio = Double(app.cacheBytes) / totalDouble
 
         return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: OpalSpacing.sm) {
@@ -409,26 +405,7 @@ extension RemoteFileBrowserWindowView {
 
                 Spacer(minLength: OpalSpacing.sm)
 
-                HStack(spacing: 5) {
-                    StatusBadgeView(
-                        text: "应用 \(FileBrowserPresentation.formatByteCount(app.apkBytes))",
-                        color: .blue,
-                        horizontalPadding: 6,
-                        verticalPadding: 2
-                    )
-                    StatusBadgeView(
-                        text: "数据 \(FileBrowserPresentation.formatByteCount(app.dataBytes))",
-                        color: .purple,
-                        horizontalPadding: 6,
-                        verticalPadding: 2
-                    )
-                    StatusBadgeView(
-                        text: "缓存 \(FileBrowserPresentation.formatByteCount(app.cacheBytes))",
-                        color: .orange,
-                        horizontalPadding: 6,
-                        verticalPadding: 2
-                    )
-                }
+                appStorageBreakdownBadges(app)
 
                 Text(FileBrowserPresentation.formatByteCount(app.totalBytes))
                     .font(.callout.weight(.bold).monospacedDigit())
@@ -447,31 +424,63 @@ extension RemoteFileBrowserWindowView {
                 }
             }
 
-            GeometryReader { proxy in
-                let barWidth = max(proxy.size.width * overallFraction, 8)
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.08))
-                    HStack(spacing: 1) {
-                        if app.apkBytes > 0 {
-                            Rectangle().fill(Color.blue).frame(width: max(barWidth * apkRatio, 2))
-                        }
-                        if app.dataBytes > 0 {
-                            Rectangle().fill(Color.purple).frame(width: max(barWidth * dataRatio, 2))
-                        }
-                        if app.cacheBytes > 0 {
-                            Rectangle().fill(Color.orange).frame(width: max(barWidth * cacheRatio, 2))
-                        }
-                    }
-                    .frame(width: barWidth, alignment: .leading)
-                    .clipShape(Capsule())
-                }
-            }
-            .frame(height: 6)
+            appStorageStackedBar(app, overallFraction: overallFraction)
         }
         .padding(.horizontal, OpalSpacing.md)
         .padding(.vertical, 9)
         .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
         .opalInteractiveHover(cornerRadius: OpalRadius.tile)
+    }
+
+    private func appStorageBreakdownBadges(_ app: AppStorageEntry) -> some View {
+        HStack(spacing: 5) {
+            StatusBadgeView(
+                text: "应用 \(FileBrowserPresentation.formatByteCount(app.apkBytes))",
+                color: .blue,
+                horizontalPadding: 6,
+                verticalPadding: 2
+            )
+            StatusBadgeView(
+                text: "数据 \(FileBrowserPresentation.formatByteCount(app.dataBytes))",
+                color: .purple,
+                horizontalPadding: 6,
+                verticalPadding: 2
+            )
+            StatusBadgeView(
+                text: "缓存 \(FileBrowserPresentation.formatByteCount(app.cacheBytes))",
+                color: .orange,
+                horizontalPadding: 6,
+                verticalPadding: 2
+            )
+        }
+    }
+
+    private func appStorageStackedBar(_ app: AppStorageEntry, overallFraction: Double) -> some View {
+        let totalDouble = Double(max(app.totalBytes, 1))
+        let apkRatio = Double(app.apkBytes) / totalDouble
+        let dataRatio = Double(app.dataBytes) / totalDouble
+        let cacheRatio = Double(app.cacheBytes) / totalDouble
+
+        return GeometryReader { proxy in
+            let barWidth = max(proxy.size.width * overallFraction, 8)
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.08))
+                HStack(spacing: 1) {
+                    if app.apkBytes > 0 {
+                        Rectangle().fill(Color.blue).frame(width: max(barWidth * apkRatio, 2))
+                    }
+                    if app.dataBytes > 0 {
+                        Rectangle().fill(Color.purple).frame(width: max(barWidth * dataRatio, 2))
+                    }
+                    if app.cacheBytes > 0 {
+                        Rectangle().fill(Color.orange).frame(width: max(barWidth * cacheRatio, 2))
+                    }
+                }
+                .frame(width: barWidth, alignment: .leading)
+                .clipShape(Capsule())
+            }
+        }
+        .frame(height: 6)
     }
 
     private var largeFilesLeaderboardCard: some View {

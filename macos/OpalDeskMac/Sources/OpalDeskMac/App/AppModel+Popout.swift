@@ -64,7 +64,32 @@ public struct PendingPopoutReloadPrompt: Identifiable {
 // MARK: - Standalone Floating Windows (Up to 3 Concurrent + Pin + History + Reload Confirmation)
 
 extension AppModel {
-    private static let reloadGapNs: UInt64 = 240_000_000
+    private enum PopoutTuning {
+        static let reloadGapNs: UInt64 = 240_000_000
+        static let maxTargetFPS: Int = 60
+        static let maxBitrateKbps: Int = 10_000
+    }
+
+    private func makePopoutConnectionContext(
+        endpoint: OpalCastEndpoint,
+        transportHint: OpalCastTransportHint,
+        authToken: String,
+        useEffectiveBitrate: Bool = true
+    ) -> PopoutConnectionContext {
+        let rawBitrate = useEffectiveBitrate ? effectiveBitrateKbps() : preferences.bitrateKbps
+        return PopoutConnectionContext(
+            endpoint: endpoint,
+            transportHint: transportHint,
+            clientId: discovery.trustStore.clientId,
+            authToken: authToken,
+            preferredCodec: preferences.preferredCodec,
+            targetFPS: min(preferences.targetFPS, PopoutTuning.maxTargetFPS),
+            bitrateKbps: min(rawBitrate, PopoutTuning.maxBitrateKbps),
+            mapCommandToCtrl: preferences.mapCommandToCtrl,
+            audioEnabled: preferences.audioEnabled,
+            enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+        )
+    }
 
     public var activePopoutCount: Int {
         popoutManager.controllers.count
@@ -94,22 +119,19 @@ extension AppModel {
         if let conn = activeConnection {
             switch conn.transport {
             case .wiredUSB(let s, _), .wirelessADB(let s, _):
-                return "adb:\(s)"
+                return PopoutDeviceKey.adb(s)
             case .wirelessWiFi:
-                if !conn.fingerprint.isEmpty {
-                    return "fp:\(conn.fingerprint.prefix(16))"
-                }
-                return conn.deviceName
+                return PopoutDeviceKey.resolve(fingerprint: conn.fingerprint, fallback: conn.deviceName)
             }
         }
         if let target = companionTarget, !target.certFingerprint.isEmpty {
-            return "fp:\(target.certFingerprint.prefix(16))"
+            return PopoutDeviceKey.fingerprint(target.certFingerprint)
         }
         if let firstUsb = discovery.usbDevices.first(where: \.isReady) {
-            return "adb:\(firstUsb.serial)"
+            return PopoutDeviceKey.adb(firstUsb.serial)
         }
         if let firstTrusted = discovery.trustedDevices.first, !firstTrusted.certFingerprint.isEmpty {
-            return "fp:\(firstTrusted.certFingerprint.prefix(16))"
+            return PopoutDeviceKey.fingerprint(firstTrusted.certFingerprint)
         }
         return ""
     }
@@ -323,17 +345,10 @@ extension AppModel {
             return
         }
 
-        let connCtx = PopoutConnectionContext(
+        let connCtx = makePopoutConnectionContext(
             endpoint: endpoint,
             transportHint: pickerContext.resolvedTransportHint,
-            clientId: discovery.trustStore.clientId,
-            authToken: pickerContext.resolvedAuthToken,
-            preferredCodec: preferences.preferredCodec,
-            targetFPS: min(preferences.targetFPS, 60),
-            bitrateKbps: min(effectiveBitrateKbps(), 10_000),
-            mapCommandToCtrl: preferences.mapCommandToCtrl,
-            audioEnabled: preferences.audioEnabled,
-            enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+            authToken: pickerContext.resolvedAuthToken
         )
 
         let historyTemplate = PopoutHistoryEntry(
@@ -390,17 +405,10 @@ extension AppModel {
     /// Migrates open popouts after Wireless ADB seamlessly upgrades to Wi-Fi TLS.
     func migratePopoutsAfterWifiUpgrade(endpoint: OpalCastEndpoint, authToken: String) {
         guard !popoutManager.controllers.isEmpty else { return }
-        let upgraded = PopoutConnectionContext(
+        let upgraded = makePopoutConnectionContext(
             endpoint: endpoint,
             transportHint: .wifiTls,
-            clientId: discovery.trustStore.clientId,
-            authToken: authToken,
-            preferredCodec: preferences.preferredCodec,
-            targetFPS: min(preferences.targetFPS, 60),
-            bitrateKbps: min(effectiveBitrateKbps(), 10_000),
-            mapCommandToCtrl: preferences.mapCommandToCtrl,
-            audioEnabled: preferences.audioEnabled,
-            enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+            authToken: authToken
         )
         popoutManager.migrateConnectionContext(to: upgraded)
     }
@@ -510,19 +518,15 @@ extension AppModel {
                 serial = nil; host = h; port = p; kind = "wifi"
             }
             if keyMatches(serial, conn.fingerprint, conn.deviceName) {
-                let devKey = serial.map { "adb:\($0)" }
-                    ?? (conn.fingerprint.isEmpty ? conn.deviceName : "fp:\(conn.fingerprint.prefix(16))")
-                let ctx = PopoutConnectionContext(
+                let devKey = PopoutDeviceKey.resolve(
+                    adbSerial: serial,
+                    fingerprint: conn.fingerprint,
+                    fallback: conn.deviceName
+                )
+                let ctx = makePopoutConnectionContext(
                     endpoint: endpoint,
                     transportHint: conn.transport.transportHint,
-                    clientId: discovery.trustStore.clientId,
-                    authToken: pendingAuth.authToken,
-                    preferredCodec: preferences.preferredCodec,
-                    targetFPS: min(preferences.targetFPS, 60),
-                    bitrateKbps: min(effectiveBitrateKbps(), 10_000),
-                    mapCommandToCtrl: preferences.mapCommandToCtrl,
-                    audioEnabled: preferences.audioEnabled,
-                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                    authToken: pendingAuth.authToken
                 )
                 let entry = PopoutHistoryEntry(
                     appPackage: packageName,
@@ -544,19 +548,13 @@ extension AppModel {
         if companionManager.isAuthenticated, let target = companionManager.activeTarget,
            keyMatches(nil, target.certFingerprint, target.deviceName)
         {
-            let ctx = PopoutConnectionContext(
+            let ctx = makePopoutConnectionContext(
                 endpoint: target.endpoint,
                 transportHint: target.endpoint.security == .wiredLocalhostPlaintext ? .usb : .wifiTls,
-                clientId: discovery.trustStore.clientId,
                 authToken: target.authToken,
-                preferredCodec: preferences.preferredCodec,
-                targetFPS: min(preferences.targetFPS, 60),
-                bitrateKbps: min(preferences.bitrateKbps, 10_000),
-                mapCommandToCtrl: preferences.mapCommandToCtrl,
-                audioEnabled: preferences.audioEnabled,
-                enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                useEffectiveBitrate: false
             )
-            let devKey = target.certFingerprint.isEmpty ? target.deviceName : "fp:\(target.certFingerprint.prefix(16))"
+            let devKey = PopoutDeviceKey.resolve(fingerprint: target.certFingerprint, fallback: target.deviceName)
             let entry = PopoutHistoryEntry(
                 appPackage: packageName,
                 appActivity: activityClass,
@@ -581,23 +579,17 @@ extension AppModel {
                     security: .wiredLocalhostPlaintext,
                     autoReconnect: true
                 )
-                let ctx = PopoutConnectionContext(
+                let ctx = makePopoutConnectionContext(
                     endpoint: ep,
                     transportHint: usbDev.isWirelessAdb ? .wifiAdb : .usb,
-                    clientId: discovery.trustStore.clientId,
                     authToken: "",
-                    preferredCodec: preferences.preferredCodec,
-                    targetFPS: min(preferences.targetFPS, 60),
-                    bitrateKbps: min(preferences.bitrateKbps, 10_000),
-                    mapCommandToCtrl: preferences.mapCommandToCtrl,
-                    audioEnabled: preferences.audioEnabled,
-                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                    useEffectiveBitrate: false
                 )
                 let entry = PopoutHistoryEntry(
                     appPackage: packageName,
                     appActivity: activityClass,
                     appLabel: appLabel,
-                    deviceKey: "adb:\(usbDev.serial)",
+                    deviceKey: PopoutDeviceKey.adb(usbDev.serial),
                     deviceName: usbDev.displayName,
                     transportKind: "usb",
                     adbSerial: usbDev.serial
@@ -623,23 +615,17 @@ extension AppModel {
                     security: .tlsPinned(expectedFingerprint: pin),
                     autoReconnect: true
                 )
-                let ctx = PopoutConnectionContext(
+                let ctx = makePopoutConnectionContext(
                     endpoint: ep,
                     transportHint: .wifiTls,
-                    clientId: discovery.trustStore.clientId,
                     authToken: trusted?.authToken ?? "",
-                    preferredCodec: preferences.preferredCodec,
-                    targetFPS: min(preferences.targetFPS, 60),
-                    bitrateKbps: min(preferences.bitrateKbps, 10_000),
-                    mapCommandToCtrl: preferences.mapCommandToCtrl,
-                    audioEnabled: preferences.audioEnabled,
-                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                    useEffectiveBitrate: false
                 )
                 let entry = PopoutHistoryEntry(
                     appPackage: packageName,
                     appActivity: activityClass,
                     appLabel: appLabel,
-                    deviceKey: "fp:\(pin.prefix(16))",
+                    deviceKey: PopoutDeviceKey.fingerprint(pin),
                     deviceName: bonjour.displayName,
                     transportKind: "bonjour",
                     certFingerprint: pin,
@@ -653,17 +639,10 @@ extension AppModel {
         // 5. Fallback to active main or companion even when preferredDeviceKey didn't match (e.g. rotated device key)
         if preferredDeviceKey != nil {
             if isAuthenticated, let endpoint = activeSessionEndpoint, let conn = activeConnection {
-                let ctx = PopoutConnectionContext(
+                let ctx = makePopoutConnectionContext(
                     endpoint: endpoint,
                     transportHint: conn.transport.transportHint,
-                    clientId: discovery.trustStore.clientId,
-                    authToken: pendingAuth.authToken,
-                    preferredCodec: preferences.preferredCodec,
-                    targetFPS: min(preferences.targetFPS, 60),
-                    bitrateKbps: min(effectiveBitrateKbps(), 10_000),
-                    mapCommandToCtrl: preferences.mapCommandToCtrl,
-                    audioEnabled: preferences.audioEnabled,
-                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                    authToken: pendingAuth.authToken
                 )
                 let entry = PopoutHistoryEntry(
                     appPackage: packageName,
@@ -677,23 +656,17 @@ extension AppModel {
                 return (ctx, entry)
             }
             if companionManager.isAuthenticated, let target = companionManager.activeTarget {
-                let ctx = PopoutConnectionContext(
+                let ctx = makePopoutConnectionContext(
                     endpoint: target.endpoint,
                     transportHint: .wifiTls,
-                    clientId: discovery.trustStore.clientId,
                     authToken: target.authToken,
-                    preferredCodec: preferences.preferredCodec,
-                    targetFPS: min(preferences.targetFPS, 60),
-                    bitrateKbps: min(preferences.bitrateKbps, 10_000),
-                    mapCommandToCtrl: preferences.mapCommandToCtrl,
-                    audioEnabled: preferences.audioEnabled,
-                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                    useEffectiveBitrate: false
                 )
                 let entry = PopoutHistoryEntry(
                     appPackage: packageName,
                     appActivity: activityClass,
                     appLabel: appLabel,
-                    deviceKey: "fp:\(target.certFingerprint.prefix(16))",
+                    deviceKey: PopoutDeviceKey.fingerprint(target.certFingerprint),
                     deviceName: target.deviceName,
                     transportKind: "bonjour",
                     certFingerprint: target.certFingerprint
@@ -747,7 +720,7 @@ extension AppModel {
                     if closePickerOnOpen { self.closeRemoteAppPicker() }
                     Task { @MainActor in
                         self.popoutManager.closeWindow(id: existingId, sendDisconnect: true)
-                        _ = await sleepCancellable(nanoseconds: Self.reloadGapNs)
+                        _ = await sleepCancellable(nanoseconds: PopoutTuning.reloadGapNs)
                         let reopened = self.openPopoutImmediate(entry: entry, context: context, forceReload: true)
                         if case .opened = reopened {
                             self.showToast("已重载「\(entry.displayLabel)」小窗与应用")
@@ -830,7 +803,7 @@ extension AppModel {
             let (connCtx, updatedEntry) = try await resolveConnectionContextForHistory(entry)
             if forceReload, let existing = popoutManager.existingController(for: entry.appPackage) {
                 popoutManager.closeWindow(id: existing.id, sendDisconnect: true)
-                _ = await sleepCancellable(nanoseconds: Self.reloadGapNs)
+                _ = await sleepCancellable(nanoseconds: PopoutTuning.reloadGapNs)
             }
             let result = openPopoutImmediate(entry: updatedEntry, context: connCtx, forceReload: forceReload)
             switch result {
@@ -866,17 +839,10 @@ extension AppModel {
                     && FingerprintUtil.matches(actualFullHex: conn.fingerprint, expected: entry.certFingerprint!))
                 || (entry.deviceName == conn.deviceName)
             if matchesActive {
-                let ctx = PopoutConnectionContext(
+                let ctx = makePopoutConnectionContext(
                     endpoint: endpoint,
                     transportHint: conn.transport.transportHint,
-                    clientId: discovery.trustStore.clientId,
-                    authToken: pendingAuth.authToken,
-                    preferredCodec: preferences.preferredCodec,
-                    targetFPS: min(preferences.targetFPS, 60),
-                    bitrateKbps: min(effectiveBitrateKbps(), 10_000),
-                    mapCommandToCtrl: preferences.mapCommandToCtrl,
-                    audioEnabled: preferences.audioEnabled,
-                    enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                    authToken: pendingAuth.authToken
                 )
                 return (ctx, nextEntry)
             }
@@ -892,17 +858,11 @@ extension AppModel {
                 security: .wiredLocalhostPlaintext,
                 autoReconnect: true
             )
-            let ctx = PopoutConnectionContext(
+            let ctx = makePopoutConnectionContext(
                 endpoint: ep,
                 transportHint: usbDev.isWirelessAdb ? .wifiAdb : .usb,
-                clientId: discovery.trustStore.clientId,
                 authToken: "",
-                preferredCodec: preferences.preferredCodec,
-                targetFPS: min(preferences.targetFPS, 60),
-                bitrateKbps: min(preferences.bitrateKbps, 10_000),
-                mapCommandToCtrl: preferences.mapCommandToCtrl,
-                audioEnabled: preferences.audioEnabled,
-                enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                useEffectiveBitrate: false
             )
             return (ctx, nextEntry)
         }
@@ -928,17 +888,11 @@ extension AppModel {
                 security: .tlsPinned(expectedFingerprint: pin),
                 autoReconnect: true
             )
-            let ctx = PopoutConnectionContext(
+            let ctx = makePopoutConnectionContext(
                 endpoint: ep,
                 transportHint: .wifiTls,
-                clientId: discovery.trustStore.clientId,
                 authToken: trusted?.authToken ?? "",
-                preferredCodec: preferences.preferredCodec,
-                targetFPS: min(preferences.targetFPS, 60),
-                bitrateKbps: min(preferences.bitrateKbps, 10_000),
-                mapCommandToCtrl: preferences.mapCommandToCtrl,
-                audioEnabled: preferences.audioEnabled,
-                enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                useEffectiveBitrate: false
             )
             return (ctx, nextEntry)
         }
@@ -954,17 +908,11 @@ extension AppModel {
                 security: .tlsPinned(expectedFingerprint: fp),
                 autoReconnect: true
             )
-            let ctx = PopoutConnectionContext(
+            let ctx = makePopoutConnectionContext(
                 endpoint: ep,
                 transportHint: .wifiTls,
-                clientId: discovery.trustStore.clientId,
                 authToken: trustedByFp?.authToken ?? "",
-                preferredCodec: preferences.preferredCodec,
-                targetFPS: min(preferences.targetFPS, 60),
-                bitrateKbps: min(preferences.bitrateKbps, 10_000),
-                mapCommandToCtrl: preferences.mapCommandToCtrl,
-                audioEnabled: preferences.audioEnabled,
-                enableEdgeNavigationGestures: preferences.enableEdgeNavigationGestures
+                useEffectiveBitrate: false
             )
             return (ctx, nextEntry)
         }
@@ -990,11 +938,11 @@ extension AppModel {
             case nil:
                 serial = nil; host = nil; port = nil; kind = "wifi"
             }
-            let devKey: String = {
-                if let serial { return "adb:\(serial)" }
-                if let fp = conn?.fingerprint, !fp.isEmpty { return "fp:\(fp.prefix(16))" }
-                return conn?.deviceName ?? "active"
-            }()
+            let devKey = PopoutDeviceKey.resolve(
+                adbSerial: serial,
+                fingerprint: conn?.fingerprint,
+                fallback: conn?.deviceName ?? "active"
+            )
             return RemoteAppPickerContext(
                 target: target,
                 deviceKey: devKey,
@@ -1013,7 +961,7 @@ extension AppModel {
         case .adb(let dev):
             return RemoteAppPickerContext(
                 target: target,
-                deviceKey: "adb:\(dev.serial)",
+                deviceKey: PopoutDeviceKey.adb(dev.serial),
                 deviceName: dev.displayName,
                 allowLaunchInDesktop: false,
                 resolvedTransportHint: dev.isWirelessAdb ? .wifiAdb : .usb,
@@ -1025,7 +973,7 @@ extension AppModel {
             let fp = trusted?.certFingerprint ?? dev.fingerprintPrefix
             return RemoteAppPickerContext(
                 target: target,
-                deviceKey: fp.isEmpty ? "bonjour:\(dev.serviceName)" : "fp:\(fp.prefix(16))",
+                deviceKey: PopoutDeviceKey.resolve(fingerprint: fp, fallback: "bonjour:\(dev.serviceName)"),
                 deviceName: dev.displayName,
                 allowLaunchInDesktop: false,
                 resolvedTransportHint: .wifiTls,
@@ -1041,7 +989,7 @@ extension AppModel {
             let fp = trusted?.certFingerprint ?? dev.certFingerprint
             return RemoteAppPickerContext(
                 target: target,
-                deviceKey: fp.isEmpty ? "host:\(dev.host):\(dev.port)" : "fp:\(fp.prefix(16))",
+                deviceKey: PopoutDeviceKey.resolve(fingerprint: fp, fallback: "host:\(dev.host):\(dev.port)"),
                 deviceName: dev.displayName,
                 allowLaunchInDesktop: false,
                 resolvedTransportHint: .wifiTls,
@@ -1054,7 +1002,7 @@ extension AppModel {
         case .trusted(let dev):
             return RemoteAppPickerContext(
                 target: target,
-                deviceKey: "fp:\(dev.certFingerprint.prefix(16))",
+                deviceKey: PopoutDeviceKey.fingerprint(dev.certFingerprint),
                 deviceName: dev.deviceName,
                 allowLaunchInDesktop: false,
                 resolvedTransportHint: .wifiTls,

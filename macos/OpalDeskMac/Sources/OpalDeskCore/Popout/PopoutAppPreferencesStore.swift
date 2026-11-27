@@ -2,6 +2,33 @@ import CoreGraphics
 import Foundation
 import os
 
+// MARK: - Canonical Device Key Formatting (SSOT)
+
+/// Single source of truth for per-device preference & shortcut keys (`adb:<serial>` / `fp:<16-hex>`).
+public enum PopoutDeviceKey {
+    public static let adbPrefix = "adb:"
+    public static let fingerprintPrefix = "fp:"
+    public static let fingerprintPrefixLength = 16
+
+    public static func adb(_ serial: String) -> String {
+        "\(adbPrefix)\(serial)"
+    }
+
+    public static func fingerprint(_ fullHex: String) -> String {
+        "\(fingerprintPrefix)\(fullHex.prefix(fingerprintPrefixLength))"
+    }
+
+    public static func resolve(adbSerial: String? = nil, fingerprint: String? = nil, fallback: String = "") -> String {
+        if let serial = adbSerial, !serial.isEmpty {
+            return adb(serial)
+        }
+        if let fp = fingerprint, !fp.isEmpty {
+            return Self.fingerprint(fp)
+        }
+        return fallback
+    }
+}
+
 // MARK: - Per-App Popout Preferences Model
 
 /// Persisted per-app preferences for standalone floating Android app windows (favorites, presets, DPI, compat resolution).

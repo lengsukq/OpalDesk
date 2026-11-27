@@ -50,6 +50,11 @@ public struct RemoteNotificationItem: Codable, Sendable, Equatable, Identifiable
         appLabel.isEmpty ? pkg : appLabel
     }
 
+    /// Non-blank interactive notification buttons ready for UI rendering (SSOT across Hub & Menu Bar).
+    public var displayActions: [RemoteNotificationAction] {
+        actions.filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
     public init(
         key: String,
         pkg: String,

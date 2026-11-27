@@ -181,7 +181,7 @@ extension DeviceHubView {
     }
 
     private func recentNotificationStrip(_ item: RemoteNotificationItem) -> some View {
-        let validActions = item.actions.filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let validActions = item.displayActions
         let extraCount = max(0, model.remoteNotifications.filter { $0.otpCode.isEmpty }.count - 1)
 
         return HStack(spacing: OpalSpacing.md) {
@@ -358,6 +358,7 @@ extension DeviceHubView {
         let isPinned = activeCtrl?.isPinnedOnTop ?? entry.pinnedOnTop
         let isFavorite = model.isFavoriteApp(pkg: entry.appPackage, deviceKey: entry.deviceKey)
         let prefSummary = model.popoutPreferenceSummary(pkg: entry.appPackage, deviceKey: entry.deviceKey)
+        let tint: Color? = isRunning ? .green : (isFavorite ? .orange : nil)
 
         return HStack(spacing: OpalSpacing.md) {
             OpalAppMonogram(
@@ -368,87 +369,113 @@ extension DeviceHubView {
                 showActiveIndicator: isRunning
             )
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 5) {
-                    Text(entry.displayLabel)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    if isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(.orange)
-                    }
-                    if let prefSummary {
-                        StatusBadgeView(
-                            text: prefSummary,
-                            color: .accentColor,
-                            horizontalPadding: 5.5,
-                            verticalPadding: 1,
-                            backgroundOpacity: 0.11
-                        )
-                    }
-                }
-                Text("\(entry.deviceName) · \(isRunning ? "运行中（点击聚焦/重载）" : "打开 \(entry.openCount) 次")")
-                    .font(.caption2)
-                    .foregroundStyle(isRunning ? .green : .secondary)
-                    .lineLimit(1)
-            }
+            historyAppTileMetadata(
+                entry: entry,
+                isRunning: isRunning,
+                isPinned: isPinned,
+                prefSummary: prefSummary
+            )
 
             Spacer(minLength: OpalSpacing.xxs)
 
-            HStack(spacing: 2) {
-                OpalGlassIconButton(
-                    systemName: isFavorite ? "star.fill" : "star",
-                    tint: isFavorite ? .orange : .secondary,
-                    isActive: isFavorite,
-                    size: 24,
-                    iconSize: 10.5,
-                    helpText: isFavorite ? "取消常用置顶" : "设为常用置顶应用"
-                ) {
-                    model.toggleFavoriteApp(pkg: entry.appPackage, deviceKey: entry.deviceKey)
-                }
-
-                if let ctrl = activeCtrl {
-                    OpalGlassIconButton(
-                        systemName: ctrl.isPinnedOnTop ? "pin.fill" : "pin",
-                        tint: ctrl.isPinnedOnTop ? .orange : .secondary,
-                        isActive: ctrl.isPinnedOnTop,
-                        size: 24,
-                        iconSize: 10.5,
-                        helpText: ctrl.isPinnedOnTop ? "取消置顶" : "置顶该悬浮窗"
-                    ) {
-                        ctrl.togglePinnedOnTop()
-                    }
-
-                    OpalGlassIconButton(
-                        systemName: "xmark.circle.fill",
-                        tint: .secondary,
-                        size: 24,
-                        iconSize: 11.5,
-                        helpText: "关闭此小窗"
-                    ) {
-                        model.popoutManager.closeWindow(id: ctrl.id, sendDisconnect: true)
-                    }
-                } else {
-                    OpalGlassIconButton(
-                        systemName: "xmark",
-                        tint: .secondary,
-                        size: 24,
-                        iconSize: 10,
-                        helpText: "移除此历史记录"
-                    ) {
-                        model.removePopoutHistoryEntry(entry)
-                    }
-                }
-            }
+            historyAppTileTrailingActions(
+                entry: entry,
+                activeCtrl: activeCtrl,
+                isFavorite: isFavorite
+            )
         }
         .padding(.horizontal, OpalSpacing.md)
         .padding(.vertical, 10)
-        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile, tint: isRunning ? .green : (isFavorite ? .orange : nil))
-        .opalInteractiveHover(cornerRadius: OpalRadius.tile, tint: isRunning ? .green : (isFavorite ? .orange : nil))
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile, tint: tint)
+        .opalInteractiveHover(cornerRadius: OpalRadius.tile, tint: tint)
         .contentShape(RoundedRectangle(cornerRadius: OpalRadius.tile, style: .continuous))
         .onTapGesture {
             model.openPopoutFromHistory(entry)
+        }
+    }
+
+    private func historyAppTileMetadata(
+        entry: PopoutHistoryEntry,
+        isRunning: Bool,
+        isPinned: Bool,
+        prefSummary: String?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Text(entry.displayLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                if isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.orange)
+                }
+                if let prefSummary {
+                    StatusBadgeView(
+                        text: prefSummary,
+                        color: .accentColor,
+                        horizontalPadding: 5.5,
+                        verticalPadding: 1,
+                        backgroundOpacity: 0.11
+                    )
+                }
+            }
+            Text("\(entry.deviceName) · \(isRunning ? "运行中（点击聚焦/重载）" : "打开 \(entry.openCount) 次")")
+                .font(.caption2)
+                .foregroundStyle(isRunning ? .green : .secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func historyAppTileTrailingActions(
+        entry: PopoutHistoryEntry,
+        activeCtrl: PopoutAppController?,
+        isFavorite: Bool
+    ) -> some View {
+        HStack(spacing: 2) {
+            OpalGlassIconButton(
+                systemName: isFavorite ? "star.fill" : "star",
+                tint: isFavorite ? .orange : .secondary,
+                isActive: isFavorite,
+                size: 24,
+                iconSize: 10.5,
+                helpText: isFavorite ? "取消常用置顶" : "设为常用置顶应用"
+            ) {
+                model.toggleFavoriteApp(pkg: entry.appPackage, deviceKey: entry.deviceKey)
+            }
+
+            if let ctrl = activeCtrl {
+                OpalGlassIconButton(
+                    systemName: ctrl.isPinnedOnTop ? "pin.fill" : "pin",
+                    tint: ctrl.isPinnedOnTop ? .orange : .secondary,
+                    isActive: ctrl.isPinnedOnTop,
+                    size: 24,
+                    iconSize: 10.5,
+                    helpText: ctrl.isPinnedOnTop ? "取消置顶" : "置顶该悬浮窗"
+                ) {
+                    ctrl.togglePinnedOnTop()
+                }
+
+                OpalGlassIconButton(
+                    systemName: "xmark.circle.fill",
+                    tint: .secondary,
+                    size: 24,
+                    iconSize: 11.5,
+                    helpText: "关闭此小窗"
+                ) {
+                    model.popoutManager.closeWindow(id: ctrl.id, sendDisconnect: true)
+                }
+            } else {
+                OpalGlassIconButton(
+                    systemName: "xmark",
+                    tint: .secondary,
+                    size: 24,
+                    iconSize: 10,
+                    helpText: "移除此历史记录"
+                ) {
+                    model.removePopoutHistoryEntry(entry)
+                }
+            }
         }
     }
 
@@ -757,7 +784,22 @@ extension DeviceHubView {
     }
 }
 
-// MARK: - Unified Device Row Component (DRY across ADB, USB Tether & Bonjour)
+// MARK: - Unified Device Row Components (DRY across ADB, USB Tether, Bonjour & BLE)
+
+private struct HubDeviceListRowContainer<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: OpalSpacing.md) {
+            content()
+        }
+        .padding(.horizontal, OpalSpacing.lg)
+        .padding(.vertical, 13)
+        .background(isHovered ? Color.primary.opacity(0.035) : .clear)
+        .onHover { isHovered = $0 }
+    }
+}
 
 private struct DeviceConnectionRow: View {
     let icon: String
@@ -771,10 +813,8 @@ private struct DeviceConnectionRow: View {
     let onPopout: () -> Void
     let onPrimary: () -> Void
 
-    @State private var isHovered = false
-
     var body: some View {
-        HStack(spacing: OpalSpacing.md) {
+        HubDeviceListRowContainer {
             OpalIconBadge(systemName: icon, tint: iconTint, size: 38, iconSize: 17, cornerRadius: 11)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -802,10 +842,6 @@ private struct DeviceConnectionRow: View {
                     .disabled(isDisabled)
             }
         }
-        .padding(.horizontal, OpalSpacing.lg)
-        .padding(.vertical, 13)
-        .background(isHovered ? Color.primary.opacity(0.035) : .clear)
-        .onHover { isHovered = $0 }
     }
 }
 
@@ -816,15 +852,13 @@ private struct BleNearbyDeviceRow: View {
     let isAnyTriggering: Bool
     let onTrigger: () -> Void
 
-    @State private var isHovered = false
-
     var body: some View {
         let statusText = device.isHotspotActive
             ? "热点已开启"
             : (device.isLanShareActive ? "无线服务待连接" : "蓝牙附近")
         let statusColor: Color = device.isHotspotActive ? .green : .blue
 
-        HStack(spacing: OpalSpacing.md) {
+        HubDeviceListRowContainer {
             OpalIconBadge(
                 systemName: "iphone.radiowaves.left.and.right",
                 tint: .blue,
@@ -873,9 +907,5 @@ private struct BleNearbyDeviceRow: View {
             .buttonStyle(.borderedProminent)
             .disabled(isAnyTriggering)
         }
-        .padding(.horizontal, OpalSpacing.lg)
-        .padding(.vertical, 13)
-        .background(isHovered ? Color.primary.opacity(0.035) : .clear)
-        .onHover { isHovered = $0 }
     }
 }

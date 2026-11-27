@@ -397,114 +397,129 @@ public struct MenuBarView: View {
 
     private func notificationRow(_ item: RemoteNotificationItem) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .top, spacing: OpalSpacing.xs) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 5) {
-                        Text(item.displayAppLabel)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        if !item.title.isEmpty {
-                            Text("· \(item.title)")
-                                .font(.caption.weight(.semibold))
-                                .lineLimit(1)
-                        }
-                    }
-                    if !item.text.isEmpty {
-                        Text(item.text)
-                            .font(.caption2)
-                            .foregroundStyle(.primary.opacity(0.86))
-                            .lineLimit(2)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture { model.openNotificationApp(item) }
-                .help("点击在 Mac 小窗打开「\(item.displayAppLabel)」")
+            notificationHeaderRow(item)
 
-                if item.clearable {
-                    OpalGlassIconButton(
-                        systemName: "xmark",
-                        tint: .secondary,
-                        size: 20,
-                        iconSize: 9,
-                        helpText: "忽略此通知"
-                    ) {
-                        if replyingNotificationKey == item.key {
-                            replyingNotificationKey = nil
-                            replyDraftText = ""
-                        }
-                        model.dismissRemoteNotification(item)
-                    }
-                }
-            }
-
-            let validActions = item.actions.filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            let validActions = item.displayActions
             if !item.otpCode.isEmpty || item.canReply || !validActions.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: OpalSpacing.xs) {
-                        if !item.otpCode.isEmpty {
-                            Button {
-                                model.copyNotificationOtp(item)
-                            } label: {
-                                Label("复制 \(item.otpCode)", systemImage: "doc.on.doc")
-                                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.green)
-                            .controlSize(.mini)
-                        }
-
-                        if item.canReply {
-                            Button {
-                                if replyingNotificationKey == item.key {
-                                    replyingNotificationKey = nil
-                                    replyDraftText = ""
-                                } else {
-                                    replyingNotificationKey = item.key
-                                    replyDraftText = ""
-                                }
-                            } label: {
-                                Label(item.replyLabel.isEmpty ? "回复" : item.replyLabel, systemImage: "arrowshape.turn.up.left")
-                                    .font(.caption2)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
-                        }
-
-                        ForEach(validActions) { action in
-                            Button {
-                                model.invokeNotificationAction(item, actionIndex: action.index)
-                            } label: {
-                                Text(action.label)
-                                    .font(.caption2.weight(.medium))
-                                    .lineLimit(1)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
-                        }
-                    }
-                }
+                notificationActionChips(for: item, actions: validActions)
             }
 
             if replyingNotificationKey == item.key {
-                HStack(spacing: OpalSpacing.xs) {
-                    TextField("输入回复内容…", text: $replyDraftText)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption)
-                        .onSubmit { submitInlineReply(for: item) }
-
-                    Button("发送") { submitInlineReply(for: item) }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.mini)
-                        .disabled(replyDraftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                .padding(.top, 2)
+                notificationInlineReplyBar(for: item)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
+    }
+
+    private func notificationHeaderRow(_ item: RemoteNotificationItem) -> some View {
+        HStack(alignment: .top, spacing: OpalSpacing.xs) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(item.displayAppLabel)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if !item.title.isEmpty {
+                        Text("· \(item.title)")
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                }
+                if !item.text.isEmpty {
+                    Text(item.text)
+                        .font(.caption2)
+                        .foregroundStyle(.primary.opacity(0.86))
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { model.openNotificationApp(item) }
+            .help("点击在 Mac 小窗打开「\(item.displayAppLabel)」")
+
+            if item.clearable {
+                OpalGlassIconButton(
+                    systemName: "xmark",
+                    tint: .secondary,
+                    size: 20,
+                    iconSize: 9,
+                    helpText: "忽略此通知"
+                ) {
+                    if replyingNotificationKey == item.key {
+                        replyingNotificationKey = nil
+                        replyDraftText = ""
+                    }
+                    model.dismissRemoteNotification(item)
+                }
+            }
+        }
+    }
+
+    private func notificationActionChips(
+        for item: RemoteNotificationItem,
+        actions: [RemoteNotificationAction]
+    ) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: OpalSpacing.xs) {
+                if !item.otpCode.isEmpty {
+                    Button {
+                        model.copyNotificationOtp(item)
+                    } label: {
+                        Label("复制 \(item.otpCode)", systemImage: "doc.on.doc")
+                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .controlSize(.mini)
+                }
+
+                if item.canReply {
+                    Button {
+                        if replyingNotificationKey == item.key {
+                            replyingNotificationKey = nil
+                            replyDraftText = ""
+                        } else {
+                            replyingNotificationKey = item.key
+                            replyDraftText = ""
+                        }
+                    } label: {
+                        Label(item.replyLabel.isEmpty ? "回复" : item.replyLabel, systemImage: "arrowshape.turn.up.left")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                }
+
+                ForEach(actions) { action in
+                    Button {
+                        model.invokeNotificationAction(item, actionIndex: action.index)
+                    } label: {
+                        Text(action.label)
+                            .font(.caption2.weight(.medium))
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                }
+            }
+        }
+    }
+
+    private func notificationInlineReplyBar(for item: RemoteNotificationItem) -> some View {
+        HStack(spacing: OpalSpacing.xs) {
+            TextField("输入回复内容…", text: $replyDraftText)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+                .onSubmit { submitInlineReply(for: item) }
+
+            Button("发送") { submitInlineReply(for: item) }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.mini)
+                .disabled(replyDraftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.top, 2)
     }
 
     private func submitInlineReply(for item: RemoteNotificationItem) {

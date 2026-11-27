@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -256,96 +255,23 @@ fun OpalSpotlightOverlay(
                 )
                 .pointerInput(Unit) { detectTapGestures {} },
         ) {
-            // 1. Spotlight Search Input Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 13.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                OpalGlyphIcon(
-                    glyph = ChromeGlyph.SEARCH,
-                    tint = OpalPalette.AccentBlue,
-                    size = 18.dp,
-                )
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    if (query.isEmpty()) {
-                        OpalText(
-                            text = placeholder,
-                            fontSize = 15.sp,
-                            color = OpalPalette.TextMuted,
-                            maxLines = 1,
-                        )
-                    }
-                    BasicTextField(
-                        value = query,
-                        onValueChange = { next ->
-                            query = next
-                            controller.resetSelection()
-                        },
-                        singleLine = true,
-                        textStyle = TextStyle(
-                            color = OpalPalette.TextPrimary,
-                            fontSize = 15.5.sp,
-                            fontWeight = FontWeight.Medium,
-                        ),
-                        cursorBrush = SolidColor(OpalPalette.AccentBlue),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(focusRequester)
-                            .onFocusChanged { st ->
-                                fieldFocused = st.isFocused
-                                val dispId = hostView.display?.displayId ?: Display.DEFAULT_DISPLAY
-                                OpalImeFocusTracker.setLocalTextFieldFocused(st.isFocused, dispId)
-                            }
-                            .onPreviewKeyEvent { keyEv ->
-                                controller.handleKeyEvent(keyEv.nativeKeyEvent)
-                            },
-                    )
-                }
-
-                if (query.isNotEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .clip(CircleShape)
-                            .background(OpalPalette.ChipFill)
-                            .clickable {
-                                query = ""
-                                controller.resetSelection()
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        OpalGlyphIcon(
-                            glyph = ChromeGlyph.CLOSE,
-                            tint = OpalPalette.TextSecondary,
-                            size = 11.dp,
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(OpalPalette.ChipFill)
-                        .border(0.7.dp, OpalPalette.BorderHairline, CircleShape)
-                        .clickable(onClick = onDismiss)
-                        .padding(horizontal = 9.dp, vertical = 4.dp),
-                ) {
-                    OpalText(
-                        text = if (isCompact) "取消" else "Esc",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = if (isCompact) null else FontFamily.Monospace,
-                        color = OpalPalette.TextSecondary,
-                        maxLines = 1,
-                    )
-                }
-            }
+            SpotlightSearchHeader(
+                query = query,
+                placeholder = placeholder,
+                isCompact = isCompact,
+                focusRequester = focusRequester,
+                controller = controller,
+                onQueryChange = { next ->
+                    query = next
+                    controller.resetSelection()
+                },
+                onFocusChanged = { focused ->
+                    fieldFocused = focused
+                    val dispId = hostView.display?.displayId ?: Display.DEFAULT_DISPLAY
+                    OpalImeFocusTracker.setLocalTextFieldFocused(focused, dispId)
+                },
+                onDismiss = onDismiss,
+            )
 
             Box(
                 modifier = Modifier
@@ -354,159 +280,289 @@ fun OpalSpotlightOverlay(
                     .background(OpalPalette.DividerColor),
             )
 
-            // 2. Empty-Query Quick Filter Chips
             if (trimmedQuery.isEmpty() && quickChips.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 14.dp, vertical = 9.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    quickChips.forEach { (label, fillQuery) ->
-                        Box(
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(OpalPalette.ChipFill)
-                                .border(0.75.dp, OpalPalette.BorderHairline, CircleShape)
-                                .clickable {
-                                    query = fillQuery
-                                    controller.resetSelection()
-                                }
-                                .padding(horizontal = 10.dp, vertical = 4.5.dp),
-                        ) {
-                            OpalText(
-                                text = label,
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = OpalPalette.TextSecondary,
-                                maxLines = 1,
-                            )
-                        }
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(0.6.dp)
-                        .background(OpalPalette.DividerColor.copy(alpha = 0.65f)),
+                SpotlightQuickChipsBar(
+                    quickChips = quickChips,
+                    onSelectChip = { fillQuery ->
+                        query = fillQuery
+                        controller.resetSelection()
+                    },
                 )
             }
 
-            // 3. Results List
             if (listEntries.isEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 28.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(5.dp),
-                ) {
-                    OpalText(
-                        text = "未找到与「$trimmedQuery」匹配的结果",
-                        fontSize = 13.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = OpalPalette.TextPrimary,
-                    )
-                    OpalText(
-                        text = "试试搜索「DPI」「分辨率」「输入法」「投屏」「UHID」或拼音首字母",
-                        fontSize = 11.5.sp,
-                        color = OpalPalette.TextMuted,
-                    )
-                }
+                SpotlightEmptyResults(trimmedQuery = trimmedQuery)
             } else {
-                LazyColumn(
-                    state = listState,
+                SpotlightResultsList(
+                    listEntries = listEntries,
+                    listState = listState,
+                    controller = controller,
+                    iconProvider = iconProvider,
+                    onSelectItem = onSelectItem,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f, fill = false)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
-                ) {
-                    items(
-                        count = listEntries.size,
-                        key = { idx ->
-                            when (val e = listEntries[idx]) {
-                                is SpotlightListEntry.Header -> "hdr_${e.id}"
-                                is SpotlightListEntry.Row -> "row_${e.item.id}"
-                            }
-                        },
-                    ) { idx ->
-                        when (val entry = listEntries[idx]) {
-                            is SpotlightListEntry.Header -> {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(
-                                            start = 8.dp,
-                                            end = 8.dp,
-                                            top = if (idx == 0) 2.dp else 8.dp,
-                                            bottom = 3.dp,
-                                        ),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                ) {
-                                    OpalText(
-                                        text = entry.title,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = OpalPalette.TextMuted,
-                                    )
-                                    OpalText(
-                                        text = "${entry.count}",
-                                        fontSize = 10.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = OpalPalette.TextMuted,
-                                    )
-                                }
-                            }
-                            is SpotlightListEntry.Row -> {
-                                val selected = entry.flatIndex == controller.selectedIndex
-                                val appIcon = iconProvider?.invoke(entry.item)
-                                SpotlightResultRow(
-                                    item = entry.item,
-                                    selected = selected,
-                                    appIcon = appIcon,
-                                    onHover = { controller.selectIndex(entry.flatIndex) },
-                                    onClick = { onSelectItem(entry.item) },
-                                )
-                            }
-                        }
-                    }
-                }
+                        .weight(1f, fill = false),
+                )
             }
 
-            // 4. Footer Keyboard Hints Bar (shown on non-compact / wide displays)
             if (!isCompact) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(0.7.dp)
-                        .background(OpalPalette.DividerColor),
+                SpotlightFooterBar(
+                    isEmptyQuery = trimmedQuery.isEmpty(),
+                    matchCount = flatSelectable.size,
                 )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    OpalText(
-                        text = if (trimmedQuery.isEmpty()) "快捷推荐" else "共 ${flatSelectable.size} 项匹配",
-                        fontSize = 10.5.sp,
-                        color = OpalPalette.TextMuted,
-                    )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpotlightSearchHeader(
+    query: String,
+    placeholder: String,
+    isCompact: Boolean,
+    focusRequester: FocusRequester,
+    controller: OpalSpotlightController,
+    onQueryChange: (String) -> Unit,
+    onFocusChanged: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        OpalGlyphIcon(
+            glyph = ChromeGlyph.SEARCH,
+            tint = OpalPalette.AccentBlue,
+            size = 18.dp,
+        )
+        Box(
+            modifier = Modifier.weight(1f),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            if (query.isEmpty()) {
+                OpalText(
+                    text = placeholder,
+                    fontSize = 15.sp,
+                    color = OpalPalette.TextMuted,
+                    maxLines = 1,
+                )
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = OpalPalette.TextPrimary,
+                    fontSize = 15.5.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+                cursorBrush = SolidColor(OpalPalette.AccentBlue),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { onFocusChanged(it.isFocused) }
+                    .onPreviewKeyEvent { controller.handleKeyEvent(it.nativeKeyEvent) },
+            )
+        }
+
+        if (query.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(OpalPalette.ChipFill)
+                    .clickable { onQueryChange("") },
+                contentAlignment = Alignment.Center,
+            ) {
+                OpalGlyphIcon(
+                    glyph = ChromeGlyph.CLOSE,
+                    tint = OpalPalette.TextSecondary,
+                    size = 11.dp,
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(OpalPalette.ChipFill)
+                .border(0.7.dp, OpalPalette.BorderHairline, CircleShape)
+                .clickable(onClick = onDismiss)
+                .padding(horizontal = 9.dp, vertical = 4.dp),
+        ) {
+            OpalText(
+                text = if (isCompact) "取消" else "Esc",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = if (isCompact) null else FontFamily.Monospace,
+                color = OpalPalette.TextSecondary,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SpotlightQuickChipsBar(
+    quickChips: List<Pair<String, String>>,
+    onSelectChip: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        quickChips.forEach { (label, fillQuery) ->
+            Box(
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(OpalPalette.ChipFill)
+                    .border(0.75.dp, OpalPalette.BorderHairline, CircleShape)
+                    .clickable { onSelectChip(fillQuery) }
+                    .padding(horizontal = 10.dp, vertical = 4.5.dp),
+            ) {
+                OpalText(
+                    text = label,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = OpalPalette.TextSecondary,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(0.6.dp)
+            .background(OpalPalette.DividerColor.copy(alpha = 0.65f)),
+    )
+}
+
+@Composable
+private fun SpotlightEmptyResults(trimmedQuery: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        OpalText(
+            text = "未找到与「$trimmedQuery」匹配的结果",
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = OpalPalette.TextPrimary,
+        )
+        OpalText(
+            text = "试试搜索「DPI」「分辨率」「输入法」「投屏」「UHID」或拼音首字母",
+            fontSize = 11.5.sp,
+            color = OpalPalette.TextMuted,
+        )
+    }
+}
+
+@Composable
+private fun SpotlightResultsList(
+    listEntries: List<SpotlightListEntry>,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    controller: OpalSpotlightController,
+    iconProvider: (@Composable (SpotlightItem) -> ImageBitmap?)?,
+    onSelectItem: (SpotlightItem) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(
+        state = listState,
+        modifier = modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        items(
+            count = listEntries.size,
+            key = { idx ->
+                when (val e = listEntries[idx]) {
+                    is SpotlightListEntry.Header -> "hdr_${e.id}"
+                    is SpotlightListEntry.Row -> "row_${e.item.id}"
+                }
+            },
+        ) { idx ->
+            when (val entry = listEntries[idx]) {
+                is SpotlightListEntry.Header -> {
                     Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                start = 8.dp,
+                                end = 8.dp,
+                                top = if (idx == 0) 2.dp else 8.dp,
+                                bottom = 3.dp,
+                            ),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        SpotlightKeyHint("↑↓", "选择")
-                        SpotlightKeyHint("↵", "执行")
-                        SpotlightKeyHint("Esc", "关闭")
+                        OpalText(
+                            text = entry.title,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = OpalPalette.TextMuted,
+                        )
+                        OpalText(
+                            text = "${entry.count}",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = OpalPalette.TextMuted,
+                        )
                     }
                 }
+                is SpotlightListEntry.Row -> {
+                    SpotlightResultRow(
+                        item = entry.item,
+                        selected = entry.flatIndex == controller.selectedIndex,
+                        appIcon = iconProvider?.invoke(entry.item),
+                        onHover = { controller.selectIndex(entry.flatIndex) },
+                        onClick = { onSelectItem(entry.item) },
+                    )
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun SpotlightFooterBar(
+    isEmptyQuery: Boolean,
+    matchCount: Int,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(0.7.dp)
+            .background(OpalPalette.DividerColor),
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        OpalText(
+            text = if (isEmptyQuery) "快捷推荐" else "共 $matchCount 项匹配",
+            fontSize = 10.5.sp,
+            color = OpalPalette.TextMuted,
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            SpotlightKeyHint("↑↓", "选择")
+            SpotlightKeyHint("↵", "执行")
+            SpotlightKeyHint("Esc", "关闭")
         }
     }
 }
