@@ -28,6 +28,11 @@ import {
 import { OpalDiagnosticsController } from './diagnostics_controller.js';
 import { DEFAULT_MIC_CHANNELS, DEFAULT_MIC_SAMPLE_RATE, OpalMicCapturer } from './mic_capturer.js';
 import { OpalStandaloneController } from './standalone_controller.js';
+import { OpalFileBrowserClient } from './file_browser_client.js';
+import { OpalFileBrowserController } from './file_browser_controller.js';
+import { OpalCompanionController } from './companion_controller.js';
+import { captureCanvasScreenshot, OpalScreenRecorder } from './media_capture.js';
+import { resolvePopoutLaunchGeometry } from './standalone_prefs.js';
 import {
   decodeAppList,
   decodeAuthResult,
@@ -50,6 +55,7 @@ import {
   encodeKeyEvent,
   encodeMicConfig,
   encodeMouseEvent,
+  encodeNotificationAction,
   encodePingPong,
   encodeResizeConfig,
   encodeSystemAction,
@@ -72,15 +78,19 @@ import {
   SYS_SET_AUDIO_ENABLED,
   SYS_TOGGLE_BLACKOUT,
   TEXT_MODE_COMMIT_PASTE,
+  TYPE_APK_INSTALL_STATUS,
   TYPE_APP_LIST,
   TYPE_AUDIO_CONFIG,
   TYPE_AUDIO_FRAME,
   TYPE_AUTH_RESULT,
+  TYPE_CALL_STATE,
   TYPE_CAMERA_CONFIG,
   TYPE_CAMERA_FRAME,
   TYPE_CAMERA_STATE,
   TYPE_CLIPBOARD_PUSH,
   TYPE_DEVICE_STATE,
+  TYPE_FILE_OP_RESPONSE,
+  TYPE_FILE_PULL_CHUNK,
   TYPE_FILE_TRANSFER_ACK,
   TYPE_FILE_TRANSFER_CHUNK,
   TYPE_HELLO,
@@ -90,9 +100,12 @@ import {
   TYPE_INPUT_TEXT,
   TYPE_INPUT_TOUCH,
   TYPE_LIST_APPS,
+  TYPE_MEDIA_STATE,
   TYPE_MIC_CONFIG,
   TYPE_MIC_FRAME,
   TYPE_MIC_STATE,
+  TYPE_NOTIFICATION_ACTION,
+  TYPE_NOTIFICATION_EVENT,
   TYPE_PING,
   TYPE_PONG,
   TYPE_REQUEST_IDR,
@@ -495,6 +508,38 @@ class OpalCastWebApp {
       getContextSummary: () => this.buildClientContextSummary(),
     });
     this.standalone = new OpalStandaloneController(this);
+    this.companion = new OpalCompanionController(this);
+    this.fileBrowserClient = new OpalFileBrowserClient({
+      sendFrame: (type, flags, payload) => this.companion.sendControlFrame(type, flags, payload),
+    });
+    this.fileBrowser = new OpalFileBrowserController({
+      app: this,
+      client: this.fileBrowserClient,
+    });
+    this.recorder = new OpalScreenRecorder({
+      getCanvas: () => $('castCanvas'),
+      desktop: this.desktop,
+      getLabel: () => (this.sessionRole === SESSION_ROLE_STANDALONE_APP && this.standaloneAppLabel
+        ? this.standaloneAppLabel
+        : 'OpalDesk'),
+      onStateChange: ({ recording, elapsedLabel }) => {
+        const btn = $('tbRecordBtn');
+        const lbl = $('tbRecordLabel');
+        if (btn) btn.classList.toggle('recording', recording);
+        if (lbl) lbl.textContent = recording ? `停止 ${elapsedLabel}` : '录屏';
+      },
+      onSaved: ({ fileName, savedPath }) => {
+        if (savedPath && this.desktop.enabled) {
+          this.showToast(`录屏已保存：${fileName}`, {
+            actionText: '打开位置',
+            actionFn: () => void this.desktop.revealInExplorer(savedPath),
+          });
+        } else {
+          this.showToast(`录屏已保存：${fileName}`);
+        }
+      },
+      onError: (msg) => this.showToast(msg),
+    });
 
     this.init();
   }
@@ -506,7 +551,11 @@ class OpalCastWebApp {
       await this.initDesktopMode();
     }
     this.restoreSavedCastPrefs();
-    await Promise.all([this.diagnostics.initialize(), this.standalone.initialize()]);
+    await Promise.all([
+      this.diagnostics.initialize(),
+      this.standalone.initialize(),
+      this.companion.initialize(),
+    ]);
     this.renderRecentDevices();
     this.installTrustPopupListener();
     this.installResizeObserver();
@@ -563,6 +612,16 @@ class OpalCastWebApp {
       const info = await this.desktop.initialize();
       if (info?.clientId) {
         this.clientId = info.clientId;
+      }
+      if (info?.micaApplied) {
+        document.body.classList.add('desktop-mica-ready');
+      }
+      const trayRow = $('hideToTrayRow');
+      const trayChk = $('hideToTrayCheck');
+      if (trayRow) trayRow.hidden = false;
+      if (trayChk) trayChk.checked = info?.prefs?.hideToTrayOnClose !== false;
+      if (info?.initialDeepLink) {
+        setTimeout(() => this.companion.handleDeepLinkUrl(info.initialDeepLink), 450);
       }
       await this.restoreRememberedAdbPath(info);
     } catch {
@@ -862,7 +921,18 @@ class OpalCastWebApp {
       this.standaloneDeviceKey = deviceKey;
       this.standaloneDeviceName = deviceName;
       document.title = `OpalDesk · ${this.standaloneAppLabel}`;
+      const preset = params.get('preset') || '';
+      const dpiParam = Number(params.get('dpi') || 0);
+      const compatParam = params.get('compat') === '1';
+      if (preset || dpiParam > 0 || compatParam) {
+        const patch = {};
+        if (preset) patch.preferredPreset = preset;
+        if (dpiParam > 0) patch.customDpi = dpiParam;
+        if (compatParam) patch.compatibilityResolution = true;
+        this.standalone.prefsStore.updatePref(deviceKey, pkg, patch);
+      }
       this.standalone.applyInitialStandalonePin(pin === '1');
+      this.standalone.syncStandaloneToolbarPrefsUi();
       if (host) {
         setTimeout(() => this.startCastConnection(), 200);
         return;
@@ -890,6 +960,11 @@ class OpalCastWebApp {
     $('tabLogsBtn')?.addEventListener('click', () => this.selectLobbyTab('logs'));
     this.diagnostics.bindEvents();
     this.standalone.bindEvents();
+    this.fileBrowser.bindEvents();
+    this.companion.bindEvents();
+    $('hideToTrayCheck')?.addEventListener('change', (e) => {
+      this.persistCastPrefs({ hideToTrayOnClose: Boolean(e.target.checked) });
+    });
     $('modeWifiBtn').addEventListener('click', () => this.selectTransportMode('wifi'));
     $('modeUsbBtn').addEventListener('click', () => this.selectTransportMode('usb'));
 
@@ -1076,6 +1151,42 @@ class OpalCastWebApp {
     });
     $('tbBlackoutBtn')?.addEventListener('click', () => {
       this.toggleBlackout();
+      this.bumpToolbarVisibility();
+      this.input.focusIme();
+    });
+    $('tbFilesBtn')?.addEventListener('click', () => {
+      $('qualityPopover').hidden = true;
+      $('appsPopover').hidden = true;
+      this.fileBrowser.open('files');
+    });
+    $('tbDialerBtn')?.addEventListener('click', () => {
+      $('qualityPopover').hidden = true;
+      $('appsPopover').hidden = true;
+      this.companion.openDialerModal();
+    });
+    $('tbScreenshotBtn')?.addEventListener('click', async () => {
+      try {
+        const label = this.sessionRole === SESSION_ROLE_STANDALONE_APP && this.standaloneAppLabel
+          ? this.standaloneAppLabel
+          : 'OpalDesk';
+        const res = await captureCanvasScreenshot($('castCanvas'), { desktop: this.desktop, label });
+        const clipSuffix = res.copiedToClipboard ? '（已复制到剪贴板）' : '';
+        if (res.savedPath && this.desktop.enabled) {
+          this.showToast(`截图已保存至桌面${clipSuffix}`, {
+            actionText: '打开位置',
+            actionFn: () => void this.desktop.revealInExplorer(res.savedPath),
+          });
+        } else {
+          this.showToast(`截图已保存：${res.fileName}${clipSuffix}`);
+        }
+      } catch (err) {
+        this.showToast(err?.message || '截图失败');
+      }
+      this.bumpToolbarVisibility();
+      this.input.focusIme();
+    });
+    $('tbRecordBtn')?.addEventListener('click', () => {
+      this.recorder.toggle();
       this.bumpToolbarVisibility();
       this.input.focusIme();
     });
@@ -1735,6 +1846,10 @@ class OpalCastWebApp {
   }
 
   openCastWebSocket(wsUrl, host, port, isUsb) {
+    // Release standalone companion socket when full desktop cast takes over
+    if (this.sessionRole === SESSION_ROLE_DESKTOP) {
+      this.companion.disconnect('', { quiet: true });
+    }
     this.teardownCastSocket();
     let ws;
     try {
@@ -1827,6 +1942,7 @@ class OpalCastWebApp {
   }
 
   handleDownlinkFrame(frame) {
+    if (this.fileBrowserClient?.handleFrame(frame)) return;
     switch (frame.type) {
       case TYPE_AUTH_RESULT: {
         const auth = decodeAuthResult(frame.payload);
@@ -1843,6 +1959,11 @@ class OpalCastWebApp {
         this.input.setEnabled(true);
         this.startHeartbeat();
         this.bumpToolbarVisibility();
+        this.standalone.syncStandaloneToolbarPrefsUi();
+        if (this.sessionRole === SESSION_ROLE_DESKTOP) {
+          this.sendOpalFrame(TYPE_NOTIFICATION_ACTION, 0, encodeNotificationAction({ op: 'sync' }));
+          this.companion.renderCompanionHub();
+        }
         this.diagnostics?.log(
           'I',
           'Session',
@@ -1929,9 +2050,25 @@ class OpalCastWebApp {
               this.inputBlockedWarned = false;
             }
           }
+          this.companion.handleDeviceState(st);
         } catch {
           // Ignore malformed telemetry
         }
+        break;
+      }
+
+      case TYPE_NOTIFICATION_EVENT: {
+        this.companion.handleNotificationFrame(frame.payload);
+        break;
+      }
+
+      case TYPE_MEDIA_STATE: {
+        this.companion.handleMediaStateFrame(frame.payload);
+        break;
+      }
+
+      case TYPE_CALL_STATE: {
+        this.companion.handleCallStateFrame(frame.payload);
         break;
       }
 
@@ -2040,9 +2177,54 @@ class OpalCastWebApp {
   }
 
   sendOpalFrame(type, flags = 0, payload = undefined) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
     const raw = encodeFrame(type, flags, undefined, payload);
     this.ws.send(raw);
+    return true;
+  }
+
+  hasControlChannel() {
+    return this.companion.hasControlChannel();
+  }
+
+  applyStandaloneStreamGeometry(geo) {
+    if (!this.authenticated || !geo) return;
+    const fps = Number($('liveFpsSelect')?.value) || Number($('castFpsSelect')?.value) || 60;
+    const brCfg = this.resolveSelectedBitrateConfig('castBitrateSelect', 'castCustomBitrateInput');
+    this.sendOpalFrame(
+      TYPE_RESIZE_CONFIG,
+      0,
+      encodeResizeConfig({
+        width: geo.streamWidth,
+        height: geo.streamHeight,
+        dpi: geo.dpi || 0,
+        fps,
+        bitrateKbps: brCfg.bitrateKbps || 14000,
+      })
+    );
+  }
+
+  launchPopoutByPackage(pkg, label = '') {
+    if (!pkg) return;
+    const target = this.authenticated
+      ? this.standalone.currentCastTarget()
+      : this.companion.target
+        ? {
+            transport: this.companion.target.transport || 'wifi',
+            host: this.companion.target.host,
+            port: this.companion.target.port || 19878,
+            adbSerial: this.companion.target.adbSerial || '',
+            deviceKey: `${this.companion.target.host}:${this.companion.target.port || 19878}`,
+            deviceName: this.companion.target.deviceName || this.companion.target.host || 'Android',
+            certFingerprint: this.companion.target.certFingerprint || '',
+          }
+        : null;
+    if (!target) {
+      this.showToast('当前无已连接设备，无法打开应用小窗');
+      return;
+    }
+    this.fileBrowser.close();
+    void this.standalone.requestLaunchStandaloneApp({ pkg, cls: '', label: label || pkg }, target);
   }
 
   computeInitialStreamSpec() {
@@ -2053,9 +2235,11 @@ class OpalCastWebApp {
     const vh = Math.max(480, Math.round(window.innerHeight * dpr));
     let width;
     let height;
+    let standaloneGeo = null;
     if (isStandalone) {
-      width = 1080;
-      height = 2280;
+      standaloneGeo = resolvePopoutLaunchGeometry(this.standalone.getCurrentStandalonePref());
+      width = standaloneGeo.streamWidth;
+      height = standaloneGeo.streamHeight;
     } else if (this.resizeMode && this.resizeMode !== 'auto') {
       const [pw, ph] = this.resizeMode.split('x').map(Number);
       width = pw || 1920;
@@ -2069,7 +2253,7 @@ class OpalCastWebApp {
     }
     const savedDpi = Number($('liveDpiSelect')?.value) || 0;
     const dpi = isStandalone
-      ? 380
+      ? (standaloneGeo?.dpi || 360)
       : (savedDpi > 0 ? savedDpi : Math.max(160, Math.min(320, Math.round(160 * dpr))));
     const fps = Number($('castFpsSelect').value) || 60;
     const brCfg = this.resolveSelectedBitrateConfig('castBitrateSelect', 'castCustomBitrateInput');
@@ -2248,9 +2432,14 @@ class OpalCastWebApp {
     this.inputBlockedWarned = false;
     this.autoAdaptiveBitrateKbps = 0;
     this.autoHealthyStreak = 0;
+    if (this.recorder?.isRecording) {
+      this.recorder.stop();
+    }
+    this.fileBrowserClient?.reset('投屏已断开');
     this.syncBlackoutUi();
     this.syncRemoteFullscreenUi();
     this.teardownCastSocket();
+    this.companion?.renderCompanionHub();
     this.input.setEnabled(false);
     this.video.reset();
     this.audio.reset();
@@ -2753,11 +2942,19 @@ class OpalCastWebApp {
     el.textContent = msg;
   }
 
-  showToast(text, actionLabel = '', actionFn = null) {
+  showToast(text, actionLabelOrOpts = '', actionFn = null) {
+    let actionLabel = '';
+    let resolvedFn = actionFn;
+    if (actionLabelOrOpts && typeof actionLabelOrOpts === 'object') {
+      actionLabel = String(actionLabelOrOpts.actionText || actionLabelOrOpts.actionLabel || '');
+      resolvedFn = typeof actionLabelOrOpts.actionFn === 'function' ? actionLabelOrOpts.actionFn : null;
+    } else {
+      actionLabel = String(actionLabelOrOpts || '');
+    }
     $('toastText').textContent = text;
     const btn = $('toastActionBtn');
-    this.toastActionFn = actionFn;
-    if (actionLabel && actionFn) {
+    this.toastActionFn = resolvedFn;
+    if (actionLabel && resolvedFn) {
       btn.textContent = actionLabel;
       btn.hidden = false;
     } else {

@@ -163,6 +163,9 @@ export function buildStandaloneWindowQuery({
   deviceName = '',
   certFingerprint = '',
   alwaysOnTop = false,
+  preset = '',
+  dpi = 0,
+  compat = false,
 }) {
   const params = new URLSearchParams();
   if (transport === 'usb') {
@@ -193,6 +196,15 @@ export function buildStandaloneWindowQuery({
   }
   if (alwaysOnTop) {
     params.set('pin', '1');
+  }
+  if (preset) {
+    params.set('preset', String(preset).trim());
+  }
+  if (Number(dpi) > 0) {
+    params.set('dpi', String(Math.round(Number(dpi))));
+  }
+  if (compat) {
+    params.set('compat', '1');
   }
   return params.toString();
 }
@@ -303,6 +315,9 @@ export function normalizeCastPrefs(raw = {}) {
   const liveDpi = Number.isFinite(dpiNum) && SUPPORTED_DPI_OPTIONS.includes(dpiNum) ? dpiNum : 0;
   const audioEnabled = typeof raw?.audioEnabled === 'boolean' ? raw.audioEnabled : null;
   const hideLocalCursor = typeof raw?.hideLocalCursor === 'boolean' ? raw.hideLocalCursor : null;
+  const hideToTrayOnClose = typeof raw?.hideToTrayOnClose === 'boolean' ? raw.hideToTrayOnClose : null;
+  const companionAutoConnect = typeof raw?.companionAutoConnect === 'boolean' ? raw.companionAutoConnect : null;
+  const bleNearbyEnabled = typeof raw?.bleNearbyEnabled === 'boolean' ? raw.bleNearbyEnabled : null;
   const customAdbPath = sanitizeCustomAdbPath(raw?.customAdbPath);
   return {
     preferredCodec: codec,
@@ -313,6 +328,9 @@ export function normalizeCastPrefs(raw = {}) {
     liveDpi,
     audioEnabled,
     hideLocalCursor,
+    hideToTrayOnClose,
+    companionAutoConnect,
+    bleNearbyEnabled,
     customAdbPath,
   };
 }
@@ -493,6 +511,9 @@ export class OpalDesktopBridge {
     forceReload = false,
     width = 440,
     height = 880,
+    preset = '',
+    dpi = 0,
+    compat = false,
   }) {
     const query = buildStandaloneWindowQuery({
       host,
@@ -506,6 +527,9 @@ export class OpalDesktopBridge {
       deviceName,
       certFingerprint,
       alwaysOnTop,
+      preset,
+      dpi,
+      compat,
     });
     return this.invoke('open_standalone_window', {
       pkg,
@@ -632,5 +656,144 @@ export class OpalDesktopBridge {
 
   async clearFeedbackHistory() {
     return this.invoke('clear_feedback_history');
+  }
+
+  // ---- v1.2 / v1.3 Windows Parity Native Commands ----
+
+  async saveBinaryFile({ fileName, bytes, targetDir = 'desktop' }) {
+    if (!this.enabled) return null;
+    const data = bytes instanceof Uint8Array ? Array.from(bytes) : Array.from(new Uint8Array(bytes || 0));
+    return this.invoke('save_binary_file', {
+      fileName: String(fileName || 'opaldesk_file.bin'),
+      data,
+      targetDir: String(targetDir || 'desktop'),
+    });
+  }
+
+  async beginFileDownload({ fileName, subdir = 'downloads' }) {
+    return this.invoke('begin_file_download', {
+      fileName: String(fileName || 'download.bin'),
+      subdir: String(subdir || 'downloads'),
+    });
+  }
+
+  async writeFileDownloadChunk({ sessionId, bytes }) {
+    const data = bytes instanceof Uint8Array ? Array.from(bytes) : Array.from(new Uint8Array(bytes || 0));
+    return this.invoke('write_file_download_chunk', {
+      sessionId: String(sessionId || ''),
+      data,
+    });
+  }
+
+  async finishFileDownload({ sessionId }) {
+    return this.invoke('finish_file_download', { sessionId: String(sessionId || '') });
+  }
+
+  async abortFileDownload({ sessionId }) {
+    return this.invoke('abort_file_download', { sessionId: String(sessionId || '') });
+  }
+
+  async revealInExplorer(path) {
+    if (!this.enabled || !path) return;
+    return this.invoke('reveal_in_explorer', { path: String(path) });
+  }
+
+  async openFileInOs(path) {
+    if (!this.enabled || !path) return;
+    return this.invoke('open_file_in_os', { path: String(path) });
+  }
+
+  async setCurrentWindowSize(width, height) {
+    if (!this.enabled) return false;
+    return this.invoke('set_current_window_size', {
+      width: Math.max(320, Math.round(Number(width) || 460)),
+      height: Math.max(400, Math.round(Number(height) || 860)),
+    });
+  }
+
+  async updateCallHudState(callState) {
+    if (!this.enabled) return false;
+    return this.invoke('update_call_hud_state', { callState });
+  }
+
+  async hideCallHud() {
+    if (!this.enabled) return false;
+    return this.invoke('hide_call_hud');
+  }
+
+  async dispatchCallHudAction(action) {
+    if (!this.enabled) return false;
+    return this.invoke('dispatch_call_hud_action', { action });
+  }
+
+  async sendNativeNotification({ title, body, appLabel = 'OpalDesk', tag = '' }) {
+    if (!this.enabled) return false;
+    try {
+      return await this.invoke('send_native_notification', {
+        title: String(title || ''),
+        body: String(body || ''),
+        appLabel: String(appLabel || 'OpalDesk'),
+        tag: String(tag || ''),
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  async updateTrayStatus({ connected = false, deviceName = '', unreadCount = 0, callActive = false } = {}) {
+    if (!this.enabled) return false;
+    try {
+      return await this.invoke('update_tray_status', {
+        connected: Boolean(connected),
+        deviceName: String(deviceName || ''),
+        unreadCount: Math.max(0, Math.round(Number(unreadCount || 0))),
+        callActive: Boolean(callActive),
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  async createAppShortcut(req) {
+    return this.invoke('create_app_shortcut', { req });
+  }
+
+  async listAppShortcuts() {
+    if (!this.enabled) return [];
+    const list = await this.invoke('list_app_shortcuts');
+    return Array.isArray(list) ? list : [];
+  }
+
+  async removeAppShortcut(pkg) {
+    return this.invoke('remove_app_shortcut', { pkg: String(pkg || '') });
+  }
+
+  async registerUrlProtocol() {
+    if (!this.enabled) return false;
+    return this.invoke('register_url_protocol');
+  }
+
+  async scanBleNearby() {
+    if (!this.enabled) return { supported: false, devices: [], note: '' };
+    return this.invoke('scan_ble_nearby');
+  }
+
+  async triggerBleHotspot({ address, certFingerprintPrefix = '', clientId, authToken }) {
+    return this.invoke('trigger_ble_hotspot', {
+      req: {
+        address: String(address || ''),
+        certFingerprintPrefix: String(certFingerprintPrefix || ''),
+        clientId: String(clientId || ''),
+        authToken: String(authToken || ''),
+      },
+    });
+  }
+
+  listenEvent(eventName, handler) {
+    const evApi = globalThis.window?.__TAURI__?.event;
+    if (!evApi || typeof evApi.listen !== 'function') {
+      return Promise.resolve(() => {});
+    }
+    return evApi.listen(eventName, (event) => handler(event?.payload, event));
   }
 }

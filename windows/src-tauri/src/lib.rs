@@ -1,35 +1,47 @@
 pub mod adb;
+pub mod ble_nearby;
+pub mod call_hud;
 pub mod feedback;
+pub mod file_io;
 pub mod fingerprint;
 pub mod logs;
 pub mod mdns;
 pub mod prefs;
+pub mod shortcuts;
 pub mod tls_bridge;
+pub mod tray_notify;
 pub mod trust;
 pub mod usb_tether;
 
 use adb::{AdbDevice, AdbForwardResult, AdbManager, AdbStatusInfo};
+use ble_nearby::{BleScanResult, TriggerBleHotspotRequest, TriggerBleHotspotResult};
+use call_hud::CallHudManager;
 use feedback::{
     FeedbackLookupOutcome, FeedbackManager, FeedbackRecord, FeedbackRefreshOutcome,
     FeedbackStateSnapshot, ManualReportOutcome,
+};
+use file_io::{
+    BeginDownloadResult, FileDownloadManager, FinishDownloadResult, SaveBinaryFileResult,
 };
 use logs::{LogEntry, LogStore};
 use mdns::{DiscoveredMdnsDevice, MdnsScanner};
 use prefs::{ClientPrefs, ClientPrefsPatch, PrefsStore};
 use serde::Serialize;
+use shortcuts::{AppShortcutRecord, CreateAppShortcutRequest, ShortcutStore};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tls_bridge::{LocalWsTunnelInfo, ProbedCertInfo, TlsBridgeRegistry};
 use trust::{TrustStore, TrustedDevice};
 use usb_tether::DiscoveredUsbTetherDevice;
 
 pub const MAX_STANDALONE_WINDOWS: usize = 3;
 const STANDALONE_LABEL_PREFIX: &str = "standalone-";
+const MAIN_TRAY_ID: &str = "main-tray";
 
 #[cfg(target_os = "windows")]
 const WEBVIEW2_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --enable-features=PlatformHEVCDecoderSupport";
@@ -49,6 +61,11 @@ pub struct DesktopState {
     pub adb_manager: Arc<AdbManager>,
     pub log_store: Arc<LogStore>,
     pub feedback_manager: Arc<FeedbackManager>,
+    pub file_downloads: Arc<FileDownloadManager>,
+    pub call_hud: Arc<CallHudManager>,
+    pub shortcut_store: Arc<ShortcutStore>,
+    pub mica_applied: bool,
+    pending_deep_link: Mutex<Option<String>>,
     standalone_meta: Mutex<HashMap<String, StandaloneMeta>>,
 }
 
@@ -62,6 +79,8 @@ pub struct DesktopRuntimeInfo {
     pub adb: AdbStatusInfo,
     pub prefs: ClientPrefs,
     pub max_standalone_windows: usize,
+    pub mica_applied: bool,
+    pub initial_deep_link: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,6 +162,11 @@ fn collect_live_standalone_windows(
 
 #[tauri::command]
 fn desktop_runtime_info(state: tauri::State<'_, DesktopState>) -> DesktopRuntimeInfo {
+    let initial_deep_link = state
+        .pending_deep_link
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take());
     DesktopRuntimeInfo {
         platform: std::env::consts::OS,
         arch: std::env::consts::ARCH,
@@ -151,6 +175,8 @@ fn desktop_runtime_info(state: tauri::State<'_, DesktopState>) -> DesktopRuntime
         adb: state.adb_manager.status(),
         prefs: state.prefs_store.get(),
         max_standalone_windows: MAX_STANDALONE_WINDOWS,
+        mica_applied: state.mica_applied,
+        initial_deep_link,
     }
 }
 
@@ -700,22 +726,243 @@ fn clear_feedback_history(state: tauri::State<'_, DesktopState>) -> Vec<Feedback
     state.feedback_manager.clear_history()
 }
 
+// ==================== v1.2 / v1.3 Windows Parity Commands ====================
+
+fn resolve_user_target_dir(app: &tauri::AppHandle, target_dir: &str) -> std::path::PathBuf {
+    match target_dir.trim().to_ascii_lowercase().as_str() {
+        "desktop" => app
+            .path()
+            .desktop_dir()
+            .or_else(|_| app.path().download_dir())
+            .unwrap_or_else(|_| std::env::temp_dir()),
+        "temp" => std::env::temp_dir().join("OpalDeskPreview"),
+        _ => app
+            .path()
+            .download_dir()
+            .or_else(|_| app.path().desktop_dir())
+            .unwrap_or_else(|_| std::env::temp_dir()),
+    }
+}
+
+#[tauri::command]
+fn save_binary_file(
+    app: tauri::AppHandle,
+    file_name: String,
+    data: Vec<u8>,
+    target_dir: Option<String>,
+) -> Result<SaveBinaryFileResult, String> {
+    let dir = resolve_user_target_dir(&app, target_dir.as_deref().unwrap_or("desktop"));
+    file_io::save_binary_file_to_dir(&dir, &file_name, &data)
+}
+
+#[tauri::command]
+fn begin_file_download(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    file_name: String,
+    subdir: Option<String>,
+) -> Result<BeginDownloadResult, String> {
+    let dir = resolve_user_target_dir(&app, subdir.as_deref().unwrap_or("downloads"));
+    state.file_downloads.begin_download(&dir, &file_name)
+}
+
+#[tauri::command]
+fn write_file_download_chunk(
+    state: tauri::State<'_, DesktopState>,
+    session_id: String,
+    data: Vec<u8>,
+) -> Result<u64, String> {
+    state.file_downloads.write_chunk(&session_id, &data)
+}
+
+#[tauri::command]
+fn finish_file_download(
+    state: tauri::State<'_, DesktopState>,
+    session_id: String,
+) -> Result<FinishDownloadResult, String> {
+    state.file_downloads.finish_download(&session_id)
+}
+
+#[tauri::command]
+fn abort_file_download(state: tauri::State<'_, DesktopState>, session_id: String) {
+    state.file_downloads.abort_download(&session_id);
+}
+
+#[tauri::command]
+fn reveal_in_explorer(path: String) -> Result<(), String> {
+    file_io::reveal_in_explorer(&path)
+}
+
+#[tauri::command]
+fn open_file_in_os(path: String) -> Result<(), String> {
+    file_io::open_file_in_os(&path)
+}
+
+#[tauri::command]
+fn set_current_window_size(
+    window: tauri::WebviewWindow,
+    width: f64,
+    height: f64,
+) -> Result<bool, String> {
+    let w = width.clamp(340.0, 2560.0);
+    let h = height.clamp(420.0, 1600.0);
+    window
+        .set_size(LogicalSize::new(w, h))
+        .map_err(|e| format!("调整窗口尺寸失败: {e}"))?;
+    Ok(true)
+}
+
+#[tauri::command]
+fn update_call_hud_state(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    call_state: serde_json::Value,
+) -> Result<bool, String> {
+    state.call_hud.update_state(&app, call_state)
+}
+
+#[tauri::command]
+fn get_call_hud_state(state: tauri::State<'_, DesktopState>) -> Option<serde_json::Value> {
+    state.call_hud.current_state()
+}
+
+#[tauri::command]
+fn hide_call_hud(app: tauri::AppHandle, state: tauri::State<'_, DesktopState>) -> bool {
+    state.call_hud.hide(&app)
+}
+
+#[tauri::command]
+fn dispatch_call_hud_action(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    action: serde_json::Value,
+) -> Result<bool, String> {
+    state.call_hud.dispatch_action(&app, action)
+}
+
+#[tauri::command]
+fn send_native_notification(
+    title: String,
+    body: String,
+    app_label: Option<String>,
+    tag: Option<String>,
+) -> Result<bool, String> {
+    tray_notify::send_native_notification(
+        &title,
+        &body,
+        app_label.as_deref().unwrap_or("OpalDesk"),
+        tag.as_deref().unwrap_or(""),
+    )
+}
+
+#[tauri::command]
+fn update_tray_status(
+    app: tauri::AppHandle,
+    connected: bool,
+    device_name: Option<String>,
+    unread_count: Option<usize>,
+    call_active: Option<bool>,
+) -> bool {
+    let tip = tray_notify::format_tray_tooltip(
+        connected,
+        device_name.as_deref().unwrap_or(""),
+        unread_count.unwrap_or(0),
+        call_active.unwrap_or(false),
+    );
+    if let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) {
+        let _ = tray.set_tooltip(Some(tip));
+        return true;
+    }
+    false
+}
+
+#[tauri::command]
+async fn create_app_shortcut(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    req: CreateAppShortcutRequest,
+) -> Result<AppShortcutRecord, String> {
+    let desktop_dir = resolve_user_target_dir(&app, "desktop");
+    let store = Arc::clone(&state.shortcut_store);
+    tokio::task::spawn_blocking(move || shortcuts::create_desktop_shortcut(&desktop_dir, &req, &store))
+        .await
+        .map_err(|e| format!("创建快捷方式任务异常: {e}"))?
+}
+
+#[tauri::command]
+fn list_app_shortcuts(state: tauri::State<'_, DesktopState>) -> Vec<AppShortcutRecord> {
+    state.shortcut_store.list()
+}
+
+#[tauri::command]
+fn remove_app_shortcut(
+    state: tauri::State<'_, DesktopState>,
+    pkg: String,
+) -> Result<bool, String> {
+    state.shortcut_store.remove(&pkg)
+}
+
+#[tauri::command]
+async fn register_url_protocol() -> Result<bool, String> {
+    tokio::task::spawn_blocking(shortcuts::register_url_protocol)
+        .await
+        .map_err(|e| format!("注册协议任务异常: {e}"))?
+}
+
+#[tauri::command]
+async fn scan_ble_nearby() -> Result<BleScanResult, String> {
+    tokio::task::spawn_blocking(ble_nearby::scan_ble_nearby)
+        .await
+        .map_err(|e| format!("蓝牙扫描任务异常: {e}"))
+}
+
+#[tauri::command]
+async fn trigger_ble_hotspot(req: TriggerBleHotspotRequest) -> Result<TriggerBleHotspotResult, String> {
+    tokio::task::spawn_blocking(move || ble_nearby::trigger_ble_hotspot(&req))
+        .await
+        .map_err(|e| format!("蓝牙热点唤醒任务异常: {e}"))?
+}
+
+fn focus_main_window(app_handle: &tauri::AppHandle) {
+    if let Some(win) = app_handle.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
 fn setup_system_tray(app: &tauri::App) -> tauri::Result<()> {
     let show_item = MenuItem::with_id(app, "show_main", "显示 OpalDesk 主控台", true, None::<&str>)?;
+    let companion_item = MenuItem::with_id(app, "connect_companion", "连接后台随行", true, None::<&str>)?;
+    let files_item = MenuItem::with_id(app, "open_files", "手机文件管理", true, None::<&str>)?;
+    let storage_item = MenuItem::with_id(app, "open_storage", "存储空间分析", true, None::<&str>)?;
+    let dialer_item = MenuItem::with_id(app, "open_dialer", "快捷拨号", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit_app", "退出 OpalDesk", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &show_item,
+            &companion_item,
+            &files_item,
+            &storage_item,
+            &dialer_item,
+            &quit_item,
+        ],
+    )?;
 
-    let mut tray = TrayIconBuilder::new()
+    let mut tray = TrayIconBuilder::with_id(MAIN_TRAY_ID)
         .menu(&menu)
-        .tooltip("OpalDesk")
+        .tooltip("OpalDesk · 待机")
         .show_menu_on_left_click(false)
         .on_menu_event(|app_handle, event| match event.id.as_ref() {
-            "show_main" => {
-                if let Some(win) = app_handle.get_webview_window("main") {
-                    let _ = win.unminimize();
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
+            "show_main" => focus_main_window(app_handle),
+            "connect_companion" | "open_files" | "open_storage" | "open_dialer" => {
+                focus_main_window(app_handle);
+                let _ = app_handle.emit_to(
+                    "main",
+                    "opaldesk:tray-action",
+                    serde_json::json!({ "action": event.id.as_ref() }),
+                );
             }
             "quit_app" => {
                 app_handle.exit(0);
@@ -729,11 +976,7 @@ fn setup_system_tray(app: &tauri::App) -> tauri::Result<()> {
                 ..
             } = event
             {
-                if let Some(win) = tray_icon.app_handle().get_webview_window("main") {
-                    let _ = win.unminimize();
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
+                focus_main_window(tray_icon.app_handle());
             }
         });
 
@@ -747,8 +990,26 @@ fn setup_system_tray(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let cli_args: Vec<String> = std::env::args().collect();
+    let initial_deep_link = shortcuts::extract_deep_link_arg(&cli_args);
+
     let app = tauri::Builder::default()
-        .setup(|app| {
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    let hide_to_tray = window
+                        .app_handle()
+                        .try_state::<DesktopState>()
+                        .map(|s| s.prefs_store.get().hide_to_tray_on_close)
+                        .unwrap_or(true);
+                    if hide_to_tray {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+        })
+        .setup(move |app| {
             let config_dir = app
                 .path()
                 .app_config_dir()
@@ -766,14 +1027,23 @@ pub fn run() {
             }
             let log_store = Arc::new(LogStore::new(config_dir.join("logs").join("opaldesk_desktop.log")));
             let feedback_manager = Arc::new(FeedbackManager::new(&config_dir, trust_store.client_id()));
+            let file_downloads = Arc::new(FileDownloadManager::new());
+            let call_hud = Arc::new(CallHudManager::new());
+            let shortcut_store = Arc::new(ShortcutStore::new(config_dir.join("shortcuts.json")));
+
+            let mica_applied = app
+                .get_webview_window("main")
+                .map(|win| tray_notify::apply_window_mica_effect(&win))
+                .unwrap_or(false);
 
             log_store.info(
                 "App",
                 &format!(
-                    "OpalDesk Desktop v{} initialized ({}/{})",
+                    "OpalDesk Desktop v{} initialized ({}/{}) mica={}",
                     env!("CARGO_PKG_VERSION"),
                     std::env::consts::OS,
-                    std::env::consts::ARCH
+                    std::env::consts::ARCH,
+                    mica_applied
                 ),
             );
             if let Some(ref custom_adb) = saved_prefs.custom_adb_path {
@@ -788,6 +1058,11 @@ pub fn run() {
                 adb_manager,
                 log_store,
                 feedback_manager,
+                file_downloads,
+                call_hud,
+                shortcut_store,
+                mica_applied,
+                pending_deep_link: Mutex::new(initial_deep_link),
                 standalone_meta: Mutex::new(HashMap::new()),
             });
 
@@ -832,6 +1107,26 @@ pub fn run() {
             lookup_feedback_by_code,
             remove_feedback_record,
             clear_feedback_history,
+            save_binary_file,
+            begin_file_download,
+            write_file_download_chunk,
+            finish_file_download,
+            abort_file_download,
+            reveal_in_explorer,
+            open_file_in_os,
+            set_current_window_size,
+            update_call_hud_state,
+            get_call_hud_state,
+            hide_call_hud,
+            dispatch_call_hud_action,
+            send_native_notification,
+            update_tray_status,
+            create_app_shortcut,
+            list_app_shortcuts,
+            remove_app_shortcut,
+            register_url_protocol,
+            scan_ble_nearby,
+            trigger_ble_hotspot,
         ])
         .build(tauri::generate_context!())
         .expect("error while building OpalDesk Tauri application");

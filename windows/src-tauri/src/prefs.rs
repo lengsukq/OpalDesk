@@ -33,6 +33,12 @@ pub struct ClientPrefs {
     pub audio_enabled: bool,
     #[serde(default)]
     pub hide_local_cursor: bool,
+    #[serde(default = "default_true")]
+    pub hide_to_tray_on_close: bool,
+    #[serde(default = "default_true")]
+    pub companion_auto_connect: bool,
+    #[serde(default = "default_true")]
+    pub ble_nearby_enabled: bool,
 }
 
 impl Default for ClientPrefs {
@@ -45,6 +51,9 @@ impl Default for ClientPrefs {
             bitrate_kbps: 0,
             audio_enabled: true,
             hide_local_cursor: false,
+            hide_to_tray_on_close: true,
+            companion_auto_connect: true,
+            ble_nearby_enabled: true,
         }
     }
 }
@@ -58,6 +67,9 @@ pub struct ClientPrefsPatch {
     pub bitrate_kbps: Option<u32>,
     pub audio_enabled: Option<bool>,
     pub hide_local_cursor: Option<bool>,
+    pub hide_to_tray_on_close: Option<bool>,
+    pub companion_auto_connect: Option<bool>,
+    pub ble_nearby_enabled: Option<bool>,
 }
 
 fn sanitize_codec(raw: &str) -> String {
@@ -145,6 +157,15 @@ impl PrefsStore {
         if let Some(next_hide_cursor) = patch.hide_local_cursor {
             guard.hide_local_cursor = next_hide_cursor;
         }
+        if let Some(next_tray) = patch.hide_to_tray_on_close {
+            guard.hide_to_tray_on_close = next_tray;
+        }
+        if let Some(next_comp) = patch.companion_auto_connect {
+            guard.companion_auto_connect = next_comp;
+        }
+        if let Some(next_ble) = patch.ble_nearby_enabled {
+            guard.ble_nearby_enabled = next_ble;
+        }
         guard.version = PREFS_SCHEMA_VERSION;
 
         let snapshot = guard.clone();
@@ -207,6 +228,9 @@ mod tests {
                 bitrate_kbps: Some(22_000),
                 audio_enabled: Some(false),
                 hide_local_cursor: Some(true),
+                hide_to_tray_on_close: Some(false),
+                companion_auto_connect: Some(true),
+                ble_nearby_enabled: Some(false),
             })
             .expect("save prefs");
 
@@ -245,6 +269,7 @@ mod tests {
                 bitrate_kbps: Some(100_000),
                 audio_enabled: None,
                 hide_local_cursor: None,
+                ..ClientPrefsPatch::default()
             })
             .expect("sanitize save");
 

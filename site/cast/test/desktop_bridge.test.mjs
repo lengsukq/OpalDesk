@@ -60,6 +60,9 @@ test('buildStandaloneWindowQuery encodes appLabel, deviceKey, and pin flag', () 
     deviceKey: '192.168.1.99:19878',
     alwaysOnTop: true,
     certFingerprint: 'a'.repeat(64),
+    preset: 'tablet',
+    dpi: 320,
+    compat: true,
   });
   const params = new URLSearchParams(q);
   assert.equal(params.get('role'), 'standalone_app');
@@ -67,6 +70,9 @@ test('buildStandaloneWindowQuery encodes appLabel, deviceKey, and pin flag', () 
   assert.equal(params.get('appLabel'), '微信');
   assert.equal(params.get('deviceKey'), '192.168.1.99:19878');
   assert.equal(params.get('pin'), '1');
+  assert.equal(params.get('preset'), 'tablet');
+  assert.equal(params.get('dpi'), '320');
+  assert.equal(params.get('compat'), '1');
 });
 
 test('desktop bridge forwards standalone pin, reload, and feedback Tauri commands', async () => {
@@ -142,6 +148,9 @@ test('normalizeCastPrefs validates codec, fps, bitrate, cursor, and ADB path; br
     liveDpi: 240,
     audioEnabled: false,
     hideLocalCursor: true,
+    hideToTrayOnClose: null,
+    companionAutoConnect: null,
+    bleNearbyEnabled: null,
     customAdbPath: 'C:\\Android\\adb.exe',
   });
 

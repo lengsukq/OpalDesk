@@ -195,6 +195,11 @@
             <span>同步播放手机系统音频（48kHz 立体声 AAC-LC）</span>
           </label>
 
+          <label id="hideToTrayRow" class="switch-row" hidden>
+            <input id="hideToTrayCheck" type="checkbox" checked />
+            <span>关闭主窗口时最小化到系统托盘（保持通知、来电浮窗与后台随行在线）</span>
+          </label>
+
           <!-- Certificate Trust Guided Helper -->
           <div id="castTrustBox" class="alert-banner info" hidden>
             <div class="banner-body">
@@ -208,6 +213,82 @@
 
           <div class="cta-row">
             <button id="connectCastBtn" type="button" class="primary-btn full">开始 Web 投屏</button>
+          </div>
+
+          <!-- Background Companion Hub (Notifications, Media Remote, Handoff, Call, OTP, Files/APK) -->
+          <div id="companionHubCard" class="info-box companion-hub-card">
+            <div class="info-box-head">
+              <div class="standalone-history-title-group">
+                <strong>后台随行中枢</strong>
+                <span id="companionStatusPill" class="status-pill">未连接</span>
+              </div>
+              <div class="standalone-history-actions">
+                <button id="companionConnectBtn" type="button" class="mini-btn">仅连随行（免投屏）</button>
+                <button id="companionDisconnectBtn" type="button" class="mini-btn" hidden>断开随行</button>
+              </div>
+            </div>
+            <p class="hint-text">免开桌面画布即可同步手机通知、OTP 验证码、媒体切歌、来电控制、文件管理与无线装 APK。</p>
+
+            <div id="companionBody" class="companion-body" hidden>
+              <div class="companion-tools-row">
+                <button id="companionFilesBtn" type="button" class="btn-pill small primary">文件管理</button>
+                <button id="companionStorageBtn" type="button" class="btn-pill small">存储分析</button>
+                <button id="companionApkBtn" type="button" class="btn-pill small">无线装 APK</button>
+                <button id="companionDialerBtn" type="button" class="btn-pill small">快捷拨号</button>
+              </div>
+
+              <div id="companionHandoffRow" class="companion-strip" hidden>
+                <div class="companion-strip-text">
+                  <span class="status-pill ok">Handoff 接力</span>
+                  <strong id="companionHandoffApp"></strong>
+                </div>
+                <button id="companionHandoffPopoutBtn" type="button" class="btn-pill small primary">在电脑小窗打开</button>
+              </div>
+
+              <div id="companionOtpBar" class="companion-strip otp" hidden>
+                <div class="companion-strip-text">
+                  <span id="companionOtpFrom" class="status-pill warn">验证码</span>
+                  <code id="companionOtpCode" class="mono companion-otp-code">------</code>
+                </div>
+                <button id="companionOtpCopyBtn" type="button" class="btn-pill small primary">一键复制</button>
+              </div>
+
+              <div id="companionCallBanner" class="companion-call-banner" hidden></div>
+
+              <div id="companionMediaBox" class="companion-media-box" hidden>
+                <img id="companionMediaArt" class="companion-media-art" alt="" hidden />
+                <div class="companion-media-meta">
+                  <div id="companionMediaTitle" class="companion-media-title">正在播放</div>
+                  <div id="companionMediaArtist" class="companion-media-artist"></div>
+                </div>
+                <div class="companion-media-ctrls">
+                  <button id="companionMediaPrevBtn" type="button" class="mini-btn" title="上一曲">⏮</button>
+                  <button id="companionMediaPlayBtn" type="button" class="mini-btn" title="播放/暂停">播放</button>
+                  <button id="companionMediaNextBtn" type="button" class="mini-btn" title="下一曲">⏭</button>
+                </div>
+              </div>
+
+              <div class="companion-notif-section">
+                <div class="info-box-head">
+                  <div class="standalone-history-title-group">
+                    <span class="companion-sub-label">手机通知</span>
+                    <span id="companionNotifCount" class="status-pill mono">0</span>
+                  </div>
+                  <button id="companionClearNotifsBtn" type="button" class="text-btn" hidden>清空全部</button>
+                </div>
+                <div id="companionNotifList" class="companion-notif-list"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- BLE Nearby Discovery & 1-Click Instant Hotspot (Windows Desktop Tauri only) -->
+          <div id="bleNearbyCard" class="info-box desktop-panel" hidden>
+            <div class="info-box-head">
+              <strong>附近设备与一键热点 (BLE)</strong>
+              <button id="refreshBleBtn" type="button" class="mini-btn">扫描附近</button>
+            </div>
+            <p id="bleNearbyNote" class="hint-text">正在检测蓝牙靠近发现能力…</p>
+            <div id="bleNearbyList" class="adb-device-list"></div>
           </div>
 
           <!-- Recent Standalone Floating App Windows Bar -->
@@ -436,8 +517,31 @@
         <button id="tbExitAppFsBtn" type="button" class="tb-btn active" title="退出远程应用全屏" hidden>退出全屏</button>
         <span class="tb-sep" aria-hidden="true"></span>
         <button id="tbPinBtn" type="button" class="tb-btn" title="切换悬浮窗置顶 (Alt+Shift+T)" hidden>置顶</button>
+        <div id="tbStandalonePrefsGroup" class="tb-standalone-prefs" hidden>
+          <button id="tbPopoutFavoriteBtn" type="button" class="tb-btn" title="收藏此应用">☆</button>
+          <select id="tbPopoutPresetSelect" class="tb-select" title="小窗比例预设">
+            <option value="phone">手机</option>
+            <option value="fold">折叠</option>
+            <option value="tablet">平板</option>
+            <option value="custom">自由</option>
+          </select>
+          <button id="tbPopoutCompatBtn" type="button" class="tb-btn" title="切换 1080×1920 兼容分辨率模式">兼容</button>
+          <select id="tbPopoutDpiSelect" class="tb-select" title="此应用独立 DPI">
+            <option value="0">自动DPI</option>
+            <option value="240">240</option>
+            <option value="280">280</option>
+            <option value="320">320</option>
+            <option value="360">360</option>
+            <option value="400">400</option>
+            <option value="440">440</option>
+          </select>
+        </div>
         <button id="tbBlackoutBtn" type="button" class="tb-btn" title="一键熄灭 / 点亮手机主屏 (Alt+Shift+B)">黑屏</button>
         <button id="tbAppsBtn" type="button" class="tb-btn" title="打开手机应用或独立小窗">应用</button>
+        <button id="tbFilesBtn" type="button" class="tb-btn" title="双向文件管理 / 存储分析 / 无线装 APK">文件</button>
+        <button id="tbDialerBtn" type="button" class="tb-btn" title="快捷拨号">拨号</button>
+        <button id="tbScreenshotBtn" type="button" class="tb-btn" title="一键截图到桌面并复制到剪贴板">截图</button>
+        <button id="tbRecordBtn" type="button" class="tb-btn" title="开始 / 停止录屏"><span id="tbRecordLabel">录屏</span></button>
         <button id="tbInputModeBtn" type="button" class="tb-btn active" title="切换左键拖拽模式：触控滑动（推荐） / 鼠标指针">触控</button>
         <button id="tbQualityBtn" type="button" class="tb-btn" title="分辨率与刷新率">画质</button>
         <span class="tb-sep" aria-hidden="true"></span>
@@ -660,6 +764,145 @@
         <button id="fbCancelBtn" type="button" class="ghost-btn">关闭</button>
         <button id="fbSubmitBtn" type="button" class="primary-btn">提交反馈</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Bidirectional File Manager, 3-Tab Storage Analyzer & Wireless APK Installer Modal -->
+  <div id="fileManagerOverlay" class="stage-overlay" hidden>
+    <div class="overlay-card glass-surface fm-modal-card">
+      <div class="pop-head">
+        <div class="standalone-history-title-group">
+          <strong>手机文件、存储分析与无线装包</strong>
+        </div>
+        <button id="closeFileManagerBtn" type="button" class="mini-btn">关闭</button>
+      </div>
+
+      <div class="segmented-bar three-tabs compact-seg" role="tablist">
+        <button id="fmTabFilesBtn" type="button" class="seg-btn active" role="tab">文件管理</button>
+        <button id="fmTabStorageBtn" type="button" class="seg-btn" role="tab">存储空间分析</button>
+        <button id="fmTabApkBtn" type="button" class="seg-btn" role="tab">无线安装 APK</button>
+      </div>
+
+      <div id="fmStatusBanner" class="fm-status-banner" hidden></div>
+
+      <!-- Sub-pane 1: Remote File Explorer -->
+      <div id="fmFilesPane" class="fm-pane">
+        <div class="fm-toolbar">
+          <div id="fmQuickNavList" class="fm-quick-nav"></div>
+          <div class="fm-path-bar">
+            <button id="fmUpBtn" type="button" class="mini-btn" title="返回上级目录">↑ 上级</button>
+            <div id="fmBreadcrumbs" class="fm-breadcrumbs"></div>
+          </div>
+          <div class="fm-controls-row">
+            <input id="fmSearchInput" type="search" class="fm-search-input" placeholder="过滤当前目录…" autocomplete="off" />
+            <select id="fmSortSelect" class="fm-sort-select">
+              <option value="name:asc">名称 ↑</option>
+              <option value="size:desc">大小 ↓</option>
+              <option value="modified:desc">时间 ↓</option>
+            </select>
+            <button id="fmViewToggleBtn" type="button" class="mini-btn">网格</button>
+            <button id="fmUploadBtn" type="button" class="mini-btn">上传文件</button>
+            <button id="fmMkdirBtn" type="button" class="mini-btn">新建目录</button>
+            <button id="fmRefreshBtn" type="button" class="mini-btn">刷新</button>
+            <input id="fmUploadInput" type="file" multiple hidden />
+          </div>
+          <div id="fmBatchBar" class="fm-batch-bar" hidden>
+            <span id="fmSelectedCount" class="small-muted">已选择 0 项</span>
+            <div class="standalone-history-actions">
+              <button id="fmBatchDownloadBtn" type="button" class="btn-pill small primary">批量下载</button>
+              <button id="fmBatchDeleteBtn" type="button" class="btn-pill small danger-ghost">批量删除</button>
+            </div>
+          </div>
+        </div>
+        <div id="fmEntriesWrap" class="fm-entries-wrap"></div>
+      </div>
+
+      <!-- Sub-pane 2: 3-Tab Storage Space Analyzer -->
+      <div id="fmStoragePane" class="fm-pane" hidden>
+        <div class="fm-storage-top">
+          <div id="fmStorageOverview" class="fm-storage-overview"></div>
+          <button id="fmRescanStorageBtn" type="button" class="mini-btn">重新扫描</button>
+        </div>
+        <div class="segmented-bar three-tabs compact-seg">
+          <button id="fmSubCategoriesBtn" type="button" class="seg-btn active">按类型 &amp; 大文件</button>
+          <button id="fmSubFoldersBtn" type="button" class="seg-btn">文件夹 Top 25</button>
+          <button id="fmSubAppsBtn" type="button" class="seg-btn">应用存储排行</button>
+        </div>
+        <div id="fmStorageBody" class="fm-storage-body"></div>
+      </div>
+
+      <!-- Sub-pane 3: Wireless APK Installer -->
+      <div id="fmApkPane" class="fm-pane" hidden>
+        <div id="fmApkDropzone" class="fm-apk-dropzone">
+          <div class="fm-apk-icon">📦</div>
+          <strong>拖拽安装包到此处，或点击下方选择文件</strong>
+          <p class="hint-text">支持标准 <code>.apk</code> 及分包格式 <code>.apks / .apkm / .xapk</code>，通过加密通道直传并静默安装到手机。</p>
+          <div class="fm-apk-options">
+            <label class="switch-row compact-switch">
+              <input id="fmApkReplaceCheck" type="checkbox" checked />
+              <span>覆盖已有应用 (-r)</span>
+            </label>
+            <label class="switch-row compact-switch">
+              <input id="fmApkDowngradeCheck" type="checkbox" />
+              <span>允许降级安装 (-d)</span>
+            </label>
+          </div>
+          <button id="fmPickApkBtn" type="button" class="primary-btn compact">选择 APK / APKS / XAPK 安装</button>
+          <input id="fmApkFileInput" type="file" accept=".apk,.apks,.apkm,.xapk" hidden />
+        </div>
+        <div id="fmApkProgressCard" class="fm-apk-progress-card" hidden>
+          <div class="fm-apk-stage" id="fmApkStageText">准备中…</div>
+          <div class="fm-storage-bar-track">
+            <div id="fmApkProgressFill" class="fm-storage-bar-fill" style="width:0%"></div>
+          </div>
+          <div class="small-muted mono" id="fmApkDetailText"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- File Image Preview Lightbox -->
+  <div id="fmPreviewOverlay" class="stage-overlay" hidden>
+    <div class="overlay-card glass-surface fm-preview-card">
+      <div class="pop-head">
+        <strong id="fmPreviewTitle">图片预览</strong>
+        <button id="fmPreviewCloseBtn" type="button" class="mini-btn">关闭</button>
+      </div>
+      <img id="fmPreviewImg" class="fm-preview-img" alt="preview" />
+    </div>
+  </div>
+
+  <!-- T9 Quick Dialer Modal -->
+  <div id="dialerModalOverlay" class="stage-overlay" hidden>
+    <div class="overlay-card glass-surface dialer-card">
+      <div class="pop-head">
+        <strong>手机快捷拨号</strong>
+        <button id="closeDialerModalBtn" type="button" class="mini-btn">关闭</button>
+      </div>
+      <div class="dialer-input-row">
+        <input id="dialerNumberInput" type="tel" class="dialer-input mono" placeholder="输入号码或点击下方键盘" autocomplete="off" />
+        <button id="dialerBackspaceBtn" type="button" class="mini-btn" title="退格">⌫</button>
+      </div>
+      <div id="dialerKeypadGrid" class="dialer-keypad-grid"></div>
+      <button id="dialerCallBtn" type="button" class="primary-btn full">在手机上拨打</button>
+    </div>
+  </div>
+
+  <!-- Web Browser Fallback Floating Call Control HUD (Tauri uses native non-focus-stealing call-hud window) -->
+  <div id="webCallHud" class="web-call-hud glass-surface" hidden>
+    <div class="web-call-hud-top">
+      <div>
+        <strong id="webCallHudCaller">来电</strong>
+        <div id="webCallHudSub" class="small-muted mono">来电响铃</div>
+      </div>
+      <button id="webCallHudDismissBtn" type="button" class="mini-btn" title="仅暂隐浮窗，不挂断">暂隐</button>
+    </div>
+    <div class="web-call-hud-actions">
+      <button id="webCallHudAnswerBtn" type="button" class="btn-pill small emerald">接听</button>
+      <button id="webCallHudRejectBtn" type="button" class="btn-pill small danger">拒接</button>
+      <button id="webCallHudMuteBtn" type="button" class="btn-pill small" hidden>静音</button>
+      <button id="webCallHudSpeakerBtn" type="button" class="btn-pill small" hidden>扬声器</button>
+      <button id="webCallHudHangupBtn" type="button" class="btn-pill small danger" hidden>挂断</button>
     </div>
   </div>
 

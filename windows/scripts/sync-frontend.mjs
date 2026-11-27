@@ -108,10 +108,12 @@ export function syncDesktopFrontend() {
     fs.copyFileSync(iconSrc, path.join(assetsOut, 'icon.svg'));
   }
 
-  const indexHtmlPath = path.join(distDir, 'index.html');
-  if (fs.existsSync(indexHtmlPath)) {
-    const rawHtml = fs.readFileSync(indexHtmlPath, 'utf8');
-    fs.writeFileSync(indexHtmlPath, rewriteCastHtmlForDesktopDist(rawHtml), 'utf8');
+  for (const entry of fs.readdirSync(distDir, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.html')) {
+      const htmlPath = path.join(distDir, entry.name);
+      const rawHtml = fs.readFileSync(htmlPath, 'utf8');
+      fs.writeFileSync(htmlPath, rewriteCastHtmlForDesktopDist(rawHtml), 'utf8');
+    }
   }
 
   syncVersionFiles(version);
