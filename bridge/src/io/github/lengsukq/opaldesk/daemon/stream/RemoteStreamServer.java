@@ -92,6 +92,7 @@ public final class RemoteStreamServer {
         default void onMediaAction(int sessionId, OpalCastProtocol.MediaActionMsg msg) {}
         default void onFileOpRequest(int sessionId, OpalCastProtocol.FileOpRequestMsg msg) {}
         default void onApkInstallRequest(int sessionId, OpalCastProtocol.ApkInstallRequestMsg msg) {}
+        default void onCallAction(int sessionId, OpalCastProtocol.CallActionMsg msg) {}
         void onWifiUpgradeEnabled();
         default void onVideoSoftCongestion(int sessionId) {}
         void onVideoCongestion(int sessionId);
@@ -683,6 +684,20 @@ public final class RemoteStreamServer {
         }
     }
 
+    public void sendCallState(int sessionId, byte[] jsonUtf8) {
+        ClientSession s = allSessions.get(sessionId);
+        if (s != null && !s.isClosed() && jsonUtf8 != null && jsonUtf8.length > 0) {
+            s.enqueue(OpalCastProtocol.TYPE_CALL_STATE, 0, nowTimestampUs(), jsonUtf8);
+        }
+    }
+
+    public void broadcastCallState(byte[] jsonUtf8) {
+        if (jsonUtf8 == null || jsonUtf8.length == 0) return;
+        for (int sid : getCompanionEventSubscriberSessionIds()) {
+            sendCallState(sid, jsonUtf8);
+        }
+    }
+
     public void sendFileOpResponse(int sessionId, OpalCastProtocol.FileOpResponseMsg response) {
         ClientSession s = allSessions.get(sessionId);
         if (s != null && !s.isClosed() && response != null) {
@@ -1271,6 +1286,12 @@ public final class RemoteStreamServer {
             case OpalCastProtocol.TYPE_APK_INSTALL_REQUEST: {
                 OpalCastProtocol.ApkInstallRequestMsg msg = OpalCastProtocol.decodeApkInstallRequest(f.payload);
                 if (listener != null) listener.onApkInstallRequest(sid, msg);
+                break;
+            }
+            case OpalCastProtocol.TYPE_CALL_ACTION: {
+                session.setCompanionEventsSubscribed(true);
+                OpalCastProtocol.CallActionMsg msg = OpalCastProtocol.decodeCallAction(f.payload);
+                if (listener != null) listener.onCallAction(sid, msg);
                 break;
             }
             default:

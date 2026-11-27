@@ -17,6 +17,7 @@ import io.github.lengsukq.opaldesk.daemon.input.ExternalMouseRouter;
 import io.github.lengsukq.opaldesk.daemon.input.PerDisplayInputRouter;
 import io.github.lengsukq.opaldesk.daemon.platform.AndroidDisplayDriver;
 import io.github.lengsukq.opaldesk.daemon.platform.AndroidServices;
+import io.github.lengsukq.opaldesk.daemon.platform.HotspotController;
 import io.github.lengsukq.opaldesk.daemon.platform.TaskApiAdapter;
 import io.github.lengsukq.opaldesk.daemon.stream.OpalCastCompositorBridge;
 import io.github.lengsukq.opaldesk.daemon.stream.RemoteStreamServer;
@@ -698,6 +699,24 @@ public final class BridgeBinderService extends Binder {
                     remoteBridge.onMediaStateSyncedFromHelper(mediaJson);
                 }
                 if (reply != null) reply.writeInt(1);
+                return true;
+            }
+            case BridgeProtocol.TX_SYNC_CALL_STATE: {
+                String callJson = data.readString();
+                if (remoteBridge != null && callJson != null && !callJson.isEmpty()) {
+                    remoteBridge.onCallStateSyncedFromHelper(callJson);
+                }
+                if (reply != null) reply.writeInt(1);
+                return true;
+            }
+            case BridgeProtocol.TX_TRIGGER_HOTSPOT: {
+                String clientId = data.readString();
+                String nonceHex = data.readString();
+                String hmacHex = data.readString();
+                String resultJson = (remoteBridge != null)
+                        ? remoteBridge.triggerHotspotForBleClient(clientId, nonceHex, hmacHex)
+                        : HotspotController.HotspotResult.unauthorized(RemoteStreamServer.DEFAULT_WIFI_PORT).toJson();
+                if (reply != null) reply.writeString(resultJson);
                 return true;
             }
             case BridgeProtocol.TX_SHUTDOWN: {

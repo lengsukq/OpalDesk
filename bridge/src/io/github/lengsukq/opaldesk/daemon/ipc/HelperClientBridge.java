@@ -494,20 +494,48 @@ public final class HelperClientBridge {
         });
     }
 
-    /** Forwards a Mac/companion notification command ({@code sync|dismiss|clear_all|reply}) to Helper. */
+    /** Forwards a Mac/companion notification command ({@code sync|dismiss|clear_all|reply|invoke_action}) to Helper. */
     public void pushNotificationAction(String op, String key, String replyText) {
+        dispatchNotificationAction(op, key, replyText, -1);
+    }
+
+    /** Forwards a Mac/companion notification command (including {@code invoke_action} + {@code actionIndex}) to Helper. */
+    public void dispatchNotificationAction(String op, String key, String replyText, int actionIndex) {
         if (config.shuttingDown || op == null || op.isEmpty()) return;
         final String safeOp = op;
         final String safeKey = (key != null) ? key : "";
         final String safeReply = (replyText != null) ? replyText : "";
+        final int safeIndex = actionIndex;
         scenePushExec.execute(() -> {
             if (config.shuttingDown) return;
             Bundle extras = new Bundle();
             extras.putString(BridgeProtocol.EXTRA_NOTIF_ACTION_OP, safeOp);
             extras.putString(BridgeProtocol.EXTRA_NOTIF_ACTION_KEY, safeKey);
             extras.putString(BridgeProtocol.EXTRA_NOTIF_ACTION_REPLY_TEXT, safeReply);
+            extras.putInt(BridgeProtocol.EXTRA_NOTIF_ACTION_INDEX, safeIndex);
             callHelperProvider(BridgeProtocol.PROVIDER_METHOD_NOTIFICATION_ACTION, extras);
         });
+    }
+
+    /**
+     * Synchronously dispatches a Mac/companion call control command ({@code sync|answer|reject|hangup|dial|...})
+     * to Helper via {@code BridgeProvider}.
+     *
+     * @return {@code true} only when Helper accepted and handled the command.
+     */
+    public boolean dispatchCallAction(String op, String number, String smsText) {
+        if (config.shuttingDown || !isHelperAlive() || op == null || op.trim().isEmpty()) {
+            return false;
+        }
+        Bundle extras = new Bundle();
+        extras.putString(BridgeProtocol.EXTRA_CALL_ACTION_OP, op.trim());
+        extras.putString(BridgeProtocol.EXTRA_CALL_ACTION_NUMBER, number != null ? number : "");
+        extras.putString(BridgeProtocol.EXTRA_CALL_ACTION_SMS_TEXT, smsText != null ? smsText : "");
+        Bundle res = callHelperProvider(BridgeProtocol.PROVIDER_METHOD_CALL_ACTION, extras);
+        if (res == null) {
+            return false;
+        }
+        return res.containsKey("handled") ? res.getBoolean("handled", false) : res.getBoolean("ok", false);
     }
 
     /** Forwards a Mac/companion media transport command ({@code play|pause|toggle|next|previous|stop|seek}) to Helper. */

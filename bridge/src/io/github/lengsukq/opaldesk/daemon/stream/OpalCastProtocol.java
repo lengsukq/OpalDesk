@@ -50,6 +50,7 @@ public final class OpalCastProtocol {
     public static final int TYPE_FILE_OP_RESPONSE = 0x1B;
     public static final int TYPE_FILE_PULL_CHUNK = 0x1C;
     public static final int TYPE_APK_INSTALL_STATUS = 0x1D;
+    public static final int TYPE_CALL_STATE = 0x1E;
     public static final int TYPE_PONG = 0x1F;
 
     // Uplink frame types (Mac / Tablet / Web -> Android)
@@ -74,6 +75,7 @@ public final class OpalCastProtocol {
     public static final int TYPE_MEDIA_ACTION = 0x32;
     public static final int TYPE_FILE_OP_REQUEST = 0x33;
     public static final int TYPE_APK_INSTALL_REQUEST = 0x34;
+    public static final int TYPE_CALL_ACTION = 0x35;
 
     // Remote microphone uplink defaults
     public static final String MIC_CODEC_PCM16 = "pcm16";
@@ -1528,6 +1530,16 @@ public final class OpalCastProtocol {
 
     // ---- OPD1 v1.2 Companion, Notification, Media, File Browser & APK Install Codecs ----
 
+    public static final class NotificationActionItem {
+        public final int index;
+        public final String label;
+
+        public NotificationActionItem(int index, String label) {
+            this.index = Math.max(0, index);
+            this.label = (label != null) ? label : "";
+        }
+    }
+
     public static final class NotificationItem {
         public final String key;
         public final String pkg;
@@ -1539,6 +1551,7 @@ public final class OpalCastProtocol {
         public final boolean canReply;
         public final String replyLabel;
         public final String otpCode;
+        public final List<NotificationActionItem> actions;
 
         public NotificationItem(
                 String key,
@@ -1551,6 +1564,22 @@ public final class OpalCastProtocol {
                 boolean canReply,
                 String replyLabel,
                 String otpCode) {
+            this(key, pkg, appLabel, title, text, postTimeMs, clearable, canReply, replyLabel, otpCode,
+                    Collections.emptyList());
+        }
+
+        public NotificationItem(
+                String key,
+                String pkg,
+                String appLabel,
+                String title,
+                String text,
+                long postTimeMs,
+                boolean clearable,
+                boolean canReply,
+                String replyLabel,
+                String otpCode,
+                List<NotificationActionItem> actions) {
             this.key = (key != null) ? key : "";
             this.pkg = (pkg != null) ? pkg : "";
             this.appLabel = (appLabel != null) ? appLabel : "";
@@ -1561,6 +1590,9 @@ public final class OpalCastProtocol {
             this.canReply = canReply;
             this.replyLabel = (replyLabel != null) ? replyLabel : "";
             this.otpCode = (otpCode != null) ? otpCode : "";
+            this.actions = (actions != null && !actions.isEmpty())
+                    ? Collections.unmodifiableList(new ArrayList<>(actions))
+                    : Collections.emptyList();
         }
     }
 
@@ -1589,6 +1621,14 @@ public final class OpalCastProtocol {
             SimpleJson.ArrayBuilder arr = new SimpleJson.ArrayBuilder();
             for (NotificationItem it : m.items) {
                 if (it == null) continue;
+                SimpleJson.ArrayBuilder actionsArr = new SimpleJson.ArrayBuilder();
+                for (NotificationActionItem act : it.actions) {
+                    if (act == null) continue;
+                    actionsArr.addRaw(new SimpleJson.ObjectBuilder()
+                            .put("index", act.index)
+                            .put("label", act.label)
+                            .build());
+                }
                 arr.addRaw(new SimpleJson.ObjectBuilder()
                         .put("key", it.key)
                         .put("pkg", it.pkg)
@@ -1600,6 +1640,7 @@ public final class OpalCastProtocol {
                         .put("canReply", it.canReply)
                         .put("replyLabel", it.replyLabel)
                         .put("otpCode", it.otpCode)
+                        .putRaw("actions", actionsArr.build())
                         .build());
             }
             root.putRaw("items", arr.build());
@@ -1618,6 +1659,13 @@ public final class OpalCastProtocol {
             List<SimpleJson.JsonObjectView> rawItems = obj.getObjectList("items");
             List<NotificationItem> items = new ArrayList<>(rawItems.size());
             for (SimpleJson.JsonObjectView it : rawItems) {
+                List<SimpleJson.JsonObjectView> rawActions = it.getObjectList("actions");
+                List<NotificationActionItem> actions = new ArrayList<>(rawActions.size());
+                for (SimpleJson.JsonObjectView rawAct : rawActions) {
+                    actions.add(new NotificationActionItem(
+                            rawAct.getInt("index", 0),
+                            rawAct.getString("label", "")));
+                }
                 items.add(new NotificationItem(
                         it.getString("key", ""),
                         it.getString("pkg", ""),
@@ -1628,7 +1676,8 @@ public final class OpalCastProtocol {
                         it.getBoolean("clearable", true),
                         it.getBoolean("canReply", false),
                         it.getString("replyLabel", ""),
-                        it.getString("otpCode", "")));
+                        it.getString("otpCode", ""),
+                        actions));
             }
             return new NotificationEventMsg(action, key, items);
         } catch (RuntimeException t) {
@@ -1637,25 +1686,33 @@ public final class OpalCastProtocol {
     }
 
     public static final class NotificationActionMsg {
-        public final String op;        // "sync" | "dismiss" | "clear_all" | "reply"
+        public final String op;        // "sync" | "dismiss" | "clear_all" | "reply" | "invoke_action"
         public final String key;
         public final String replyText;
+        public final int actionIndex;
 
         public NotificationActionMsg(String op, String key, String replyText) {
+            this(op, key, replyText, -1);
+        }
+
+        public NotificationActionMsg(String op, String key, String replyText, int actionIndex) {
             this.op = (op != null) ? op.trim() : "";
             this.key = (key != null) ? key : "";
             this.replyText = (replyText != null) ? replyText : "";
+            this.actionIndex = actionIndex;
         }
     }
 
     public static byte[] encodeNotificationAction(NotificationActionMsg msg) {
-        NotificationActionMsg m = (msg != null) ? msg : new NotificationActionMsg("sync", "", "");
-        return new SimpleJson.ObjectBuilder()
+        NotificationActionMsg m = (msg != null) ? msg : new NotificationActionMsg("sync", "", "", -1);
+        SimpleJson.ObjectBuilder b = new SimpleJson.ObjectBuilder()
                 .put("op", m.op)
                 .put("key", m.key)
-                .put("replyText", m.replyText)
-                .build()
-                .getBytes(StandardCharsets.UTF_8);
+                .put("replyText", m.replyText);
+        if (m.actionIndex >= 0 || "invoke_action".equalsIgnoreCase(m.op)) {
+            b.put("actionIndex", m.actionIndex);
+        }
+        return b.build().getBytes(StandardCharsets.UTF_8);
     }
 
     public static NotificationActionMsg decodeNotificationAction(byte[] payload) throws ProtocolException {
@@ -1671,7 +1728,8 @@ public final class OpalCastProtocol {
             return new NotificationActionMsg(
                     op,
                     obj.getString("key", ""),
-                    obj.getString("replyText", ""));
+                    obj.getString("replyText", ""),
+                    obj.getInt("actionIndex", -1));
         } catch (ProtocolException pe) {
             throw pe;
         } catch (RuntimeException t) {
@@ -1892,12 +1950,52 @@ public final class OpalCastProtocol {
         }
     }
 
+    public static final class FolderStorageEntry {
+        public final String path;
+        public final String name;
+        public final long bytes;
+        public final int fileCount;
+
+        public FolderStorageEntry(String path, String name, long bytes, int fileCount) {
+            this.path = (path != null) ? path : "";
+            this.name = (name != null) ? name : "";
+            this.bytes = Math.max(0L, bytes);
+            this.fileCount = Math.max(0, fileCount);
+        }
+    }
+
+    public static final class AppStorageEntry {
+        public final String pkg;
+        public final String appLabel;
+        public final long apkBytes;
+        public final long dataBytes;
+        public final long cacheBytes;
+        public final long totalBytes;
+
+        public AppStorageEntry(
+                String pkg,
+                String appLabel,
+                long apkBytes,
+                long dataBytes,
+                long cacheBytes,
+                long totalBytes) {
+            this.pkg = (pkg != null) ? pkg : "";
+            this.appLabel = (appLabel != null) ? appLabel : "";
+            this.apkBytes = Math.max(0L, apkBytes);
+            this.dataBytes = Math.max(0L, dataBytes);
+            this.cacheBytes = Math.max(0L, cacheBytes);
+            this.totalBytes = Math.max(0L, totalBytes);
+        }
+    }
+
     public static final class StorageReport {
         public final long totalBytes;
         public final long freeBytes;
         public final long usedBytes;
         public final List<StorageCategory> categories;
         public final List<LargeFileEntry> largeFiles;
+        public final List<FolderStorageEntry> folders;
+        public final List<AppStorageEntry> apps;
 
         public StorageReport(
                 long totalBytes,
@@ -1905,6 +2003,18 @@ public final class OpalCastProtocol {
                 long usedBytes,
                 List<StorageCategory> categories,
                 List<LargeFileEntry> largeFiles) {
+            this(totalBytes, freeBytes, usedBytes, categories, largeFiles,
+                    Collections.emptyList(), Collections.emptyList());
+        }
+
+        public StorageReport(
+                long totalBytes,
+                long freeBytes,
+                long usedBytes,
+                List<StorageCategory> categories,
+                List<LargeFileEntry> largeFiles,
+                List<FolderStorageEntry> folders,
+                List<AppStorageEntry> apps) {
             this.totalBytes = Math.max(0L, totalBytes);
             this.freeBytes = Math.max(0L, freeBytes);
             this.usedBytes = Math.max(0L, usedBytes);
@@ -1913,6 +2023,12 @@ public final class OpalCastProtocol {
                     : Collections.emptyList();
             this.largeFiles = (largeFiles != null)
                     ? Collections.unmodifiableList(new ArrayList<>(largeFiles))
+                    : Collections.emptyList();
+            this.folders = (folders != null && !folders.isEmpty())
+                    ? Collections.unmodifiableList(new ArrayList<>(folders))
+                    : Collections.emptyList();
+            this.apps = (apps != null && !apps.isEmpty())
+                    ? Collections.unmodifiableList(new ArrayList<>(apps))
                     : Collections.emptyList();
         }
     }
@@ -1997,12 +2113,36 @@ public final class OpalCastProtocol {
                         .put("modifiedMs", lf.modifiedMs)
                         .build());
             }
+            SimpleJson.ArrayBuilder foldersArr = new SimpleJson.ArrayBuilder();
+            for (FolderStorageEntry fe : m.storage.folders) {
+                if (fe == null) continue;
+                foldersArr.addRaw(new SimpleJson.ObjectBuilder()
+                        .put("path", fe.path)
+                        .put("name", fe.name)
+                        .put("bytes", fe.bytes)
+                        .put("fileCount", fe.fileCount)
+                        .build());
+            }
+            SimpleJson.ArrayBuilder appsArr = new SimpleJson.ArrayBuilder();
+            for (AppStorageEntry ae : m.storage.apps) {
+                if (ae == null) continue;
+                appsArr.addRaw(new SimpleJson.ObjectBuilder()
+                        .put("pkg", ae.pkg)
+                        .put("appLabel", ae.appLabel)
+                        .put("apkBytes", ae.apkBytes)
+                        .put("dataBytes", ae.dataBytes)
+                        .put("cacheBytes", ae.cacheBytes)
+                        .put("totalBytes", ae.totalBytes)
+                        .build());
+            }
             root.putRaw("storage", new SimpleJson.ObjectBuilder()
                     .put("totalBytes", m.storage.totalBytes)
                     .put("freeBytes", m.storage.freeBytes)
                     .put("usedBytes", m.storage.usedBytes)
                     .putRaw("categories", catArr.build())
                     .putRaw("largeFiles", largeArr.build())
+                    .putRaw("folders", foldersArr.build())
+                    .putRaw("apps", appsArr.build())
                     .build());
         }
         return root.build().getBytes(StandardCharsets.UTF_8);
@@ -2045,12 +2185,34 @@ public final class OpalCastProtocol {
                             lf.getLong("size", 0L),
                             lf.getLong("modifiedMs", 0L)));
                 }
+                List<SimpleJson.JsonObjectView> rawFolders = stObj.getObjectList("folders");
+                List<FolderStorageEntry> folders = new ArrayList<>(rawFolders.size());
+                for (SimpleJson.JsonObjectView fe : rawFolders) {
+                    folders.add(new FolderStorageEntry(
+                            fe.getString("path", ""),
+                            fe.getString("name", ""),
+                            fe.getLong("bytes", 0L),
+                            fe.getInt("fileCount", 0)));
+                }
+                List<SimpleJson.JsonObjectView> rawApps = stObj.getObjectList("apps");
+                List<AppStorageEntry> apps = new ArrayList<>(rawApps.size());
+                for (SimpleJson.JsonObjectView ae : rawApps) {
+                    apps.add(new AppStorageEntry(
+                            ae.getString("pkg", ""),
+                            ae.getString("appLabel", ""),
+                            ae.getLong("apkBytes", 0L),
+                            ae.getLong("dataBytes", 0L),
+                            ae.getLong("cacheBytes", 0L),
+                            ae.getLong("totalBytes", 0L)));
+                }
                 storage = new StorageReport(
                         stObj.getLong("totalBytes", 0L),
                         stObj.getLong("freeBytes", 0L),
                         stObj.getLong("usedBytes", 0L),
                         cats,
-                        largeFiles);
+                        largeFiles,
+                        folders,
+                        apps);
             }
             return new FileOpResponseMsg(
                     obj.getInt("requestId", 0),
@@ -2256,6 +2418,132 @@ public final class OpalCastProtocol {
                     obj.getString("message", ""));
         } catch (RuntimeException t) {
             throw new ProtocolException("Invalid APK_INSTALL_STATUS JSON: " + t.getMessage(), t);
+        }
+    }
+
+    // ---- OPD1 v1.3 Call Continuity Codecs (0x1E CALL_STATE / 0x35 CALL_ACTION) ----
+
+    public static final class CallStateMsg {
+        public final String state; // "idle" | "ringing" | "dialing" | "active" | "holding" | "disconnected"
+        public final String number;
+        public final String contactName;
+        public final long startedAtMs;
+        public final boolean isMuted;
+        public final boolean isSpeakerOn;
+        public final boolean canAnswer;
+        public final boolean canReject;
+        public final boolean canDial;
+        public final String source; // "telecom" | "telephony" | "notification" | ""
+
+        public CallStateMsg(
+                String state,
+                String number,
+                String contactName,
+                long startedAtMs,
+                boolean isMuted,
+                boolean isSpeakerOn,
+                boolean canAnswer,
+                boolean canReject,
+                boolean canDial,
+                String source) {
+            String cleanState = (state != null) ? state.trim().toLowerCase(java.util.Locale.ROOT) : "";
+            this.state = cleanState.isEmpty() ? "idle" : cleanState;
+            this.number = (number != null) ? number : "";
+            this.contactName = (contactName != null) ? contactName : "";
+            this.startedAtMs = Math.max(0L, startedAtMs);
+            this.isMuted = isMuted;
+            this.isSpeakerOn = isSpeakerOn;
+            this.canAnswer = canAnswer;
+            this.canReject = canReject;
+            this.canDial = canDial;
+            this.source = (source != null) ? source.trim() : "";
+        }
+
+        public boolean isActiveOrRinging() {
+            return !"idle".equals(state) && !"disconnected".equals(state);
+        }
+    }
+
+    public static byte[] encodeCallState(CallStateMsg msg) {
+        CallStateMsg m = (msg != null)
+                ? msg : new CallStateMsg("idle", "", "", 0L, false, false, false, false, false, "");
+        return new SimpleJson.ObjectBuilder()
+                .put("state", m.state)
+                .put("number", m.number)
+                .put("contactName", m.contactName)
+                .put("startedAtMs", m.startedAtMs)
+                .put("isMuted", m.isMuted)
+                .put("isSpeakerOn", m.isSpeakerOn)
+                .put("canAnswer", m.canAnswer)
+                .put("canReject", m.canReject)
+                .put("canDial", m.canDial)
+                .put("source", m.source)
+                .build()
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static CallStateMsg decodeCallState(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("CALL_STATE payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            return new CallStateMsg(
+                    obj.getString("state", "idle"),
+                    obj.getString("number", ""),
+                    obj.getString("contactName", ""),
+                    obj.getLong("startedAtMs", 0L),
+                    obj.getBoolean("isMuted", false),
+                    obj.getBoolean("isSpeakerOn", false),
+                    obj.getBoolean("canAnswer", false),
+                    obj.getBoolean("canReject", false),
+                    obj.getBoolean("canDial", false),
+                    obj.getString("source", ""));
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid CALL_STATE JSON: " + t.getMessage(), t);
+        }
+    }
+
+    public static final class CallActionMsg {
+        public final String op; // "sync" | "answer" | "reject" | "hangup" | "dial" | "mute" | "unmute" | "speaker_on" | "speaker_off" | "reject_with_sms"
+        public final String number;
+        public final String smsText;
+
+        public CallActionMsg(String op, String number, String smsText) {
+            this.op = (op != null) ? op.trim() : "";
+            this.number = (number != null) ? number.trim() : "";
+            this.smsText = (smsText != null) ? smsText : "";
+        }
+    }
+
+    public static byte[] encodeCallAction(CallActionMsg msg) {
+        CallActionMsg m = (msg != null) ? msg : new CallActionMsg("sync", "", "");
+        return new SimpleJson.ObjectBuilder()
+                .put("op", m.op)
+                .put("number", m.number)
+                .put("smsText", m.smsText)
+                .build()
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static CallActionMsg decodeCallAction(byte[] payload) throws ProtocolException {
+        if (payload == null || payload.length < 2) {
+            throw new ProtocolException("CALL_ACTION payload empty");
+        }
+        try {
+            SimpleJson.JsonObjectView obj = SimpleJson.parseObject(new String(payload, StandardCharsets.UTF_8));
+            String op = obj.getString("op", "");
+            if (op.trim().isEmpty()) {
+                throw new ProtocolException("CALL_ACTION missing op");
+            }
+            return new CallActionMsg(
+                    op,
+                    obj.getString("number", ""),
+                    obj.getString("smsText", ""));
+        } catch (ProtocolException pe) {
+            throw pe;
+        } catch (RuntimeException t) {
+            throw new ProtocolException("Invalid CALL_ACTION JSON: " + t.getMessage(), t);
         }
     }
 }

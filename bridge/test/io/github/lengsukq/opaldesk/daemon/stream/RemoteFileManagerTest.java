@@ -253,6 +253,153 @@ public class RemoteFileManagerTest {
         assertEquals(300L, audBytes);
         assertEquals(200L, docBytes);
         assertEquals(400L, apkBytes);
+
+        // Verify top-level folder ranking is populated in the same scan pass
+        assertFalse(resp.storage.folders.isEmpty());
+        assertEquals("/sdcard/Download", resp.storage.folders.get(0).path);
+        assertEquals("Download", resp.storage.folders.get(0).name);
+        assertEquals(56, resp.storage.folders.get(0).fileCount);
+    }
+
+    @Test
+    public void testStorageScanTop25FoldersRecursiveDepth1And2SkipsSymlinksAndIncludesApps() throws Exception {
+        File storageRoot = tmpDir.newFolder("sdcard_folders");
+        File dcim = new File(storageRoot, "DCIM");
+        File dcimCam = new File(dcim, "Camera");
+        File dcimDeep = new File(dcimCam, "2026/Trips");
+        assertTrue(dcimDeep.mkdirs());
+        Files.write(new File(dcim, "cover.jpg").toPath(), new byte[100]);
+        Files.write(new File(dcimCam, "shot.jpg").toPath(), new byte[400]);
+        Files.write(new File(dcimDeep, "deep.mp4").toPath(), new byte[2000]);
+
+        // Create 30 additional depth-1 directories to verify Top-25 cap & descending sort
+        for (int i = 1; i <= 30; i++) {
+            File d = new File(storageRoot, String.format("Dir_%02d", i));
+            assertTrue(d.mkdirs());
+            Files.write(new File(d, "f.bin").toPath(), new byte[i * 50]);
+        }
+
+        // Symlink inside scanRoot pointing to an outside dir with huge file must be skipped
+        File outsideDir = tmpDir.newFolder("outside_huge");
+        Files.write(new File(outsideDir, "huge.bin").toPath(), new byte[99_999]);
+        Files.createSymbolicLink(new File(storageRoot, "SymlinkHuge").toPath(), outsideDir.toPath());
+
+        List<OpalCastProtocol.AppStorageEntry> injectedApps = new ArrayList<>();
+        injectedApps.add(new OpalCastProtocol.AppStorageEntry("com.small", "Small", 10, 20, 5, 35));
+        injectedApps.add(new OpalCastProtocol.AppStorageEntry("com.big", "BigApp", 1000, 5000, 500, 6500));
+
+        RemoteFileManager fm = new RemoteFileManager(
+                storageRoot, "/sdcard", (f, max, cap) -> "", () -> injectedApps);
+        OpalCastProtocol.FileOpResponseMsg resp = fm.executeRequest(
+                new OpalCastProtocol.FileOpRequestMsg(12, "storage_scan", "/sdcard", "", 0, 8),
+                null, null, () -> false);
+        assertTrue(resp.ok);
+        assertNotNull(resp.storage);
+
+        // Top 25 folders cap and descending order
+        assertEquals(RemoteFileManager.MAX_TOP_FOLDERS, resp.storage.folders.size());
+        assertEquals("/sdcard/DCIM", resp.storage.folders.get(0).path);
+        assertEquals("DCIM", resp.storage.folders.get(0).name);
+        assertEquals(2500L, resp.storage.folders.get(0).bytes);
+        assertEquals(3, resp.storage.folders.get(0).fileCount);
+
+        assertEquals("/sdcard/DCIM/Camera", resp.storage.folders.get(1).path);
+        assertEquals("Camera", resp.storage.folders.get(1).name);
+        assertEquals(2400L, resp.storage.folders.get(1).bytes);
+        assertEquals(2, resp.storage.folders.get(1).fileCount);
+
+        for (int i = 1; i < resp.storage.folders.size(); i++) {
+            assertTrue(resp.storage.folders.get(i - 1).bytes >= resp.storage.folders.get(i).bytes);
+            assertFalse("Symlink dir must never appear in folder report",
+                    resp.storage.folders.get(i).name.equals("SymlinkHuge"));
+            assertFalse("Depth-3 subdir must not be emitted as standalone folder entry",
+                    resp.storage.folders.get(i).path.contains("/2026"));
+        }
+
+        // Injected app storage sorted descending by totalBytes
+        assertEquals(2, resp.storage.apps.size());
+        assertEquals("com.big", resp.storage.apps.get(0).pkg);
+        assertEquals("BigApp", resp.storage.apps.get(0).appLabel);
+        assertEquals(6500L, resp.storage.apps.get(0).totalBytes);
+        assertEquals("com.small", resp.storage.apps.get(1).pkg);
+    }
+
+    @Test
+    public void testParseDumpsysDiskstatsRealisticAospOemVariantsAndMalformedFallback() {
+        String realisticAosp = ""
+                + "Latency: 1ms [512B Data Write]\n"
+                + "Data-Free: 45123456K / 115234567K total = 39% free\n"
+                + "App Size: 12345678900\n"
+                + "App Data Size: 23456789012\n"
+                + "App Cache Size: 3456789012\n"
+                + "Package Names: [\"com.android.chrome\", \"com.tencent.mm\", \"com.ss.android.ugc.aweme\"]\n"
+                + "App Sizes: [198000000, 450000000, 312000000]\n"
+                + "App Data Sizes: [850000000, 12500000000, 4200000000]\n"
+                + "Cache Sizes: [120000000, 1800000000, 650000000]\n";
+
+        List<OpalCastProtocol.AppStorageEntry> parsed = RemoteFileManager.parseDumpsysDiskstats(
+                realisticAosp,
+                pkg -> "com.tencent.mm".equals(pkg) ? "微信" : pkg);
+        assertEquals(3, parsed.size());
+        assertEquals("com.tencent.mm", parsed.get(0).pkg);
+        assertEquals("微信", parsed.get(0).appLabel);
+        assertEquals(450_000_000L, parsed.get(0).apkBytes);
+        assertEquals(12_500_000_000L, parsed.get(0).dataBytes);
+        assertEquals(1_800_000_000L, parsed.get(0).cacheBytes);
+        assertEquals(14_750_000_000L, parsed.get(0).totalBytes);
+        assertEquals("com.ss.android.ugc.aweme", parsed.get(1).pkg);
+        assertEquals("com.android.chrome", parsed.get(2).pkg);
+
+        // OEM variant: App Cache Sizes + multi-line wrap + negative value clamped to 0
+        String oemVariant = ""
+                + "Package Names: [\"com.alpha\",\n"
+                + "  \"com.beta\"]\n"
+                + "App Sizes: [100, -5]\n"
+                + "App Data Sizes: [200, 900]\n"
+                + "App Cache Sizes: [50, bad_num]\n";
+        List<OpalCastProtocol.AppStorageEntry> oemParsed = RemoteFileManager.parseDumpsysDiskstats(oemVariant);
+        assertEquals(2, oemParsed.size());
+        assertEquals("com.beta", oemParsed.get(0).pkg);
+        assertEquals(0L, oemParsed.get(0).apkBytes);
+        assertEquals(900L, oemParsed.get(0).dataBytes);
+        assertEquals(0L, oemParsed.get(0).cacheBytes);
+        assertEquals(900L, oemParsed.get(0).totalBytes);
+        assertEquals("com.alpha", oemParsed.get(1).pkg);
+        assertEquals(350L, oemParsed.get(1).totalBytes);
+
+        // Top 50 cap check (60 packages -> top 50 descending)
+        StringBuilder pkgs = new StringBuilder("Package Names: [");
+        StringBuilder apks = new StringBuilder("App Sizes: [");
+        StringBuilder datas = new StringBuilder("App Data Sizes: [");
+        StringBuilder caches = new StringBuilder("Cache Sizes: [");
+        for (int i = 1; i <= 60; i++) {
+            if (i > 1) {
+                pkgs.append(',');
+                apks.append(',');
+                datas.append(',');
+                caches.append(',');
+            }
+            pkgs.append('"').append("com.app.").append(i).append('"');
+            apks.append(i * 1000L);
+            datas.append(i * 2000L);
+            caches.append(i * 500L);
+        }
+        pkgs.append("]\n");
+        apks.append("]\n");
+        datas.append("]\n");
+        caches.append("]\n");
+        List<OpalCastProtocol.AppStorageEntry> capped = RemoteFileManager.parseDumpsysDiskstats(
+                pkgs.toString() + apks + datas + caches);
+        assertEquals(RemoteFileManager.MAX_APP_STORAGE_ENTRIES, capped.size());
+        assertEquals("com.app.60", capped.get(0).pkg);
+        assertEquals(60L * 3500L, capped.get(0).totalBytes);
+        assertEquals("com.app.11", capped.get(49).pkg);
+
+        // Malformed / empty / null fallback returns empty list gracefully
+        assertTrue(RemoteFileManager.parseDumpsysDiskstats(null).isEmpty());
+        assertTrue(RemoteFileManager.parseDumpsysDiskstats("").isEmpty());
+        assertTrue(RemoteFileManager.parseDumpsysDiskstats("Permission Denial: can't dump diskstats").isEmpty());
+        assertTrue(RemoteFileManager.parseDumpsysDiskstats("Package Names: []\nApp Sizes: []").isEmpty());
     }
 
     @Test

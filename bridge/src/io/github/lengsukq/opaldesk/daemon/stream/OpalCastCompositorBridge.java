@@ -32,6 +32,7 @@ import io.github.lengsukq.opaldesk.daemon.input.PerDisplayInputRouter;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.platform.AndroidDisplayDriver;
 import io.github.lengsukq.opaldesk.daemon.platform.AndroidServices;
+import io.github.lengsukq.opaldesk.daemon.platform.HotspotController;
 import io.github.lengsukq.opaldesk.daemon.platform.TaskApiAdapter;
 import io.github.lengsukq.opaldesk.daemon.platform.VirtualDisplayFactory;
 import io.github.lengsukq.opaldesk.daemon.security.PairingApprovalCoordinator;
@@ -242,7 +243,9 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
 
     private final RemoteFileManager fileManager = new RemoteFileManager();
     private final RemoteApkInstaller apkInstaller = new RemoteApkInstaller();
+    private final HotspotController hotspotController = new HotspotController();
     private final CompanionNotificationRelay notificationRelay;
+    private final CompanionCallRelay callRelay;
 
     private final Map<Integer, ActiveRemoteSession> sessions = new ConcurrentHashMap<>();
     private volatile byte[] lastMediaStatePayload = null;
@@ -267,11 +270,15 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     }
 
     public interface NotificationActionConsumer {
-        void accept(String op, String key, String replyText);
+        void accept(String op, String key, String replyText, int actionIndex);
     }
 
     public interface MediaActionConsumer {
         void accept(String op, long positionMs);
+    }
+
+    public interface CallActionConsumer {
+        boolean dispatch(String op, String number, String smsText);
     }
 
     private final Object mirrorListenerLock = new Object();
@@ -280,6 +287,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     private volatile DirectImeTextCommitter directImeCommitter;
     private volatile NotificationActionConsumer notificationActionConsumer;
     private volatile MediaActionConsumer mediaActionConsumer;
+    private volatile CallActionConsumer callActionConsumer;
     private volatile java.util.function.BooleanSupplier bridgeImeActiveSupplier = () -> false;
 
     public OpalCastCompositorBridge(
@@ -299,6 +307,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         String devName = (Build.MODEL != null && !Build.MODEL.trim().isEmpty())
                 ? Build.MODEL.trim() : "Android Device";
         this.server = new RemoteStreamServer(this, trustStore, CERT_FILE, devName);
+        this.fileManager.setAppStorageStatsProvider(
+                RemoteFileManager.createDefaultAppStorageProvider(this::resolveCachedHostAppLabel));
         this.notificationRelay = new CompanionNotificationRelay(new CompanionNotificationRelay.OutboundSender() {
             @Override
             public void sendNotificationEventToSession(int sessionId, byte[] jsonUtf8) {
@@ -308,6 +318,17 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             @Override
             public void broadcastNotificationEvent(byte[] jsonUtf8) {
                 server.broadcastNotificationEvent(jsonUtf8);
+            }
+        });
+        this.callRelay = new CompanionCallRelay(new CompanionCallRelay.OutboundSender() {
+            @Override
+            public void sendCallStateToSession(int sessionId, byte[] jsonUtf8) {
+                server.sendCallState(sessionId, jsonUtf8);
+            }
+
+            @Override
+            public void broadcastCallState(byte[] jsonUtf8) {
+                server.broadcastCallState(jsonUtf8);
             }
         });
         if (this.inputRouter != null) {
@@ -353,6 +374,11 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         this.mediaActionConsumer = consumer;
     }
 
+    public void setCallActionConsumer(CallActionConsumer consumer) {
+        this.callActionConsumer = consumer;
+        this.callRelay.setActionDispatcher(consumer != null ? consumer::dispatch : null);
+    }
+
     public void setBridgeImeActiveSupplier(java.util.function.BooleanSupplier supplier) {
         this.bridgeImeActiveSupplier = supplier != null ? supplier : () -> false;
     }
@@ -365,6 +391,46 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     public void onNotificationsSyncedFromHelper(String rawJson) {
         if (rawJson == null || rawJson.trim().isEmpty()) return;
         worker.execute(() -> notificationRelay.onNotificationsSyncedFromHelper(rawJson));
+    }
+
+    /**
+     * Ingests a call state JSON pushed from Helper (Binder TX 52), caches the normalized payload,
+     * and broadcasts {@code 0x1E TYPE_CALL_STATE} exclusively to subscribed companion/desktop sessions.
+     */
+    public void onCallStateSyncedFromHelper(String rawJson) {
+        if (rawJson == null || rawJson.trim().isEmpty()) return;
+        worker.execute(() -> callRelay.onCallStateSyncedFromHelper(rawJson));
+    }
+
+    /**
+     * Verifies a BLE Instant Hotspot challenge-response HMAC in constant time against
+     * {@link TrustStoreManager}'s stored {@code tokenSha256}, ensures the LAN/hotspot TLS listener
+     * is bound on wildcard scope, triggers SoftAP via {@link HotspotController}, and returns JSON.
+     */
+    public String triggerHotspotForBleClient(String clientId, String nonceHex, String hmacHex) {
+        int targetPort = (server.getWifiPort() > 0)
+                ? server.getWifiPort()
+                : RemoteStreamServer.DEFAULT_WIFI_PORT;
+        if (!trustStore.verifyHotspotHmac(clientId, nonceHex, hmacHex)) {
+            System.err.println("OPALDESK_HOTSPOT_REJECT_UNAUTH clientId="
+                    + TrustStoreManager.sanitizeClientId(clientId));
+            return HotspotController.HotspotResult.unauthorized(targetPort).toJson();
+        }
+        if (!server.isWifiEnabled() || server.getWifiBindScope() != BridgeProtocol.TLS_BIND_SCOPE_ALL) {
+            RemoteStreamServer.WifiConfigStatus st = server.configureWifi(
+                    true, targetPort, BridgeProtocol.TLS_BIND_SCOPE_ALL);
+            if (st != null && st.port > 0) {
+                targetPort = st.port;
+            }
+            notifyRemoteStateChanged();
+        }
+        HotspotController.HotspotResult res = hotspotController.triggerHotspot(targetPort);
+        System.out.println("OPALDESK_HOTSPOT_TRIGGER clientId="
+                + TrustStoreManager.sanitizeClientId(clientId)
+                + " status=" + res.status
+                + " gw=" + res.gatewayIp
+                + " port=" + res.port);
+        return res.toJson();
     }
 
     /**
@@ -435,6 +501,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             notificationRelay.pushCachedSnapshotToSession(sessionId);
         }
         pushCachedMediaStateOnly(sessionId);
+        callRelay.pushCachedCallStateToSession(sessionId, true);
     }
 
     private void pushCachedMediaStateOnly(int sessionId) {
@@ -1188,6 +1255,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             notificationRelay.handleRemoteAction(sessionId, msg);
             if ("sync".equals(op)) {
                 pushCachedMediaStateOnly(sessionId);
+                callRelay.pushCachedCallStateToSession(sessionId, true);
             }
         });
     }
@@ -1202,6 +1270,13 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         if (mac != null) {
             mac.accept(msg.op.toLowerCase(Locale.ROOT), msg.positionMs);
         }
+    }
+
+    @Override
+    public void onCallAction(int sessionId, OpalCastProtocol.CallActionMsg msg) {
+        if (msg == null || msg.op.isEmpty()) return;
+        server.markSessionCompanionEventsSubscribed(sessionId);
+        worker.execute(() -> callRelay.handleRemoteAction(sessionId, msg));
     }
 
     @Override

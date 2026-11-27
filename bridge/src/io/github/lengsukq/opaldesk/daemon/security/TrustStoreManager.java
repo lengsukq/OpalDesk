@@ -1,8 +1,9 @@
 package io.github.lengsukq.opaldesk.daemon.security;
 
+import io.github.lengsukq.opaldesk.daemon.stream.BleNearbyProtocol;
+import io.github.lengsukq.opaldesk.daemon.stream.SimpleJson;
 import io.github.lengsukq.opaldesk.daemon.util.AtomicFiles;
 import io.github.lengsukq.opaldesk.daemon.util.CryptoHex;
-import io.github.lengsukq.opaldesk.daemon.stream.SimpleJson;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -276,6 +277,31 @@ public final class TrustStoreManager {
         synchronized (lock) {
             return peers.containsKey(cid);
         }
+    }
+
+    /**
+     * Verifies a BLE Instant Hotspot challenge-response HMAC in constant time against the
+     * persisted {@code tokenSha256} for {@code rawClientId}. Strictly fail-closed.
+     */
+    public boolean verifyHotspotHmac(String rawClientId, String nonceHex, String providedHmacHex) {
+        if (rawClientId == null || nonceHex == null || providedHmacHex == null) {
+            return false;
+        }
+        String trimmedId = rawClientId.trim();
+        String sanitizedId = sanitizeClientId(trimmedId);
+        if (sanitizedId.isEmpty() || !sanitizedId.equals(trimmedId)) {
+            return false;
+        }
+        String storedTokenSha256;
+        synchronized (lock) {
+            TrustedPeer peer = peers.get(sanitizedId);
+            if (peer == null || peer.tokenSha256 == null || peer.tokenSha256.isEmpty()) {
+                return false;
+            }
+            storedTokenSha256 = peer.tokenSha256;
+        }
+        return BleNearbyProtocol.verifyHotspotHmacWithTokenHash(
+                storedTokenSha256, sanitizedId, nonceHex, providedHmacHex);
     }
 
     public int getTrustedCount() {
