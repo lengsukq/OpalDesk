@@ -24,6 +24,7 @@ class OpalNotificationListenerService : NotificationListenerService() {
 
     private val appLabelCache = ConcurrentHashMap<String, String>()
     private val replyTargets = ConcurrentHashMap<String, ReplyTarget>()
+    private val actionTargets = ConcurrentHashMap<String, List<PendingIntent>>()
 
     override fun onListenerConnected() {
         super.onListenerConnected()
@@ -35,6 +36,8 @@ class OpalNotificationListenerService : NotificationListenerService() {
     override fun onListenerDisconnected() {
         OpalMediaSessionMonitor.stop()
         replyTargets.clear()
+        actionTargets.clear()
+        OpalCallControlBridge.clearCallNotifications(applicationContext)
         OpalNotificationStore.bindService(null)
         super.onListenerDisconnected()
     }
@@ -42,15 +45,19 @@ class OpalNotificationListenerService : NotificationListenerService() {
     override fun onDestroy() {
         OpalMediaSessionMonitor.stop()
         replyTargets.clear()
+        actionTargets.clear()
+        OpalCallControlBridge.clearCallNotifications(applicationContext)
         OpalNotificationStore.bindService(null)
         super.onDestroy()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
+        observeCallNotificationPosted(sbn)
         val item = toDesktopItem(sbn)
         if (item == null) {
             replyTargets.remove(sbn.key)
+            actionTargets.remove(sbn.key)
             return
         }
         OpalNotificationStore.onPosted(item, showBanner = true)
@@ -59,31 +66,45 @@ class OpalNotificationListenerService : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         val key = sbn?.key ?: return
         replyTargets.remove(key)
+        actionTargets.remove(key)
+        OpalCallControlBridge.onCallNotificationRemoved(applicationContext, key)
         OpalNotificationStore.onRemoved(key)
     }
 
     fun syncActiveNotifications() {
         val active = runCatching { activeNotifications }.getOrNull() ?: return
         val seenKeys = HashSet<String>(active.size)
+        var sawCallNotification = false
         val items = active.mapNotNull { sbn ->
+            if (observeCallNotificationPosted(sbn)) {
+                sawCallNotification = true
+            }
             val item = toDesktopItem(sbn)
             if (item != null) {
                 seenKeys.add(item.key)
             }
             item
         }
+        if (!sawCallNotification) {
+            OpalCallControlBridge.clearCallNotifications(applicationContext)
+        }
         replyTargets.keys.retainAll(seenKeys)
+        actionTargets.keys.retainAll(seenKeys)
         OpalNotificationStore.updateAll(items)
     }
 
     fun cancelNotificationSafely(key: String) {
         replyTargets.remove(key)
+        actionTargets.remove(key)
         runCatching { cancelNotification(key) }
     }
 
     fun cancelNotificationsSafely(keys: List<String>) {
         if (keys.isEmpty()) return
-        keys.forEach { replyTargets.remove(it) }
+        keys.forEach {
+            replyTargets.remove(it)
+            actionTargets.remove(it)
+        }
         runCatching { cancelNotifications(keys.toTypedArray()) }
     }
 
@@ -102,6 +123,47 @@ class OpalNotificationListenerService : NotificationListenerService() {
             target.pendingIntent.send(this, 0, fillInIntent)
             true
         }.getOrDefault(false)
+    }
+
+    /**
+     * Triggers one of the cached non-reply clickable [Notification.Action] targets by 0-based index.
+     */
+    fun invokeNotificationActionSafely(key: String, actionIndex: Int): Boolean {
+        if (key.isBlank() || actionIndex < 0) return false
+        val targets = actionTargets[key] ?: return false
+        val pi = targets.getOrNull(actionIndex) ?: return false
+        return runCatching {
+            pi.send()
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun observeCallNotificationPosted(sbn: StatusBarNotification): Boolean {
+        val pkg = sbn.packageName.orEmpty()
+        if (pkg.isBlank() || pkg == packageName) return false
+        val notif = sbn.notification ?: return false
+        if (notif.category != Notification.CATEGORY_CALL) return false
+        val extras = notif.extras
+        val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+        val bigText = extras?.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim().orEmpty()
+        val plainText = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
+        val body = bigText.ifEmpty { plainText }
+        val isOngoing = sbn.isOngoing || (notif.flags and Notification.FLAG_ONGOING_EVENT) != 0
+        val hasAnswerAction = notif.actions.orEmpty().any { act ->
+            val label = act?.title?.toString()?.trim()?.lowercase().orEmpty()
+            label.contains("接听") || label.contains("answer") || label.contains("accept")
+        }
+        OpalCallControlBridge.onCallNotificationUpdated(
+            ctx = applicationContext,
+            key = sbn.key,
+            packageName = pkg,
+            title = title,
+            text = body,
+            postTimeMs = sbn.postTime,
+            hasAnswerAction = hasAnswerAction,
+            isOngoing = isOngoing,
+        )
+        return true
     }
 
     private fun toDesktopItem(sbn: StatusBarNotification): DesktopNotificationItem? {
@@ -137,6 +199,13 @@ class OpalNotificationListenerService : NotificationListenerService() {
             replyTargets.remove(sbn.key)
         }
 
+        val (actionButtons, clickableIntents) = extractClickableActions(notif)
+        if (clickableIntents.isNotEmpty()) {
+            actionTargets[sbn.key] = clickableIntents
+        } else {
+            actionTargets.remove(sbn.key)
+        }
+
         val appLabel = resolveAppLabel(pkg)
         return DesktopNotificationItem(
             key = sbn.key,
@@ -150,7 +219,31 @@ class OpalNotificationListenerService : NotificationListenerService() {
             canReply = replyTarget != null,
             replyLabel = replyTarget?.label.orEmpty(),
             otpCode = "",
+            actions = actionButtons,
         )
+    }
+
+    private fun extractClickableActions(
+        notif: Notification,
+    ): Pair<List<NotificationActionButton>, List<PendingIntent>> {
+        val actions = notif.actions ?: return emptyList<NotificationActionButton>() to emptyList()
+        val raw = actions.map { action ->
+            RawNotificationAction(
+                label = action?.title?.toString().orEmpty(),
+                hasActionIntent = action?.actionIntent != null,
+                hasRemoteInputs = !action?.remoteInputs.isNullOrEmpty(),
+            )
+        }
+        val selected = OpalNotificationActionPolicy.selectClickableNonReplyIndices(raw)
+        if (selected.isEmpty()) return emptyList<NotificationActionButton>() to emptyList()
+        val buttons = ArrayList<NotificationActionButton>(selected.size)
+        val intents = ArrayList<PendingIntent>(selected.size)
+        for ((srcIdx, button) in selected) {
+            val pi = actions.getOrNull(srcIdx)?.actionIntent ?: continue
+            buttons.add(button.copy(index = intents.size))
+            intents.add(pi)
+        }
+        return buttons to intents
     }
 
     private fun extractReplyTarget(notif: Notification): ReplyTarget? {

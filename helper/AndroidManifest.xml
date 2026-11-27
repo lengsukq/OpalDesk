@@ -18,6 +18,21 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Strictly optional, user-granted overlay permission used ONLY by receiver-side PeerFloatingAppService -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Strictly optional, runtime-requested ONLY when user enables Call Control Bridge in Settings -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <!-- Strictly optional, runtime-requested ONLY when user enables BLE Nearby Discovery & Instant Hotspot -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
     <queries>
         <intent>

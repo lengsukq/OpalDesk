@@ -36,6 +36,7 @@ object BridgeProtocol {
     const val PROVIDER_METHOD_PLUGIN_IME_SYNC = "pluginImeSync"
     const val PROVIDER_METHOD_NOTIFICATION_ACTION = "notificationAction"
     const val PROVIDER_METHOD_MEDIA_ACTION = "mediaAction"
+    const val PROVIDER_METHOD_CALL_ACTION = "callAction"
 
     const val EXTRA_CALLBACK_BINDER = "cb"
     const val EXTRA_PROC_TOKEN = "proc"
@@ -50,8 +51,12 @@ object BridgeProtocol {
     const val EXTRA_NOTIF_ACTION_OP = "op"
     const val EXTRA_NOTIF_ACTION_KEY = "key"
     const val EXTRA_NOTIF_ACTION_REPLY_TEXT = "replyText"
+    const val EXTRA_NOTIF_ACTION_INDEX = "actionIndex"
     const val EXTRA_MEDIA_ACTION_OP = "op"
     const val EXTRA_MEDIA_ACTION_POSITION_MS = "positionMs"
+    const val EXTRA_CALL_ACTION_OP = "op"
+    const val EXTRA_CALL_ACTION_NUMBER = "number"
+    const val EXTRA_CALL_ACTION_SMS_TEXT = "smsText"
 
     object Tx {
         const val GET_DAEMON_STATUS = 10
@@ -96,6 +101,8 @@ object BridgeProtocol {
         const val NOTIFY_BRIDGE_IME_EVENT = 49
         const val SYNC_NOTIFICATIONS = 50
         const val SYNC_MEDIA_STATE = 51
+        const val SYNC_CALL_STATE = 52
+        const val TRIGGER_HOTSPOT = 53
         const val SHUTDOWN = 99
     }
 
