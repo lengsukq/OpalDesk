@@ -222,7 +222,7 @@ extension RemoteFileBrowserWindowView {
         switch activeStorageSubTab {
         case .categories: return "按媒体与文档类型统计手机内部存储分布"
         case .folders: return "点击任意文件夹可直接跳转至文件浏览定位"
-        case .apps: return "按应用安装包、用户数据与缓存体积排序"
+        case .apps: return "按应用安装包、数据与缓存排序 · 点击小窗按钮可直接打开清理"
         }
     }
 
@@ -433,6 +433,18 @@ extension RemoteFileBrowserWindowView {
                 Text(FileBrowserPresentation.formatByteCount(app.totalBytes))
                     .font(.callout.weight(.bold).monospacedDigit())
                     .frame(minWidth: 74, alignment: .trailing)
+
+                if let onOpenAppPopout = actions.onOpenAppPopout {
+                    OpalGlassIconButton(
+                        systemName: "macwindow.on.rectangle",
+                        tint: .accentColor,
+                        size: 26,
+                        iconSize: 12,
+                        helpText: "在独立小窗中打开「\(app.displayLabel)」"
+                    ) {
+                        onOpenAppPopout(app)
+                    }
+                }
             }
 
             GeometryReader { proxy in
@@ -459,6 +471,7 @@ extension RemoteFileBrowserWindowView {
         .padding(.horizontal, OpalSpacing.md)
         .padding(.vertical, 9)
         .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
+        .opalInteractiveHover(cornerRadius: OpalRadius.tile)
     }
 
     private var largeFilesLeaderboardCard: some View {

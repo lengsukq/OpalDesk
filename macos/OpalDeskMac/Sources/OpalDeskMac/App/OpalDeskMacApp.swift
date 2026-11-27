@@ -300,6 +300,16 @@ private struct OpalDeskCommands: Commands {
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
 
+            Button(model.finderMountState.isMounted ? "在 Finder 中打开手机磁盘" : "挂载手机存储到 Finder") {
+                if model.finderMountState.isMounted {
+                    model.openMountedFinderVolume()
+                } else {
+                    model.toggleFinderMount()
+                }
+            }
+            .keyboardShortcut("f", modifiers: [.command, .option])
+            .disabled(!model.isAnyChannelConnected)
+
             Button("安装 Android 安装包 (.apk/.xapk)…") {
                 model.presentApkFileChooser(targetWindow: .main)
             }

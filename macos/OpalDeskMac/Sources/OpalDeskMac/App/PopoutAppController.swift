@@ -6,6 +6,7 @@ import os
 
 /// Discrete user-driven preference mutations emitted by `PopoutAppController` for persistence in `PopoutAppPreferencesStore`.
 public enum PopoutAppPreferenceChange: Sendable, Equatable {
+    case favorite(Bool)
     case preset(String?)
     case customWindowSize(widthPt: Double, heightPt: Double)
     case pinnedOnTop(Bool)
@@ -77,6 +78,7 @@ public final class PopoutAppController: Identifiable {
     public var errorMessage: String?
 
     public var isPinnedOnTop: Bool
+    public var isFavorite: Bool
     public var windowOpacity: Double = DisplayPresets.popoutOpacityRange.upperBound
     public var activePreset: PopoutAspectPreset? = .phone
     public var customDpi: Int?
@@ -128,6 +130,7 @@ public final class PopoutAppController: Identifiable {
         self.deviceName = deviceName
         self.taskId = taskId
         self.isPinnedOnTop = initialPreference?.pinnedOnTop ?? initialPinnedOnTop
+        self.isFavorite = initialPreference?.isFavorite ?? false
         self.customDpi = initialPreference?.customDpi.map(PopoutCompatibilityResolution.clampCustomDpi)
         self.isCompatibilityResolution = initialPreference?.compatibilityResolution ?? false
         self.activePreset = PopoutAspectPreset.fromPreferenceKey(initialPreference?.preferredPreset)
@@ -234,6 +237,18 @@ public final class PopoutAppController: Identifiable {
         onPinStateChanged?(pinned)
         onPreferenceChanged?(.pinnedOnTop(pinned))
         OpalDeskLog.info("popout", "Set always-on-top=\(pinned) for pkg=\(appPackage)")
+    }
+
+    public func toggleFavorite() {
+        setFavorite(!isFavorite)
+    }
+
+    public func setFavorite(_ favorite: Bool) {
+        guard isFavorite != favorite else { return }
+        isFavorite = favorite
+        onPreferenceChanged?(.favorite(favorite))
+        showToast(favorite ? "已设为常用置顶应用" : "已取消常用置顶")
+        OpalDeskLog.info("popout", "Set favorite=\(favorite) for pkg=\(appPackage)")
     }
 
     public func applyWindowPinLevel() {

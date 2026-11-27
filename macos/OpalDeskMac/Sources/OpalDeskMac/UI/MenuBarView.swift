@@ -585,6 +585,15 @@ public struct MenuBarView: View {
                     }
 
                     OpalGlassIconButton(
+                        systemName: ctrl.isFavorite ? "star.fill" : "star",
+                        tint: ctrl.isFavorite ? .orange : .secondary,
+                        isActive: ctrl.isFavorite,
+                        size: 24,
+                        iconSize: 10.5,
+                        helpText: ctrl.isFavorite ? "取消常用置顶" : "设为常用置顶"
+                    ) { ctrl.toggleFavorite() }
+
+                    OpalGlassIconButton(
                         systemName: ctrl.isPinnedOnTop ? "pin.slash" : "pin",
                         tint: ctrl.isPinnedOnTop ? .orange : .secondary,
                         size: 24,
@@ -651,6 +660,41 @@ public struct MenuBarView: View {
                 openWindow(id: WindowID.fileBrowser)
                 NSApp.activate(ignoringOtherApps: true)
             }
+
+            if model.isAnyChannelConnected {
+                if model.finderMountState.isMounted {
+                    HStack(spacing: OpalSpacing.xs) {
+                        OpalMenuActionRow(
+                            title: "在访达中打开手机磁盘",
+                            systemImage: "externaldrive.fill.badge.checkmark",
+                            subtitle: "已挂载",
+                            tint: .green
+                        ) {
+                            model.openMountedFinderVolume()
+                        }
+
+                        OpalGlassIconButton(
+                            systemName: "eject.fill",
+                            tint: .secondary,
+                            size: 24,
+                            iconSize: 10,
+                            helpText: "卸载手机磁盘"
+                        ) {
+                            model.toggleFinderMount()
+                        }
+                    }
+                } else {
+                    OpalMenuActionRow(
+                        title: model.finderMountState == .mounting ? "正在挂载手机到访达…" : "挂载手机存储到访达",
+                        systemImage: "externaldrive.badge.plus",
+                        tint: .blue,
+                        isDisabled: model.finderMountState == .mounting
+                    ) {
+                        model.toggleFinderMount()
+                    }
+                }
+            }
+
             OpalMenuActionRow(title: "安装 Android 安装包 (.apk/.xapk)…", systemImage: "shippingbox", tint: .green) {
                 model.presentApkFileChooser(targetWindow: .main)
             }

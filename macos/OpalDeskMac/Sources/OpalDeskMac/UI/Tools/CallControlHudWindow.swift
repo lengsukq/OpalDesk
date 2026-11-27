@@ -50,6 +50,7 @@ enum CallHudFormatting {
 final class CallControlHudModel {
     var callState: CallStatePayload = .idle
     var onAction: @MainActor (CallActionPayload) -> Void = { _ in }
+    var onDismissTemporarily: @MainActor () -> Void = {}
 }
 
 // MARK: - Floating Non-Activating NSPanel Coordinator
@@ -59,13 +60,14 @@ final class CallControlHudModel {
 @MainActor
 public final class CallControlHudCoordinator {
     private enum Layout {
-        static let panelSize = NSSize(width: 356, height: 132)
+        static let panelSize = NSSize(width: 368, height: 148)
         static let topRightMargin: CGFloat = 18
     }
 
     private let hudModel = CallControlHudModel()
     private var panel: KeyableFloatingHudPanel?
     private var isPanelShown: Bool = false
+    private var dismissedCallIdentity: String?
 
     public init() {}
 
@@ -74,10 +76,19 @@ public final class CallControlHudCoordinator {
         enabled: Bool,
         onAction: @escaping @MainActor (CallActionPayload) -> Void
     ) {
+        let identity = callIdentity(for: callState)
+        if !callState.isActive {
+            dismissedCallIdentity = nil
+        }
+
         hudModel.callState = callState
         hudModel.onAction = onAction
+        hudModel.onDismissTemporarily = { [weak self] in
+            self?.dismissedCallIdentity = identity
+            self?.hide()
+        }
 
-        guard enabled && callState.isActive else {
+        guard enabled && callState.isActive && dismissedCallIdentity != identity else {
             hide()
             return
         }
@@ -88,6 +99,10 @@ public final class CallControlHudCoordinator {
             hudPanel.orderFrontRegardless()
             isPanelShown = true
         }
+    }
+
+    private func callIdentity(for callState: CallStatePayload) -> String {
+        "\(callState.state.rawValue)|\(callState.number)|\(callState.contactName)"
     }
 
     public func hide() {
@@ -171,21 +186,30 @@ private struct CallControlHudView: View {
         }
     }
 
+    @ViewBuilder
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
-            VStack(alignment: .leading, spacing: OpalSpacing.md) {
-                callerHeader(now: timeline.date)
-                controlsRow
+        if call.state == .offhook && call.startedAtMs > 0 {
+            TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
+                hudCardBody(now: timeline.date)
             }
-            .padding(OpalSpacing.lg)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .opalGlassSurface(.stageOverlay, cornerRadius: OpalRadius.panel, tint: accentTint)
-            .padding(4)
+        } else {
+            hudCardBody(now: Date())
         }
     }
 
+    private func hudCardBody(now: Date) -> some View {
+        VStack(alignment: .leading, spacing: OpalSpacing.md) {
+            callerHeader(now: now)
+            controlsRow
+        }
+        .padding(OpalSpacing.lg)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .opalGlassSurface(.stageOverlay, cornerRadius: OpalRadius.panel, tint: accentTint)
+        .padding(4)
+    }
+
     private func callerHeader(now: Date) -> some View {
-        HStack(spacing: OpalSpacing.md) {
+        HStack(alignment: .top, spacing: OpalSpacing.md) {
             callerMonogram
 
             VStack(alignment: .leading, spacing: 2) {
@@ -216,7 +240,17 @@ private struct CallControlHudView: View {
                     .lineLimit(1)
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 4)
+
+            OpalGlassIconButton(
+                systemName: "xmark",
+                tint: .secondary,
+                size: 22,
+                iconSize: 9.5,
+                helpText: "暂时隐藏来电浮窗（可在菜单栏继续控制通话）"
+            ) {
+                model.onDismissTemporarily()
+            }
         }
     }
 
@@ -376,6 +410,7 @@ private struct CallControlHudView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .opalGlassSurface(.inset, cornerRadius: OpalRadius.control)
+                    .opalInteractiveHover(cornerRadius: OpalRadius.control)
                 }
                 .buttonStyle(.plain)
             }

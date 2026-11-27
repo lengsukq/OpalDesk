@@ -37,63 +37,68 @@ extension DeviceHubView {
                             StatusBadgeView(text: "\(model.remoteNotifications.count) 条手机通知", color: .blue)
                         }
                     }
-                    Text("免开大屏即可收发手机通知、同步剪贴板、控制媒体、互传文件与无线安装 APK")
+                    Text("免开大屏即可收发通知、控通话与媒体、同步剪贴板、挂入 Finder 磁盘及无线装包")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
 
                 Spacer(minLength: OpalSpacing.sm)
 
-                HStack(spacing: OpalSpacing.xs) {
-                    if model.isAnyChannelConnected {
-                        Button {
-                            isQuickDialPopoverShown.toggle()
-                        } label: {
-                            Label("快捷拨号", systemImage: "phone.badge.waveform.fill")
-                                .font(.caption.weight(.medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .popover(isPresented: $isQuickDialPopoverShown, arrowEdge: .bottom) {
-                            OpalQuickDialPopoverView(deviceName: model.activeChannelDeviceName) { number in
-                                isQuickDialPopoverShown = false
-                                model.dialPhoneNumber(number)
-                            }
-                        }
+                if model.companionState.isActiveOrAttempting {
+                    OpalGlassIconButton(
+                        systemName: "bolt.slash",
+                        tint: .secondary,
+                        size: OpalControlSize.iconButtonCompact,
+                        iconSize: 11.5,
+                        helpText: "断开后台伴侣连接"
+                    ) {
+                        model.disconnectCompanion()
                     }
+                }
+            }
 
+            HStack(spacing: OpalSpacing.sm) {
+                if model.isAnyChannelConnected {
                     Button {
-                        openFileBrowserWindow()
+                        isQuickDialPopoverShown.toggle()
                     } label: {
-                        Label("文件与存储", systemImage: "folder")
+                        Label("快捷拨号", systemImage: "phone.badge.waveform.fill")
                             .font(.caption.weight(.medium))
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .disabled(!model.isAnyChannelConnected)
-
-                    Button {
-                        model.presentApkFileChooser(targetWindow: .main)
-                    } label: {
-                        Label("安装 APK", systemImage: "shippingbox")
-                            .font(.caption.weight(.medium))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(!model.isAnyChannelConnected)
-
-                    if model.companionState.isActiveOrAttempting {
-                        OpalGlassIconButton(
-                            systemName: "bolt.slash",
-                            tint: .secondary,
-                            size: OpalControlSize.iconButtonCompact,
-                            iconSize: 11.5,
-                            helpText: "断开后台伴侣连接"
-                        ) {
-                            model.disconnectCompanion()
+                    .popover(isPresented: $isQuickDialPopoverShown, arrowEdge: .bottom) {
+                        OpalQuickDialPopoverView(deviceName: model.activeChannelDeviceName) { number in
+                            isQuickDialPopoverShown = false
+                            model.dialPhoneNumber(number)
                         }
                     }
                 }
+
+                Button {
+                    openFileBrowserWindow()
+                } label: {
+                    Label("文件与存储", systemImage: "folder")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!model.isAnyChannelConnected)
+
+                companionFinderMountControl
+
+                Button {
+                    model.presentApkFileChooser(targetWindow: .main)
+                } label: {
+                    Label("安装 APK", systemImage: "shippingbox")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!model.isAnyChannelConnected)
+
+                Spacer(minLength: 0)
             }
 
             if model.callState.isActive {
@@ -121,9 +126,134 @@ extension DeviceHubView {
             if let otpItem = model.remoteNotifications.first(where: { !$0.otpCode.isEmpty }) {
                 otpQuickCopyStrip(otpItem)
             }
+
+            if let latestNotif = model.remoteNotifications.first(where: { $0.otpCode.isEmpty }) {
+                recentNotificationStrip(latestNotif)
+            }
         }
         .padding(OpalSpacing.lg)
         .opalGlassSurface(.panel)
+    }
+
+    @ViewBuilder
+    private var companionFinderMountControl: some View {
+        if model.finderMountState.isMounted {
+            Menu {
+                Button("在访达中打开手机磁盘", systemImage: "folder") {
+                    model.openMountedFinderVolume()
+                }
+                Divider()
+                Button("卸载手机磁盘", systemImage: "eject") {
+                    model.toggleFinderMount()
+                }
+            } label: {
+                Label("已挂 Finder", systemImage: "externaldrive.fill.badge.checkmark")
+                    .font(.caption.weight(.medium))
+            }
+            .menuStyle(.borderedButton)
+            .tint(.green)
+            .controlSize(.small)
+            .fixedSize()
+            .help("手机存储已挂载到访达 · 点击打开或卸载 (⌘⌥F)")
+        } else if model.finderMountState == .mounting {
+            Button {} label: {
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.mini)
+                    Text("挂载中…")
+                        .font(.caption.weight(.medium))
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(true)
+        } else {
+            Button {
+                model.toggleFinderMount()
+            } label: {
+                Label("挂入 Finder", systemImage: "externaldrive.badge.plus")
+                    .font(.caption.weight(.medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!model.isAnyChannelConnected)
+            .help("零驱动将手机存储直接挂载为 macOS 访达磁盘 (⌘⌥F)")
+        }
+    }
+
+    private func recentNotificationStrip(_ item: RemoteNotificationItem) -> some View {
+        let validActions = item.actions.filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let extraCount = max(0, model.remoteNotifications.filter { $0.otpCode.isEmpty }.count - 1)
+
+        return HStack(spacing: OpalSpacing.md) {
+            OpalIconBadge(systemName: "bell.badge.fill", tint: .blue, size: 32, iconSize: 13.5, cornerRadius: 9)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: OpalSpacing.xs) {
+                    Text(item.displayAppLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    if !item.title.isEmpty {
+                        Text("· \(item.title)")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    if extraCount > 0 {
+                        StatusBadgeView(
+                            text: "+\(extraCount) 条",
+                            color: .secondary,
+                            horizontalPadding: 6,
+                            verticalPadding: 1.5,
+                            backgroundOpacity: 0.10
+                        )
+                    }
+                }
+                if !item.text.isEmpty {
+                    Text(item.text)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { model.openNotificationApp(item) }
+            .help("点击在独立小窗中打开「\(item.displayAppLabel)」")
+
+            HStack(spacing: OpalSpacing.xs) {
+                ForEach(validActions.prefix(2)) { action in
+                    Button(action.label) {
+                        model.invokeNotificationAction(item, actionIndex: action.index)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                OpalGlassIconButton(
+                    systemName: "macwindow.on.rectangle",
+                    tint: .accentColor,
+                    size: 24,
+                    iconSize: 11,
+                    helpText: "小窗打开「\(item.displayAppLabel)」"
+                ) {
+                    model.openNotificationApp(item)
+                }
+
+                if item.clearable {
+                    OpalGlassIconButton(
+                        systemName: "xmark",
+                        tint: .secondary,
+                        size: 24,
+                        iconSize: 10,
+                        helpText: "忽略此通知"
+                    ) {
+                        model.dismissRemoteNotification(item)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, OpalSpacing.md)
+        .padding(.vertical, 9)
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.card, tint: .blue)
     }
 
     private func otpQuickCopyStrip(_ item: RemoteNotificationItem) -> some View {
@@ -163,7 +293,15 @@ extension DeviceHubView {
 
     var standaloneHistorySection: some View {
         let activeControllers = model.popoutManager.controllers
-        let history = model.popoutHistory
+        let history = model.popoutHistory.sorted { lhs, rhs in
+            let lRunning = model.isPopoutActive(pkg: lhs.appPackage)
+            let rRunning = model.isPopoutActive(pkg: rhs.appPackage)
+            if lRunning != rRunning { return lRunning }
+            let lFav = model.isFavoriteApp(pkg: lhs.appPackage, deviceKey: lhs.deviceKey)
+            let rFav = model.isFavoriteApp(pkg: rhs.appPackage, deviceKey: rhs.deviceKey)
+            if lFav != rFav { return lFav }
+            return false
+        }
         let maxCount = PopoutWindowManager.maxConcurrentWindows
 
         return VStack(alignment: .leading, spacing: OpalSpacing.md) {
@@ -218,6 +356,8 @@ extension DeviceHubView {
         let activeCtrl = model.popoutManager.existingController(for: entry.appPackage)
         let isRunning = activeCtrl != nil
         let isPinned = activeCtrl?.isPinnedOnTop ?? entry.pinnedOnTop
+        let isFavorite = model.isFavoriteApp(pkg: entry.appPackage, deviceKey: entry.deviceKey)
+        let prefSummary = model.popoutPreferenceSummary(pkg: entry.appPackage, deviceKey: entry.deviceKey)
 
         return HStack(spacing: OpalSpacing.md) {
             OpalAppMonogram(
@@ -238,6 +378,15 @@ extension DeviceHubView {
                             .font(.system(size: 9.5))
                             .foregroundStyle(.orange)
                     }
+                    if let prefSummary {
+                        StatusBadgeView(
+                            text: prefSummary,
+                            color: .accentColor,
+                            horizontalPadding: 5.5,
+                            verticalPadding: 1,
+                            backgroundOpacity: 0.11
+                        )
+                    }
                 }
                 Text("\(entry.deviceName) · \(isRunning ? "运行中（点击聚焦/重载）" : "打开 \(entry.openCount) 次")")
                     .font(.caption2)
@@ -247,8 +396,19 @@ extension DeviceHubView {
 
             Spacer(minLength: OpalSpacing.xxs)
 
-            if let ctrl = activeCtrl {
-                HStack(spacing: 2) {
+            HStack(spacing: 2) {
+                OpalGlassIconButton(
+                    systemName: isFavorite ? "star.fill" : "star",
+                    tint: isFavorite ? .orange : .secondary,
+                    isActive: isFavorite,
+                    size: 24,
+                    iconSize: 10.5,
+                    helpText: isFavorite ? "取消常用置顶" : "设为常用置顶应用"
+                ) {
+                    model.toggleFavoriteApp(pkg: entry.appPackage, deviceKey: entry.deviceKey)
+                }
+
+                if let ctrl = activeCtrl {
                     OpalGlassIconButton(
                         systemName: ctrl.isPinnedOnTop ? "pin.fill" : "pin",
                         tint: ctrl.isPinnedOnTop ? .orange : .secondary,
@@ -269,23 +429,23 @@ extension DeviceHubView {
                     ) {
                         model.popoutManager.closeWindow(id: ctrl.id, sendDisconnect: true)
                     }
-                }
-            } else {
-                OpalGlassIconButton(
-                    systemName: "xmark",
-                    tint: .secondary,
-                    size: 24,
-                    iconSize: 10,
-                    helpText: "移除此历史记录"
-                ) {
-                    model.removePopoutHistoryEntry(entry)
+                } else {
+                    OpalGlassIconButton(
+                        systemName: "xmark",
+                        tint: .secondary,
+                        size: 24,
+                        iconSize: 10,
+                        helpText: "移除此历史记录"
+                    ) {
+                        model.removePopoutHistoryEntry(entry)
+                    }
                 }
             }
         }
         .padding(.horizontal, OpalSpacing.md)
         .padding(.vertical, 10)
-        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile, tint: isRunning ? .green : nil)
-        .opalInteractiveHover(cornerRadius: OpalRadius.tile, tint: isRunning ? .green : nil)
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile, tint: isRunning ? .green : (isFavorite ? .orange : nil))
+        .opalInteractiveHover(cornerRadius: OpalRadius.tile, tint: isRunning ? .green : (isFavorite ? .orange : nil))
         .contentShape(RoundedRectangle(cornerRadius: OpalRadius.tile, style: .continuous))
         .onTapGesture {
             model.openPopoutFromHistory(entry)
@@ -502,7 +662,13 @@ extension DeviceHubView {
             if !bleDevices.isEmpty {
                 VStack(spacing: 0) {
                     ForEach(Array(bleDevices.enumerated()), id: \.element.id) { index, device in
-                        bleNearbyDeviceRow(device)
+                        BleNearbyDeviceRow(
+                            device: device,
+                            subtitle: bleDeviceSubtitle(for: device),
+                            isTriggering: model.triggeringBleDeviceId == device.id,
+                            isAnyTriggering: model.triggeringBleDeviceId != nil,
+                            onTrigger: { model.triggerBleHotspot(for: device) }
+                        )
                         if index < bleDevices.count - 1 {
                             Divider().padding(.leading, 64)
                         }
@@ -512,68 +678,6 @@ extension DeviceHubView {
                 .opalGlassSurface(.panel)
             }
         }
-    }
-
-    private func bleNearbyDeviceRow(_ device: DiscoveredBleDevice) -> some View {
-        let isTriggering = model.triggeringBleDeviceId == device.id
-        let statusText = device.isHotspotActive
-            ? "热点已开启"
-            : (device.isLanShareActive ? "无线服务待连接" : "蓝牙附近")
-        let statusColor: Color = device.isHotspotActive ? .green : .blue
-
-        return HStack(spacing: OpalSpacing.md) {
-            OpalIconBadge(
-                systemName: "iphone.radiowaves.left.and.right",
-                tint: .blue,
-                size: 38,
-                iconSize: 17,
-                cornerRadius: 11
-            )
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: OpalSpacing.sm) {
-                    Text(device.trustedDevice.deviceName)
-                        .font(.body.weight(.semibold))
-                        .lineLimit(1)
-
-                    StatusBadgeView(text: statusText, color: statusColor)
-
-                    if let battery = device.batteryPercent {
-                        StatusBadgeView(
-                            text: "电量 \(battery)%",
-                            color: battery <= 20 ? .orange : .green
-                        )
-                    }
-                }
-
-                Text(bleDeviceSubtitle(for: device))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: OpalSpacing.sm)
-
-            Button {
-                model.triggerBleHotspot(for: device)
-            } label: {
-                if isTriggering {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text("唤醒热点中…")
-                    }
-                } else {
-                    Label(
-                        device.isHotspotActive ? "获取热点信息" : "一键开启手机热点",
-                        systemImage: "personalhotspot"
-                    )
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.triggeringBleDeviceId != nil)
-        }
-        .padding(.horizontal, OpalSpacing.lg)
-        .padding(.vertical, 13)
     }
 
     private func bleDeviceSubtitle(for device: DiscoveredBleDevice) -> String {
@@ -697,6 +801,77 @@ private struct DeviceConnectionRow: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(isDisabled)
             }
+        }
+        .padding(.horizontal, OpalSpacing.lg)
+        .padding(.vertical, 13)
+        .background(isHovered ? Color.primary.opacity(0.035) : .clear)
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct BleNearbyDeviceRow: View {
+    let device: DiscoveredBleDevice
+    let subtitle: String
+    let isTriggering: Bool
+    let isAnyTriggering: Bool
+    let onTrigger: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        let statusText = device.isHotspotActive
+            ? "热点已开启"
+            : (device.isLanShareActive ? "无线服务待连接" : "蓝牙附近")
+        let statusColor: Color = device.isHotspotActive ? .green : .blue
+
+        HStack(spacing: OpalSpacing.md) {
+            OpalIconBadge(
+                systemName: "iphone.radiowaves.left.and.right",
+                tint: .blue,
+                size: 38,
+                iconSize: 17,
+                cornerRadius: 11
+            )
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: OpalSpacing.sm) {
+                    Text(device.trustedDevice.deviceName)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+
+                    StatusBadgeView(text: statusText, color: statusColor)
+
+                    if let battery = device.batteryPercent {
+                        StatusBadgeView(
+                            text: "电量 \(battery)%",
+                            color: battery <= 20 ? .orange : .green
+                        )
+                    }
+                }
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: OpalSpacing.sm)
+
+            Button(action: onTrigger) {
+                if isTriggering {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("唤醒热点中…")
+                    }
+                } else {
+                    Label(
+                        device.isHotspotActive ? "获取热点信息" : "一键开启手机热点",
+                        systemImage: "personalhotspot"
+                    )
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isAnyTriggering)
         }
         .padding(.horizontal, OpalSpacing.lg)
         .padding(.vertical, 13)

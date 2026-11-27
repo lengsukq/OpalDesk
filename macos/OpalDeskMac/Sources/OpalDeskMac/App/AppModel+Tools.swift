@@ -710,6 +710,12 @@ extension AppModel {
             onQuickLookItem: { [weak self] item in
                 self?.previewRemoteItemWithQuickLook(item)
             },
+            onOpenAppPopout: { [weak self] app in
+                self?.openAppPopoutForRemotePackage(
+                    packageName: app.pkg,
+                    appLabel: app.displayLabel
+                )
+            },
             onPullFileForDrag: { [fileBrowserClient] remotePath, destinationURL in
                 try await fileBrowserClient.pullFile(remotePath: remotePath, toLocalURL: destinationURL)
             }

@@ -54,6 +54,7 @@ public struct RemoteFileBrowserActions {
     public var onOpenFinderMount: @MainActor () -> Void
     public var onUnmountFinder: @MainActor () -> Void
     public var onQuickLookItem: @MainActor (RemoteFileItem) -> Void
+    public var onOpenAppPopout: (@MainActor (AppStorageEntry) -> Void)?
     public var onPullFileForDrag: RemoteFileDragPullHandler?
 
     public init(
@@ -74,6 +75,7 @@ public struct RemoteFileBrowserActions {
         onOpenFinderMount: @escaping @MainActor () -> Void = {},
         onUnmountFinder: @escaping @MainActor () -> Void = {},
         onQuickLookItem: @escaping @MainActor (RemoteFileItem) -> Void = { _ in },
+        onOpenAppPopout: (@MainActor (AppStorageEntry) -> Void)? = nil,
         onPullFileForDrag: RemoteFileDragPullHandler? = nil
     ) {
         self.onNavigateToPath = onNavigateToPath
@@ -93,6 +95,7 @@ public struct RemoteFileBrowserActions {
         self.onOpenFinderMount = onOpenFinderMount
         self.onUnmountFinder = onUnmountFinder
         self.onQuickLookItem = onQuickLookItem
+        self.onOpenAppPopout = onOpenAppPopout
         self.onPullFileForDrag = onPullFileForDrag
     }
 }

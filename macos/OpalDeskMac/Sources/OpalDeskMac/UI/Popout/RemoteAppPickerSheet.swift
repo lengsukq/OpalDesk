@@ -299,6 +299,7 @@ public struct RemoteAppPickerSheet: View {
     private func appRow(_ app: RemoteAppInfo) -> some View {
         let isOpen = model.isPopoutActive(pkg: app.pkg)
         let isFavorite = model.isFavoriteApp(pkg: app.pkg, deviceKey: context.deviceKey)
+        let prefSummary = model.popoutPreferenceSummary(pkg: app.pkg, deviceKey: context.deviceKey)
         let isLimitHit = !isOpen && activeCount >= maxCount
 
         return HStack(spacing: OpalSpacing.md) {
@@ -317,6 +318,15 @@ public struct RemoteAppPickerSheet: View {
                         .lineLimit(1)
                     if isOpen {
                         StatusBadgeView(text: "小窗运行中", color: .green)
+                    }
+                    if let prefSummary {
+                        StatusBadgeView(
+                            text: prefSummary,
+                            color: .accentColor,
+                            horizontalPadding: 6,
+                            verticalPadding: 1.5,
+                            backgroundOpacity: 0.11
+                        )
                     }
                 }
                 Text(app.pkg)

@@ -171,6 +171,11 @@ public struct PopoutAppWindowView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
+                if controller.isFavorite {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .foregroundStyle(.orange)
+                }
             }
             .padding(.leading, 5)
             .padding(.trailing, 2)
@@ -332,6 +337,17 @@ public struct PopoutAppWindowView: View {
                     Text("兼容分辨率模式（修复拉伸/错位）")
                     if controller.isCompatibilityResolution { Image(systemName: "checkmark") }
                 }
+            }
+
+            Divider()
+
+            Button {
+                controller.toggleFavorite()
+            } label: {
+                Label(
+                    controller.isFavorite ? "已设为常用置顶" : "设为常用置顶应用",
+                    systemImage: controller.isFavorite ? "star.fill" : "star"
+                )
             }
 
             Divider()

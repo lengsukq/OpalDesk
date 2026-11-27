@@ -221,44 +221,6 @@ fun ConsoleEngineSettingsTab(
             val callAnswerGranted = remember(permRefreshTick, callControlEnabled) {
                 OpalCallControlBridge.hasAnswerPhoneCallsPermission(ctx)
             }
-            val callBadge = when {
-                !callControlEnabled -> "未开启" to OpalPalette.TextMuted
-                callPhoneGranted && callAnswerGranted -> "已授权" to OpalPalette.AccentEmerald
-                callPhoneGranted || notifAccessGranted -> "部分授权" to OpalPalette.AccentAmber
-                else -> "待授权" to OpalPalette.AccentAmber
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                OpalText(
-                    text = "来电桥接权限状态",
-                    fontSize = 11.5.sp,
-                    color = OpalPalette.TextSecondary,
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    OpalStatusBadge(label = callBadge.first, color = callBadge.second)
-                    if (callControlEnabled && (!callPhoneGranted || !callAnswerGranted)) {
-                        OpalButton(
-                            label = "补全权限",
-                            compact = true,
-                            filled = false,
-                            accent = OpalPalette.AccentAmber,
-                            onClick = {
-                                val missing = OpalCallControlBridge.requiredRuntimePermissions()
-                                    .filterNot { OpalCallControlBridge.hasPermission(ctx, it) }
-                                if (missing.isNotEmpty()) {
-                                    callPermLauncher.launch(missing.toTypedArray())
-                                }
-                            },
-                        )
-                    }
-                }
-            }
             OpalSwitchRow(
                 title = "Mac 来电控制浮窗与快捷拨号",
                 subtitle = "开启后按需申请电话与通讯录权限，支持 Mac 实时来电浮窗、接听/拒接、静音免提与快捷拨号",
@@ -282,6 +244,35 @@ fun ConsoleEngineSettingsTab(
                     }
                 },
             )
+            if (callControlEnabled) {
+                val callBadge = when {
+                    callPhoneGranted && callAnswerGranted -> "电话权限已就绪" to OpalPalette.AccentEmerald
+                    callPhoneGranted || notifAccessGranted -> "部分授权（通知/按键兜底）" to OpalPalette.AccentAmber
+                    else -> "待授权电话权限" to OpalPalette.AccentAmber
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    OpalStatusBadge(label = callBadge.first, color = callBadge.second)
+                    if (!callPhoneGranted || !callAnswerGranted) {
+                        OpalButton(
+                            label = "补全权限",
+                            compact = true,
+                            filled = false,
+                            accent = OpalPalette.AccentAmber,
+                            onClick = {
+                                val missing = OpalCallControlBridge.requiredRuntimePermissions()
+                                    .filterNot { OpalCallControlBridge.hasPermission(ctx, it) }
+                                if (missing.isNotEmpty()) {
+                                    callPermLauncher.launch(missing.toTypedArray())
+                                }
+                            },
+                        )
+                    }
+                }
+            }
 
             Spacer(Modifier.height(6.dp))
             Box(
@@ -300,26 +291,6 @@ fun ConsoleEngineSettingsTab(
             }
             val bleBtOn = remember(permRefreshTick, bleRuntime.bluetoothEnabled) {
                 BleNearbyService.isBluetoothEnabled(ctx)
-            }
-            val bleBadge = when {
-                !bleSupported -> "不支持 BLE" to OpalPalette.TextMuted
-                !bleNearbyEnabled -> "未开启" to OpalPalette.TextMuted
-                !blePermGranted -> "待授权蓝牙" to OpalPalette.AccentAmber
-                !bleBtOn -> "蓝牙未开启" to OpalPalette.AccentAmber
-                bleRuntime.advertising -> "广播中" to OpalPalette.AccentEmerald
-                else -> "已开启" to OpalPalette.AccentCyan
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                OpalText(
-                    text = "蓝牙近场与热点状态",
-                    fontSize = 11.5.sp,
-                    color = OpalPalette.TextSecondary,
-                )
-                OpalStatusBadge(label = bleBadge.first, color = bleBadge.second)
             }
             OpalSwitchRow(
                 title = "蓝牙近场发现与一键热点",
@@ -357,6 +328,37 @@ fun ConsoleEngineSettingsTab(
                     }
                 },
             )
+            if (bleNearbyEnabled || !bleSupported) {
+                val bleBadge = when {
+                    !bleSupported -> "设备不支持 BLE" to OpalPalette.TextMuted
+                    !blePermGranted -> "待授权蓝牙权限" to OpalPalette.AccentAmber
+                    !bleBtOn -> "请开启系统蓝牙" to OpalPalette.AccentAmber
+                    bleRuntime.advertising -> "BLE 近场广播中" to OpalPalette.AccentEmerald
+                    else -> "BLE 已就绪" to OpalPalette.AccentCyan
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    OpalStatusBadge(label = bleBadge.first, color = bleBadge.second)
+                    if (bleSupported && !blePermGranted) {
+                        OpalButton(
+                            label = "授权蓝牙",
+                            compact = true,
+                            filled = false,
+                            accent = OpalPalette.AccentAmber,
+                            onClick = {
+                                val needed = BleNearbyService.requiredRuntimePermissions()
+                                    .filterNot { OpalCallControlBridge.hasPermission(ctx, it) }
+                                if (needed.isNotEmpty()) {
+                                    blePermLauncher.launch(needed.toTypedArray())
+                                }
+                            },
+                        )
+                    }
+                }
+            }
         }
 
         // 2. High-Frequency Card: Startup Behavior & App List

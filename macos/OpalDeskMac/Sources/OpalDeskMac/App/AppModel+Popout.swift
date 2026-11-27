@@ -115,8 +115,41 @@ extension AppModel {
     }
 
     public func toggleFavoriteApp(pkg: String, deviceKey: String) {
-        _ = popoutAppPrefsStore.toggleFavorite(appPackage: pkg, deviceKey: deviceKey)
+        let updated = popoutAppPrefsStore.toggleFavorite(appPackage: pkg, deviceKey: deviceKey)
         refreshPopoutAppPrefs()
+        if let ctrl = popoutManager.existingController(for: pkg) {
+            ctrl.isFavorite = updated.isFavorite
+        }
+    }
+
+    /// Returns a compact Chinese summary of non-default remembered window preferences (preset/DPI/compat),
+    /// or `nil` when the app uses all default adaptive settings.
+    public func popoutPreferenceSummary(pkg: String, deviceKey: String) -> String? {
+        let cleanPkg = pkg.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanPkg.isEmpty else { return nil }
+        let snapshot = popoutAppPrefs
+        let exactKey = PopoutAppPreferencesStore.compositeKey(deviceKey: deviceKey, appPackage: cleanPkg)
+        let globalKey = PopoutAppPreferencesStore.compositeKey(deviceKey: "", appPackage: cleanPkg)
+        guard let pref = snapshot[exactKey] ?? snapshot[globalKey] else { return nil }
+
+        var parts: [String] = []
+        switch pref.preferredPreset?.lowercased() {
+        case "fold", "foldable":
+            parts.append("折叠")
+        case "tablet":
+            parts.append("平板")
+        case "custom":
+            if pref.customWindowSize != nil { parts.append("自定义尺寸") }
+        default:
+            if pref.customWindowSize != nil { parts.append("自定义尺寸") }
+        }
+        if let dpi = pref.customDpi {
+            parts.append("\(dpi) DPI")
+        }
+        if pref.compatibilityResolution {
+            parts.append("兼容模式")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     public func isFavoriteApp(pkg: String, deviceKey: String) -> Bool {
@@ -204,6 +237,11 @@ extension AppModel {
         deviceKey: String
     ) {
         switch change {
+        case .favorite(let isFav):
+            let currentFav = popoutAppPrefsStore.exactPreference(for: appPackage, deviceKey: deviceKey)?.isFavorite ?? false
+            if currentFav != isFav {
+                _ = popoutAppPrefsStore.toggleFavorite(appPackage: appPackage, deviceKey: deviceKey)
+            }
         case .preset(let presetKey):
             _ = popoutAppPrefsStore.setPreset(presetKey, appPackage: appPackage, deviceKey: deviceKey)
             if presetKey != "custom" {

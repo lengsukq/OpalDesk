@@ -776,25 +776,29 @@ struct OpalQuickDialPopoverView: View {
 
     @State private var phoneNumber: String = ""
 
-    private let dialKeys: [[String]] = [
-        ["1", "2", "3"],
-        ["4", "5", "6"],
-        ["7", "8", "9"],
-        ["*", "0", "#"],
+    private struct DialKey: Hashable {
+        let digit: String
+        let letters: String
+    }
+
+    private let dialKeys: [[DialKey]] = [
+        [DialKey(digit: "1", letters: ""), DialKey(digit: "2", letters: "ABC"), DialKey(digit: "3", letters: "DEF")],
+        [DialKey(digit: "4", letters: "GHI"), DialKey(digit: "5", letters: "JKL"), DialKey(digit: "6", letters: "MNO")],
+        [DialKey(digit: "7", letters: "PQRS"), DialKey(digit: "8", letters: "TUV"), DialKey(digit: "9", letters: "WXYZ")],
+        [DialKey(digit: "*", letters: ""), DialKey(digit: "0", letters: "+"), DialKey(digit: "#", letters: "")],
     ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: OpalSpacing.md) {
             HStack(spacing: OpalSpacing.xs) {
-                Image(systemName: "phone.badge.waveform.fill")
-                    .foregroundStyle(.green)
+                OpalIconBadge(systemName: "phone.badge.waveform.fill", tint: .green, size: 24, iconSize: 11.5, cornerRadius: 7)
                 Text("通过「\(deviceName)」快捷拨号")
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
             }
 
             HStack(spacing: OpalSpacing.xs) {
-                TextField("输入电话号码…", text: $phoneNumber)
+                TextField("输入或粘贴号码…", text: $phoneNumber)
                     .textFieldStyle(.roundedBorder)
                     .font(.body.monospaced())
                     .onSubmit { triggerDial() }
@@ -817,12 +821,19 @@ struct OpalQuickDialPopoverView: View {
                     HStack(spacing: OpalSpacing.xs) {
                         ForEach(row, id: \.self) { key in
                             Button {
-                                phoneNumber.append(key)
+                                phoneNumber.append(key.digit)
                             } label: {
-                                Text(key)
-                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                    .frame(maxWidth: .infinity, minHeight: 28)
-                                    .opalGlassSurface(.inset, cornerRadius: OpalRadius.control)
+                                VStack(spacing: 0) {
+                                    Text(key.digit)
+                                        .font(.system(size: 14.5, weight: .semibold, design: .rounded))
+                                    Text(key.letters.isEmpty ? " " : key.letters)
+                                        .font(.system(size: 8, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                        .tracking(0.6)
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 34)
+                                .opalGlassSurface(.inset, cornerRadius: OpalRadius.control)
+                                .opalInteractiveHover(cornerRadius: OpalRadius.control, tint: .green)
                             }
                             .buttonStyle(.plain)
                         }
@@ -839,16 +850,22 @@ struct OpalQuickDialPopoverView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.green)
-            .disabled(phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(sanitizedNumber.isEmpty)
         }
         .padding(OpalSpacing.md)
-        .frame(width: 244)
+        .frame(width: 252)
+    }
+
+    private var sanitizedNumber: String {
+        let allowed = CharacterSet(charactersIn: "0123456789+*#()- ")
+        return String(phoneNumber.unicodeScalars.filter { allowed.contains($0) })
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func triggerDial() {
-        let trimmed = phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        onDial(trimmed)
+        let clean = sanitizedNumber
+        guard !clean.isEmpty else { return }
+        onDial(clean)
         phoneNumber = ""
     }
 }
