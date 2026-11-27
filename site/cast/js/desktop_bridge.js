@@ -197,6 +197,18 @@ export function buildStandaloneWindowQuery({
   return params.toString();
 }
 
+export function sanitizeCustomAdbPath(raw) {
+  if (typeof raw !== 'string') return '';
+  let cleaned = raw.trim();
+  while (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+  return cleaned.replace(/^["']+|["']+$/g, '').trim();
+}
+
 export function normalizeCastPrefs(raw = {}) {
   const codec = raw?.preferredCodec === 'hevc' || raw?.preferredCodec === 'h264'
     ? raw.preferredCodec
@@ -209,9 +221,7 @@ export function normalizeCastPrefs(raw = {}) {
     : 0;
   const audioEnabled = typeof raw?.audioEnabled === 'boolean' ? raw.audioEnabled : null;
   const hideLocalCursor = typeof raw?.hideLocalCursor === 'boolean' ? raw.hideLocalCursor : null;
-  const customAdbPath = typeof raw?.customAdbPath === 'string' && raw.customAdbPath.trim()
-    ? raw.customAdbPath.trim()
-    : '';
+  const customAdbPath = sanitizeCustomAdbPath(raw?.customAdbPath);
   return {
     preferredCodec: codec,
     targetFps,
@@ -248,7 +258,7 @@ export class OpalDesktopBridge {
     this.runtimeInfo = await this.invoke('desktop_runtime_info');
     this.adbStatus = this.runtimeInfo?.adb || this.adbStatus;
     this.clientPrefs = this.runtimeInfo?.prefs || null;
-    await Promise.all([this.refreshTrustedDevices(), this.pollMdnsDevices()]);
+    await Promise.allSettled([this.refreshTrustedDevices(), this.pollMdnsDevices()]);
     return this.runtimeInfo;
   }
 
@@ -338,13 +348,26 @@ export class OpalDesktopBridge {
 
   async refreshAdbStatus() {
     this.adbStatus = await this.invoke('get_adb_status');
+    if (this.clientPrefs && typeof this.clientPrefs === 'object' && this.adbStatus) {
+      this.clientPrefs = {
+        ...this.clientPrefs,
+        customAdbPath: this.adbStatus.customAdbPath || null,
+      };
+    }
     return this.adbStatus;
   }
 
   async setCustomAdbPath(customPath) {
+    const cleaned = sanitizeCustomAdbPath(customPath);
     this.adbStatus = await this.invoke('set_custom_adb_path', {
-      path: customPath ? String(customPath).trim() : null,
+      path: cleaned || null,
     });
+    if (this.clientPrefs && typeof this.clientPrefs === 'object') {
+      this.clientPrefs = {
+        ...this.clientPrefs,
+        customAdbPath: this.adbStatus?.customAdbPath || null,
+      };
+    }
     return this.adbStatus;
   }
 

@@ -98,6 +98,16 @@ export const SESSION_ROLE_DESKTOP = 'desktop';
 export const SESSION_ROLE_STANDALONE_APP = 'standalone_app';
 export const SESSION_ROLE_APP_CATALOG = 'app_catalog';
 
+/**
+ * Returns whether an OpalCast session role should request phone audio playback.
+ * Both full desktop and standalone floating app windows support audio (the Android daemon
+ * arbitrates a single audio owner so concurrent windows never echo); app_catalog stays silent.
+ */
+export function shouldRequestSessionAudio(sessionRole, audioPrefEnabled = true) {
+  if (!audioPrefEnabled) return false;
+  return sessionRole === SESSION_ROLE_DESKTOP || sessionRole === SESSION_ROLE_STANDALONE_APP;
+}
+
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const EMPTY_U8 = new Uint8Array(0);

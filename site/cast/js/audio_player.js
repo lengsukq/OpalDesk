@@ -169,6 +169,14 @@ export class OpalAudioPlayer {
       this.audioCtx = ctx;
       this.workletNode = node;
       this.gainNode = gain;
+      ctx.onstatechange = () => this.emitState();
+      if (ctx.state === 'suspended') {
+        try {
+          await ctx.resume();
+        } catch {
+          // Pure web browsers may require a user gesture before AudioContext can resume
+        }
+      }
       this.emitState();
     })();
 

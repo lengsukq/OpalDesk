@@ -14,6 +14,7 @@ import {
   isTauriDesktop,
   normalizeCastPrefs,
   OpalDesktopBridge,
+  sanitizeCustomAdbPath,
 } from './desktop_bridge.js';
 import { OpalDiagnosticsController } from './diagnostics_controller.js';
 import { DEFAULT_MIC_CHANNELS, DEFAULT_MIC_SAMPLE_RATE, OpalMicCapturer } from './mic_capturer.js';
@@ -55,6 +56,7 @@ import {
   resolveAutoCodecPreference,
   SESSION_ROLE_DESKTOP,
   SESSION_ROLE_STANDALONE_APP,
+  shouldRequestSessionAudio,
   SYS_BACK,
   SYS_DISCONNECT,
   SYS_HOME,
@@ -103,6 +105,7 @@ const STORAGE_BITRATE = 'opaldesk-web-bitrate-pref-v1';
 const STORAGE_AUDIO = 'opaldesk-web-audio-pref-v1';
 const STORAGE_HIDE_CURSOR = 'opaldesk-web-hide-cursor-v1';
 const STORAGE_USB_TETHER_BETA = 'opaldesk-usb-tether-beta-v1';
+const STORAGE_CUSTOM_ADB_PATH = 'opaldesk-custom-adb-path-v1';
 const FILE_CHUNK_SIZE = 64 * 1024;
 
 function loadCodecPref() {
@@ -172,6 +175,27 @@ function loadUsbTetherBetaPref() {
 function saveUsbTetherBetaPref(enabled) {
   try {
     localStorage.setItem(STORAGE_USB_TETHER_BETA, enabled ? '1' : '0');
+  } catch {
+    // Ignore storage restriction
+  }
+}
+
+function loadLocalCustomAdbPath() {
+  try {
+    return sanitizeCustomAdbPath(localStorage.getItem(STORAGE_CUSTOM_ADB_PATH) || '');
+  } catch {
+    return '';
+  }
+}
+
+function saveLocalCustomAdbPath(customPath) {
+  try {
+    const cleaned = sanitizeCustomAdbPath(customPath);
+    if (cleaned) {
+      localStorage.setItem(STORAGE_CUSTOM_ADB_PATH, cleaned);
+    } else {
+      localStorage.removeItem(STORAGE_CUSTOM_ADB_PATH);
+    }
   } catch {
     // Ignore storage restriction
   }
@@ -253,6 +277,7 @@ class OpalCastWebApp {
     this.activeVerifiedFingerprint = '';
     this.activeUsbLocalPort = 0;
     this.selectedAdbSerial = '';
+    this.customAdbPathDirty = false;
     this.tofuResolver = null;
 
     this.ws = null;
@@ -482,12 +507,12 @@ class OpalCastWebApp {
       if (info?.clientId) {
         this.clientId = info.clientId;
       }
-      const persistedAdbPath = info?.adb?.customAdbPath || info?.prefs?.customAdbPath || '';
-      if (persistedAdbPath) {
-        $('customAdbPathInput').value = persistedAdbPath;
-      }
+      await this.restoreRememberedAdbPath(info);
     } catch {
-      // Keep graceful fallback if native state init encounters an error
+      const localAdbPath = loadLocalCustomAdbPath();
+      if (localAdbPath) {
+        this.syncCustomAdbPathUi({ customAdbPath: localAdbPath }, { forceInput: true });
+      }
     }
 
     $('desktopMdnsSection').hidden = this.transportMode === 'usb';
@@ -497,6 +522,102 @@ class OpalCastWebApp {
     this.syncDesktopUsbTetherUi();
     this.renderDesktopMdnsDevices(this.desktop.mdnsDevices);
     this.desktop.startDiscoveryPolling((devices) => this.renderDesktopMdnsDevices(devices));
+  }
+
+  syncCustomAdbPathUi(status = this.desktop.adbStatus, { forceInput = false } = {}) {
+    const savedPath = sanitizeCustomAdbPath(
+      status?.customAdbPath || this.desktop.clientPrefs?.customAdbPath || ''
+    );
+    const inputEl = $('customAdbPathInput');
+    if (inputEl && (forceInput || (!this.customAdbPathDirty && document.activeElement !== inputEl))) {
+      inputEl.value = savedPath;
+      this.customAdbPathDirty = false;
+    }
+    const summaryEl = $('adbPathSummary');
+    if (summaryEl) {
+      summaryEl.textContent = savedPath
+        ? '自定义 adb.exe 路径（已记忆上次路径）'
+        : '自定义 adb.exe 路径（可选 · 保存后自动记忆）';
+    }
+    const clearBtn = $('clearAdbPathBtn');
+    if (clearBtn) {
+      clearBtn.hidden = !savedPath;
+    }
+  }
+
+  async restoreRememberedAdbPath(info) {
+    const nativePath = sanitizeCustomAdbPath(
+      info?.adb?.customAdbPath || info?.prefs?.customAdbPath || ''
+    );
+    if (nativePath) {
+      saveLocalCustomAdbPath(nativePath);
+      this.syncCustomAdbPathUi(info?.adb || { customAdbPath: nativePath }, { forceInput: true });
+      return;
+    }
+
+    const localPath = loadLocalCustomAdbPath();
+    if (!localPath) {
+      this.syncCustomAdbPathUi(info?.adb || null, { forceInput: true });
+      return;
+    }
+
+    try {
+      const restored = await this.desktop.setCustomAdbPath(localPath);
+      saveLocalCustomAdbPath(restored?.customAdbPath || localPath);
+      this.syncCustomAdbPathUi(restored, { forceInput: true });
+    } catch {
+      this.syncCustomAdbPathUi({ customAdbPath: localPath }, { forceInput: true });
+    }
+  }
+
+  async flushPendingCustomAdbPath() {
+    if (!this.desktop.enabled || !this.customAdbPathDirty) return;
+    const inputEl = $('customAdbPathInput');
+    if (!inputEl) {
+      this.customAdbPathDirty = false;
+      return;
+    }
+    const pendingPath = sanitizeCustomAdbPath(inputEl.value);
+    const currentSaved = sanitizeCustomAdbPath(this.desktop.adbStatus?.customAdbPath || '');
+    if (pendingPath !== currentSaved) {
+      await this.saveCustomAdbPath({ customPath: pendingPath, silent: true });
+    } else {
+      this.customAdbPathDirty = false;
+    }
+  }
+
+  async saveCustomAdbPath({ customPath, silent = false } = {}) {
+    if (!this.desktop.enabled) return null;
+    const cleaned = sanitizeCustomAdbPath(customPath);
+    const inputEl = $('customAdbPathInput');
+    if (inputEl) inputEl.value = cleaned;
+    this.customAdbPathDirty = false;
+    saveLocalCustomAdbPath(cleaned);
+
+    try {
+      const st = await this.desktop.setCustomAdbPath(cleaned || null);
+      saveLocalCustomAdbPath(st?.customAdbPath || '');
+      this.syncCustomAdbPathUi(st, { forceInput: true });
+      if (!silent) {
+        if (!cleaned) {
+          this.showToast(
+            st.available ? `已清除自定义路径，恢复自动探测 ADB: ${st.adbPath}` : '已清除已记忆的自定义 ADB 路径'
+          );
+        } else if (st.available) {
+          this.showToast(`已保存并记忆 ADB 路径: ${st.adbPath}`);
+        } else {
+          this.showToast('已记忆该路径，但未在其中找到可用的 adb.exe，请检查路径是否正确');
+        }
+      }
+      return st;
+    } catch (err) {
+      const msg = String(err?.message || err || '未知错误');
+      this.diagnostics?.log('W', 'ADB', `保存自定义 ADB 路径失败: ${msg}`);
+      if (!silent) {
+        this.showToast(`保存 ADB 路径失败: ${msg}`);
+      }
+      return null;
+    }
   }
 
   resolveSavedCastPrefs() {
@@ -694,11 +815,23 @@ class OpalCastWebApp {
       }
     });
     $('scanUsbTetherBtn')?.addEventListener('click', () => this.refreshDesktopUsbTetherPanel(true));
+    $('customAdbPathInput')?.addEventListener('input', () => {
+      this.customAdbPathDirty = true;
+    });
+    $('customAdbPathInput')?.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter' || !this.desktop.enabled) return;
+      e.preventDefault();
+      await this.saveCustomAdbPath({ customPath: $('customAdbPathInput').value });
+      await this.refreshDesktopUsbPanel();
+    });
     $('saveAdbPathBtn')?.addEventListener('click', async () => {
       if (!this.desktop.enabled) return;
-      const custom = $('customAdbPathInput').value.trim();
-      const st = await this.desktop.setCustomAdbPath(custom || null);
-      this.showToast(st.available ? `ADB 已就绪: ${st.adbPath}` : '未在该路径找到可用的 adb 工具');
+      await this.saveCustomAdbPath({ customPath: $('customAdbPathInput').value });
+      await this.refreshDesktopUsbPanel();
+    });
+    $('clearAdbPathBtn')?.addEventListener('click', async () => {
+      if (!this.desktop.enabled) return;
+      await this.saveCustomAdbPath({ customPath: '' });
       await this.refreshDesktopUsbPanel();
     });
     $('tofuApproveBtn')?.addEventListener('click', () => this.resolveTofuModal(true));
@@ -821,7 +954,12 @@ class OpalCastWebApp {
       this.input.focusIme();
     });
     $('tbAudioBtn').addEventListener('click', async () => {
+      const wasSuspended = Boolean(this.audio.audioCtx && this.audio.audioCtx.state === 'suspended');
       await this.audio.resumeFromGesture();
+      if (wasSuspended && !this.audio.muted) {
+        this.input.focusIme();
+        return;
+      }
       const nextMuted = !this.audio.muted;
       this.audio.setMuted(nextMuted);
       this.sendOpalFrame(TYPE_SYSTEM_ACTION, 0, encodeSystemAction(SYS_SET_AUDIO_ENABLED, nextMuted ? 0 : 1));
@@ -920,7 +1058,7 @@ class OpalCastWebApp {
       } else if (e.code === 'KeyB' && this.sessionRole !== SESSION_ROLE_STANDALONE_APP) {
         e.preventDefault();
         this.toggleBlackout();
-      } else if (e.code === 'KeyM' && this.sessionRole !== SESSION_ROLE_STANDALONE_APP) {
+      } else if (e.code === 'KeyM') {
         e.preventDefault();
         $('tbAudioBtn')?.click();
       } else if (e.code === 'KeyH' && this.sessionRole !== SESSION_ROLE_STANDALONE_APP) {
@@ -1196,12 +1334,20 @@ class OpalCastWebApp {
     const listEl = $('desktopAdbList');
     listEl.innerHTML = '';
     try {
+      await this.flushPendingCustomAdbPath();
       const status = await this.desktop.refreshAdbStatus();
+      this.syncCustomAdbPathUi(status);
       if (!status.available) {
-        hintEl.textContent = '未检测到 adb.exe：请安装 Android Platform-Tools 或展开下方设置指定路径。';
+        const detailsEl = $('adbPathDetails');
+        if (detailsEl) detailsEl.open = true;
+        hintEl.textContent = status.customAdbPath
+          ? `已记忆的自定义路径中未找到 adb.exe（${status.customAdbPath}）：请检查文件是否存在或重新指定路径。`
+          : '未检测到 adb.exe：请安装 Android Platform-Tools 或在下方指定路径（保存后自动记忆）。';
         return;
       }
-      hintEl.textContent = `已就绪 ADB: ${status.adbPath}`;
+      hintEl.textContent = status.customAdbPath
+        ? `已就绪 ADB（已记忆路径）: ${status.adbPath}`
+        : `已就绪 ADB: ${status.adbPath}`;
       const devices = await this.desktop.scanAdbDevices();
       if (!devices.length) {
         const empty = document.createElement('span');
@@ -1364,6 +1510,7 @@ class OpalCastWebApp {
             this.openCastWebSocket(`ws://127.0.0.1:${port}/ws`, '127.0.0.1', port, true);
             return;
           }
+          await this.flushPendingCustomAdbPath();
           const status = await this.desktop.refreshAdbStatus();
           if (status.available) {
             const devices = await this.desktop.scanAdbDevices();
@@ -1455,6 +1602,9 @@ class OpalCastWebApp {
       ? ''
       : ((this.desktop.enabled && this.desktop.getTrustedToken(host, port)) || getSavedToken(host, port));
 
+    const wantAudio = shouldRequestSessionAudio(this.sessionRole, Boolean($('castAudioCheck')?.checked));
+    this.audio.setMuted(!wantAudio);
+
     this.enterStageView(host, !savedToken && !isUsb);
 
     ws.onopen = () => {
@@ -1469,7 +1619,7 @@ class OpalCastWebApp {
         fps: reqSpec.fps,
         bitrateKbps: reqSpec.bitrateKbps,
         displayMode: DISPLAY_MODE_DEX,
-        audioEnabled: this.sessionRole === SESSION_ROLE_DESKTOP && $('castAudioCheck').checked,
+        audioEnabled: wantAudio,
         authToken: savedToken,
         transportHint: isUsb ? 'usb' : 'wifi_tls',
         clientPlatform: this.desktop.enabled ? 'windows' : 'web',
@@ -1873,7 +2023,7 @@ class OpalCastWebApp {
     $('tbHomeBtn').hidden = isStandalone;
     if ($('tbBlackoutBtn')) $('tbBlackoutBtn').hidden = isStandalone;
     $('tbAppsBtn').hidden = isStandalone;
-    $('tbAudioBtn').hidden = isStandalone;
+    $('tbAudioBtn').hidden = false;
     if ($('tbDisconnectBtn')) {
       $('tbDisconnectBtn').textContent = isStandalone && this.desktop.enabled ? '关闭' : '断开';
       $('tbDisconnectBtn').title = isStandalone && this.desktop.enabled ? '关闭此悬浮小窗' : '断开投屏';

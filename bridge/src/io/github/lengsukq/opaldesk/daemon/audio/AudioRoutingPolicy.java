@@ -40,6 +40,62 @@ public final class AudioRoutingPolicy {
         return Collections.unmodifiableList(new ArrayList<>(sorted));
     }
 
+    /** Lightweight snapshot of an active remote session for single-owner audio arbitration. */
+    public static final class AudioSessionCandidate {
+        public final int sessionId;
+        public final boolean standalone;
+        public final boolean audioRequested;
+
+        public AudioSessionCandidate(int sessionId, boolean standalone, boolean audioRequested) {
+            this.sessionId = sessionId;
+            this.standalone = standalone;
+            this.audioRequested = audioRequested;
+        }
+    }
+
+    /**
+     * Selects the single remote session that owns the shared {@link AudioStreamCapturer} stream,
+     * preventing duplicate playback echo when Desktop and 1–3 Standalone app windows are open
+     * concurrently while ensuring Standalone-only sessions seamlessly receive audio.
+     *
+     * <p>Priority order:
+     * <ol>
+     *   <li>Active desktop session ({@code desktopSessionId}) when it requests audio.</li>
+     *   <li>Current audio owner ({@code currentOwnerSessionId}) when still live and requesting audio
+     *       (sticky among standalone windows to avoid glitches when opening additional windows).</li>
+     *   <li>Oldest live session (smallest positive {@code sessionId}) requesting audio.</li>
+     *   <li>{@code -1} when no session requests audio (caller stops capture).</li>
+     * </ol>
+     */
+    public static int selectAudioOwnerSessionId(
+            int currentOwnerSessionId,
+            int desktopSessionId,
+            Collection<AudioSessionCandidate> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return -1;
+        }
+        int stickyOwner = -1;
+        int fallbackSmallest = Integer.MAX_VALUE;
+        for (AudioSessionCandidate c : candidates) {
+            if (c == null || c.sessionId <= 0 || !c.audioRequested) {
+                continue;
+            }
+            if (!c.standalone && desktopSessionId > 0 && c.sessionId == desktopSessionId) {
+                return c.sessionId;
+            }
+            if (currentOwnerSessionId > 0 && c.sessionId == currentOwnerSessionId) {
+                stickyOwner = c.sessionId;
+            }
+            if (c.sessionId < fallbackSmallest) {
+                fallbackSmallest = c.sessionId;
+            }
+        }
+        if (stickyOwner > 0) {
+            return stickyOwner;
+        }
+        return (fallbackSmallest != Integer.MAX_VALUE) ? fallbackSmallest : -1;
+    }
+
     public static boolean uidListsEqual(List<Integer> a, List<Integer> b) {
         if (a == b) return true;
         if (a == null || b == null || a.size() != b.size()) return false;

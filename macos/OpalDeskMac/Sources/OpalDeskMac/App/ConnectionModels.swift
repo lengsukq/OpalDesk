@@ -70,6 +70,7 @@ public struct PopoutConnectionContext: Sendable, Equatable {
     public let targetFPS: Int
     public let bitrateKbps: Int
     public let mapCommandToCtrl: Bool
+    public let audioEnabled: Bool
 
     public init(
         endpoint: OpalCastEndpoint,
@@ -79,7 +80,8 @@ public struct PopoutConnectionContext: Sendable, Equatable {
         preferredCodec: OpalCastVideoCodec,
         targetFPS: Int,
         bitrateKbps: Int,
-        mapCommandToCtrl: Bool
+        mapCommandToCtrl: Bool,
+        audioEnabled: Bool = true
     ) {
         self.endpoint = endpoint
         self.transportHint = transportHint
@@ -89,6 +91,7 @@ public struct PopoutConnectionContext: Sendable, Equatable {
         self.targetFPS = targetFPS
         self.bitrateKbps = bitrateKbps
         self.mapCommandToCtrl = mapCommandToCtrl
+        self.audioEnabled = audioEnabled
     }
 }
 

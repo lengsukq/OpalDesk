@@ -31,6 +31,10 @@ import {
   MOUSE_SCROLL,
   PROTOCOL_VERSION,
   resolveAutoCodecPreference,
+  SESSION_ROLE_APP_CATALOG,
+  SESSION_ROLE_DESKTOP,
+  SESSION_ROLE_STANDALONE_APP,
+  shouldRequestSessionAudio,
   SYS_BACK,
   TEXT_MODE_COMMIT_PASTE,
   TOUCH_DOWN,
@@ -235,4 +239,12 @@ test('encodeHello and encodeResizeConfig support wired 45-50 Mbps bitrates and c
 
   const resize = encodeResizeConfig({ width: 3840, height: 2160, dpi: 240, fps: 60, bitrateKbps: 48000 });
   assert.equal(new DataView(resize.buffer).getInt32(8, false), 48000);
+});
+
+test('shouldRequestSessionAudio enables audio for both desktop and standalone app windows while keeping app_catalog silent', () => {
+  assert.equal(shouldRequestSessionAudio(SESSION_ROLE_DESKTOP, true), true);
+  assert.equal(shouldRequestSessionAudio(SESSION_ROLE_STANDALONE_APP, true), true);
+  assert.equal(shouldRequestSessionAudio(SESSION_ROLE_APP_CATALOG, true), false);
+  assert.equal(shouldRequestSessionAudio(SESSION_ROLE_DESKTOP, false), false);
+  assert.equal(shouldRequestSessionAudio(SESSION_ROLE_STANDALONE_APP, false), false);
 });

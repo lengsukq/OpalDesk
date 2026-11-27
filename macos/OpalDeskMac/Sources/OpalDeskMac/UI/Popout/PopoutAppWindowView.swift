@@ -125,6 +125,13 @@ public struct PopoutAppWindowView: View {
 
             aspectPresetMenu
 
+            iconButton(
+                controller.isAudioMuted ? "speaker.slash" : "speaker.wave.2",
+                tint: controller.isAudioMuted ? .secondary : .primary,
+                highlighted: !controller.isAudioMuted,
+                help: controller.isAudioMuted ? "已静音 · 点击恢复音频回传" : "静音此小窗音频回传"
+            ) { controller.toggleAudioMute() }
+
             iconButton("textformat.size", help: "重载 App DPI（修复字体过大或缩放异常）") { controller.reloadAppDPI() }
             iconButton("chevron.backward", help: "Android 返回") { controller.sendAndroidBack() }
             if controller.canReturnToDesktop {

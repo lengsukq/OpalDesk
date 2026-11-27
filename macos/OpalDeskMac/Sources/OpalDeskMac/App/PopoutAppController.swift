@@ -33,11 +33,13 @@ public final class PopoutAppController: Identifiable {
     public let session: OpalCastSession
     public let streamBridge: StreamSessionBridge
     public let videoRenderer: VideoDisplayRenderer
+    public let audioPlayer: AudioStreamPlayer
 
     public var sessionState: OpalCastSessionState = .idle
     public var isAuthenticated: Bool = false
     public var isWaitingForApproval: Bool = false
     public var isMigratingConnection: Bool = false
+    public var isAudioMuted: Bool
     public var deviceState = DeviceStatePayload()
     public var videoMetrics = VideoRendererMetrics()
     public var rttMs: Double = 0
@@ -85,9 +87,13 @@ public final class PopoutAppController: Identifiable {
         self.canReturnToDesktop = canReturnToDesktop
         self.connectionContext = connectionContext
         self.mapCommandToCtrl = connectionContext.mapCommandToCtrl
+        self.isAudioMuted = !connectionContext.audioEnabled
         self.session = castSession
         self.streamBridge = StreamSessionBridge(session: castSession, logger: OpalDeskLog.popout)
         self.videoRenderer = VideoDisplayRenderer()
+        let player = AudioStreamPlayer()
+        player.setMuted(!connectionContext.audioEnabled)
+        self.audioPlayer = player
     }
 
     public var currentVideoWidth: Int {
@@ -139,6 +145,7 @@ public final class PopoutAppController: Identifiable {
         OpalDeskLog.info("popout", "Retrying standalone window pkg=\(appPackage)")
         session.disconnect()
         videoRenderer.reset()
+        audioPlayer.stop()
         isAuthenticated = false
         isWaitingForApproval = false
         isMigratingConnection = false
@@ -229,6 +236,13 @@ public final class PopoutAppController: Identifiable {
         }
     }
 
+    public func toggleAudioMute() {
+        isAudioMuted.toggle()
+        audioPlayer.setMuted(isAudioMuted)
+        streamBridge.sendSystemAction(.setAudioEnabled, arg: isAudioMuted ? 0 : 1, isAuthenticated: isAuthenticated)
+        OpalDeskLog.info("popout", "Set audioMuted=\(isAudioMuted) for pkg=\(appPackage)")
+    }
+
     public func reloadAppDPI() {
         streamBridge.sendWindowAction(.reloadAppDpi(pkg: appPackage), isAuthenticated: isAuthenticated)
     }
@@ -270,6 +284,7 @@ public final class PopoutAppController: Identifiable {
         }
         session.disconnect()
         videoRenderer.reset()
+        audioPlayer.stop()
         isAuthenticated = false
         isWaitingForApproval = false
         isMigratingConnection = false
@@ -285,6 +300,7 @@ public final class PopoutAppController: Identifiable {
     private func connectCurrentEndpoint() {
         let handler = StreamSessionBridge.makeEventHandler(
             videoRenderer: videoRenderer,
+            audioPlayer: audioPlayer,
             onControlEvent: { [weak self] event in self?.handleSessionEvent(event) }
         )
         session.connect(to: connectionContext.endpoint, onEvent: handler)
@@ -299,6 +315,7 @@ public final class PopoutAppController: Identifiable {
             case .connected:
                 sendStandaloneHello()
             case .failed(let message):
+                audioPlayer.stop()
                 isAuthenticated = false
                 isWaitingForApproval = false
                 isMigratingConnection = false
@@ -306,6 +323,7 @@ public final class PopoutAppController: Identifiable {
                 OpalDeskLog.warn("popout", "Standalone window failed pkg=\(appPackage): \(message)")
             case .disconnected:
                 if !isMigratingConnection {
+                    audioPlayer.stop()
                     isAuthenticated = false
                     isWaitingForApproval = false
                 }
@@ -345,7 +363,7 @@ public final class PopoutAppController: Identifiable {
             fps: min(connectionContext.targetFPS, 60),
             bitrateKbps: min(connectionContext.bitrateKbps, Tuning.maxBitrateKbps),
             displayMode: Int(OpalCastDisplayMode.dex.rawValue),
-            audioEnabled: false,
+            audioEnabled: !isAudioMuted,
             authToken: connectionContext.authToken,
             transportHint: connectionContext.transportHint.rawValue,
             sessionRole: OpalCastSessionRole.standaloneApp.rawValue,

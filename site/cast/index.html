@@ -110,11 +110,12 @@
             </div>
             <p id="adbStatusHint" class="hint-text">正在检测本机 ADB 环境…</p>
             <div id="desktopAdbList" class="adb-device-list"></div>
-            <details class="adb-path-details">
-              <summary>自定义 adb.exe 路径（可选）</summary>
+            <details id="adbPathDetails" class="adb-path-details">
+              <summary id="adbPathSummary">自定义 adb.exe 路径（可选 · 保存后自动记忆）</summary>
               <div class="adb-path-row">
-                <input id="customAdbPathInput" type="text" placeholder="例如 C:\Android\platform-tools\adb.exe" autocomplete="off" />
+                <input id="customAdbPathInput" type="text" placeholder="例如 C:\Android\platform-tools\adb.exe（支持带引号路径或目录）" autocomplete="off" />
                 <button id="saveAdbPathBtn" type="button" class="mini-btn">保存路径</button>
+                <button id="clearAdbPathBtn" type="button" class="mini-btn" hidden>清除</button>
               </div>
             </details>
             <div id="desktopUsbTetherWrap" class="usb-tether-beta-box">

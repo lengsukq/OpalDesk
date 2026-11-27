@@ -1,3 +1,4 @@
+use crate::adb::sanitize_custom_adb_path;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -83,13 +84,9 @@ fn sanitize_bitrate(kbps: u32) -> u32 {
     }
 }
 
-fn sanitize_adb_path(path: Option<String>) -> Option<String> {
-    path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty())
-}
-
 fn sanitize_prefs(mut prefs: ClientPrefs) -> ClientPrefs {
     prefs.version = PREFS_SCHEMA_VERSION;
-    prefs.custom_adb_path = sanitize_adb_path(prefs.custom_adb_path);
+    prefs.custom_adb_path = sanitize_custom_adb_path(prefs.custom_adb_path);
     prefs.preferred_codec = sanitize_codec(&prefs.preferred_codec);
     prefs.target_fps = sanitize_fps(prefs.target_fps);
     prefs.bitrate_kbps = sanitize_bitrate(prefs.bitrate_kbps);
@@ -131,7 +128,7 @@ impl PrefsStore {
             .map_err(|_| "客户端配置锁异常".to_string())?;
 
         if let Some(next_adb) = patch.custom_adb_path {
-            guard.custom_adb_path = sanitize_adb_path(next_adb);
+            guard.custom_adb_path = sanitize_custom_adb_path(next_adb);
         }
         if let Some(next_codec) = patch.preferred_codec {
             guard.preferred_codec = sanitize_codec(&next_codec);
@@ -169,18 +166,17 @@ impl PrefsStore {
             fs::create_dir_all(parent).map_err(|e| format!("无法创建配置目录: {e}"))?;
         }
         let body = serde_json::to_string_pretty(prefs).map_err(|e| format!("序列化配置失败: {e}"))?;
-        let tmp_path = path.with_extension("json.tmp");
+        let tmp_path = path.with_extension(format!("json.{}.tmp", std::process::id()));
         fs::write(&tmp_path, body.as_bytes()).map_err(|e| format!("写入临时配置文件失败: {e}"))?;
 
         if fs::rename(&tmp_path, path).is_err() {
-            // Windows fs::rename does not overwrite an existing destination file.
-            if path.exists() {
-                let _ = fs::remove_file(path);
-            }
-            if let Err(err) = fs::rename(&tmp_path, path) {
+            // Windows fs::rename does not overwrite an existing destination file; copy over
+            // in-place so the previous client-prefs.json is never lost if replacement fails.
+            if let Err(err) = fs::copy(&tmp_path, path) {
                 let _ = fs::remove_file(&tmp_path);
                 return Err(format!("替换配置文件失败: {err}"));
             }
+            let _ = fs::remove_file(&tmp_path);
         }
         Ok(())
     }
@@ -205,7 +201,7 @@ mod tests {
         let store = PrefsStore::new(path.clone());
         let updated = store
             .update(ClientPrefsPatch {
-                custom_adb_path: Some(Some(r" C:\Android\platform-tools\adb.exe ".to_string())),
+                custom_adb_path: Some(Some(r#" "C:\Android\platform-tools\adb.exe" "#.to_string())),
                 preferred_codec: Some("HEVC".to_string()),
                 target_fps: Some(120),
                 bitrate_kbps: Some(22_000),

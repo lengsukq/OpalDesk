@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildStandaloneWindowQuery, normalizeCastPrefs, OpalDesktopBridge } from '../js/desktop_bridge.js';
+import {
+  buildStandaloneWindowQuery,
+  normalizeCastPrefs,
+  OpalDesktopBridge,
+  sanitizeCustomAdbPath,
+} from '../js/desktop_bridge.js';
 
 test('scanUsbTetherDevices stays no-op outside Tauri desktop environment', async () => {
   const bridge = new OpalDesktopBridge({});
@@ -158,4 +163,82 @@ test('normalizeCastPrefs validates codec, fps, bitrate, cursor, and ADB path; br
   assert.equal(calls[0].cmd, 'update_client_prefs');
   assert.deepEqual(calls[0].args, { patch: { targetFps: 90, bitrateKbps: 32000 } });
   assert.equal(updated.targetFps, 90);
+});
+
+test('sanitizeCustomAdbPath strips Windows Copy-as-path quotes and bridge preserves remembered path on init/save', async () => {
+  assert.equal(
+    sanitizeCustomAdbPath('  "C:\\Android\\platform-tools\\adb.exe"  '),
+    'C:\\Android\\platform-tools\\adb.exe'
+  );
+  assert.equal(sanitizeCustomAdbPath("  'D:\\Tools\\adb.exe' "), 'D:\\Tools\\adb.exe');
+  assert.equal(sanitizeCustomAdbPath('  ""  '), '');
+  assert.equal(
+    normalizeCastPrefs({ customAdbPath: ' "D:\\platform-tools\\adb.exe" ' }).customAdbPath,
+    'D:\\platform-tools\\adb.exe'
+  );
+
+  const calls = [];
+  const fakeWin = {
+    __TAURI__: {
+      core: {
+        async invoke(cmd, args) {
+          calls.push({ cmd, args });
+          if (cmd === 'desktop_runtime_info') {
+            return {
+              clientId: 'win-1234567890ab',
+              adb: {
+                available: true,
+                adbPath: 'D:\\platform-tools\\adb.exe',
+                customAdbPath: 'D:\\platform-tools\\adb.exe',
+              },
+              prefs: {
+                customAdbPath: 'D:\\platform-tools\\adb.exe',
+                preferredCodec: 'hevc',
+                targetFps: 120,
+                bitrateKbps: 22000,
+                audioEnabled: true,
+                hideLocalCursor: false,
+              },
+            };
+          }
+          if (cmd === 'list_mdns_devices') {
+            throw new Error('transient mDNS error');
+          }
+          if (cmd === 'list_trusted_devices') {
+            return [];
+          }
+          if (cmd === 'set_custom_adb_path') {
+            return {
+              available: Boolean(args.path),
+              adbPath: args.path,
+              customAdbPath: args.path,
+            };
+          }
+          return null;
+        },
+      },
+    },
+  };
+
+  const bridge = new OpalDesktopBridge(fakeWin);
+  const info = await bridge.initialize();
+  assert.equal(info.adb.customAdbPath, 'D:\\platform-tools\\adb.exe');
+  assert.equal(bridge.adbStatus.customAdbPath, 'D:\\platform-tools\\adb.exe');
+  assert.equal(bridge.clientPrefs.customAdbPath, 'D:\\platform-tools\\adb.exe');
+
+  const saved = await bridge.setCustomAdbPath('  "E:\\Android\\platform-tools\\adb.exe"  ');
+  assert.equal(saved.customAdbPath, 'E:\\Android\\platform-tools\\adb.exe');
+  assert.equal(bridge.clientPrefs.customAdbPath, 'E:\\Android\\platform-tools\\adb.exe');
+  assert.deepEqual(calls.at(-1), {
+    cmd: 'set_custom_adb_path',
+    args: { path: 'E:\\Android\\platform-tools\\adb.exe' },
+  });
+
+  const cleared = await bridge.setCustomAdbPath('  ""  ');
+  assert.equal(cleared.customAdbPath, null);
+  assert.equal(bridge.clientPrefs.customAdbPath, null);
+  assert.deepEqual(calls.at(-1), {
+    cmd: 'set_custom_adb_path',
+    args: { path: null },
+  });
 });

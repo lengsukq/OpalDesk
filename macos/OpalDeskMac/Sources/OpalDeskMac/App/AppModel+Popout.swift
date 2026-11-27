@@ -128,7 +128,8 @@ extension AppModel {
             preferredCodec: preferences.preferredCodec,
             targetFPS: min(preferences.targetFPS, 60),
             bitrateKbps: min(effectiveBitrateKbps(), 10_000),
-            mapCommandToCtrl: preferences.mapCommandToCtrl
+            mapCommandToCtrl: preferences.mapCommandToCtrl,
+            audioEnabled: preferences.audioEnabled
         )
 
         let historyTemplate = PopoutHistoryEntry(
@@ -193,7 +194,8 @@ extension AppModel {
             preferredCodec: preferences.preferredCodec,
             targetFPS: min(preferences.targetFPS, 60),
             bitrateKbps: min(effectiveBitrateKbps(), 10_000),
-            mapCommandToCtrl: preferences.mapCommandToCtrl
+            mapCommandToCtrl: preferences.mapCommandToCtrl,
+            audioEnabled: preferences.audioEnabled
         )
         popoutManager.migrateConnectionContext(to: upgraded)
     }
@@ -356,7 +358,8 @@ extension AppModel {
                     preferredCodec: preferences.preferredCodec,
                     targetFPS: min(preferences.targetFPS, 60),
                     bitrateKbps: min(effectiveBitrateKbps(), 10_000),
-                    mapCommandToCtrl: preferences.mapCommandToCtrl
+                    mapCommandToCtrl: preferences.mapCommandToCtrl,
+                    audioEnabled: preferences.audioEnabled
                 )
                 return (ctx, nextEntry)
             }
@@ -380,7 +383,8 @@ extension AppModel {
                 preferredCodec: preferences.preferredCodec,
                 targetFPS: min(preferences.targetFPS, 60),
                 bitrateKbps: min(preferences.bitrateKbps, 10_000),
-                mapCommandToCtrl: preferences.mapCommandToCtrl
+                mapCommandToCtrl: preferences.mapCommandToCtrl,
+                audioEnabled: preferences.audioEnabled
             )
             return (ctx, nextEntry)
         }
@@ -414,7 +418,8 @@ extension AppModel {
                 preferredCodec: preferences.preferredCodec,
                 targetFPS: min(preferences.targetFPS, 60),
                 bitrateKbps: min(preferences.bitrateKbps, 10_000),
-                mapCommandToCtrl: preferences.mapCommandToCtrl
+                mapCommandToCtrl: preferences.mapCommandToCtrl,
+                audioEnabled: preferences.audioEnabled
             )
             return (ctx, nextEntry)
         }
@@ -438,7 +443,8 @@ extension AppModel {
                 preferredCodec: preferences.preferredCodec,
                 targetFPS: min(preferences.targetFPS, 60),
                 bitrateKbps: min(preferences.bitrateKbps, 10_000),
-                mapCommandToCtrl: preferences.mapCommandToCtrl
+                mapCommandToCtrl: preferences.mapCommandToCtrl,
+                audioEnabled: preferences.audioEnabled
             )
             return (ctx, nextEntry)
         }

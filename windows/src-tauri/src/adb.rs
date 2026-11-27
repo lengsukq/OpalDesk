@@ -56,6 +56,28 @@ pub struct AdbManager {
     state: Mutex<MutableAdbState>,
 }
 
+pub fn sanitize_custom_adb_path(path: Option<String>) -> Option<String> {
+    let raw = path?;
+    let mut cleaned = raw.trim();
+    loop {
+        let stripped = cleaned
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .or_else(|| cleaned.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+            .map(str::trim);
+        match stripped {
+            Some(inner) => cleaned = inner,
+            None => break,
+        }
+    }
+    let cleaned = cleaned.trim_matches(|c| c == '"' || c == '\'').trim();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.to_string())
+    }
+}
+
 impl AdbManager {
     pub fn new(resource_dir: Option<PathBuf>) -> Self {
         Self {
@@ -65,9 +87,7 @@ impl AdbManager {
     }
 
     pub fn set_custom_adb_path(&self, path: Option<String>) -> AdbStatusInfo {
-        let cleaned = path
-            .map(|p| p.trim().to_string())
-            .filter(|p| !p.is_empty());
+        let cleaned = sanitize_custom_adb_path(path);
         if let Ok(mut s) = self.state.lock() {
             s.custom_adb_path = cleaned;
         }
@@ -93,6 +113,12 @@ impl AdbManager {
             if p.is_dir() {
                 candidates.push(p.join(bin_name));
                 candidates.push(p.join("platform-tools").join(bin_name));
+                candidates.push(p.join("Sdk").join("platform-tools").join(bin_name));
+                candidates.push(p.join("sdk").join("platform-tools").join(bin_name));
+            } else if cfg!(windows) && p.extension().is_none() {
+                let with_exe = p.with_extension("exe");
+                candidates.push(p);
+                candidates.push(with_exe);
             } else {
                 candidates.push(p);
             }
@@ -666,5 +692,44 @@ mod tests {
         assert!(script.contains("exit 24"));
         let fallback = build_remote_bootstrap_script(false);
         assert!(fallback.contains("exit 23"));
+    }
+
+    #[test]
+    fn sanitizes_quoted_custom_adb_paths_and_locates_from_dir() {
+        assert_eq!(
+            sanitize_custom_adb_path(Some(r#"  "C:\Android\platform-tools\adb.exe"  "#.into())).as_deref(),
+            Some(r"C:\Android\platform-tools\adb.exe")
+        );
+        assert_eq!(
+            sanitize_custom_adb_path(Some(" 'D:\\Tools\\adb.exe' ".into())).as_deref(),
+            Some(r"D:\Tools\adb.exe")
+        );
+        assert_eq!(sanitize_custom_adb_path(Some(r#"  ""  "#.into())), None);
+        assert_eq!(sanitize_custom_adb_path(None), None);
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!("opaldesk_adb_loc_{nanos}"));
+        let pt_dir = root.join("platform-tools");
+        std::fs::create_dir_all(&pt_dir).expect("create temp platform-tools dir");
+        let bin_name = if cfg!(windows) { "adb.exe" } else { "adb" };
+        let fake_bin = pt_dir.join(bin_name);
+        std::fs::write(&fake_bin, b"fake-adb").expect("write fake adb binary");
+
+        let mgr = AdbManager::new(None);
+        let status = mgr.set_custom_adb_path(Some(format!("\"{}\"", root.display())));
+        assert_eq!(
+            status.custom_adb_path.as_deref(),
+            Some(&*root.to_string_lossy())
+        );
+        assert!(status.available);
+        assert_eq!(
+            status.adb_path.as_deref(),
+            Some(&*fake_bin.to_string_lossy())
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -252,7 +252,7 @@ fn get_adb_status(state: tauri::State<'_, DesktopState>) -> AdbStatusInfo {
 fn set_custom_adb_path(
     state: tauri::State<'_, DesktopState>,
     path: Option<String>,
-) -> AdbStatusInfo {
+) -> Result<AdbStatusInfo, String> {
     let status = state.adb_manager.set_custom_adb_path(path);
     if let Err(err) = state
         .prefs_store
@@ -261,8 +261,14 @@ fn set_custom_adb_path(
         state
             .log_store
             .warn("Prefs", &format!("Failed to persist custom ADB path: {err}"));
+        return Err(format!("ADB 路径已临时生效，但持久化保存失败: {err}"));
     }
-    status
+    let summary = match status.custom_adb_path.as_deref() {
+        Some(p) => format!("Saved custom ADB path: {p} (available={})", status.available),
+        None => format!("Cleared custom ADB path (available={})", status.available),
+    };
+    state.log_store.info("ADB", &summary);
+    Ok(status)
 }
 
 #[tauri::command]
@@ -755,8 +761,8 @@ pub fn run() {
             let mdns_scanner = Arc::new(MdnsScanner::start());
             let adb_manager = Arc::new(AdbManager::new(resource_dir));
             let saved_prefs = prefs_store.get();
-            if saved_prefs.custom_adb_path.is_some() {
-                adb_manager.set_custom_adb_path(saved_prefs.custom_adb_path);
+            if let Some(ref custom_adb) = saved_prefs.custom_adb_path {
+                adb_manager.set_custom_adb_path(Some(custom_adb.clone()));
             }
             let log_store = Arc::new(LogStore::new(config_dir.join("logs").join("opaldesk_desktop.log")));
             let feedback_manager = Arc::new(FeedbackManager::new(&config_dir, trust_store.client_id()));
@@ -770,6 +776,9 @@ pub fn run() {
                     std::env::consts::ARCH
                 ),
             );
+            if let Some(ref custom_adb) = saved_prefs.custom_adb_path {
+                log_store.info("ADB", &format!("Restored remembered custom ADB path: {custom_adb}"));
+            }
 
             app.manage(DesktopState {
                 trust_store,
