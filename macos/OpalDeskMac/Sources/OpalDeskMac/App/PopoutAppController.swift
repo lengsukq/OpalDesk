@@ -4,11 +4,41 @@ import Observation
 import OpalDeskCore
 import os
 
+/// Discrete user-driven preference mutations emitted by `PopoutAppController` for persistence in `PopoutAppPreferencesStore`.
+public enum PopoutAppPreferenceChange: Sendable, Equatable {
+    case preset(String?)
+    case customWindowSize(widthPt: Double, heightPt: Double)
+    case pinnedOnTop(Bool)
+    case customDpi(Int?)
+    case compatibilityResolution(Bool)
+}
+
+extension PopoutAspectPreset {
+    var preferenceKey: String {
+        switch self {
+        case .phone: return "phone"
+        case .foldable: return "fold"
+        case .tablet: return "tablet"
+        }
+    }
+
+    static func fromPreferenceKey(_ raw: String?) -> PopoutAspectPreset? {
+        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "phone": return .phone
+        case "fold", "foldable": return .foldable
+        case "tablet": return .tablet
+        default: return nil
+        }
+    }
+}
+
 /// Manages the lifecycle, video stream, input forwarding, always-on-top state, and desktop window state
 /// of one standalone popout Android app window.
 @MainActor
 @Observable
 public final class PopoutAppController: Identifiable {
+    public static let customDpiOptions: [Int] = [240, 280, 320, 360, 400, 480]
+
     private enum Tuning {
         static let defaultVideoWidth: Int = 848
         static let defaultVideoHeight: Int = 1680
@@ -49,6 +79,8 @@ public final class PopoutAppController: Identifiable {
     public var isPinnedOnTop: Bool
     public var windowOpacity: Double = DisplayPresets.popoutOpacityRange.upperBound
     public var activePreset: PopoutAspectPreset? = .phone
+    public var customDpi: Int?
+    public var isCompatibilityResolution: Bool
     public var mapCommandToCtrl: Bool
     public var enableEdgeNavigationGestures: Bool
     public var canReturnToDesktop: Bool
@@ -61,6 +93,7 @@ public final class PopoutAppController: Identifiable {
     public weak var hostWindow: NSWindow?
     public var onRequestClose: (() -> Void)?
     public var onPinStateChanged: ((Bool) -> Void)?
+    public var onPreferenceChanged: ((PopoutAppPreferenceChange) -> Void)?
     public var onAuthTokenIssued: ((_ deviceName: String, _ fingerprint: String, _ authToken: String) -> Void)?
 
     @ObservationIgnored private var connectionContext: PopoutConnectionContext
@@ -69,6 +102,7 @@ public final class PopoutAppController: Identifiable {
     @ObservationIgnored private var toastClearTask: Task<Void, Never>?
     @ObservationIgnored private var lastSentGeometry: PopoutStreamGeometry?
     @ObservationIgnored private var lastCanvasSize: CGSize = PopoutAspectPreset.phone.windowSize
+    @ObservationIgnored private var lastPersistedWindowSize: CGSize = PopoutAspectPreset.phone.windowSize
     @ObservationIgnored private var lastBackingScale: CGFloat = 2.0
     @ObservationIgnored private var isClosing: Bool = false
 
@@ -80,6 +114,8 @@ public final class PopoutAppController: Identifiable {
         deviceName: String,
         taskId: Int = -1,
         initialPinnedOnTop: Bool = false,
+        initialWindowSize: CGSize = PopoutAspectPreset.phone.windowSize,
+        initialPreference: PopoutAppPreference? = nil,
         canReturnToDesktop: Bool = false,
         connectionContext: PopoutConnectionContext,
         trustStore: TrustStore
@@ -91,7 +127,13 @@ public final class PopoutAppController: Identifiable {
         self.deviceKey = deviceKey
         self.deviceName = deviceName
         self.taskId = taskId
-        self.isPinnedOnTop = initialPinnedOnTop
+        self.isPinnedOnTop = initialPreference?.pinnedOnTop ?? initialPinnedOnTop
+        self.customDpi = initialPreference?.customDpi.map(PopoutCompatibilityResolution.clampCustomDpi)
+        self.isCompatibilityResolution = initialPreference?.compatibilityResolution ?? false
+        self.activePreset = PopoutAspectPreset.fromPreferenceKey(initialPreference?.preferredPreset)
+            ?? Self.matchingPreset(for: initialWindowSize)
+        self.lastCanvasSize = initialWindowSize
+        self.lastPersistedWindowSize = initialWindowSize
         self.canReturnToDesktop = canReturnToDesktop
         self.connectionContext = connectionContext
         self.mapCommandToCtrl = connectionContext.mapCommandToCtrl
@@ -190,6 +232,7 @@ public final class PopoutAppController: Identifiable {
         isPinnedOnTop = pinned
         applyWindowPinLevel()
         onPinStateChanged?(pinned)
+        onPreferenceChanged?(.pinnedOnTop(pinned))
         OpalDeskLog.info("popout", "Set always-on-top=\(pinned) for pkg=\(appPackage)")
     }
 
@@ -203,10 +246,39 @@ public final class PopoutAppController: Identifiable {
         hostWindow?.alphaValue = CGFloat(clamped)
     }
 
+    public func setCustomDpi(_ dpi: Int?) {
+        let clamped = dpi.map(PopoutCompatibilityResolution.clampCustomDpi)
+        guard customDpi != clamped else { return }
+        customDpi = clamped
+        onPreferenceChanged?(.customDpi(clamped))
+        if isAuthenticated {
+            let geom = computeStreamGeometry(viewSize: lastCanvasSize, backingScale: lastBackingScale)
+            sendResizeIfNeeded(geom, force: true)
+        }
+        if let clamped {
+            showToast("已设置自定义 DPI：\(clamped)")
+        } else {
+            showToast("已恢复自动 DPI")
+        }
+    }
+
+    public func setCompatibilityResolution(_ enabled: Bool) {
+        guard isCompatibilityResolution != enabled else { return }
+        isCompatibilityResolution = enabled
+        onPreferenceChanged?(.compatibilityResolution(enabled))
+        if isAuthenticated {
+            let geom = computeStreamGeometry(viewSize: lastCanvasSize, backingScale: lastBackingScale)
+            sendResizeIfNeeded(geom, force: true)
+        }
+        showToast(enabled ? "已开启兼容分辨率模式" : "已恢复自适应分辨率")
+    }
+
     public func applyAspectPreset(_ preset: PopoutAspectPreset) {
         activePreset = preset
         let targetSize = preset.windowSize
         lastCanvasSize = targetSize
+        lastPersistedWindowSize = targetSize
+        onPreferenceChanged?(.preset(preset.preferenceKey))
 
         if let window = hostWindow {
             let currentFrame = window.frame
@@ -225,7 +297,7 @@ public final class PopoutAppController: Identifiable {
 
         resizeDebounceTask?.cancel()
         if isAuthenticated {
-            let geom = CoordinateMapper.popoutStreamGeometry(viewSize: targetSize, backingScale: lastBackingScale)
+            let geom = computeStreamGeometry(viewSize: targetSize, backingScale: lastBackingScale)
             sendResizeIfNeeded(geom, force: true)
         }
     }
@@ -234,13 +306,27 @@ public final class PopoutAppController: Identifiable {
         guard viewSize.width >= Tuning.minCanvasDimension, viewSize.height >= Tuning.minCanvasDimension else { return }
         lastCanvasSize = viewSize
         lastBackingScale = backingScale
-        activePreset = Self.matchingPreset(for: viewSize)
+        let matchedPreset = Self.matchingPreset(for: viewSize)
+        activePreset = matchedPreset
 
-        guard isAuthenticated else { return }
         resizeDebounceTask?.cancel()
         resizeDebounceTask = Task { [weak self] in
             guard await sleepCancellable(nanoseconds: Tuning.resizeDebounceNs), let self else { return }
-            let geom = CoordinateMapper.popoutStreamGeometry(viewSize: viewSize, backingScale: backingScale)
+            let sizeChanged = abs(viewSize.width - self.lastPersistedWindowSize.width) > 2
+                || abs(viewSize.height - self.lastPersistedWindowSize.height) > 2
+            if sizeChanged {
+                self.lastPersistedWindowSize = viewSize
+                if let matched = Self.matchingPreset(for: viewSize) {
+                    self.onPreferenceChanged?(.preset(matched.preferenceKey))
+                } else {
+                    self.onPreferenceChanged?(.customWindowSize(
+                        widthPt: Double(viewSize.width.rounded()),
+                        heightPt: Double(viewSize.height.rounded())
+                    ))
+                }
+            }
+            guard self.isAuthenticated else { return }
+            let geom = self.computeStreamGeometry(viewSize: viewSize, backingScale: backingScale)
             self.sendResizeIfNeeded(geom, force: false)
         }
     }
@@ -464,7 +550,7 @@ public final class PopoutAppController: Identifiable {
     private func sendStandaloneHello() {
         let scale = hostWindow?.backingScaleFactor ?? lastBackingScale
         lastBackingScale = scale
-        let geom = CoordinateMapper.popoutStreamGeometry(viewSize: lastCanvasSize, backingScale: scale)
+        let geom = computeStreamGeometry(viewSize: lastCanvasSize, backingScale: scale)
         lastSentGeometry = geom
         isWaitingForApproval = connectionContext.transportHint == .wifiTls && connectionContext.authToken.isEmpty
 
@@ -505,7 +591,7 @@ public final class PopoutAppController: Identifiable {
                     let fp = session.verifiedPeerFingerprint ?? auth.certFingerprint
                     onAuthTokenIssued?(deviceName, fp, auth.authToken)
                 }
-                let geom = CoordinateMapper.popoutStreamGeometry(
+                let geom = computeStreamGeometry(
                     viewSize: lastCanvasSize,
                     backingScale: hostWindow?.backingScaleFactor ?? lastBackingScale
                 )
@@ -544,6 +630,20 @@ public final class PopoutAppController: Identifiable {
                   let self, self.isAuthenticated, self.videoMetrics.totalFramesDecoded == 0 else { return }
             self.errorMessage = "应用启动超时或未能渲染首帧，请点击重试"
         }
+    }
+
+    private func computeStreamGeometry(viewSize: CGSize, backingScale: CGFloat) -> PopoutStreamGeometry {
+        let pref = PopoutAppPreference(
+            preferredPreset: activePreset?.preferenceKey,
+            pinnedOnTop: isPinnedOnTop,
+            customDpi: customDpi,
+            compatibilityResolution: isCompatibilityResolution
+        )
+        return PopoutCompatibilityResolution.resolveStreamGeometry(
+            preference: pref,
+            viewSize: viewSize,
+            backingScale: backingScale
+        )
     }
 
     private func sendResizeIfNeeded(_ geom: PopoutStreamGeometry, force: Bool) {

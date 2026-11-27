@@ -50,10 +50,15 @@ public final class AppModel {
     public let companionManager: CompanionConnectionManager
     public let notificationBridge: NotificationBridgeManager
     public let mediaBridge: MediaRemoteBridge
+    public let callBridge: CallBridgeManager
     public let fileBrowserClient: RemoteFileBrowserClient
+    public let finderMountManager: FinderMountManager
+    public let quickLookCoordinator: QuickLookPreviewCoordinator
+    public let callHudCoordinator: CallControlHudCoordinator
     public let screenRecorder: WindowScreenRecorder
     public let popoutManager: PopoutWindowManager
     public let popoutHistoryStore: PopoutHistoryStore
+    public let popoutAppPrefsStore: PopoutAppPreferencesStore
     public let remoteAppCatalogFetcher: RemoteAppCatalogFetcher
     public let feedbackConfig: FeedbackBuildConfig
     public let feedbackHistoryStore: FeedbackHistoryStore
@@ -76,13 +81,16 @@ public final class AppModel {
     public var selectedPreset: DisplayResolutionPreset = .matchWindow
     public var selectedDPI: Int = DisplayPresets.defaultDPI
 
-    // Background companion, notifications, media remote & phone handoff
+    // Background companion, notifications, media remote, calls & phone handoff
     public var companionState: CompanionConnectionState = .idle
     public var companionTarget: CompanionTargetDevice?
     public var hostTopApp = HostTopAppState()
     public var remoteNotifications: [RemoteNotificationItem] = []
     public var mediaState: MediaStatePayload?
+    public var callState: CallStatePayload = .idle
     public var cachedCompanionApps: [RemoteAppInfo] = []
+    public var triggeringBleDeviceId: String?
+    public var bleHotspotBanner: BleHotspotBannerState?
 
     // Screen recording & rich toast action state
     public var isMainWindowRecording: Bool = false
@@ -90,7 +98,7 @@ public final class AppModel {
     public var toastActionTitle: String?
     public var toastActionURL: URL?
 
-    // Remote file browser & storage analyzer state
+    // Remote file browser, Finder WebDAV mount, Quick Look & storage analyzer state
     public var fileBrowserCurrentPath: String = "/sdcard"
     public var fileBrowserItems: [RemoteFileItem] = []
     public var isLoadingFileBrowser: Bool = false
@@ -99,14 +107,17 @@ public final class AppModel {
     public var isScanningRemoteStorage: Bool = false
     public var fileBrowserStorageError: String?
     public var fileBrowserTransfers: [RemoteFileTransferItem] = []
+    public var finderMountState: FinderMountState = .unmounted
+    public var quickLookLoadingPath: String?
 
     // APK installer & Spotlight shortcut manager sheet state
     public var apkInstallerContext: ApkInstallerContext?
     public var apkInstallState: ApkInstallState = .idle
     public var isShortcutManagerPresented: Bool = false
 
-    // Standalone floating app windows & history
+    // Standalone floating app windows, history & per-app preferences
     public var popoutHistory: [PopoutHistoryEntry] = []
+    public var popoutAppPrefs: [String: PopoutAppPreference] = [:]
     public var remoteAppPickerContext: RemoteAppPickerContext?
     public var pendingPopoutReloadPrompt: PendingPopoutReloadPrompt?
     public var cachedDesktopApps: [RemoteAppInfo] = []
@@ -136,6 +147,9 @@ public final class AppModel {
     @ObservationIgnored var fileBrowserDirectoryTask: Task<Void, Never>?
     @ObservationIgnored var fileBrowserStorageTask: Task<Void, Never>?
     @ObservationIgnored var fileBrowserDownloadTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored var finderMountTask: Task<Void, Never>?
+    @ObservationIgnored var quickLookDownloadTask: Task<Void, Never>?
+    @ObservationIgnored var bleHotspotProbeTask: Task<Void, Never>?
     @ObservationIgnored var fileBrowserUploadTransferMap: [UInt32: (transferItemId: String, remoteDirectory: String)] = [:]
     @ObservationIgnored var pendingFileTransferAckWaiters: [UInt32: CheckedContinuation<String, Error>] = [:]
     @ObservationIgnored var pendingFileTransferProgressHandlers: [UInt32: @MainActor (FileTransferProgress) -> Void] = [:]
@@ -166,16 +180,22 @@ public final class AppModel {
         let extSession = OpalCastSession(trustStore: discoveryCoord.trustStore)
         let notifBridge = NotificationBridgeManager()
         let mediaRemoteBridge = MediaRemoteBridge()
+        let telephonyBridge = CallBridgeManager()
         let remoteFileClient = RemoteFileBrowserClient()
+        let finderMountMgr = FinderMountManager()
+        let qlCoordinator = QuickLookPreviewCoordinator()
+        let callHud = CallControlHudCoordinator()
         let companionMgr = CompanionConnectionManager(
             trustStore: discoveryCoord.trustStore,
             fileBrowserClient: remoteFileClient,
             notificationBridge: notifBridge,
-            mediaBridge: mediaRemoteBridge
+            mediaBridge: mediaRemoteBridge,
+            callBridge: telephonyBridge
         )
         let recorder = WindowScreenRecorder()
         let popoutMgr = PopoutWindowManager()
         let popoutStore = PopoutHistoryStore()
+        let popoutPrefsStore = PopoutAppPreferencesStore()
         let catalogFetcher = RemoteAppCatalogFetcher()
         let fbConfig = FeedbackBuildConfig.current()
         let fbHistoryStore = FeedbackHistoryStore()
@@ -196,10 +216,15 @@ public final class AppModel {
         self.companionManager = companionMgr
         self.notificationBridge = notifBridge
         self.mediaBridge = mediaRemoteBridge
+        self.callBridge = telephonyBridge
         self.fileBrowserClient = remoteFileClient
+        self.finderMountManager = finderMountMgr
+        self.quickLookCoordinator = qlCoordinator
+        self.callHudCoordinator = callHud
         self.screenRecorder = recorder
         self.popoutManager = popoutMgr
         self.popoutHistoryStore = popoutStore
+        self.popoutAppPrefsStore = popoutPrefsStore
         self.remoteAppCatalogFetcher = catalogFetcher
         self.feedbackConfig = fbConfig
         self.feedbackHistoryStore = fbHistoryStore
@@ -207,6 +232,7 @@ public final class AppModel {
         self.feedbackRateLimiter = fbLimiter
         self.deviceState = DeviceStatePayload()
         self.popoutHistory = popoutStore.snapshot()
+        self.popoutAppPrefs = popoutPrefsStore.snapshot()
         self.logEntries = OpalLogStore.shared.snapshot()
         self.feedbackRecords = fbHistoryStore.snapshot()
         self.feedbackQuota = fbLimiter.currentQuota()
@@ -235,7 +261,8 @@ public final class AppModel {
         discoveryCoord.start(
             customAdbPath: { [weak self] in self?.preferences.customAdbPath ?? "" },
             isCanvasActive: { [weak self] in self?.isShowingDisplayCanvas ?? false },
-            isUsbTetherEnabled: { [weak self] in self?.preferences.usbTetherDiscoveryEnabled ?? false }
+            isUsbTetherEnabled: { [weak self] in self?.preferences.usbTetherDiscoveryEnabled ?? false },
+            isBleEnabled: { [weak self] in self?.preferences.bleNearbyDiscoveryEnabled ?? true }
         )
     }
 
@@ -497,11 +524,19 @@ public final class AppModel {
         toastClearTask?.cancel()
         fileBrowserDirectoryTask?.cancel()
         fileBrowserStorageTask?.cancel()
+        finderMountTask?.cancel()
+        quickLookDownloadTask?.cancel()
+        bleHotspotProbeTask?.cancel()
         for task in fileBrowserDownloadTasks.values { task.cancel() }
         fileBrowserDownloadTasks.removeAll()
         activeApkInstallTask?.cancel()
         activeApkInstallTask = nil
         cancelPendingFileTransferWaiters(reason: "应用正在退出")
+
+        quickLookCoordinator.closeIfVisible()
+        callHudCoordinator.close()
+        callBridge.handleSessionDisconnected()
+        detachFinderUnmountIfNeeded()
 
         if screenRecorder.isRecording {
             screenRecorder.cancel()

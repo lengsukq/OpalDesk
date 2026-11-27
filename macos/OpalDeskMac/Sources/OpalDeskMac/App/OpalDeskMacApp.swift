@@ -231,6 +231,8 @@ private struct FileBrowserWindowHostView: View {
             isScanningStorage: model.isScanningRemoteStorage,
             storageError: model.fileBrowserStorageError,
             transfers: model.fileBrowserTransfers,
+            finderMountState: model.finderMountState,
+            quickLookLoadingPath: model.quickLookLoadingPath,
             actions: model.makeFileBrowserActions()
         )
         .background(WindowChromeConfigurator(isImmersiveCanvas: false))

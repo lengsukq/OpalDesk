@@ -3,7 +3,40 @@ import Foundation
 import OpalDeskCore
 import os
 
-// MARK: - Background Companion, Notifications, Media Remote, Handoff & Dual-Channel Routing
+// MARK: - Background Companion, Notifications, Media Remote, Call Control, BLE Hotspot & Dual-Channel Routing
+
+public struct BleHotspotBannerState: Sendable, Equatable {
+    public enum Kind: Sendable, Equatable {
+        case loading
+        case info
+        case success
+        case warning
+        case error
+    }
+
+    public var kind: Kind
+    public var title: String
+    public var message: String
+    public var ssid: String?
+    public var gatewayIp: String?
+    public var port: UInt16?
+
+    public init(
+        kind: Kind,
+        title: String,
+        message: String,
+        ssid: String? = nil,
+        gatewayIp: String? = nil,
+        port: UInt16? = nil
+    ) {
+        self.kind = kind
+        self.title = title
+        self.message = message
+        self.ssid = ssid
+        self.gatewayIp = gatewayIp
+        self.port = port
+    }
+}
 
 extension AppModel {
     /// True whenever either the primary desktop cast session or the lightweight background `.companion`
@@ -45,6 +78,19 @@ extension AppModel {
 
         companionManager.setExternalFrameRouter(controlRouter)
         fileBrowserClient.setFrameSender(controlRouter)
+        callBridge.setFrameSender(controlRouter)
+
+        finderMountManager.setOnStateChanged { [weak self] newState in
+            Task { @MainActor [weak self] in
+                self?.finderMountState = newState
+            }
+        }
+
+        callBridge.setOnStateChanged { [weak self] incomingState in
+            Task { @MainActor [weak self] in
+                self?.handleCallStateChanged(incomingState)
+            }
+        }
 
         notificationBridge.setCallbacks(NotificationBridgeManager.Callbacks(
             onNotificationsChanged: { [weak self] items in
@@ -67,6 +113,9 @@ extension AppModel {
                 Task { @MainActor [weak self] in
                     self?.showToast("已复制「\(item.displayAppLabel)」验证码：\(code)")
                 }
+            },
+            onInvokeAction: { [weak self] key, actionIndex in
+                _ = self?.sendNotificationActionOnActiveChannel(.invokeAction(key: key, actionIndex: actionIndex))
             }
         ))
 
@@ -172,6 +221,16 @@ extension AppModel {
         }
     }
 
+    @discardableResult
+    public nonisolated func sendCallActionOnActiveChannel(_ payload: CallActionPayload) -> Bool {
+        do {
+            return sendControlFrameOnActiveChannel(try OpalCastFrame.callAction(payload))
+        } catch {
+            OpalDeskLog.app.error("Failed to encode CALL_ACTION: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
     // MARK: - Preferences Synchronization
 
     public func applyCompanionPreferences() {
@@ -181,6 +240,9 @@ extension AppModel {
         notificationBridge.autoCopyOtpToClipboard = preferences.autoCopyOtpEnabled
         mediaBridge.isEnabled = preferences.mediaRemoteControlEnabled
         popoutManager.updateEdgeNavigationGestures(preferences.enableEdgeNavigationGestures)
+        discovery.setBleScanningEnabled(preferences.bleNearbyDiscoveryEnabled)
+
+        syncCallControlHud()
 
         if preferences.notificationsSyncEnabled && isAnyChannelConnected {
             notificationBridge.start()
@@ -192,6 +254,15 @@ extension AppModel {
             companionManager.disconnect()
         }
         updateClipboardSyncLifecycle()
+    }
+
+    public func setBleNearbyDiscoveryEnabled(_ enabled: Bool) {
+        discovery.setBleScanningEnabled(enabled)
+        if !enabled {
+            bleHotspotProbeTask?.cancel()
+            bleHotspotProbeTask = nil
+            bleHotspotBanner = nil
+        }
     }
 
     // MARK: - Explicit Companion Controls
@@ -220,6 +291,9 @@ extension AppModel {
         companionManager.setMainSessionActive(authenticated)
 
         if authenticated {
+            bleHotspotProbeTask?.cancel()
+            bleHotspotProbeTask = nil
+            bleHotspotBanner = nil
             ensureSharedBridgesStarted()
             if preferences.notificationsSyncEnabled {
                 _ = sendNotificationActionOnActiveChannel(.sync())
@@ -300,6 +374,18 @@ extension AppModel {
         showToast("已回复「\(item.displayAppLabel)」")
     }
 
+    public func invokeNotificationAction(_ item: RemoteNotificationItem, actionIndex: Int) {
+        let sent = notificationBridge.invokeAction(key: item.key, actionIndex: actionIndex)
+        if sent {
+            let label = item.actions.first(where: { $0.index == actionIndex })?.label ?? ""
+            if !label.isEmpty {
+                showToast("已触发通知操作「\(label)」")
+            }
+        } else {
+            showToast("未连接到 Android 设备，无法触发通知操作")
+        }
+    }
+
     public func clearAllRemoteNotifications() {
         _ = sendNotificationActionOnActiveChannel(.clearAll())
         notificationBridge.clearLocalState(removeDelivered: true)
@@ -307,6 +393,234 @@ extension AppModel {
 
     public func sendMediaAction(_ action: MediaActionPayload) {
         mediaBridge.sendAction(action)
+    }
+
+    // MARK: - Phone Call Control & Quick Dialer (`0x1E` / `0x35`)
+
+    public func sendCallAction(_ action: CallActionPayload) {
+        guard isAnyChannelConnected else {
+            showToast("未连接到 Android 设备，无法控制手机通话")
+            return
+        }
+        if !callBridge.sendAction(action) {
+            _ = sendCallActionOnActiveChannel(action)
+        }
+    }
+
+    public func dialPhoneNumber(_ number: String) {
+        let trimmed = number.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard isAnyChannelConnected else {
+            showToast("未连接到 Android 设备，无法发起快捷拨号")
+            return
+        }
+        sendCallAction(.dial(number: trimmed))
+        showToast("正在手机端拨打 \(trimmed)…")
+    }
+
+    func handleCallStateChanged(_ incoming: CallStatePayload) {
+        callState = incoming
+        syncCallControlHud()
+    }
+
+    private func syncCallControlHud() {
+        callHudCoordinator.update(
+            callState: callState,
+            enabled: preferences.callControlEnabled,
+            onAction: { [weak self] action in
+                self?.sendCallAction(action)
+            }
+        )
+    }
+
+    // MARK: - BLE Nearby Authenticated Hotspot Trigger & 20s Auto-Connect Probe
+
+    public func dismissBleHotspotBanner() {
+        bleHotspotProbeTask?.cancel()
+        bleHotspotProbeTask = nil
+        bleHotspotBanner = nil
+    }
+
+    public func triggerBleHotspot(for device: DiscoveredBleDevice) {
+        guard triggeringBleDeviceId == nil else { return }
+        bleHotspotProbeTask?.cancel()
+        bleHotspotProbeTask = nil
+
+        let deviceName = device.trustedDevice.deviceName
+        triggeringBleDeviceId = device.id
+        bleHotspotBanner = BleHotspotBannerState(
+            kind: .loading,
+            title: "正在通过蓝牙唤起「\(deviceName)」个人热点…",
+            message: "正在执行安全挑战签名并等待手机端响应。"
+        )
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.triggeringBleDeviceId == device.id {
+                    self.triggeringBleDeviceId = nil
+                }
+            }
+
+            do {
+                let response = try await self.discovery.bleScanner.triggerHotspot(
+                    for: device,
+                    clientId: self.discovery.trustStore.clientId
+                )
+                self.handleBleHotspotResponse(response, for: device)
+            } catch {
+                OpalDeskLog.app.warning("BLE hotspot trigger failed for \(deviceName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                let msg = error.localizedDescription
+                self.bleHotspotBanner = BleHotspotBannerState(
+                    kind: .error,
+                    title: "蓝牙开启热点失败",
+                    message: msg
+                )
+                self.showToast(msg)
+            }
+        }
+    }
+
+    private func handleBleHotspotResponse(_ response: HotspotCommandResponse, for device: DiscoveredBleDevice) {
+        let deviceName = device.trustedDevice.deviceName
+        let ssid = response.ssid.trimmingCharacters(in: .whitespacesAndNewlines)
+        let gatewayIp = response.gatewayIp.trimmingCharacters(in: .whitespacesAndNewlines)
+        let port: UInt16 = response.port > 0
+            ? response.port
+            : (device.wifiPort > 0 ? device.wifiPort : OpalCastProtocol.defaultWifiPort)
+        let detailMsg = response.message.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch response.status {
+        case .started, .alreadyActive:
+            let title = response.status == .alreadyActive
+                ? "「\(deviceName)」个人热点已开启"
+                : "已为「\(deviceName)」开启个人热点"
+            var parts: [String] = []
+            if !ssid.isEmpty {
+                parts.append("热点名称：\(ssid)")
+            }
+            if !gatewayIp.isEmpty {
+                parts.append("服务地址：\(gatewayIp):\(port)")
+            }
+            parts.append("请在 Mac 顶部 Wi-Fi 菜单连入该热点，OpalDesk 正在 20 秒内自动探测并连接。")
+            let message = parts.joined(separator: " · ")
+
+            bleHotspotBanner = BleHotspotBannerState(
+                kind: .success,
+                title: title,
+                message: message,
+                ssid: ssid.isEmpty ? nil : ssid,
+                gatewayIp: gatewayIp.isEmpty ? nil : gatewayIp,
+                port: port
+            )
+            showToast(ssid.isEmpty ? title : "\(title)：\(ssid)", durationSeconds: 5.0)
+            if !gatewayIp.isEmpty {
+                startHotspotAutoConnectProbe(device: device, gatewayIp: gatewayIp, port: port, ssid: ssid)
+            }
+
+        case .needsUserToggle:
+            let base = "手机 ROM 限制后台自动开热点，已尝试在手机端唤起热点开关，请在手机确认开启后连入热点。"
+            let fullMessage = detailMsg.isEmpty ? base : "\(base)（\(detailMsg)）"
+            bleHotspotBanner = BleHotspotBannerState(
+                kind: .warning,
+                title: "需要在手机端确认开启热点",
+                message: fullMessage,
+                ssid: ssid.isEmpty ? nil : ssid,
+                gatewayIp: gatewayIp.isEmpty ? nil : gatewayIp,
+                port: port
+            )
+            showToast("请在手机端确认开启个人热点", durationSeconds: 5.0)
+            if !gatewayIp.isEmpty {
+                startHotspotAutoConnectProbe(device: device, gatewayIp: gatewayIp, port: port, ssid: ssid)
+            }
+
+        case .unauthorized:
+            let msg = detailMsg.isEmpty
+                ? "手机端拒绝了蓝牙热点鉴权，信任凭证可能已失效，请重新完成一次无线配对。"
+                : detailMsg
+            bleHotspotBanner = BleHotspotBannerState(
+                kind: .error,
+                title: "蓝牙鉴权未通过",
+                message: msg
+            )
+            showToast(msg)
+
+        case .error:
+            let msg = detailMsg.isEmpty
+                ? "手机端无法启动个人热点，请在手机设置中手动开启热点。"
+                : detailMsg
+            bleHotspotBanner = BleHotspotBannerState(
+                kind: .error,
+                title: "手机端热点启动失败",
+                message: msg
+            )
+            showToast(msg)
+        }
+    }
+
+    private func startHotspotAutoConnectProbe(
+        device: DiscoveredBleDevice,
+        gatewayIp: String,
+        port: UInt16,
+        ssid: String
+    ) {
+        bleHotspotProbeTask?.cancel()
+        let trusted = device.trustedDevice
+        let deadline = Date().addingTimeInterval(20.0)
+
+        bleHotspotProbeTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled && Date() < deadline {
+                if self.isAnyChannelConnected {
+                    self.bleHotspotBanner = nil
+                    return
+                }
+                do {
+                    let probedFp = try await OpalCastSession.probeCertificateFingerprint(host: gatewayIp, port: port)
+                    guard !Task.isCancelled else { return }
+                    if FingerprintUtil.matches(actualFullHex: trusted.certFingerprint, expected: probedFp) {
+                        _ = self.discovery.upsertTrustedDevice(
+                            deviceName: trusted.deviceName,
+                            model: trusted.model,
+                            certFingerprint: trusted.certFingerprint,
+                            authToken: trusted.authToken,
+                            lastHost: gatewayIp,
+                            lastPort: port
+                        )
+                        let endpoint = OpalCastEndpoint(
+                            target: .hostPort(host: gatewayIp, port: port),
+                            security: .tlsPinned(expectedFingerprint: trusted.certFingerprint),
+                            autoReconnect: true
+                        )
+                        self.companionManager.connect(to: trusted, endpoint: endpoint)
+                        self.bleHotspotBanner = BleHotspotBannerState(
+                            kind: .success,
+                            title: "已检测到热点并自动连接「\(trusted.deviceName)」",
+                            message: "正在通过 \(gatewayIp):\(port) 建立伴侣通道，您也可直接进入大屏桌面。",
+                            ssid: ssid.isEmpty ? nil : ssid,
+                            gatewayIp: gatewayIp,
+                            port: port
+                        )
+                        self.showToast("已自动连入「\(trusted.deviceName)」热点")
+                        return
+                    }
+                } catch {
+                    // Expected while Mac has not yet joined the phone hotspot Wi-Fi.
+                }
+                guard await sleepCancellable(nanoseconds: 1_500_000_000) else { return }
+            }
+
+            guard !Task.isCancelled, !self.isAnyChannelConnected else { return }
+            let ssidHint = ssid.isEmpty ? "手机个人热点" : "热点「\(ssid)」"
+            self.bleHotspotBanner = BleHotspotBannerState(
+                kind: .info,
+                title: "等待 Mac 连入\(ssidHint)",
+                message: "20 秒自动探测已结束。请在 Mac Wi-Fi 菜单连入\(ssidHint)，设备将自动出现在附近无线设备列表中。",
+                ssid: ssid.isEmpty ? nil : ssid,
+                gatewayIp: gatewayIp,
+                port: port
+            )
+        }
     }
 
     /// Launches the Android phone's current Display 0 foreground app inside a standalone macOS floating popout window.
@@ -417,6 +731,9 @@ extension AppModel {
         switch newState {
         case .connected(let deviceName):
             OpalDeskLog.info("companion", "Background companion connected to \(deviceName)")
+            bleHotspotProbeTask?.cancel()
+            bleHotspotProbeTask = nil
+            bleHotspotBanner = nil
             ensureSharedBridgesStarted()
             _ = companionManager.requestAppList()
             updateClipboardSyncLifecycle()
@@ -445,10 +762,14 @@ extension AppModel {
         fileBrowserClient.handleSessionDisconnected(reason: reason)
         notificationBridge.clearLocalState(removeDelivered: true)
         mediaBridge.stop()
+        callBridge.handleSessionDisconnected()
+        callState = .idle
+        callHudCoordinator.hide()
         remoteNotifications = []
         mediaState = nil
         hostTopApp = HostTopAppState()
         cachedCompanionApps = []
         cancelPendingFileTransferWaiters(reason: reason)
+        Task { await self.unmountFinderIfNeeded(showToastOnSuccess: false) }
     }
 }

@@ -4,7 +4,7 @@ import Observation
 import os
 
 /// Coordinates USB/wireless ADB device polling, Bonjour (`_opaldesk._tcp`) LAN discovery,
-/// and persistent `TrustStore` records with honest error logging and surfacing.
+/// BLE nearby discovery for trusted hosts, and persistent `TrustStore` records with honest error surfacing.
 @MainActor
 @Observable
 public final class DiscoveryCoordinator {
@@ -14,6 +14,7 @@ public final class DiscoveryCoordinator {
     public let trustStore: TrustStore
     public let adbManager: AdbManager
     public let bonjourBrowser: BonjourBrowser
+    public let bleScanner: BleNearbyScanner
 
     public private(set) var usbDevices: [AdbDevice] = []
     public private(set) var isScanningUSB: Bool = false
@@ -22,9 +23,15 @@ public final class DiscoveryCoordinator {
     public private(set) var usbTetherDevices: [DiscoveredUsbTetherDevice] = []
     public private(set) var isScanningUsbTether: Bool = false
     public private(set) var trustedDevices: [TrustedDevice] = []
+    /// Trusted BLE-nearby devices filtered to exclude hosts already reachable on LAN Bonjour, USB ADB, or USB Tether.
+    public private(set) var bleNearbyDevices: [DiscoveredBleDevice] = []
+    public private(set) var bleAuthState: BleAuthorizationState = .unknown
 
     @ObservationIgnored
     private var usbPollTask: Task<Void, Never>?
+
+    @ObservationIgnored
+    private var rawBleDevices: [DiscoveredBleDevice] = []
 
     @ObservationIgnored
     public var onBonjourDevicesChanged: (@MainActor ([DiscoveredBonjourDevice]) -> Void)?
@@ -35,26 +42,47 @@ public final class DiscoveryCoordinator {
     public init(customAdbPath: String) {
         let store = TrustStore()
         let adb = AdbManager(customAdbPath: customAdbPath)
+        let scanner = BleNearbyScanner(trustStore: store)
         self.trustStore = store
         self.adbManager = adb
         self.bonjourBrowser = BonjourBrowser()
+        self.bleScanner = scanner
         self.trustedDevices = store.allDevices()
         self.adbBinaryPath = adb.locateAdb()
+        self.bleAuthState = scanner.authorizationState
     }
 
     public func start(
         customAdbPath: @escaping @MainActor () -> String,
         isCanvasActive: @escaping @MainActor () -> Bool,
-        isUsbTetherEnabled: @escaping @MainActor () -> Bool = { false }
+        isUsbTetherEnabled: @escaping @MainActor () -> Bool = { false },
+        isBleEnabled: @escaping @MainActor () -> Bool = { true }
     ) {
         refreshAdbPath(customPath: customAdbPath())
         bonjourBrowser.start { [weak self] devices in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.bonjourDevices = devices
+                self.recomputeFilteredBleDevices()
                 self.onBonjourDevicesChanged?(devices)
             }
         }
+        bleScanner.setOnDevicesChanged { [weak self] devices in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.rawBleDevices = devices
+                self.recomputeFilteredBleDevices()
+            }
+        }
+        bleScanner.setOnAuthorizationChanged { [weak self] authState in
+            Task { @MainActor [weak self] in
+                self?.bleAuthState = authState
+            }
+        }
+        if isBleEnabled() {
+            bleScanner.startScanning()
+        }
+
         usbPollTask?.cancel()
         usbPollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -67,6 +95,7 @@ public final class DiscoveryCoordinator {
                         await self.refreshUsbTetherDevices(enabled: true)
                     } else if !self.usbTetherDevices.isEmpty {
                         self.usbTetherDevices = []
+                        self.recomputeFilteredBleDevices()
                     }
                 }
                 let sleepNs = canvasActive ? Self.activeCanvasPollIntervalNs : Self.idlePollIntervalNs
@@ -79,6 +108,17 @@ public final class DiscoveryCoordinator {
         usbPollTask?.cancel()
         usbPollTask = nil
         bonjourBrowser.stop()
+        bleScanner.stopScanning()
+    }
+
+    public func setBleScanningEnabled(_ enabled: Bool) {
+        if enabled {
+            bleScanner.startScanning()
+        } else {
+            bleScanner.stopScanning()
+            rawBleDevices = []
+            bleNearbyDevices = []
+        }
     }
 
     public func refreshAdbPath(customPath: String) {
@@ -90,6 +130,7 @@ public final class DiscoveryCoordinator {
         refreshAdbPath(customPath: customPath)
         guard adbBinaryPath != nil else {
             usbDevices = []
+            recomputeFilteredBleDevices()
             return
         }
         isScanningUSB = true
@@ -100,10 +141,12 @@ public final class DiscoveryCoordinator {
             OpalDeskLog.adb.warning("Failed to scan ADB devices: \(error.localizedDescription, privacy: .public)")
             usbDevices = []
         }
+        recomputeFilteredBleDevices()
     }
 
     public func refreshTrustedDevices() {
         trustedDevices = trustStore.allDevices()
+        recomputeFilteredBleDevices()
         onTrustedDevicesChanged?(trustedDevices)
     }
 
@@ -111,12 +154,57 @@ public final class DiscoveryCoordinator {
         guard enabled else {
             usbTetherDevices = []
             isScanningUsbTether = false
+            recomputeFilteredBleDevices()
             return
         }
         guard !isScanningUsbTether else { return }
         isScanningUsbTether = true
         defer { isScanningUsbTether = false }
         usbTetherDevices = await UsbTetherScanner.scan()
+        recomputeFilteredBleDevices()
+    }
+
+    private func recomputeFilteredBleDevices() {
+        bleNearbyDevices = rawBleDevices.filter { bleDevice in
+            let fp = bleDevice.trustedDevice.certFingerprint
+            let stillTrusted = trustedDevices.contains { trusted in
+                !trusted.authToken.isEmpty && FingerprintUtil.matches(actualFullHex: trusted.certFingerprint, expected: fp)
+            }
+            guard stillTrusted else { return false }
+
+            let visibleOnBonjour = bonjourDevices.contains { bonjour in
+                if !bonjour.fingerprintPrefix.isEmpty,
+                   FingerprintUtil.matches(actualFullHex: fp, expected: bonjour.fingerprintPrefix)
+                {
+                    return true
+                }
+                return !bonjour.displayName.isEmpty
+                    && bonjour.displayName.caseInsensitiveCompare(bleDevice.trustedDevice.deviceName) == .orderedSame
+            }
+            if visibleOnBonjour { return false }
+
+            let visibleOnUsb = usbDevices.contains { usb in
+                guard usb.isReady else { return false }
+                if !usb.displayName.isEmpty,
+                   usb.displayName.caseInsensitiveCompare(bleDevice.trustedDevice.deviceName) == .orderedSame
+                {
+                    return true
+                }
+                if !usb.model.isEmpty && !bleDevice.trustedDevice.model.isEmpty,
+                   usb.model.caseInsensitiveCompare(bleDevice.trustedDevice.model) == .orderedSame
+                {
+                    return true
+                }
+                return false
+            }
+            if visibleOnUsb { return false }
+
+            let visibleOnTether = usbTetherDevices.contains { tether in
+                !tether.certFingerprint.isEmpty
+                    && FingerprintUtil.matches(actualFullHex: fp, expected: tether.certFingerprint)
+            }
+            return !visibleOnTether
+        }
     }
 
     public func isTrusted(_ device: DiscoveredUsbTetherDevice) -> Bool {

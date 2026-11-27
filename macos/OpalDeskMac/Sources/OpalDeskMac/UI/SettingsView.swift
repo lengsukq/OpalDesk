@@ -25,7 +25,7 @@ public struct SettingsView: View {
             trustedDevicesTab
                 .tabItem { Label("已信任设备", systemImage: "lock.shield") }
         }
-        .frame(width: 620, height: 500)
+        .frame(width: 620, height: 560)
     }
 
     // MARK: - Tab 1: Stream & High-FPS
@@ -135,6 +135,27 @@ public struct SettingsView: View {
             Section("媒体播控联动") {
                 Toggle("同步手机媒体播放信息至 macOS 播放中心（支持硬件媒体键控制）", isOn: $prefs.mediaRemoteControlEnabled)
                     .onChange(of: prefs.mediaRemoteControlEnabled) { _, _ in model.applyCompanionPreferences() }
+            }
+
+            Section("手机来电控制与快捷拨号") {
+                Toggle("在 Mac 显示手机来电浮窗与快捷接听/拨号", isOn: $prefs.callControlEnabled)
+                    .onChange(of: prefs.callControlEnabled) { _, _ in model.applyCompanionPreferences() }
+                Text("手机来电或通话时在屏幕右上角自动弹出免抢焦点浮窗，支持接听、拒接、快捷短信拒接、静音、免提与挂断。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("蓝牙近场发现与一键开热点") {
+                Toggle("启用蓝牙近场发现与一键拉起手机热点", isOn: $prefs.bleNearbyDiscoveryEnabled)
+                    .onChange(of: prefs.bleNearbyDiscoveryEnabled) { _, enabled in
+                        model.setBleNearbyDiscoveryEnabled(enabled)
+                    }
+                HStack(spacing: 6) {
+                    Image(systemName: bleAuthIconName(for: model.discovery.bleAuthState))
+                        .foregroundStyle(bleAuthTint(for: model.discovery.bleAuthState))
+                    Text(bleAuthDescription(for: model.discovery.bleAuthState))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("触控板边缘导航手势与双指旋转") {
@@ -295,6 +316,40 @@ public struct SettingsView: View {
         case 90: return "90 fps（流畅高刷）"
         case 120: return "120 fps（ProMotion 极速）"
         default: return "\(fps) fps"
+        }
+    }
+
+    private func bleAuthIconName(for state: BleAuthorizationState) -> String {
+        switch state {
+        case .ready: return "checkmark.circle.fill"
+        case .poweredOff: return "bolt.slash.circle.fill"
+        case .unauthorized: return "hand.raised.circle.fill"
+        case .unsupported: return "xmark.circle.fill"
+        case .unknown: return "info.circle"
+        }
+    }
+
+    private func bleAuthTint(for state: BleAuthorizationState) -> Color {
+        switch state {
+        case .ready: return .green
+        case .poweredOff, .unauthorized: return .orange
+        case .unsupported: return .red
+        case .unknown: return .secondary
+        }
+    }
+
+    private func bleAuthDescription(for state: BleAuthorizationState) -> String {
+        switch state {
+        case .ready:
+            return "蓝牙权限已就绪，正在低功耗扫描附近已信任的 Android 手机。"
+        case .poweredOff:
+            return "当前 Mac 蓝牙处于关闭状态，开启蓝牙后即可使用近场发现与一键开热点。"
+        case .unauthorized:
+            return "尚未获得蓝牙权限，请前往「系统设置 → 隐私与安全性 → 蓝牙」允许 OpalDesk。"
+        case .unsupported:
+            return "当前 Mac 硬件不支持低功耗蓝牙 (BLE)。"
+        case .unknown:
+            return "正在检测蓝牙权限与硬件状态…"
         }
     }
 

@@ -656,3 +656,199 @@ struct OpalMediaPlayerCard: View {
         }
     }
 }
+
+/// Shared live phone call banner rendered in both `DeviceHubView` and `MenuBarView` when a call is active.
+struct OpalCallBannerCard: View {
+    let callState: CallStatePayload
+    var isCompact: Bool = false
+    let onAction: (CallActionPayload) -> Void
+
+    private var tint: Color {
+        callState.state == .dialing ? .accentColor : .green
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
+            HStack(spacing: isCompact ? OpalSpacing.sm : OpalSpacing.md) {
+                OpalIconBadge(
+                    systemName: callState.state == .ringing ? "phone.arrow.down.left.fill" : "phone.fill",
+                    tint: tint,
+                    size: isCompact ? 30 : 36,
+                    iconSize: isCompact ? 13 : 16,
+                    cornerRadius: isCompact ? 9 : 11
+                )
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(callState.displayCaller)
+                        .font((isCompact ? Font.caption : Font.subheadline).weight(.semibold))
+                        .lineLimit(1)
+                    Text(CallHudFormatting.statusSubtitle(for: callState, now: timeline.date))
+                        .font(isCompact ? .caption2.monospacedDigit() : .caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: OpalSpacing.xs)
+
+                callActionButtons
+            }
+            .padding(.horizontal, isCompact ? 10 : OpalSpacing.md)
+            .padding(.vertical, isCompact ? 8 : 10)
+            .opalGlassSurface(.inset, cornerRadius: isCompact ? OpalRadius.tile : OpalRadius.card, tint: tint)
+        }
+    }
+
+    @ViewBuilder
+    private var callActionButtons: some View {
+        switch callState.state {
+        case .ringing:
+            HStack(spacing: isCompact ? 4 : 6) {
+                if callState.canAnswer {
+                    Button {
+                        onAction(.answer())
+                    } label: {
+                        Image(systemName: "phone.fill")
+                            .font(.system(size: isCompact ? 10.5 : 12, weight: .semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .controlSize(isCompact ? .mini : .small)
+                    .help("接听来电")
+                }
+                if callState.canReject {
+                    Button {
+                        onAction(.reject())
+                    } label: {
+                        Image(systemName: "phone.down.fill")
+                            .font(.system(size: isCompact ? 10.5 : 12, weight: .semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .controlSize(isCompact ? .mini : .small)
+                    .help("拒接来电")
+                }
+            }
+        case .offhook, .dialing:
+            HStack(spacing: isCompact ? 4 : 6) {
+                OpalGlassIconButton(
+                    systemName: callState.isMuted ? "mic.slash.fill" : "mic.fill",
+                    tint: callState.isMuted ? .orange : .secondary,
+                    isActive: callState.isMuted,
+                    size: isCompact ? 24 : 28,
+                    iconSize: isCompact ? 10.5 : 12,
+                    helpText: callState.isMuted ? "取消静音" : "静音"
+                ) {
+                    onAction(.toggleMute())
+                }
+
+                OpalGlassIconButton(
+                    systemName: callState.isSpeakerOn ? "speaker.wave.3.fill" : "speaker.wave.2",
+                    tint: callState.isSpeakerOn ? .accentColor : .secondary,
+                    isActive: callState.isSpeakerOn,
+                    size: isCompact ? 24 : 28,
+                    iconSize: isCompact ? 10.5 : 12,
+                    helpText: callState.isSpeakerOn ? "关闭免提" : "开启免提"
+                ) {
+                    onAction(.toggleSpeaker())
+                }
+
+                Button {
+                    onAction(.hangup())
+                } label: {
+                    Image(systemName: "phone.down.fill")
+                        .font(.system(size: isCompact ? 10.5 : 12, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(isCompact ? .mini : .small)
+                .help("挂断通话")
+            }
+        case .idle:
+            EmptyView()
+        }
+    }
+}
+
+/// Shared Quick Dialer popover body used in both `DeviceHubSections` and `MenuBarView`.
+struct OpalQuickDialPopoverView: View {
+    let deviceName: String
+    let onDial: (String) -> Void
+
+    @State private var phoneNumber: String = ""
+
+    private let dialKeys: [[String]] = [
+        ["1", "2", "3"],
+        ["4", "5", "6"],
+        ["7", "8", "9"],
+        ["*", "0", "#"],
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: OpalSpacing.md) {
+            HStack(spacing: OpalSpacing.xs) {
+                Image(systemName: "phone.badge.waveform.fill")
+                    .foregroundStyle(.green)
+                Text("通过「\(deviceName)」快捷拨号")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+            }
+
+            HStack(spacing: OpalSpacing.xs) {
+                TextField("输入电话号码…", text: $phoneNumber)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.body.monospaced())
+                    .onSubmit { triggerDial() }
+
+                if !phoneNumber.isEmpty {
+                    OpalGlassIconButton(
+                        systemName: "delete.left",
+                        tint: .secondary,
+                        size: 24,
+                        iconSize: 12,
+                        helpText: "退格"
+                    ) {
+                        phoneNumber.removeLast()
+                    }
+                }
+            }
+
+            VStack(spacing: OpalSpacing.xs) {
+                ForEach(dialKeys, id: \.self) { row in
+                    HStack(spacing: OpalSpacing.xs) {
+                        ForEach(row, id: \.self) { key in
+                            Button {
+                                phoneNumber.append(key)
+                            } label: {
+                                Text(key)
+                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .frame(maxWidth: .infinity, minHeight: 28)
+                                    .opalGlassSurface(.inset, cornerRadius: OpalRadius.control)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+
+            Button {
+                triggerDial()
+            } label: {
+                Label("立即在手机端拨打", systemImage: "phone.fill")
+                    .font(.callout.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
+            .disabled(phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(OpalSpacing.md)
+        .frame(width: 244)
+    }
+
+    private func triggerDial() {
+        let trimmed = phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        onDial(trimmed)
+        phoneNumber = ""
+    }
+}

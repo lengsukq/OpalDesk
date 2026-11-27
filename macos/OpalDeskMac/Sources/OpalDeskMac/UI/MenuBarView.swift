@@ -18,18 +18,27 @@ public struct MenuBarView: View {
 
     @State private var replyingNotificationKey: String?
     @State private var replyDraftText: String = ""
+    @State private var isQuickDialPopoverShown: Bool = false
 
     public init(model: AppModel) {
         self.model = model
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: OpalSpacing.md) {
+        let favoriteApps = model.favoriteAppItems()
+
+        return VStack(alignment: .leading, spacing: OpalSpacing.md) {
             if let conn = model.activeConnection {
                 connectedHeaderCard(conn)
                 quickControlsGrid
             } else {
                 disconnectedStatusAndDevicesCard
+            }
+
+            if model.callState.isActive {
+                OpalCallBannerCard(callState: model.callState, isCompact: true) { action in
+                    model.sendCallAction(action)
+                }
             }
 
             if !model.hostTopApp.isEmpty {
@@ -50,6 +59,10 @@ public struct MenuBarView: View {
 
             if !model.remoteNotifications.isEmpty {
                 notificationsCard
+            }
+
+            if !favoriteApps.isEmpty {
+                favoriteAppsCard(favoriteApps)
             }
 
             if !model.popoutManager.controllers.isEmpty {
@@ -208,6 +221,7 @@ public struct MenuBarView: View {
     private var disconnectedStatusAndDevicesCard: some View {
         let usbDevices = model.discovery.usbDevices
         let bonjourDevices = model.discovery.bonjourDevices
+        let bleDevices = model.discovery.bleNearbyDevices
 
         return VStack(alignment: .leading, spacing: OpalSpacing.sm) {
             if case let .connected(deviceName) = model.companionState {
@@ -287,9 +301,66 @@ public struct MenuBarView: View {
                     }
                 }
             }
+
+            if !bleDevices.isEmpty {
+                Divider()
+                Text("蓝牙近场设备（一键开热点）")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+
+                ForEach(bleDevices) { device in
+                    let isTriggering = model.triggeringBleDeviceId == device.id
+                    HStack(spacing: OpalSpacing.sm) {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.blue)
+                            .frame(width: 20)
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(device.trustedDevice.deviceName)
+                                .font(.system(size: 12.5, weight: .medium))
+                                .lineLimit(1)
+                            Text(bleCompactSubtitle(for: device))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 4)
+
+                        Button {
+                            openMainWindow()
+                            model.triggerBleHotspot(for: device)
+                        } label: {
+                            if isTriggering {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Text(device.isHotspotActive ? "连接热点" : "开热点")
+                                    .font(.caption2.weight(.semibold))
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.mini)
+                        .disabled(model.triggeringBleDeviceId != nil)
+                    }
+                    .padding(.horizontal, OpalSpacing.sm)
+                    .padding(.vertical, 5)
+                    .opalGlassSurface(.inset, cornerRadius: OpalRadius.control)
+                }
+            }
         }
         .padding(OpalSpacing.md)
         .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
+    }
+
+    private func bleCompactSubtitle(for device: DiscoveredBleDevice) -> String {
+        var parts: [String] = []
+        if let battery = device.batteryPercent {
+            parts.append("电量 \(battery)%")
+        }
+        parts.append(device.isHotspotActive ? "热点已开启" : "附近可唤醒热点")
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - Synced Phone Notifications Card
@@ -368,38 +439,51 @@ public struct MenuBarView: View {
                 }
             }
 
-            if !item.otpCode.isEmpty || item.canReply {
-                HStack(spacing: OpalSpacing.xs) {
-                    if !item.otpCode.isEmpty {
-                        Button {
-                            model.copyNotificationOtp(item)
-                        } label: {
-                            Label("复制 \(item.otpCode)", systemImage: "doc.on.doc")
-                                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
-                        .controlSize(.mini)
-                    }
-
-                    if item.canReply {
-                        Button {
-                            if replyingNotificationKey == item.key {
-                                replyingNotificationKey = nil
-                                replyDraftText = ""
-                            } else {
-                                replyingNotificationKey = item.key
-                                replyDraftText = ""
+            let validActions = item.actions.filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            if !item.otpCode.isEmpty || item.canReply || !validActions.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: OpalSpacing.xs) {
+                        if !item.otpCode.isEmpty {
+                            Button {
+                                model.copyNotificationOtp(item)
+                            } label: {
+                                Label("复制 \(item.otpCode)", systemImage: "doc.on.doc")
+                                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                             }
-                        } label: {
-                            Label(item.replyLabel.isEmpty ? "回复" : item.replyLabel, systemImage: "arrowshape.turn.up.left")
-                                .font(.caption2)
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
+                            .controlSize(.mini)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                    }
 
-                    Spacer(minLength: 0)
+                        if item.canReply {
+                            Button {
+                                if replyingNotificationKey == item.key {
+                                    replyingNotificationKey = nil
+                                    replyDraftText = ""
+                                } else {
+                                    replyingNotificationKey = item.key
+                                    replyDraftText = ""
+                                }
+                            } label: {
+                                Label(item.replyLabel.isEmpty ? "回复" : item.replyLabel, systemImage: "arrowshape.turn.up.left")
+                                    .font(.caption2)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                        }
+
+                        ForEach(validActions) { action in
+                            Button {
+                                model.invokeNotificationAction(item, actionIndex: action.index)
+                            } label: {
+                                Text(action.label)
+                                    .font(.caption2.weight(.medium))
+                                    .lineLimit(1)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                        }
+                    }
                 }
             }
 
@@ -431,7 +515,57 @@ public struct MenuBarView: View {
         replyDraftText = ""
     }
 
-    // MARK: - Active / Recent Popouts, Quick Tools & Footer
+    // MARK: - Pinned Favorite Apps, Active / Recent Popouts, Quick Tools & Footer
+
+    private func favoriteAppsCard(_ favorites: [FavoritePopoutAppItem]) -> some View {
+        VStack(alignment: .leading, spacing: OpalSpacing.xs) {
+            Label("常用置顶小窗", systemImage: "star.fill")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 6)
+
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: OpalSpacing.xs), GridItem(.flexible(), spacing: OpalSpacing.xs)],
+                spacing: OpalSpacing.xs
+            ) {
+                ForEach(favorites.prefix(6)) { fav in
+                    let isOpen = model.isPopoutActive(pkg: fav.pkg)
+                    Button {
+                        model.openAppPopoutForRemotePackage(
+                            packageName: fav.pkg,
+                            activityClass: fav.cls,
+                            appLabel: fav.label,
+                            preferredDeviceKey: fav.deviceKey.isEmpty ? nil : fav.deviceKey,
+                            preferredDeviceName: fav.deviceName.isEmpty ? nil : fav.deviceName
+                        )
+                    } label: {
+                        HStack(spacing: OpalSpacing.xs) {
+                            OpalAppMonogram(
+                                label: fav.label,
+                                packageKey: fav.pkg,
+                                size: 22,
+                                cornerRadius: 6,
+                                showActiveIndicator: isOpen
+                            )
+                            Text(fav.label)
+                                .font(.system(size: 11.5, weight: .medium))
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                        .opalGlassSurface(.inset, cornerRadius: OpalRadius.control, tint: isOpen ? .green : nil)
+                        .opalInteractiveHover(cornerRadius: OpalRadius.control, tint: isOpen ? .green : .orange)
+                    }
+                    .buttonStyle(.plain)
+                    .help("一键弹出「\(fav.label)」独立小窗")
+                }
+            }
+        }
+        .padding(OpalSpacing.sm)
+        .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
+    }
 
     private var activePopoutsCard: some View {
         VStack(alignment: .leading, spacing: OpalSpacing.xs) {
@@ -497,6 +631,22 @@ public struct MenuBarView: View {
 
     private var quickToolsCard: some View {
         VStack(alignment: .leading, spacing: 2) {
+            if model.isAnyChannelConnected {
+                OpalMenuActionRow(
+                    title: "快捷拨号（手机呼出）…",
+                    systemImage: "phone.badge.waveform.fill",
+                    tint: .green
+                ) {
+                    isQuickDialPopoverShown.toggle()
+                }
+                .popover(isPresented: $isQuickDialPopoverShown, arrowEdge: .leading) {
+                    OpalQuickDialPopoverView(deviceName: model.activeChannelDeviceName) { number in
+                        isQuickDialPopoverShown = false
+                        model.dialPhoneNumber(number)
+                    }
+                }
+            }
+
             OpalMenuActionRow(title: "手机文件与存储", systemImage: "folder", tint: .accentColor) {
                 openWindow(id: WindowID.fileBrowser)
                 NSApp.activate(ignoringOtherApps: true)

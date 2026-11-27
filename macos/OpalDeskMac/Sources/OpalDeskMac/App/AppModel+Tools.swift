@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import OpalDeskCore
 import UniformTypeIdentifiers
@@ -10,6 +11,8 @@ extension AppModel {
     private enum ToolsTuning {
         static let urlDedupWindowSeconds: TimeInterval = 0.45
         static let maxThumbnailCacheEntries: Int = 240
+        static let maxQuickLookCacheBytes: Int64 = 256 * 1024 * 1024
+        static let maxQuickLookCacheEntries: Int = 64
     }
 
     // MARK: - Formatting Helpers
@@ -519,6 +522,7 @@ extension AppModel {
     private func uploadFileAwaitingAck(
         url: URL,
         remoteFileNameOverride: String,
+        trackAsApkUpload: Bool = true,
         onProgress: @escaping @MainActor (FileTransferProgress) -> Void
     ) async throws -> String {
         let startedTransferIdLock = OSAllocatedUnfairLock<UInt32?>(initialState: nil)
@@ -539,7 +543,9 @@ extension AppModel {
                         }
                     )
                     startedTransferIdLock.withLock { $0 = transferId }
-                    activeApkUploadTransferId = transferId
+                    if trackAsApkUpload {
+                        activeApkUploadTransferId = transferId
+                    }
                     pendingFileTransferAckWaiters[transferId] = continuation
                     pendingFileTransferProgressHandlers[transferId] = onProgress
                 } catch {
@@ -550,7 +556,7 @@ extension AppModel {
             let capturedId = startedTransferIdLock.withLock { $0 }
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let tid = capturedId ?? self.activeApkUploadTransferId
+                let tid = capturedId ?? (trackAsApkUpload ? self.activeApkUploadTransferId : nil)
                 if let tid {
                     self.cancelFileTransfer(tid)
                 }
@@ -690,8 +696,243 @@ extension AppModel {
             },
             onClearCompletedTransfers: { [weak self] in
                 self?.clearCompletedFileBrowserTransfers()
+            },
+            onToggleFinderMount: { [weak self] in
+                self?.toggleFinderMount()
+            },
+            onOpenFinderMount: { [weak self] in
+                self?.openMountedFinderVolume()
+            },
+            onUnmountFinder: { [weak self] in
+                guard let self else { return }
+                Task { await self.unmountFinderIfNeeded(showToastOnSuccess: true) }
+            },
+            onQuickLookItem: { [weak self] item in
+                self?.previewRemoteItemWithQuickLook(item)
+            },
+            onPullFileForDrag: { [fileBrowserClient] remotePath, destinationURL in
+                try await fileBrowserClient.pullFile(remotePath: remotePath, toLocalURL: destinationURL)
             }
         )
+    }
+
+    // MARK: - Native Finder WebDAV Volume Mount
+
+    public func toggleFinderMount() {
+        if finderMountState.isMounted {
+            Task { await unmountFinderIfNeeded(showToastOnSuccess: true) }
+            return
+        }
+        guard finderMountState != .mounting else { return }
+        guard isAnyChannelConnected else {
+            let msg = "尚未连接到 Android 设备，无法挂载到访达"
+            fileBrowserError = msg
+            showToast(msg)
+            return
+        }
+
+        let targetDeviceName = activeChannelDeviceName
+        let browserClient = fileBrowserClient
+        let backend = CompanionRemoteFileSystemBackend(browserClient: browserClient) { [weak self] localURL, toRemoteDirectory, remoteFileName in
+            guard let self else { throw RemoteFileSystemError.ioError("应用会话已关闭") }
+            guard let remotePath = FileBrowserPresentation.joining(base: toRemoteDirectory, name: remoteFileName) else {
+                throw RemoteFileSystemError.invalidPath("\(toRemoteDirectory)/\(remoteFileName)")
+            }
+            _ = try await self.uploadFileAwaitingAck(
+                url: localURL,
+                remoteFileNameOverride: remotePath,
+                trackAsApkUpload: false,
+                onProgress: { _ in }
+            )
+        }
+
+        finderMountTask?.cancel()
+        finderMountTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let mountPoint = try await self.finderMountManager.mount(
+                    deviceName: targetDeviceName,
+                    backend: backend,
+                    rootPath: "/sdcard"
+                )
+                guard !Task.isCancelled else { return }
+                self.finderMountState = self.finderMountManager.currentState
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: mountPoint.path)
+                self.showToast(
+                    "已在访达中挂载「\(targetDeviceName)」",
+                    durationSeconds: 5.0,
+                    actionTitle: "打开访达",
+                    revealURL: mountPoint
+                )
+            } catch is CancellationError {
+                self.finderMountState = self.finderMountManager.currentState
+            } catch {
+                OpalDeskLog.file.error("Finder WebDAV mount failed: \(error.localizedDescription, privacy: .public)")
+                self.finderMountState = self.finderMountManager.currentState
+                self.fileBrowserError = error.localizedDescription
+                self.showToast(error.localizedDescription)
+            }
+        }
+    }
+
+    public func openMountedFinderVolume() {
+        guard let mountPoint = finderMountState.mountPoint ?? finderMountManager.currentState.mountPoint else { return }
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: mountPoint.path)
+    }
+
+    public func unmountFinderIfNeeded(showToastOnSuccess: Bool = false) async {
+        finderMountTask?.cancel()
+        finderMountTask = nil
+        let hadMount = finderMountState.isMounted
+            || finderMountState == .mounting
+            || finderMountManager.currentState.isMounted
+        guard hadMount else {
+            finderMountState = .unmounted
+            return
+        }
+        await finderMountManager.unmount()
+        finderMountState = .unmounted
+        if showToastOnSuccess {
+            showToast("已卸载访达挂载卷")
+        }
+    }
+
+    /// Non-blocking unmount invoked during `cleanupOnTerminate()` so `@MainActor` never stalls on exit.
+    func detachFinderUnmountIfNeeded() {
+        guard let mountPoint = finderMountState.mountPoint ?? finderMountManager.currentState.mountPoint else {
+            return
+        }
+        finderMountState = .unmounted
+        let mountPath = mountPoint.path
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
+        process.arguments = ["unmount", "force", mountPath]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            OpalDeskLog.file.warning("Failed to detach Finder unmount for \(mountPath, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Quick Look Bounded Temp Cache & Preview
+
+    /// Downloads a remote non-directory file into a bounded temporary cache (`OpalDeskQuickLook`) keyed by
+    /// `path + sizeBytes + modifiedAtMs` so repeated Spacebar Quick Look previews open instantaneously.
+    public func downloadForQuickLook(_ item: RemoteFileItem) async throws -> URL {
+        guard !item.isDirectory else {
+            throw RemoteFileBrowserError.localFileError("文件夹暂不支持快速查看")
+        }
+        guard isAnyChannelConnected else {
+            throw RemoteFileBrowserError.notConnected
+        }
+
+        let cacheRoot = Self.quickLookCacheRootURL()
+        let keyHash = Self.quickLookCacheKey(for: item)
+        let entryDir = cacheRoot.appendingPathComponent(keyHash, isDirectory: true)
+        let safeName = RemoteFilePromiseDelegate.sanitizedFileName(item.name)
+        let destinationURL = entryDir.appendingPathComponent(safeName)
+
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destinationURL.path) {
+            let existingSize = Int64((try? destinationURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1)
+            if item.sizeBytes <= 0 || existingSize == item.sizeBytes {
+                try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: entryDir.path)
+                return destinationURL
+            }
+        }
+
+        try fm.createDirectory(at: entryDir, withIntermediateDirectories: true)
+        let savedURL = try await fileBrowserClient.pullFile(
+            remotePath: item.path,
+            toLocalURL: destinationURL
+        )
+        try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: entryDir.path)
+        Self.pruneQuickLookCacheIfNeeded(cacheRoot: cacheRoot, keepingDirName: keyHash)
+        return savedURL
+    }
+
+    public func previewRemoteItemWithQuickLook(_ item: RemoteFileItem) {
+        guard !item.isDirectory else { return }
+        quickLookDownloadTask?.cancel()
+        quickLookLoadingPath = item.path
+
+        quickLookDownloadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.quickLookLoadingPath == item.path {
+                    self.quickLookLoadingPath = nil
+                }
+            }
+            do {
+                let localURL = try await self.downloadForQuickLook(item)
+                guard !Task.isCancelled else { return }
+                self.quickLookCoordinator.togglePreview(url: localURL)
+            } catch is CancellationError {
+                return
+            } catch {
+                OpalDeskLog.file.warning("Quick Look download failed for \(item.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                self.showToast("快速查看失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    private static func quickLookCacheRootURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpalDeskQuickLook", isDirectory: true)
+    }
+
+    private static func quickLookCacheKey(for item: RemoteFileItem) -> String {
+        let raw = "\(item.path)|\(item.sizeBytes)|\(item.modifiedAtMs)"
+        let digest = SHA256.hash(data: Data(raw.utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func pruneQuickLookCacheIfNeeded(cacheRoot: URL, keepingDirName: String) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: cacheRoot,
+            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+            options: []
+        ) else { return }
+
+        struct EntryStat {
+            let url: URL
+            let modifiedAt: Date
+            let bytes: Int64
+        }
+
+        var stats: [EntryStat] = []
+        var totalBytes: Int64 = 0
+        for entry in entries {
+            let modDate = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            var dirBytes: Int64 = 0
+            if let children = try? fm.contentsOfDirectory(at: entry, includingPropertiesForKeys: [.fileSizeKey], options: []) {
+                for child in children {
+                    dirBytes += Int64((try? child.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                }
+            }
+            totalBytes += dirBytes
+            stats.append(EntryStat(url: entry, modifiedAt: modDate, bytes: dirBytes))
+        }
+
+        guard stats.count > ToolsTuning.maxQuickLookCacheEntries || totalBytes > ToolsTuning.maxQuickLookCacheBytes else {
+            return
+        }
+
+        let sortedOldestFirst = stats.sorted { $0.modifiedAt < $1.modifiedAt }
+        var remainingCount = stats.count
+        var remainingBytes = totalBytes
+        for stat in sortedOldestFirst {
+            if stat.url.lastPathComponent == keepingDirName { continue }
+            if remainingCount <= ToolsTuning.maxQuickLookCacheEntries && remainingBytes <= ToolsTuning.maxQuickLookCacheBytes {
+                break
+            }
+            try? fm.removeItem(at: stat.url)
+            remainingCount -= 1
+            remainingBytes -= stat.bytes
+        }
     }
 
     public func navigateFileBrowser(to path: String) {
@@ -1001,7 +1242,9 @@ extension AppModel {
                     freeBytes: summary.freeBytes,
                     usedBytes: summary.usedBytes,
                     categories: categories,
-                    largeFiles: largeFiles
+                    largeFiles: largeFiles,
+                    folders: summary.folders,
+                    apps: summary.apps
                 )
                 self.isScanningRemoteStorage = false
                 self.fileBrowserStorageError = nil

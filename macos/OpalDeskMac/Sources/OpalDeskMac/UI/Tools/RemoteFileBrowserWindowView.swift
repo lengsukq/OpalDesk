@@ -13,6 +13,14 @@ public enum RemoteFileBrowserTab: String, CaseIterable, Identifiable, Sendable {
     public var id: String { rawValue }
 }
 
+public enum RemoteStorageSubTab: String, CaseIterable, Identifiable, Sendable {
+    case categories = "分类概览"
+    case folders = "文件夹占用"
+    case apps = "应用空间排行"
+
+    public var id: String { rawValue }
+}
+
 public enum RemoteFileViewMode: String, CaseIterable, Identifiable, Sendable {
     case list = "列表"
     case grid = "网格"
@@ -42,6 +50,11 @@ public struct RemoteFileBrowserActions {
     public var onCancelTransfer: @MainActor (String) -> Void
     public var onDismissTransfer: @MainActor (String) -> Void
     public var onClearCompletedTransfers: @MainActor () -> Void
+    public var onToggleFinderMount: @MainActor () -> Void
+    public var onOpenFinderMount: @MainActor () -> Void
+    public var onUnmountFinder: @MainActor () -> Void
+    public var onQuickLookItem: @MainActor (RemoteFileItem) -> Void
+    public var onPullFileForDrag: RemoteFileDragPullHandler?
 
     public init(
         onNavigateToPath: @escaping @MainActor (String) -> Void = { _ in },
@@ -56,7 +69,12 @@ public struct RemoteFileBrowserActions {
         onScanStorage: @escaping @MainActor () -> Void = {},
         onCancelTransfer: @escaping @MainActor (String) -> Void = { _ in },
         onDismissTransfer: @escaping @MainActor (String) -> Void = { _ in },
-        onClearCompletedTransfers: @escaping @MainActor () -> Void = {}
+        onClearCompletedTransfers: @escaping @MainActor () -> Void = {},
+        onToggleFinderMount: @escaping @MainActor () -> Void = {},
+        onOpenFinderMount: @escaping @MainActor () -> Void = {},
+        onUnmountFinder: @escaping @MainActor () -> Void = {},
+        onQuickLookItem: @escaping @MainActor (RemoteFileItem) -> Void = { _ in },
+        onPullFileForDrag: RemoteFileDragPullHandler? = nil
     ) {
         self.onNavigateToPath = onNavigateToPath
         self.onRefreshDirectory = onRefreshDirectory
@@ -71,6 +89,11 @@ public struct RemoteFileBrowserActions {
         self.onCancelTransfer = onCancelTransfer
         self.onDismissTransfer = onDismissTransfer
         self.onClearCompletedTransfers = onClearCompletedTransfers
+        self.onToggleFinderMount = onToggleFinderMount
+        self.onOpenFinderMount = onOpenFinderMount
+        self.onUnmountFinder = onUnmountFinder
+        self.onQuickLookItem = onQuickLookItem
+        self.onPullFileForDrag = onPullFileForDrag
     }
 }
 
@@ -88,10 +111,13 @@ public struct RemoteFileBrowserWindowView: View {
     public let isScanningStorage: Bool
     public let storageError: String?
     public let transfers: [RemoteFileTransferItem]
+    public let finderMountState: FinderMountState
+    public let quickLookLoadingPath: String?
     public let quickLocations: [RemoteQuickLocation]
     public let actions: RemoteFileBrowserActions
 
     @State var activeTab: RemoteFileBrowserTab
+    @State var activeStorageSubTab: RemoteStorageSubTab = .categories
     @State var searchQuery: String = ""
     @State var sortOption: RemoteFileSortOption = .name
     @State var sortAscending: Bool = true
@@ -119,6 +145,8 @@ public struct RemoteFileBrowserWindowView: View {
         isScanningStorage: Bool = false,
         storageError: String? = nil,
         transfers: [RemoteFileTransferItem] = [],
+        finderMountState: FinderMountState = .unmounted,
+        quickLookLoadingPath: String? = nil,
         quickLocations: [RemoteQuickLocation] = RemoteQuickLocation.defaultLocations,
         initialTab: RemoteFileBrowserTab = .files,
         actions: RemoteFileBrowserActions = RemoteFileBrowserActions()
@@ -133,6 +161,8 @@ public struct RemoteFileBrowserWindowView: View {
         self.isScanningStorage = isScanningStorage
         self.storageError = storageError
         self.transfers = transfers
+        self.finderMountState = finderMountState
+        self.quickLookLoadingPath = quickLookLoadingPath
         self.quickLocations = quickLocations
         self.actions = actions
         _activeTab = State(initialValue: initialTab)
@@ -194,7 +224,14 @@ public struct RemoteFileBrowserWindowView: View {
         .padding(.top, OpalSpacing.sm)
         .padding(.bottom, OpalSpacing.lg)
         .background(OpalAmbientBackdrop(intensity: 0.85))
-        .frame(minWidth: 840, minHeight: 560)
+        .background(
+            RemoteFileBrowserSpacebarMonitor(
+                isEnabled: activeTab == .files && isConnected && !isNewFolderPresented && renamingItem == nil
+            ) {
+                triggerQuickLookForCurrentSelection()
+            }
+        )
+        .frame(minWidth: 920, minHeight: 560)
         .onChange(of: currentPath) { _, _ in
             selectedFilePaths.removeAll()
         }
@@ -263,16 +300,16 @@ public struct RemoteFileBrowserWindowView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 200)
+            .frame(width: 176)
 
-            Spacer(minLength: OpalSpacing.sm)
+            Spacer(minLength: OpalSpacing.xs)
 
             OpalSearchField(
-                placeholder: activeTab == .files ? "筛选当前目录…" : "筛选大文件…",
+                placeholder: activeTab == .files ? "筛选当前目录…" : "筛选文件夹 / 应用 / 大文件…",
                 text: $searchQuery,
                 accessibilityClearLabel: "清除搜索关键字"
             )
-            .frame(width: 210)
+            .frame(minWidth: 150, idealWidth: 185, maxWidth: 210)
 
             toolbarActionButtons
         }
@@ -283,6 +320,8 @@ public struct RemoteFileBrowserWindowView: View {
 
     private var toolbarActionButtons: some View {
         HStack(spacing: OpalSpacing.sm) {
+            finderMountControl
+
             OpalGlassIconButton(
                 systemName: "arrow.clockwise",
                 size: 28,
@@ -322,6 +361,58 @@ public struct RemoteFileBrowserWindowView: View {
                 .help("选择 Mac 本地文件上传到当前目录")
             }
         }
+    }
+
+    @ViewBuilder
+    private var finderMountControl: some View {
+        switch finderMountState {
+        case .mounted:
+            Menu {
+                Button("在 Finder 中打开", systemImage: "folder") {
+                    actions.onOpenFinderMount()
+                }
+                Divider()
+                Button("卸载 Finder 卷", systemImage: "eject.fill", role: .destructive) {
+                    actions.onUnmountFinder()
+                }
+            } label: {
+                Label("已挂载 Finder", systemImage: "externaldrive.fill.badge.checkmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.green)
+            }
+            .menuStyle(.borderedButton)
+            .tint(.green)
+            .fixedSize()
+            .help("手机存储已通过本地 WebDAV 挂载到 macOS 访达，点击可打开或卸载")
+
+        case .mounting:
+            Button {} label: {
+                HStack(spacing: 5) {
+                    ProgressView().controlSize(.mini)
+                    Text("挂载中…")
+                        .font(.system(size: 12, weight: .medium))
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(true)
+
+        case .unmounted, .failed:
+            Button {
+                actions.onToggleFinderMount()
+            } label: {
+                Label("在 Finder 中挂载", systemImage: "externaldrive.badge.plus")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .disabled(!isConnected)
+            .help("通过本地加密回环 WebDAV 将手机存储直接挂载到 macOS 访达")
+        }
+    }
+
+    func triggerQuickLookForCurrentSelection() {
+        let previewable = selectedItems.filter { !$0.isDirectory }
+        guard previewable.count == 1, let target = previewable.first else { return }
+        actions.onQuickLookItem(target)
     }
 
     // MARK: - Shared Actions

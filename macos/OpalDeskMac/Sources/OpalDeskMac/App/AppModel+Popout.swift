@@ -33,6 +33,24 @@ public struct RemoteAppPickerContext: Identifiable, Sendable {
     public var resolvedTransportKind: String = "wifi"
 }
 
+/// Lightweight quick-launch item for a user-pinned favorite Android app.
+public struct FavoritePopoutAppItem: Identifiable, Sendable, Equatable {
+    public var id: String { "\(deviceKey)::\(pkg)" }
+    public let pkg: String
+    public let cls: String
+    public let label: String
+    public let deviceKey: String
+    public let deviceName: String
+
+    public init(pkg: String, cls: String = "", label: String, deviceKey: String, deviceName: String = "") {
+        self.pkg = pkg
+        self.cls = cls
+        self.label = label.isEmpty ? pkg : label
+        self.deviceKey = deviceKey
+        self.deviceName = deviceName
+    }
+}
+
 /// Secondary confirmation prompt shown whenever the user clicks an app whose floating window is already open.
 public struct PendingPopoutReloadPrompt: Identifiable {
     public let id = UUID()
@@ -67,6 +85,153 @@ extension AppModel {
     public func clearPopoutHistory() {
         popoutHistoryStore.clearAll()
         popoutHistory = []
+    }
+
+    // MARK: - Favorite App Pinning & Per-App Popout Preferences
+
+    /// Preferred device key for resolving favorites in global surfaces (e.g. Menu Bar).
+    public var activePreferredDeviceKey: String {
+        if let conn = activeConnection {
+            switch conn.transport {
+            case .wiredUSB(let s, _), .wirelessADB(let s, _):
+                return "adb:\(s)"
+            case .wirelessWiFi:
+                if !conn.fingerprint.isEmpty {
+                    return "fp:\(conn.fingerprint.prefix(16))"
+                }
+                return conn.deviceName
+            }
+        }
+        if let target = companionTarget, !target.certFingerprint.isEmpty {
+            return "fp:\(target.certFingerprint.prefix(16))"
+        }
+        if let firstUsb = discovery.usbDevices.first(where: \.isReady) {
+            return "adb:\(firstUsb.serial)"
+        }
+        if let firstTrusted = discovery.trustedDevices.first, !firstTrusted.certFingerprint.isEmpty {
+            return "fp:\(firstTrusted.certFingerprint.prefix(16))"
+        }
+        return ""
+    }
+
+    public func toggleFavoriteApp(pkg: String, deviceKey: String) {
+        _ = popoutAppPrefsStore.toggleFavorite(appPackage: pkg, deviceKey: deviceKey)
+        refreshPopoutAppPrefs()
+    }
+
+    public func isFavoriteApp(pkg: String, deviceKey: String) -> Bool {
+        let cleanPkg = pkg.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanPkg.isEmpty else { return false }
+        let snapshot = popoutAppPrefs
+        let exactKey = PopoutAppPreferencesStore.compositeKey(deviceKey: deviceKey, appPackage: cleanPkg)
+        if let exact = snapshot[exactKey] {
+            return exact.isFavorite
+        }
+        let globalKey = PopoutAppPreferencesStore.compositeKey(deviceKey: "", appPackage: cleanPkg)
+        return snapshot[globalKey]?.isFavorite ?? false
+    }
+
+    public func favoriteAppPackages(for deviceKey: String) -> [String] {
+        // Read `popoutAppPrefs` so SwiftUI Observation tracks mutations live.
+        _ = popoutAppPrefs
+        return popoutAppPrefsStore.favoritePackages(forDeviceKey: deviceKey)
+    }
+
+    /// Returns ordered pinned favorite apps enriched with cached labels & activities for 1-click launch.
+    public func favoriteAppItems(for deviceKey: String? = nil) -> [FavoritePopoutAppItem] {
+        let snapshot = popoutAppPrefs
+        let targetDeviceKey = deviceKey ?? activePreferredDeviceKey
+
+        var orderedEntries: [(pkg: String, deviceKey: String, order: Int)] = []
+        if !targetDeviceKey.isEmpty {
+            let pkgs = popoutAppPrefsStore.favoritePackages(forDeviceKey: targetDeviceKey)
+            for (idx, pkg) in pkgs.enumerated() {
+                orderedEntries.append((pkg, targetDeviceKey, idx + 1))
+            }
+        }
+
+        // If no favorites on the active device key (or no device key), surface favorites across all devices.
+        if orderedEntries.isEmpty {
+            var bestByPkg: [String: (deviceKey: String, order: Int)] = [:]
+            for (composite, pref) in snapshot where pref.isFavorite {
+                guard let sep = composite.range(of: "::") else { continue }
+                let devKey = String(composite[..<sep.lowerBound])
+                let pkg = String(composite[sep.upperBound...])
+                guard !pkg.isEmpty else { continue }
+                if let existing = bestByPkg[pkg] {
+                    if pref.favoriteOrder < existing.order {
+                        bestByPkg[pkg] = (devKey, pref.favoriteOrder)
+                    }
+                } else {
+                    bestByPkg[pkg] = (devKey, pref.favoriteOrder)
+                }
+            }
+            orderedEntries = bestByPkg
+                .sorted { lhs, rhs in
+                    if lhs.value.order != rhs.value.order {
+                        return lhs.value.order < rhs.value.order
+                    }
+                    return lhs.key < rhs.key
+                }
+                .map { ($0.key, $0.value.deviceKey, $0.value.order) }
+        }
+
+        return orderedEntries.map { item in
+            let catalogMatch = cachedDesktopApps.first(where: { $0.pkg == item.pkg })
+                ?? cachedCompanionApps.first(where: { $0.pkg == item.pkg })
+            let historyMatch = popoutHistory.first(where: { $0.appPackage == item.pkg && $0.deviceKey == item.deviceKey })
+                ?? popoutHistory.first(where: { $0.appPackage == item.pkg })
+            let label = catalogMatch?.displayLabel ?? historyMatch?.displayLabel ?? item.pkg
+            let cls = catalogMatch?.cls ?? historyMatch?.appActivity ?? ""
+            let devName = historyMatch?.deviceName ?? (isAnyChannelConnected ? activeChannelDeviceName : "")
+            return FavoritePopoutAppItem(
+                pkg: item.pkg,
+                cls: cls,
+                label: label,
+                deviceKey: item.deviceKey,
+                deviceName: devName
+            )
+        }
+    }
+
+    private func refreshPopoutAppPrefs() {
+        popoutAppPrefs = popoutAppPrefsStore.snapshot()
+    }
+
+    private func applyPopoutPreferenceChange(
+        _ change: PopoutAppPreferenceChange,
+        appPackage: String,
+        deviceKey: String
+    ) {
+        switch change {
+        case .preset(let presetKey):
+            _ = popoutAppPrefsStore.setPreset(presetKey, appPackage: appPackage, deviceKey: deviceKey)
+            if presetKey != "custom" {
+                _ = popoutAppPrefsStore.setCustomWindowSize(
+                    widthPt: nil,
+                    heightPt: nil,
+                    appPackage: appPackage,
+                    deviceKey: deviceKey
+                )
+                if let presetKey {
+                    _ = popoutAppPrefsStore.setPreset(presetKey, appPackage: appPackage, deviceKey: deviceKey)
+                }
+            }
+        case let .customWindowSize(widthPt, heightPt):
+            _ = popoutAppPrefsStore.setCustomWindowSize(
+                widthPt: widthPt,
+                heightPt: heightPt,
+                appPackage: appPackage,
+                deviceKey: deviceKey
+            )
+        case .pinnedOnTop(let pinned):
+            _ = popoutAppPrefsStore.setPinnedOnTop(pinned, appPackage: appPackage, deviceKey: deviceKey)
+        case .customDpi(let dpi):
+            _ = popoutAppPrefsStore.setCustomDpi(dpi, appPackage: appPackage, deviceKey: deviceKey)
+        case .compatibilityResolution(let enabled):
+            _ = popoutAppPrefsStore.setCompatibilityResolution(enabled, appPackage: appPackage, deviceKey: deviceKey)
+        }
+        refreshPopoutAppPrefs()
     }
 
     /// Opens the remote app picker sheet for either the live desktop session or any discovered device in Device Hub.
@@ -567,7 +732,10 @@ extension AppModel {
         context: PopoutConnectionContext,
         forceReload: Bool
     ) -> PopoutOpenResult {
-        let savedPinned = popoutHistory.first(where: { $0.id == entry.id })?.pinnedOnTop ?? entry.pinnedOnTop
+        let savedPref = popoutAppPrefsStore.preference(for: entry.appPackage, deviceKey: entry.deviceKey)
+        let savedPinned = savedPref?.pinnedOnTop
+            ?? popoutHistory.first(where: { $0.id == entry.id })?.pinnedOnTop
+            ?? entry.pinnedOnTop
         let res = popoutManager.openPopout(
             appPackage: entry.appPackage,
             appActivity: entry.appActivity,
@@ -575,6 +743,7 @@ extension AppModel {
             deviceKey: entry.deviceKey,
             deviceName: entry.deviceName,
             initialPinnedOnTop: savedPinned,
+            initialPreference: savedPref,
             canReturnToDesktop: isAuthenticated,
             forceReloadExisting: forceReload,
             context: context,
@@ -585,6 +754,13 @@ extension AppModel {
                     appPackage: entry.appPackage,
                     deviceKey: entry.deviceKey,
                     pinnedOnTop: pinned
+                )
+            },
+            onPreferenceChanged: { [weak self] change in
+                self?.applyPopoutPreferenceChange(
+                    change,
+                    appPackage: entry.appPackage,
+                    deviceKey: entry.deviceKey
                 )
             },
             onAuthTokenIssued: { [weak self] devName, fp, token in
@@ -776,7 +952,11 @@ extension AppModel {
             case nil:
                 serial = nil; host = nil; port = nil; kind = "wifi"
             }
-            let devKey = serial ?? (conn?.fingerprint.isEmpty == false ? String(conn!.fingerprint.prefix(16)) : (conn?.deviceName ?? "active"))
+            let devKey: String = {
+                if let serial { return "adb:\(serial)" }
+                if let fp = conn?.fingerprint, !fp.isEmpty { return "fp:\(fp.prefix(16))" }
+                return conn?.deviceName ?? "active"
+            }()
             return RemoteAppPickerContext(
                 target: target,
                 deviceKey: devKey,

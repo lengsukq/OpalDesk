@@ -20,23 +20,43 @@ public struct RemoteAppPickerSheet: View {
     private var activeCount: Int { model.popoutManager.controllers.count }
     private var maxCount: Int { PopoutWindowManager.maxConcurrentWindows }
 
+    private var favoritePackageRank: [String: Int] {
+        let ordered = model.favoriteAppPackages(for: context.deviceKey)
+        return Dictionary(uniqueKeysWithValues: ordered.enumerated().map { ($0.element, $0.offset) })
+    }
+
     private var filteredApps: [RemoteAppInfo] {
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let base = context.apps.filter { app in
             q.isEmpty || app.displayLabel.lowercased().contains(q) || app.pkg.lowercased().contains(q)
         }
-        if sortByUsage {
-            let localCounts = Dictionary(uniqueKeysWithValues: model.popoutHistory.map { ($0.appPackage, $0.openCount) })
-            return base.sorted { lhs, rhs in
+        let favRanks = favoritePackageRank
+        let localCounts = Dictionary(uniqueKeysWithValues: model.popoutHistory.map { ($0.appPackage, $0.openCount) })
+
+        return base.sorted { lhs, rhs in
+            let lFav = favRanks[lhs.pkg]
+            let rFav = favRanks[rhs.pkg]
+            if lFav != nil || rFav != nil {
+                if let lf = lFav, let rf = rFav { return lf < rf }
+                return lFav != nil
+            }
+            if sortByUsage {
                 let lc = max(lhs.openCount, localCounts[lhs.pkg] ?? 0)
                 let rc = max(rhs.openCount, localCounts[rhs.pkg] ?? 0)
                 if lc != rc { return lc > rc }
-                return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
             }
+            return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
         }
-        return base.sorted {
-            $0.displayLabel.localizedCaseInsensitiveCompare($1.displayLabel) == .orderedAscending
-        }
+    }
+
+    private var favoriteFilteredApps: [RemoteAppInfo] {
+        let favRanks = favoritePackageRank
+        return filteredApps.filter { favRanks[$0.pkg] != nil }
+    }
+
+    private var regularFilteredApps: [RemoteAppInfo] {
+        let favRanks = favoritePackageRank
+        return filteredApps.filter { favRanks[$0.pkg] == nil }
     }
 
     private var relevantHistory: [PopoutHistoryEntry] {
@@ -240,9 +260,33 @@ public struct RemoteAppPickerSheet: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
         } else {
+            let favorites = favoriteFilteredApps
+            let others = regularFilteredApps
             ScrollView {
-                LazyVStack(spacing: OpalSpacing.xs) {
-                    ForEach(filteredApps) { app in
+                LazyVStack(alignment: .leading, spacing: OpalSpacing.xs) {
+                    if !favorites.isEmpty {
+                        Label("常用置顶 (\(favorites.count))", systemImage: "star.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 6)
+                            .padding(.top, 2)
+                            .padding(.bottom, 2)
+
+                        ForEach(favorites) { app in
+                            appRow(app)
+                        }
+
+                        if !others.isEmpty {
+                            Text("全部应用")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.top, OpalSpacing.sm)
+                                .padding(.bottom, 2)
+                        }
+                    }
+
+                    ForEach(others) { app in
                         appRow(app)
                     }
                 }
@@ -254,6 +298,7 @@ public struct RemoteAppPickerSheet: View {
 
     private func appRow(_ app: RemoteAppInfo) -> some View {
         let isOpen = model.isPopoutActive(pkg: app.pkg)
+        let isFavorite = model.isFavoriteApp(pkg: app.pkg, deviceKey: context.deviceKey)
         let isLimitHit = !isOpen && activeCount >= maxCount
 
         return HStack(spacing: OpalSpacing.md) {
@@ -281,6 +326,17 @@ public struct RemoteAppPickerSheet: View {
             }
 
             Spacer(minLength: OpalSpacing.sm)
+
+            OpalGlassIconButton(
+                systemName: isFavorite ? "star.fill" : "star",
+                tint: isFavorite ? .orange : .secondary,
+                isActive: isFavorite,
+                size: 26,
+                iconSize: 12.5,
+                helpText: isFavorite ? "取消常用置顶" : "设为常用置顶应用"
+            ) {
+                model.toggleFavoriteApp(pkg: app.pkg, deviceKey: context.deviceKey)
+            }
 
             OpalGlassIconButton(
                 systemName: "plus.app",
