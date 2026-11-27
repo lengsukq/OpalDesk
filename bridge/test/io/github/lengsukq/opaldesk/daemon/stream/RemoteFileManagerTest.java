@@ -145,6 +145,68 @@ public class RemoteFileManagerTest {
     }
 
     @Test
+    public void testDeleteUnlinksInternalAndDanglingSymlinksWithoutTouchingRealTarget() throws Exception {
+        File storageRoot = tmpDir.newFolder("sdcard_symlinks");
+        File realDir = new File(storageRoot, "Important");
+        assertTrue(realDir.mkdirs());
+        File realFile = new File(realDir, "keep.txt");
+        Files.write(realFile.toPath(), "KEEP_ME".getBytes(StandardCharsets.UTF_8));
+
+        // 1. Internal symlink pointing to a real directory inside storageRoot
+        File internalDirLink = new File(storageRoot, "alias_important");
+        Files.createSymbolicLink(internalDirLink.toPath(), realDir.toPath());
+
+        // 2. Internal symlink pointing to a real file inside storageRoot
+        File internalFileLink = new File(storageRoot, "alias_keep.txt");
+        Files.createSymbolicLink(internalFileLink.toPath(), realFile.toPath());
+
+        // 3. Dangling symlink pointing to a non-existent path inside storageRoot
+        File danglingLink = new File(storageRoot, "broken_link");
+        Files.createSymbolicLink(danglingLink.toPath(), new File(storageRoot, "does_not_exist").toPath());
+
+        RemoteFileManager fm = new RemoteFileManager(storageRoot, "/sdcard", (f, max, cap) -> "");
+
+        // Deleting internal dir symlink removes ONLY the symlink; realDir + keep.txt stay intact
+        OpalCastProtocol.FileOpResponseMsg delDirLink = fm.executeRequest(
+                new OpalCastProtocol.FileOpRequestMsg(20, "delete", "/sdcard/alias_important", "", 0, 0),
+                null, null, () -> false);
+        assertTrue(delDirLink.ok);
+        assertEquals("/sdcard/alias_important", delDirLink.path);
+        assertFalse(Files.exists(internalDirLink.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS));
+        assertTrue("Real target directory must NOT be deleted", realDir.isDirectory());
+        assertTrue("Real file inside target directory must NOT be deleted", realFile.isFile());
+
+        // Deleting internal file symlink removes ONLY the symlink; keep.txt stays intact
+        OpalCastProtocol.FileOpResponseMsg delFileLink = fm.executeRequest(
+                new OpalCastProtocol.FileOpRequestMsg(21, "delete", "/sdcard/alias_keep.txt", "", 0, 0),
+                null, null, () -> false);
+        assertTrue(delFileLink.ok);
+        assertFalse(Files.exists(internalFileLink.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS));
+        assertTrue("Real target file must NOT be deleted", realFile.isFile());
+
+        // Deleting dangling symlink succeeds cleanly
+        OpalCastProtocol.FileOpResponseMsg delDangling = fm.executeRequest(
+                new OpalCastProtocol.FileOpRequestMsg(22, "delete", "/sdcard/broken_link", "", 0, 0),
+                null, null, () -> false);
+        assertTrue(delDangling.ok);
+        assertEquals("/sdcard/broken_link", delDangling.path);
+        assertFalse(Files.exists(danglingLink.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS));
+
+        // Deleting through an escaping parent symlink is still blocked
+        File outsideDir = tmpDir.newFolder("outside_del");
+        File outsideSecret = new File(outsideDir, "secret.txt");
+        Files.write(outsideSecret.toPath(), "SECRET".getBytes(StandardCharsets.UTF_8));
+        File escapingParentLink = new File(storageRoot, "escape_dir");
+        Files.createSymbolicLink(escapingParentLink.toPath(), outsideDir.toPath());
+
+        OpalCastProtocol.FileOpResponseMsg delEscapeChild = fm.executeRequest(
+                new OpalCastProtocol.FileOpRequestMsg(23, "delete", "/sdcard/escape_dir/secret.txt", "", 0, 0),
+                null, null, () -> false);
+        assertFalse(delEscapeChild.ok);
+        assertTrue("Outside secret must remain untouched", outsideSecret.isFile());
+    }
+
+    @Test
     public void testStorageScanCategorizationAndTop50LargeFiles() throws Exception {
         File storageRoot = tmpDir.newFolder("sdcard_scan");
         File dcim = new File(storageRoot, "DCIM");

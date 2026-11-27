@@ -1040,6 +1040,8 @@ public final class OpalCastProtocol {
         public final String appPackage;
         public final String appActivity;
         public final String clientPlatform; // "android" | "macos" | "windows" | "web" | ""
+        // OpalCast v1.2 opt-in capability flag for desktop sessions (companion always subscribes)
+        public final boolean companionEvents;
 
         public HelloMsg(
                 int protocolVersion, String clientName, String clientId, String preferredCodec,
@@ -1047,7 +1049,7 @@ public final class OpalCastProtocol {
                 int displayMode, boolean audioEnabled, String authToken, String pinCode) {
             this(protocolVersion, clientName, clientId, preferredCodec,
                     width, height, dpi, fps, bitrateKbps, displayMode, audioEnabled,
-                    authToken, pinCode, "", SESSION_ROLE_DESKTOP, "", "", "");
+                    authToken, pinCode, "", SESSION_ROLE_DESKTOP, "", "", "", false);
         }
 
         public HelloMsg(
@@ -1057,7 +1059,7 @@ public final class OpalCastProtocol {
                 String transportHint, String sessionRole, String appPackage, String appActivity) {
             this(protocolVersion, clientName, clientId, preferredCodec,
                     width, height, dpi, fps, bitrateKbps, displayMode, audioEnabled,
-                    authToken, pinCode, transportHint, sessionRole, appPackage, appActivity, "");
+                    authToken, pinCode, transportHint, sessionRole, appPackage, appActivity, "", false);
         }
 
         public HelloMsg(
@@ -1066,6 +1068,18 @@ public final class OpalCastProtocol {
                 int displayMode, boolean audioEnabled, String authToken, String pinCode,
                 String transportHint, String sessionRole, String appPackage, String appActivity,
                 String clientPlatform) {
+            this(protocolVersion, clientName, clientId, preferredCodec,
+                    width, height, dpi, fps, bitrateKbps, displayMode, audioEnabled,
+                    authToken, pinCode, transportHint, sessionRole, appPackage, appActivity,
+                    clientPlatform, false);
+        }
+
+        public HelloMsg(
+                int protocolVersion, String clientName, String clientId, String preferredCodec,
+                int width, int height, int dpi, int fps, int bitrateKbps,
+                int displayMode, boolean audioEnabled, String authToken, String pinCode,
+                String transportHint, String sessionRole, String appPackage, String appActivity,
+                String clientPlatform, boolean companionEvents) {
             this.protocolVersion = protocolVersion;
             this.clientName = (clientName != null) ? clientName : "Mac";
             this.clientId = (clientId != null) ? clientId : "";
@@ -1085,6 +1099,7 @@ public final class OpalCastProtocol {
             this.appPackage = (appPackage != null) ? appPackage.trim() : "";
             this.appActivity = (appActivity != null) ? appActivity.trim() : "";
             this.clientPlatform = (clientPlatform != null) ? clientPlatform.trim().toLowerCase(java.util.Locale.ROOT) : "";
+            this.companionEvents = companionEvents;
         }
 
         public boolean isStandaloneApp() {
@@ -1124,7 +1139,8 @@ public final class OpalCastProtocol {
                     obj.getString("sessionRole", SESSION_ROLE_DESKTOP),
                     obj.getString("appPackage", ""),
                     obj.getString("appActivity", ""),
-                    obj.getString("clientPlatform", ""));
+                    obj.getString("clientPlatform", ""),
+                    obj.getBoolean("companionEvents", false));
         } catch (RuntimeException t) {
             throw new ProtocolException("Invalid HELLO JSON: " + t.getMessage(), t);
         }

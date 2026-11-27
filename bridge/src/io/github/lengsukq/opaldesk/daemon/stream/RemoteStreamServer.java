@@ -289,6 +289,36 @@ public final class RemoteStreamServer {
         return ids;
     }
 
+    /**
+     * Returns all live sessions eligible to receive OPD1 v1.2 {@code 0x19}/{@code 0x1A} pushes:
+     * all companion sessions plus any desktop session that declared {@code companionEvents=true}
+     * in {@code HELLO} or dynamically subscribed via {@code 0x31}/{@code 0x32}.
+     * Protects pre-P1 legacy desktop clients from disconnecting on unknown frame types.
+     */
+    public List<Integer> getCompanionEventSubscriberSessionIds() {
+        List<Integer> ids = new ArrayList<>(3);
+        ClientSession d = desktopSession;
+        if (d != null && !d.isClosed() && d.isCompanionEventsSubscribed()) {
+            ids.add(d.sessionId);
+        }
+        synchronized (sessionLock) {
+            for (ClientSession s : companionSessions.values()) {
+                if (s != null && !s.isClosed() && s.isCompanionEventsSubscribed()) {
+                    ids.add(s.sessionId);
+                }
+            }
+        }
+        return ids;
+    }
+
+    public boolean markSessionCompanionEventsSubscribed(int sessionId) {
+        ClientSession s = allSessions.get(sessionId);
+        if (s == null || s.isClosed()) return false;
+        boolean wasSubscribed = s.isCompanionEventsSubscribed();
+        s.setCompanionEventsSubscribed(true);
+        return !wasSubscribed;
+    }
+
     public int getActiveSinkType() {
         ClientSession d = desktopSession;
         if (d != null && !d.isClosed()) {
@@ -634,7 +664,7 @@ public final class RemoteStreamServer {
 
     public void broadcastNotificationEvent(byte[] jsonUtf8) {
         if (jsonUtf8 == null || jsonUtf8.length == 0) return;
-        for (int sid : getDesktopAndCompanionSessionIds()) {
+        for (int sid : getCompanionEventSubscriberSessionIds()) {
             sendNotificationEvent(sid, jsonUtf8);
         }
     }
@@ -648,7 +678,7 @@ public final class RemoteStreamServer {
 
     public void broadcastMediaState(byte[] jsonUtf8) {
         if (jsonUtf8 == null || jsonUtf8.length == 0) return;
-        for (int sid : getDesktopAndCompanionSessionIds()) {
+        for (int sid : getCompanionEventSubscriberSessionIds()) {
             sendMediaState(sid, jsonUtf8);
         }
     }
@@ -1031,6 +1061,8 @@ public final class RemoteStreamServer {
                 sessionId, sinkType, isAdbLocalSocket, permanentTrust, hello.sessionRole, hello.appPackage,
                 clientId, clientName, transport, frameTransport, listener);
         current.setTargetFps(hello.fps > 0 ? hello.fps : 60f);
+        current.setCompanionEventsSubscribed(
+                isCompanion || (!isStandalone && !isCatalog && hello.companionEvents));
 
         ClientSession replaced = null;
         boolean capacityExceeded = false;
@@ -1220,11 +1252,13 @@ public final class RemoteStreamServer {
                 break;
             }
             case OpalCastProtocol.TYPE_NOTIFICATION_ACTION: {
+                session.setCompanionEventsSubscribed(true);
                 OpalCastProtocol.NotificationActionMsg msg = OpalCastProtocol.decodeNotificationAction(f.payload);
                 if (listener != null) listener.onNotificationAction(sid, msg);
                 break;
             }
             case OpalCastProtocol.TYPE_MEDIA_ACTION: {
+                session.setCompanionEventsSubscribed(true);
                 OpalCastProtocol.MediaActionMsg msg = OpalCastProtocol.decodeMediaAction(f.payload);
                 if (listener != null) listener.onMediaAction(sid, msg);
                 break;
