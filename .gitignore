@@ -33,3 +33,19 @@ Thumbs.db
 .gradle/
 .kotlin/
 local.properties
+
+# Local agent / session state
+.coding-tools/
+docs/history-session/
+
+# Local helper & release scripts
+scripts/adb-wireless-install.sh
+scripts/apply-v1.0.20-notes.sh
+scripts/build-and-install-release.sh
+scripts/inspect-dpi-log.sh
+scripts/publish-v1.0.8.sh
+scripts/push-v1.0.20.sh
+scripts/retag-v1.0.20.sh
+scripts/update-release-notes.sh
+scripts/v1.0.20-notes.md
+scripts/watch-ci.sh
