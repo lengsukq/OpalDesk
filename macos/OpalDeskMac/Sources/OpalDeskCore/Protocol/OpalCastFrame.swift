@@ -118,6 +118,10 @@ public struct OpalCastFrame: Sendable, Equatable {
     public static func apkInstallRequest(_ payload: ApkInstallRequestPayload) throws -> OpalCastFrame {
         OpalCastFrame(type: .apkInstallRequest, payload: try payload.encode())
     }
+
+    public static func callAction(_ payload: CallActionPayload) throws -> OpalCastFrame {
+        OpalCastFrame(type: .callAction, payload: try payload.encode())
+    }
 }
 
 /// Streaming ring-buffered decoder for TCP byte streams that handles arbitrary

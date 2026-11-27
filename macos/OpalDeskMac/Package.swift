@@ -34,6 +34,7 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("UserNotifications"),
                 .linkedFramework("MediaPlayer"),
+                .linkedFramework("CoreBluetooth"),
                 .linkedLibrary("z")
             ]
         ),

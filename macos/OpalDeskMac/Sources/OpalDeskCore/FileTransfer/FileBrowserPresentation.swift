@@ -192,26 +192,54 @@ public struct RemoteStorageCategory: Identifiable, Sendable, Equatable, Hashable
     }
 }
 
-/// Overall Android storage report including categories and largest files leaderboard.
+/// Overall Android storage report including categories, folder drill-down, app usage, and largest files leaderboard.
 public struct RemoteStorageReport: Sendable, Equatable {
     public let totalBytes: Int64
     public let freeBytes: Int64
     public let usedBytes: Int64
     public let categories: [RemoteStorageCategory]
     public let largeFiles: [RemoteFileItem]
+    public var folders: [FolderStorageEntry]
+    public var apps: [AppStorageEntry]
 
     public init(
         totalBytes: Int64,
         freeBytes: Int64,
         usedBytes: Int64,
         categories: [RemoteStorageCategory],
-        largeFiles: [RemoteFileItem] = []
+        largeFiles: [RemoteFileItem] = [],
+        folders: [FolderStorageEntry] = [],
+        apps: [AppStorageEntry] = []
     ) {
         self.totalBytes = max(totalBytes, 0)
         self.freeBytes = max(freeBytes, 0)
         self.usedBytes = max(usedBytes, 0)
         self.categories = categories
         self.largeFiles = largeFiles
+        self.folders = folders
+        self.apps = apps
+    }
+
+    public init(summary: RemoteStorageSummaryPayload) {
+        self.init(
+            totalBytes: summary.totalBytes,
+            freeBytes: summary.freeBytes,
+            usedBytes: summary.usedBytes,
+            categories: summary.categories.map {
+                RemoteStorageCategory(name: $0.name, bytes: $0.bytes, fileCount: $0.fileCount)
+            },
+            largeFiles: summary.largeFiles.map {
+                RemoteFileItem(
+                    name: $0.name,
+                    path: $0.path,
+                    isDirectory: false,
+                    sizeBytes: $0.size,
+                    modifiedAtMs: $0.modifiedMs
+                )
+            },
+            folders: summary.folders,
+            apps: summary.apps
+        )
     }
 
     public var usedFractionOfTotal: Double {

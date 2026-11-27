@@ -1,6 +1,6 @@
 import Foundation
 
-/// OpalCast v1.2 wire-protocol constants and typed enumerations.
+/// OpalCast v1.3 wire-protocol constants and typed enumerations.
 /// All multi-byte integers on the wire use Big-Endian (network byte order).
 public enum OpalCastProtocol {
     public static let version: Int = 1
@@ -40,6 +40,7 @@ public enum OpalCastFrameType: UInt8, Sendable, CaseIterable {
     case fileOpResponse = 0x1B
     case filePullChunk = 0x1C
     case apkInstallStatus = 0x1D
+    case callState = 0x1E
     case pong = 0x1F
 
     // Uplink: Mac -> Android
@@ -64,6 +65,7 @@ public enum OpalCastFrameType: UInt8, Sendable, CaseIterable {
     case mediaAction = 0x32
     case fileOpRequest = 0x33
     case apkInstallRequest = 0x34
+    case callAction = 0x35
 }
 
 public struct OpalCastVideoFrameFlags: OptionSet, Sendable, Hashable {

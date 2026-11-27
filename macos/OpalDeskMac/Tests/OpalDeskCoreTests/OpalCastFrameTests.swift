@@ -106,7 +106,7 @@ struct OpalCastFrameTests {
         let after = OpalCastFrame.ping(202)
         let unknownPayload = Data("{\"futureField\":true}".utf8)
 
-        var unknownWire = Data([0x4F, 0x50, 0x44, 0x31, 0x1E, 0x00]) // hypothetical v1.3 frame type 0x1E
+        var unknownWire = Data([0x4F, 0x50, 0x44, 0x31, 0x7E, 0x00]) // hypothetical future v1.4+ frame type 0x7E
         var lenBE = UInt32(unknownPayload.count).bigEndian
         withUnsafeBytes(of: &lenBE) { unknownWire.append(contentsOf: $0) }
         unknownWire.append(Data(repeating: 0, count: 8))
