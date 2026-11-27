@@ -27,7 +27,20 @@ public final class DisplayCanvasNSView: NSView {
         return NSCursor(image: img, hotSpot: .zero)
     }()
 
-    public var config: DisplayCanvasConfig
+    public var config: DisplayCanvasConfig {
+        didSet {
+            if oldValue.enableEdgeNavigationGestures != config.enableEdgeNavigationGestures {
+                let cancelled = edgeGestureSynthesizer.setEnabled(config.enableEdgeNavigationGestures)
+                for payload in cancelled {
+                    callbacks.onTouch(payload)
+                }
+                if !cancelled.isEmpty {
+                    lastReportedEdgeZone = nil
+                    callbacks.onEdgeGestureChange?(nil)
+                }
+            }
+        }
+    }
     public var callbacks: DisplayCanvasCallbacks
 
     // Pointer state
@@ -39,13 +52,11 @@ public final class DisplayCanvasNSView: NSView {
     private var lastReportedTopHover: Bool = false
     private var lastMouseMoveSentNs: UInt64 = 0
 
-    // Pinch & three-finger gesture state (accessed by DisplayCanvasNSView+Gestures)
-    var isPinching: Bool = false
-    var pinchCenter = CGPoint(
-        x: Double(OpalCastProtocol.defaultWidth) * 0.5,
-        y: Double(OpalCastProtocol.defaultHeight) * 0.5
-    )
-    var pinchScale: CGFloat = 1.0
+    // Pinch, rotate, edge-navigation & three-finger gesture state (accessed by DisplayCanvasNSView+Gestures)
+    var twoFingerTransform = TwoFingerTransformSynthesizer()
+    var edgeGestureSynthesizer = TrackpadEdgeGestureSynthesizer()
+    var lastReportedEdgeZone: TrackpadEdgeZone?
+    var suppressMomentumScrollUntilIdle: Bool = false
     var threeFingerStartCentroid: CGPoint?
     var threeFingerDidTrigger: Bool = false
     var lastThreeFingerTriggerNs: UInt64 = 0
@@ -70,6 +81,9 @@ public final class DisplayCanvasNSView: NSView {
         self.videoLayer = displayLayer
         self.config = config
         self.callbacks = callbacks
+        self.edgeGestureSynthesizer = TrackpadEdgeGestureSynthesizer(
+            config: TrackpadEdgeGestureConfig(isEnabled: config.enableEdgeNavigationGestures)
+        )
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = DeXTheme.canvasNSColor.cgColor
@@ -296,6 +310,9 @@ public final class DisplayCanvasNSView: NSView {
     }
 
     public override func scrollWheel(with event: NSEvent) {
+        if shouldSuppressScrollWheel(event) {
+            return
+        }
         callbacks.onCanvasInteract?()
         let pt = mapEventPoint(event)
         let divisor: CGFloat = event.hasPreciseScrollingDeltas ? Metrics.preciseScrollDivisor : 1.0
