@@ -9,6 +9,28 @@ public enum NotificationEventAction: String, Codable, Sendable, CaseIterable, Eq
     case removed = "removed"
 }
 
+/// An interactive button action attached to an Android status-bar notification (e.g. "Mark as Read").
+public struct RemoteNotificationAction: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public var id: Int { index }
+    public var index: Int
+    public var label: String
+
+    public init(index: Int, label: String) {
+        self.index = index
+        self.label = label
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case index, label
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        index = try c.decodeIfPresent(Int.self, forKey: .index) ?? 0
+        label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
+    }
+}
+
 /// A single Android status bar notification synced over `0x19 NOTIFICATION_EVENT`.
 public struct RemoteNotificationItem: Codable, Sendable, Equatable, Identifiable, Hashable {
     public var id: String { key }
@@ -22,6 +44,7 @@ public struct RemoteNotificationItem: Codable, Sendable, Equatable, Identifiable
     public var canReply: Bool
     public var replyLabel: String
     public var otpCode: String
+    public var actions: [RemoteNotificationAction]
 
     public var displayAppLabel: String {
         appLabel.isEmpty ? pkg : appLabel
@@ -37,7 +60,8 @@ public struct RemoteNotificationItem: Codable, Sendable, Equatable, Identifiable
         clearable: Bool = true,
         canReply: Bool = false,
         replyLabel: String = "",
-        otpCode: String = ""
+        otpCode: String = "",
+        actions: [RemoteNotificationAction] = []
     ) {
         self.key = key
         self.pkg = pkg
@@ -49,10 +73,11 @@ public struct RemoteNotificationItem: Codable, Sendable, Equatable, Identifiable
         self.canReply = canReply
         self.replyLabel = replyLabel
         self.otpCode = otpCode
+        self.actions = actions
     }
 
     private enum CodingKeys: String, CodingKey {
-        case key, pkg, appLabel, title, text, postTimeMs, clearable, canReply, replyLabel, otpCode
+        case key, pkg, appLabel, title, text, postTimeMs, clearable, canReply, replyLabel, otpCode, actions
     }
 
     public init(from decoder: Decoder) throws {
@@ -67,6 +92,7 @@ public struct RemoteNotificationItem: Codable, Sendable, Equatable, Identifiable
         canReply = try c.decodeIfPresent(Bool.self, forKey: .canReply) ?? false
         replyLabel = try c.decodeIfPresent(String.self, forKey: .replyLabel) ?? ""
         otpCode = try c.decodeIfPresent(String.self, forKey: .otpCode) ?? ""
+        actions = try c.decodeIfPresent([RemoteNotificationAction].self, forKey: .actions) ?? []
     }
 }
 
@@ -116,6 +142,7 @@ public enum NotificationActionOp: String, Codable, Sendable, CaseIterable, Equat
     case dismiss = "dismiss"
     case clearAll = "clear_all"
     case reply = "reply"
+    case invokeAction = "invoke_action"
 }
 
 /// Uplink `0x31 NOTIFICATION_ACTION` UTF-8 JSON payload.
@@ -123,11 +150,18 @@ public struct NotificationActionPayload: Codable, Sendable, Equatable {
     public var op: NotificationActionOp
     public var key: String?
     public var replyText: String?
+    public var actionIndex: Int?
 
-    public init(op: NotificationActionOp, key: String? = nil, replyText: String? = nil) {
+    public init(
+        op: NotificationActionOp,
+        key: String? = nil,
+        replyText: String? = nil,
+        actionIndex: Int? = nil
+    ) {
         self.op = op
         self.key = key
         self.replyText = replyText
+        self.actionIndex = actionIndex
     }
 
     public static func sync() -> NotificationActionPayload {
@@ -144,6 +178,10 @@ public struct NotificationActionPayload: Codable, Sendable, Equatable {
 
     public static func reply(key: String, text: String) -> NotificationActionPayload {
         NotificationActionPayload(op: .reply, key: key, replyText: text)
+    }
+
+    public static func invokeAction(key: String, actionIndex: Int) -> NotificationActionPayload {
+        NotificationActionPayload(op: .invokeAction, key: key, actionIndex: actionIndex)
     }
 
     public func encode() throws -> Data {
@@ -440,6 +478,80 @@ public struct RemoteLargeFilePayload: Codable, Sendable, Equatable, Identifiable
     }
 }
 
+/// Folder-level storage breakdown entry inside `0x1B FILE_OP_RESPONSE.storage.folders`.
+public struct FolderStorageEntry: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public var id: String { path }
+    public var path: String
+    public var name: String
+    public var bytes: Int64
+    public var fileCount: Int
+
+    public init(path: String, name: String, bytes: Int64, fileCount: Int) {
+        self.path = path
+        self.name = name
+        self.bytes = max(0, bytes)
+        self.fileCount = max(0, fileCount)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path, name, bytes, fileCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        bytes = max(0, try c.decodeIfPresent(Int64.self, forKey: .bytes) ?? 0)
+        fileCount = max(0, try c.decodeIfPresent(Int.self, forKey: .fileCount) ?? 0)
+    }
+}
+
+/// Per-application storage breakdown entry inside `0x1B FILE_OP_RESPONSE.storage.apps`.
+public struct AppStorageEntry: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public var id: String { pkg }
+    public var pkg: String
+    public var appLabel: String
+    public var apkBytes: Int64
+    public var dataBytes: Int64
+    public var cacheBytes: Int64
+    public var totalBytes: Int64
+
+    public var displayLabel: String {
+        appLabel.isEmpty ? pkg : appLabel
+    }
+
+    public init(
+        pkg: String,
+        appLabel: String = "",
+        apkBytes: Int64 = 0,
+        dataBytes: Int64 = 0,
+        cacheBytes: Int64 = 0,
+        totalBytes: Int64? = nil
+    ) {
+        self.pkg = pkg
+        self.appLabel = appLabel
+        self.apkBytes = max(0, apkBytes)
+        self.dataBytes = max(0, dataBytes)
+        self.cacheBytes = max(0, cacheBytes)
+        self.totalBytes = max(0, totalBytes ?? (self.apkBytes + self.dataBytes + self.cacheBytes))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pkg, appLabel, apkBytes, dataBytes, cacheBytes, totalBytes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pkg = try c.decodeIfPresent(String.self, forKey: .pkg) ?? ""
+        appLabel = try c.decodeIfPresent(String.self, forKey: .appLabel) ?? ""
+        apkBytes = max(0, try c.decodeIfPresent(Int64.self, forKey: .apkBytes) ?? 0)
+        dataBytes = max(0, try c.decodeIfPresent(Int64.self, forKey: .dataBytes) ?? 0)
+        cacheBytes = max(0, try c.decodeIfPresent(Int64.self, forKey: .cacheBytes) ?? 0)
+        let decodedTotal = try c.decodeIfPresent(Int64.self, forKey: .totalBytes)
+        totalBytes = max(0, decodedTotal ?? (apkBytes + dataBytes + cacheBytes))
+    }
+}
+
 /// Wire storage analysis summary inside `0x1B FILE_OP_RESPONSE.storage`.
 public struct RemoteStorageSummaryPayload: Codable, Sendable, Equatable {
     public var totalBytes: Int64
@@ -447,23 +559,29 @@ public struct RemoteStorageSummaryPayload: Codable, Sendable, Equatable {
     public var usedBytes: Int64
     public var categories: [RemoteStorageCategoryPayload]
     public var largeFiles: [RemoteLargeFilePayload]
+    public var folders: [FolderStorageEntry]
+    public var apps: [AppStorageEntry]
 
     public init(
         totalBytes: Int64 = 0,
         freeBytes: Int64 = 0,
         usedBytes: Int64 = 0,
         categories: [RemoteStorageCategoryPayload] = [],
-        largeFiles: [RemoteLargeFilePayload] = []
+        largeFiles: [RemoteLargeFilePayload] = [],
+        folders: [FolderStorageEntry] = [],
+        apps: [AppStorageEntry] = []
     ) {
         self.totalBytes = totalBytes
         self.freeBytes = freeBytes
         self.usedBytes = usedBytes
         self.categories = categories
         self.largeFiles = largeFiles
+        self.folders = folders
+        self.apps = apps
     }
 
     private enum CodingKeys: String, CodingKey {
-        case totalBytes, freeBytes, usedBytes, categories, largeFiles
+        case totalBytes, freeBytes, usedBytes, categories, largeFiles, folders, apps
     }
 
     public init(from decoder: Decoder) throws {
@@ -473,6 +591,8 @@ public struct RemoteStorageSummaryPayload: Codable, Sendable, Equatable {
         usedBytes = try c.decodeIfPresent(Int64.self, forKey: .usedBytes) ?? 0
         categories = try c.decodeIfPresent([RemoteStorageCategoryPayload].self, forKey: .categories) ?? []
         largeFiles = try c.decodeIfPresent([RemoteLargeFilePayload].self, forKey: .largeFiles) ?? []
+        folders = try c.decodeIfPresent([FolderStorageEntry].self, forKey: .folders) ?? []
+        apps = try c.decodeIfPresent([AppStorageEntry].self, forKey: .apps) ?? []
     }
 }
 
@@ -731,5 +851,150 @@ public struct ApkInstallStatusPayload: Codable, Sendable, Equatable {
 
     public static func decode(from data: Data) throws -> ApkInstallStatusPayload {
         try OpalCastJSONCodec.decode(ApkInstallStatusPayload.self, from: data, context: "APK_INSTALL_STATUS")
+    }
+}
+
+// MARK: - Phone Call Bridge Payloads (0x1E Downlink / 0x35 Uplink)
+
+/// Lifecycle state reported by Android telephony in `0x1E CALL_STATE`.
+public enum CallLifecycleState: String, Codable, Sendable, CaseIterable, Equatable, Hashable {
+    case idle = "idle"
+    case ringing = "ringing"
+    case offhook = "offhook"
+    case dialing = "dialing"
+}
+
+/// Downlink `0x1E CALL_STATE` UTF-8 JSON payload representing live Android phone call state.
+public struct CallStatePayload: Codable, Sendable, Equatable, Hashable {
+    public var state: CallLifecycleState
+    public var number: String
+    public var contactName: String
+    public var startedAtMs: Int64
+    public var isMuted: Bool
+    public var isSpeakerOn: Bool
+    public var canAnswer: Bool
+    public var canReject: Bool
+    public var canDial: Bool
+    public var source: String
+
+    public static let idle = CallStatePayload()
+
+    public var isActive: Bool {
+        state != .idle
+    }
+
+    public var displayCaller: String {
+        if !contactName.isEmpty { return contactName }
+        if !number.isEmpty { return number }
+        return "未知来电"
+    }
+
+    public init(
+        state: CallLifecycleState = .idle,
+        number: String = "",
+        contactName: String = "",
+        startedAtMs: Int64 = 0,
+        isMuted: Bool = false,
+        isSpeakerOn: Bool = false,
+        canAnswer: Bool = false,
+        canReject: Bool = false,
+        canDial: Bool = false,
+        source: String = ""
+    ) {
+        self.state = state
+        self.number = number
+        self.contactName = contactName
+        self.startedAtMs = max(0, startedAtMs)
+        self.isMuted = isMuted
+        self.isSpeakerOn = isSpeakerOn
+        self.canAnswer = canAnswer
+        self.canReject = canReject
+        self.canDial = canDial
+        self.source = source
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state, number, contactName, startedAtMs, isMuted, isSpeakerOn, canAnswer, canReject, canDial, source
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let rawState = try c.decodeIfPresent(String.self, forKey: .state) {
+            let trimmed = rawState.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                state = .idle
+            } else if let parsed = CallLifecycleState(rawValue: trimmed) {
+                state = parsed
+            } else {
+                throw OpalCastCodecError.invalidJSON("CALL_STATE: unsupported state '\(trimmed)'")
+            }
+        } else {
+            state = .idle
+        }
+        number = try c.decodeIfPresent(String.self, forKey: .number) ?? ""
+        contactName = try c.decodeIfPresent(String.self, forKey: .contactName) ?? ""
+        startedAtMs = max(0, try c.decodeIfPresent(Int64.self, forKey: .startedAtMs) ?? 0)
+        isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
+        isSpeakerOn = try c.decodeIfPresent(Bool.self, forKey: .isSpeakerOn) ?? false
+        canAnswer = try c.decodeIfPresent(Bool.self, forKey: .canAnswer) ?? false
+        canReject = try c.decodeIfPresent(Bool.self, forKey: .canReject) ?? false
+        canDial = try c.decodeIfPresent(Bool.self, forKey: .canDial) ?? false
+        source = try c.decodeIfPresent(String.self, forKey: .source) ?? ""
+    }
+
+    public func encode() throws -> Data {
+        try OpalCastJSONCodec.encode(self, context: "CALL_STATE")
+    }
+
+    public static func decode(from data: Data) throws -> CallStatePayload {
+        try OpalCastJSONCodec.decode(CallStatePayload.self, from: data, context: "CALL_STATE")
+    }
+}
+
+/// Operation verb for uplink `0x35 CALL_ACTION`.
+public enum CallActionOp: String, Codable, Sendable, CaseIterable, Equatable, Hashable {
+    case answer = "answer"
+    case reject = "reject"
+    case hangup = "hangup"
+    case toggleMute = "toggle_mute"
+    case toggleSpeaker = "toggle_speaker"
+    case dial = "dial"
+    case rejectSms = "reject_sms"
+}
+
+/// Uplink `0x35 CALL_ACTION` UTF-8 JSON payload sent from Mac to control Android phone calls.
+public struct CallActionPayload: Codable, Sendable, Equatable, Hashable {
+    public var op: CallActionOp
+    public var number: String?
+    public var smsText: String?
+
+    public init(
+        op: CallActionOp,
+        number: String? = nil,
+        smsText: String? = nil
+    ) {
+        self.op = op
+        self.number = number
+        self.smsText = smsText
+    }
+
+    public static func answer() -> CallActionPayload { CallActionPayload(op: .answer) }
+    public static func reject() -> CallActionPayload { CallActionPayload(op: .reject) }
+    public static func hangup() -> CallActionPayload { CallActionPayload(op: .hangup) }
+    public static func toggleMute() -> CallActionPayload { CallActionPayload(op: .toggleMute) }
+    public static func toggleSpeaker() -> CallActionPayload { CallActionPayload(op: .toggleSpeaker) }
+    public static func dial(number: String) -> CallActionPayload {
+        CallActionPayload(op: .dial, number: number)
+    }
+    public static func rejectSms(text: String) -> CallActionPayload {
+        CallActionPayload(op: .rejectSms, smsText: text)
+    }
+
+    public func encode() throws -> Data {
+        try OpalCastJSONCodec.encode(self, context: "CALL_ACTION")
+    }
+
+    public static func decode(from data: Data) throws -> CallActionPayload {
+        try OpalCastJSONCodec.decode(CallActionPayload.self, from: data, context: "CALL_ACTION")
     }
 }

@@ -574,19 +574,22 @@ public final class NotificationBridgeManager: Sendable {
         public var onDismissNotification: (@Sendable (_ key: String) -> Void)?
         public var onReplyNotification: (@Sendable (_ key: String, _ replyText: String) -> Void)?
         public var onOtpCopied: (@Sendable (_ code: String, _ item: RemoteNotificationItem) -> Void)?
+        public var onInvokeAction: (@Sendable (_ key: String, _ actionIndex: Int) -> Void)?
 
         public init(
             onNotificationsChanged: (@Sendable ([RemoteNotificationItem]) -> Void)? = nil,
             onOpenApp: (@Sendable (_ packageName: String, _ appLabel: String) -> Void)? = nil,
             onDismissNotification: (@Sendable (_ key: String) -> Void)? = nil,
             onReplyNotification: (@Sendable (_ key: String, _ replyText: String) -> Void)? = nil,
-            onOtpCopied: (@Sendable (_ code: String, _ item: RemoteNotificationItem) -> Void)? = nil
+            onOtpCopied: (@Sendable (_ code: String, _ item: RemoteNotificationItem) -> Void)? = nil,
+            onInvokeAction: (@Sendable (_ key: String, _ actionIndex: Int) -> Void)? = nil
         ) {
             self.onNotificationsChanged = onNotificationsChanged
             self.onOpenApp = onOpenApp
             self.onDismissNotification = onDismissNotification
             self.onReplyNotification = onReplyNotification
             self.onOtpCopied = onOtpCopied
+            self.onInvokeAction = onInvokeAction
         }
     }
 
@@ -598,9 +601,11 @@ public final class NotificationBridgeManager: Sendable {
         var deliveredFingerprints: [String: String] = [:]
         var copiedOtpByKey: [String: String] = [:]
         var callbacks = Callbacks()
+        var sendFrame: (@Sendable (OpalCastFrame) -> Bool)?
         var isStarted: Bool = false
     }
 
+    private static let logger = Logger(subsystem: "io.github.lengsukq.opaldesk.mac", category: "companion.notifications")
     private let notificationCenter: any LocalNotificationCenterProtocol
     private let clipboardWriter: any ClipboardWriterProtocol
     private let state = OSAllocatedUnfairLock(initialState: MutableState())
@@ -617,13 +622,21 @@ public final class NotificationBridgeManager: Sendable {
     public init(
         notificationCenter: (any LocalNotificationCenterProtocol)? = nil,
         clipboardWriter: any ClipboardWriterProtocol = SystemClipboardWriter(),
-        callbacks: Callbacks = Callbacks()
+        callbacks: Callbacks = Callbacks(),
+        sendFrame: (@Sendable (OpalCastFrame) -> Bool)? = nil
     ) {
         self.notificationCenter = notificationCenter
             ?? SystemUserNotificationCenterAdapter.createIfSupported()
             ?? NoopLocalNotificationCenter()
         self.clipboardWriter = clipboardWriter
-        self.state.withLock { $0.callbacks = callbacks }
+        self.state.withLock {
+            $0.callbacks = callbacks
+            $0.sendFrame = sendFrame
+        }
+    }
+
+    public func setFrameSender(_ sender: (@Sendable (OpalCastFrame) -> Bool)?) {
+        state.withLock { $0.sendFrame = sender }
     }
 
     public var isEnabled: Bool {
@@ -751,6 +764,31 @@ public final class NotificationBridgeManager: Sendable {
             guard !key.isEmpty, !trimmed.isEmpty else { return }
             let onReply = state.withLock { $0.callbacks.onReplyNotification }
             onReply?(key, trimmed)
+        }
+    }
+
+    /// Invokes a quick action button on a remote Android notification by emitting
+    /// `0x31 NOTIFICATION_ACTION` (`op: "invoke_action"`).
+    @discardableResult
+    public func invokeAction(key: String, actionIndex: Int) -> Bool {
+        guard !key.isEmpty, actionIndex >= 0 else { return false }
+        let (onInvoke, sender): (
+            (@Sendable (String, Int) -> Void)?,
+            (@Sendable (OpalCastFrame) -> Bool)?
+        ) = state.withLock { s in
+            (s.callbacks.onInvokeAction, s.sendFrame)
+        }
+        if let onInvoke {
+            onInvoke(key, actionIndex)
+            return true
+        }
+        guard let sender else { return false }
+        do {
+            let frame = try OpalCastFrame.notificationAction(.invokeAction(key: key, actionIndex: actionIndex))
+            return sender(frame)
+        } catch {
+            Self.logger.error("Failed to encode invoke_action NOTIFICATION_ACTION: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -941,7 +979,8 @@ public final class NotificationBridgeManager: Sendable {
     }
 
     private static func contentFingerprint(for item: RemoteNotificationItem) -> String {
-        "\(item.pkg)|\(item.title)|\(item.text)|\(item.postTimeMs)|\(item.otpCode)|\(item.canReply)"
+        let actionsSig = item.actions.map { "\($0.index):\($0.label)" }.joined(separator: ",")
+        return "\(item.pkg)|\(item.title)|\(item.text)|\(item.postTimeMs)|\(item.otpCode)|\(item.canReply)|\(actionsSig)"
     }
 
     private static func sortedItems(from map: [String: RemoteNotificationItem]) -> [RemoteNotificationItem] {

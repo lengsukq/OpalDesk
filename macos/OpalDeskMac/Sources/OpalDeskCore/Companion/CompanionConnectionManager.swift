@@ -119,6 +119,7 @@ public final class CompanionConnectionManager: Sendable {
         public var onFileTransferAck: (@Sendable (FileTransferAckPayload) -> Void)?
         public var onApkInstallStatus: (@Sendable (ApkInstallStatusPayload) -> Void)?
         public var onError: (@Sendable (String) -> Void)?
+        public var onCallStateChanged: (@Sendable (CallStatePayload) -> Void)?
 
         public init(
             onStateChanged: (@Sendable (CompanionConnectionState) -> Void)? = nil,
@@ -131,7 +132,8 @@ public final class CompanionConnectionManager: Sendable {
             onClipboardImageReceived: (@Sendable (_ seq: Int64, _ pngData: Data) -> Void)? = nil,
             onFileTransferAck: (@Sendable (FileTransferAckPayload) -> Void)? = nil,
             onApkInstallStatus: (@Sendable (ApkInstallStatusPayload) -> Void)? = nil,
-            onError: (@Sendable (String) -> Void)? = nil
+            onError: (@Sendable (String) -> Void)? = nil,
+            onCallStateChanged: (@Sendable (CallStatePayload) -> Void)? = nil
         ) {
             self.onStateChanged = onStateChanged
             self.onDeviceStateUpdated = onDeviceStateUpdated
@@ -144,6 +146,7 @@ public final class CompanionConnectionManager: Sendable {
             self.onFileTransferAck = onFileTransferAck
             self.onApkInstallStatus = onApkInstallStatus
             self.onError = onError
+            self.onCallStateChanged = onCallStateChanged
         }
     }
 
@@ -177,6 +180,7 @@ public final class CompanionConnectionManager: Sendable {
     public let fileBrowserClient: RemoteFileBrowserClient
     public let notificationBridge: NotificationBridgeManager
     public let mediaBridge: MediaRemoteBridge
+    public let callBridge: CallBridgeManager
 
     private let transport: any CompanionSessionTransport
     private let clientName: String
@@ -191,6 +195,7 @@ public final class CompanionConnectionManager: Sendable {
         fileBrowserClient: RemoteFileBrowserClient = RemoteFileBrowserClient(),
         notificationBridge: NotificationBridgeManager = NotificationBridgeManager(),
         mediaBridge: MediaRemoteBridge = MediaRemoteBridge(),
+        callBridge: CallBridgeManager = CallBridgeManager(),
         clientName: String? = nil,
         baseBackoffSeconds: TimeInterval = 5.0,
         maxBackoffSeconds: TimeInterval = 300.0,
@@ -202,6 +207,7 @@ public final class CompanionConnectionManager: Sendable {
         self.fileBrowserClient = fileBrowserClient
         self.notificationBridge = notificationBridge
         self.mediaBridge = mediaBridge
+        self.callBridge = callBridge
         self.clientName = clientName ?? (Host.current().localizedName ?? ProcessInfo.processInfo.hostName)
         self.baseBackoffSeconds = max(0.05, baseBackoffSeconds)
         self.maxBackoffSeconds = max(self.baseBackoffSeconds, maxBackoffSeconds)
@@ -214,6 +220,7 @@ public final class CompanionConnectionManager: Sendable {
     deinit {
         transport.disconnect()
         mediaBridge.stop()
+        callBridge.handleSessionDisconnected()
         fileBrowserClient.handleSessionDisconnected(reason: "伴侣管理器已释放")
     }
 
@@ -401,6 +408,7 @@ public final class CompanionConnectionManager: Sendable {
             fileBrowserClient.handleSessionDisconnected(reason: "用户手动断开连接")
             notificationBridge.clearLocalState(removeDelivered: true)
             mediaBridge.stop()
+            callBridge.handleSessionDisconnected()
         }
 
         onStateChanged?(.disconnected)
@@ -460,11 +468,27 @@ public final class CompanionConnectionManager: Sendable {
     }
 
     @discardableResult
+    public func invokeNotificationAction(key: String, actionIndex: Int) -> Bool {
+        guard !key.isEmpty, actionIndex >= 0 else { return false }
+        return sendNotificationAction(.invokeAction(key: key, actionIndex: actionIndex))
+    }
+
+    @discardableResult
     public func sendMediaAction(_ payload: MediaActionPayload) -> Bool {
         do {
             return routeControlFrame(try OpalCastFrame.mediaAction(payload))
         } catch {
             Self.logger.error("Failed to encode MEDIA_ACTION: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    @discardableResult
+    public func sendCallAction(_ payload: CallActionPayload) -> Bool {
+        do {
+            return routeControlFrame(try OpalCastFrame.callAction(payload))
+        } catch {
+            Self.logger.error("Failed to encode CALL_ACTION: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
@@ -691,6 +715,7 @@ public final class CompanionConnectionManager: Sendable {
             if !mainActive {
                 fileBrowserClient.handleSessionDisconnected(reason: reason)
                 mediaBridge.stop()
+                callBridge.handleSessionDisconnected()
             }
             cb?(.failed(reason))
             if hadTopApp {
@@ -713,6 +738,7 @@ public final class CompanionConnectionManager: Sendable {
             if !mainActive {
                 fileBrowserClient.handleSessionDisconnected(reason: "连接已断开")
                 mediaBridge.stop()
+                callBridge.handleSessionDisconnected()
             }
             cb?(.disconnected)
             if hadTopApp {
@@ -828,6 +854,16 @@ public final class CompanionConnectionManager: Sendable {
                 Self.logger.error("Failed to decode APK_INSTALL_STATUS: \(error.localizedDescription, privacy: .public)")
             }
 
+        case .callState:
+            do {
+                let callState = try CallStatePayload.decode(from: frame.payload)
+                callBridge.handleCallState(callState)
+                let callback = state.withLock { $0.callbacks.onCallStateChanged }
+                callback?(callState)
+            } catch {
+                Self.logger.error("Failed to decode CALL_STATE: \(error.localizedDescription, privacy: .public)")
+            }
+
         case .fileTransferAck:
             do {
                 let ack = try FileTransferAckPayload.decode(from: frame.payload)
@@ -872,6 +908,7 @@ public final class CompanionConnectionManager: Sendable {
             if !mainActive {
                 fileBrowserClient.handleSessionDisconnected(reason: reason)
                 mediaBridge.stop()
+                callBridge.handleSessionDisconnected()
             }
             onError?(reason)
             onState?(.failed(reason))
@@ -1000,9 +1037,13 @@ public final class CompanionConnectionManager: Sendable {
     }
 
     private func wireSubcomponents() {
-        fileBrowserClient.setFrameSender { [weak self] frame in
+        let router: @Sendable (OpalCastFrame) -> Bool = { [weak self] frame in
             self?.routeControlFrame(frame) ?? false
         }
+
+        fileBrowserClient.setFrameSender(router)
+        callBridge.setFrameSender(router)
+        notificationBridge.setFrameSender(router)
 
         notificationBridge.updateCallbacks { cb in
             if cb.onDismissNotification == nil {
