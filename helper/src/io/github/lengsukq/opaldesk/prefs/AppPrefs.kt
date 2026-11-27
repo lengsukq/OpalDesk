@@ -38,6 +38,7 @@ object AppPrefs {
     const val MIN_OVERSCAN_PCT = 0f
     const val MAX_OVERSCAN_PCT = 6f
     const val DEFAULT_OVERSCAN_PCT = 0f
+    const val MAX_SPOTLIGHT_RECENTS = 5
 
     private const val PREFS_NAME = "opaldesk_v2_prefs"
     private const val KEY_AUTO_ROOT = "auto_root"
@@ -88,6 +89,7 @@ object AppPrefs {
     private const val KEY_MUTE_HOST_IME_ON_CAST = "mute_host_ime_on_cast_v1"
     private const val KEY_HARD_KBD_SOFT_IME_MODE = "hard_kbd_soft_ime_mode_v1"
     private const val KEY_AUTO_BRIDGE_IME_ON_CAST = "auto_bridge_ime_on_cast_v1"
+    private const val KEY_SPOTLIGHT_RECENTS = "spotlight_recent_ids_v1"
 
     private val DEFAULT_PINNED = listOf(
         "com.android.chrome",
@@ -212,6 +214,9 @@ object AppPrefs {
     private val _autoBridgeImeOnCastFlow = MutableStateFlow(true)
     val autoBridgeImeOnCastFlow: StateFlow<Boolean> = _autoBridgeImeOnCastFlow.asStateFlow()
 
+    private val _spotlightRecentsFlow = MutableStateFlow<List<String>>(emptyList())
+    val spotlightRecentsFlow: StateFlow<List<String>> = _spotlightRecentsFlow.asStateFlow()
+
     private fun prefs(ctx: Context?) =
         ctx?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -292,6 +297,7 @@ object AppPrefs {
             else -> io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM
         }
         _autoBridgeImeOnCastFlow.value = p.getBoolean(KEY_AUTO_BRIDGE_IME_ON_CAST, true)
+        _spotlightRecentsFlow.value = parseSpotlightRecents(p.getString(KEY_SPOTLIGHT_RECENTS, null))
     }
 
     private fun loadPkgList(p: android.content.SharedPreferences, key: String, fallbackKey: String): List<String> {
@@ -863,6 +869,48 @@ object AppPrefs {
     fun setAutoBridgeImeOnCastEnabled(ctx: Context?, enabled: Boolean) {
         prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_BRIDGE_IME_ON_CAST, enabled)?.apply()
         _autoBridgeImeOnCastFlow.value = enabled
+    }
+
+    fun getSpotlightRecents(ctx: Context?): List<String> {
+        hydrateFlows(ctx)
+        return _spotlightRecentsFlow.value
+    }
+
+    fun recordSpotlightRecent(ctx: Context?, itemId: String): List<String> {
+        hydrateFlows(ctx)
+        val updated = updateSpotlightRecents(_spotlightRecentsFlow.value, itemId, MAX_SPOTLIGHT_RECENTS)
+        _spotlightRecentsFlow.value = updated
+        prefs(ctx)?.edit()?.putString(KEY_SPOTLIGHT_RECENTS, updated.joinToString(","))?.apply()
+        return updated
+    }
+
+    fun parseSpotlightRecents(raw: String?, maxSize: Int = MAX_SPOTLIGHT_RECENTS): List<String> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return raw.split(',')
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .take(maxSize.coerceAtLeast(1))
+            .toList()
+    }
+
+    fun updateSpotlightRecents(
+        existing: List<String>,
+        itemId: String,
+        maxSize: Int = MAX_SPOTLIGHT_RECENTS,
+    ): List<String> {
+        val clean = itemId.trim()
+        if (clean.isEmpty()) return existing.take(maxSize.coerceAtLeast(1))
+        val out = ArrayList<String>(maxSize.coerceAtLeast(1))
+        out.add(clean)
+        for (id in existing) {
+            val t = id.trim()
+            if (t.isNotEmpty() && t != clean && out.size < maxSize) {
+                out.add(t)
+            }
+        }
+        return out
     }
 
     fun createFeedbackQuotaStorage(ctx: Context): FeedbackQuotaStorage {

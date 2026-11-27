@@ -49,6 +49,7 @@ import io.github.lengsukq.opaldesk.protocol.WindowTilingLayout
  * Persisted as comma-separated [prefKey] values in [AppPrefs].
  */
 enum class WorkstationShortcutId(val prefKey: String) {
+    OPEN_SPOTLIGHT("open_spotlight"),
     SWITCH_WINDOW("alt_tab"),
     CLOSE_WINDOW("ctrl_w"),
     TOGGLE_FULLSCREEN("alt_enter"),
@@ -61,6 +62,8 @@ enum class WorkstationShortcutId(val prefKey: String) {
     }
 }
 
+typealias GlobalShortcutId = WorkstationShortcutId
+
 data class ShortcutCheatItem(
     val keys: List<String>,
     val title: String,
@@ -69,6 +72,7 @@ data class ShortcutCheatItem(
 )
 
 sealed interface GlobalShortcutAction {
+    data object OpenSpotlight : GlobalShortcutAction
     data object SwitchNextWindow : GlobalShortcutAction
     data object CloseFocusedWindow : GlobalShortcutAction
     data object ToggleFullscreen : GlobalShortcutAction
@@ -83,6 +87,12 @@ sealed interface GlobalShortcutAction {
  */
 object WorkstationShortcutCatalog {
     val windowShortcuts: List<ShortcutCheatItem> = listOf(
+        ShortcutCheatItem(
+            keys = listOf("Alt", "Space"),
+            title = "全局搜索 Spotlight",
+            subtitle = "亦支持 Ctrl+K · 秒搜窗口、应用、桌面指令与设置",
+            toggleId = WorkstationShortcutId.OPEN_SPOTLIGHT,
+        ),
         ShortcutCheatItem(
             keys = listOf("Alt", "Tab"),
             title = "切换聚焦窗口",
@@ -131,6 +141,8 @@ object WorkstationShortcutCatalog {
             subtitle = "始终直接透传给当前应用，不受快捷键开关影响",
         ),
     )
+
+    val allShortcuts: List<ShortcutCheatItem> = windowShortcuts + tilingShortcuts + passthroughShortcuts
 
     val totalGlobalShortcutCount: Int = windowShortcuts.size + tilingShortcuts.size
 
@@ -202,6 +214,15 @@ object WorkstationShortcutCatalog {
         val altPressed = (metaState and (KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON or KeyEvent.META_ALT_RIGHT_ON)) != 0
         val ctrlPressed = (metaState and (KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON or KeyEvent.META_CTRL_RIGHT_ON)) != 0
 
+        if ((altPressed && keyCode == KeyEvent.KEYCODE_SPACE) ||
+            (ctrlPressed && keyCode == KeyEvent.KEYCODE_K)
+        ) {
+            return if (WorkstationShortcutId.OPEN_SPOTLIGHT.prefKey !in disabledIds) {
+                GlobalShortcutAction.OpenSpotlight
+            } else {
+                null
+            }
+        }
         if (altPressed && keyCode == KeyEvent.KEYCODE_TAB) {
             return if (WorkstationShortcutId.SWITCH_WINDOW.prefKey !in disabledIds) {
                 GlobalShortcutAction.SwitchNextWindow
@@ -342,6 +363,55 @@ fun DexKeyboardShortcutsPopover(
                 onToggleItem = { id, enabled -> AppPrefs.setShortcutEnabled(ctx, id, enabled) },
             )
         }
+    }
+}
+
+/**
+ * Inner content for [OpalCollapsibleSectionCard] in Tab 1 ("显示与外设") without nested outer glass cards.
+ */
+@Composable
+fun ConsoleKeyboardShortcutsSectionContent() {
+    val ctx = LocalContext.current
+    val globalEnabled by AppPrefs.globalShortcutsEnabledFlow.collectAsState()
+    val disabledIds by AppPrefs.disabledShortcutIdsFlow.collectAsState()
+    LaunchedEffect(Unit) { AppPrefs.hydrateFlows(ctx) }
+
+    val customized = WorkstationShortcutCatalog.hasCustomizations(globalEnabled, disabledIds)
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (customized) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                OpalText(
+                    text = WorkstationShortcutCatalog.formatDetailSubtitle(globalEnabled, disabledIds),
+                    fontSize = 11.5.sp,
+                    color = OpalPalette.TextSecondary,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                OpalText(
+                    text = "恢复默认",
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = OpalPalette.AccentBlue,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(OpalPalette.ChipActiveFill)
+                        .clickable { AppPrefs.resetKeyboardShortcuts(ctx) }
+                        .padding(horizontal = 9.dp, vertical = 4.dp),
+                )
+            }
+        }
+        KeyboardShortcutsBody(
+            globalEnabled = globalEnabled,
+            disabledIds = disabledIds,
+            compact = false,
+            showMasterSwitch = true,
+            onToggleGlobal = { AppPrefs.setGlobalShortcutsEnabled(ctx, it) },
+            onToggleItem = { id, enabled -> AppPrefs.setShortcutEnabled(ctx, id, enabled) },
+        )
     }
 }
 

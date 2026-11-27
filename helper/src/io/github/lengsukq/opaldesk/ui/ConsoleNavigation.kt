@@ -92,6 +92,7 @@ fun OpalConsoleHeader(
     readyToInstallUpdate: Boolean,
     onOpenActivation: () -> Unit,
     onOpenUpdate: () -> Unit,
+    onOpenSearch: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val (title, subtitle) = when (selectedTab) {
@@ -189,6 +190,10 @@ fun OpalConsoleHeader(
                         maxLines = 1,
                     )
                 }
+            }
+
+            if (onOpenSearch != null) {
+                ConsoleHeaderSearchButton(onClick = onOpenSearch)
             }
 
             val statusColor = if (connected) OpalPalette.AccentEmerald else OpalPalette.AccentAmber
@@ -334,6 +339,65 @@ fun OpalConsoleBottomBar(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ConsoleHeaderSearchButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isDark = OpalPalette.isDark
+    val fill = if (isDark) {
+        Brush.verticalGradient(listOf(Color(0xD8242C3F), Color(0xCC161B28)))
+    } else {
+        Brush.verticalGradient(listOf(Color(0xF0FFFFFF), Color(0xD8EDF3FC)))
+    }
+    val rim = if (isDark) {
+        Brush.verticalGradient(listOf(Color(0x48FFFFFF), Color(0x16FFFFFF)))
+    } else {
+        Brush.verticalGradient(listOf(Color(0xF5FFFFFF), Color(0x300F172A)))
+    }
+    val tint = OpalPalette.TextPrimary
+    Box(
+        modifier = modifier
+            .size(32.dp)
+            .liquidGlassSurface(
+                shape = CircleShape,
+                fill = fill,
+                rim = rim,
+                elevation = if (isDark) 8.dp else 6.dp,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.size(15.dp)) {
+            val w = size.width
+            val h = size.height
+            val stroke = Stroke(
+                width = w * 0.11f,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round,
+            )
+            drawCircle(
+                color = tint.copy(alpha = if (isDark) 0.14f else 0.08f),
+                radius = w * 0.30f,
+                center = Offset(w * 0.43f, h * 0.43f),
+            )
+            drawCircle(
+                color = tint,
+                radius = w * 0.30f,
+                center = Offset(w * 0.43f, h * 0.43f),
+                style = stroke,
+            )
+            drawLine(
+                color = tint,
+                start = Offset(w * 0.65f, h * 0.65f),
+                end = Offset(w * 0.88f, h * 0.88f),
+                strokeWidth = stroke.width * 1.05f,
+                cap = StrokeCap.Round,
+            )
         }
     }
 }

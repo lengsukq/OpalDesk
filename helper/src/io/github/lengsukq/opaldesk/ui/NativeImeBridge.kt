@@ -75,6 +75,28 @@ object WorkstationKeyDispatcher {
         Thread(r, "OpalImeTextCommit").apply { isDaemon = true }
     }
     private val consumedShortcutKeyCodes = HashSet<Int>()
+    private val _spotlightTogglePulseFlow = MutableStateFlow(0L)
+    val spotlightTogglePulseFlow: StateFlow<Long> = _spotlightTogglePulseFlow.asStateFlow()
+
+    @Volatile
+    private var activeSpotlightKeyHandler: ((KeyEvent) -> Boolean)? = null
+
+    fun setActiveSpotlightKeyHandler(handler: ((KeyEvent) -> Boolean)?) {
+        activeSpotlightKeyHandler = handler
+    }
+
+    fun clearActiveSpotlightKeyHandler(expected: ((KeyEvent) -> Boolean)?) {
+        if (expected == null || activeSpotlightKeyHandler === expected) {
+            activeSpotlightKeyHandler = null
+        }
+    }
+
+    fun handleActiveSpotlightKeyEvent(event: KeyEvent): Boolean =
+        activeSpotlightKeyHandler?.invoke(event) == true
+
+    fun triggerSpotlightToggle() {
+        _spotlightTogglePulseFlow.value = _spotlightTogglePulseFlow.value + 1L
+    }
 
     fun handleGlobalShortcut(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_UP) {
@@ -93,6 +115,9 @@ object WorkstationKeyDispatcher {
         ) ?: return false
 
         when (action) {
+            GlobalShortcutAction.OpenSpotlight -> {
+                triggerSpotlightToggle()
+            }
             GlobalShortcutAction.SwitchNextWindow -> {
                 val candidates = scene.windows.filter { !it.isMinimized }
                 if (candidates.size >= 2) {

@@ -68,6 +68,7 @@ fun ConsoleLogsTab(
     scene: CompositorScene,
     remote: RemoteStreamStatus,
     onOpenUpdateModal: () -> Unit = {},
+    navController: ConsoleNavigationController? = null,
 ) {
     val ctx = LocalContext.current
     val helperEntries by OpalLogStore.entriesFlow.collectAsState()
@@ -168,6 +169,11 @@ fun ConsoleLogsTab(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .consoleSearchAnchor(
+                    controller = navController,
+                    sectionKey = ConsoleSectionKeys.DIAGNOSTICS_LOGS,
+                    shape = RoundedCornerShape(24.dp),
+                )
                 .liquidGlassSurface(
                     shape = RoundedCornerShape(24.dp),
                     fill = heroBrush,
@@ -393,6 +399,10 @@ fun ConsoleLogsTab(
         FeedbackTrackingSection(
             currentAppVersion = appVersion,
             onOpenUpdateModal = onOpenUpdateModal,
+            cardModifier = Modifier.consoleSearchAnchor(
+                controller = navController,
+                sectionKey = ConsoleSectionKeys.FEEDBACK_TRACKING,
+            ),
         )
 
         // 2. Filters & Log Stream

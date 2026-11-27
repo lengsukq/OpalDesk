@@ -61,7 +61,13 @@ import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadLauncher
 import io.github.lengsukq.opaldesk.guide.OpalGuidePolicy
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
+import io.github.lengsukq.opaldesk.prefs.ProfileConfigStore
 import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
+import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
+import io.github.lengsukq.opaldesk.search.ConsoleSearchCatalog
+import io.github.lengsukq.opaldesk.search.ConsoleSpotlightActionIds
+import io.github.lengsukq.opaldesk.search.ConsoleSpotlightState
+import io.github.lengsukq.opaldesk.search.SpotlightCategory
 import io.github.lengsukq.opaldesk.service.DisplayLaunchHelper
 import io.github.lengsukq.opaldesk.service.QuickEntryPolicy
 import kotlinx.coroutines.Dispatchers
@@ -74,18 +80,28 @@ import io.github.lengsukq.opaldesk.ui.ConsoleDisplaySettingsTab
 import io.github.lengsukq.opaldesk.ui.ConsoleEngineSettingsTab
 import io.github.lengsukq.opaldesk.ui.ConsoleFeatureGuideModal
 import io.github.lengsukq.opaldesk.ui.ConsoleLogsTab
+import io.github.lengsukq.opaldesk.ui.ConsoleSectionKeys
+import io.github.lengsukq.opaldesk.ui.DexImeCatalog
 import io.github.lengsukq.opaldesk.ui.OpalAmbientBackdrop
 import io.github.lengsukq.opaldesk.ui.OpalButton
 import io.github.lengsukq.opaldesk.ui.OpalConsoleBottomBar
 import io.github.lengsukq.opaldesk.ui.OpalConsoleHeader
 import io.github.lengsukq.opaldesk.ui.OpalGlassCard
 import io.github.lengsukq.opaldesk.ui.OpalPalette
+import io.github.lengsukq.opaldesk.ui.OpalSpotlightController
+import io.github.lengsukq.opaldesk.ui.OpalSpotlightOverlay
 import io.github.lengsukq.opaldesk.ui.OpalText
 import io.github.lengsukq.opaldesk.ui.OpalTheme
 import io.github.lengsukq.opaldesk.ui.PairingConsentModal
+import io.github.lengsukq.opaldesk.ui.WorkstationShortcutCatalog
+import io.github.lengsukq.opaldesk.ui.formatCompactResolutionBadge
 import io.github.lengsukq.opaldesk.ui.joinOpalDeskQqGroup
 import io.github.lengsukq.opaldesk.ui.openAllowedGuideUrl
+import io.github.lengsukq.opaldesk.ui.rememberConsoleNavigationController
+import io.github.lengsukq.opaldesk.ui.toggleHostScreenPowerWithToast
 import io.github.lengsukq.opaldesk.update.AppUpdateManager
+import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * OpalDesk v1.0.0 macOS Liquid Glass Control Console.
@@ -101,17 +117,23 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_FROM_DESKTOP = "from_desktop"
         const val EXTRA_BYPASS_AUTO_ENTER_DEX = "bypass_auto_enter_dex"
         const val EXTRA_OPEN_ACTIVATION = "open_activation"
+        const val EXTRA_FOCUS_TAB = "focus_tab"
+        const val EXTRA_FOCUS_SECTION_KEY = "focus_section_key"
 
         fun createLaunchIntent(
             ctx: Context,
             fromDesktop: Boolean = false,
             bypassAutoEnterDex: Boolean = false,
             openActivation: Boolean = false,
+            focusTab: Int = -1,
+            focusSectionKey: String? = null,
         ): Intent = Intent(ctx, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             if (fromDesktop) putExtra(EXTRA_FROM_DESKTOP, true)
             if (bypassAutoEnterDex) putExtra(EXTRA_BYPASS_AUTO_ENTER_DEX, true)
             if (openActivation) putExtra(EXTRA_OPEN_ACTIVATION, true)
+            if (focusTab in 0..3) putExtra(EXTRA_FOCUS_TAB, focusTab)
+            if (!focusSectionKey.isNullOrBlank()) putExtra(EXTRA_FOCUS_SECTION_KEY, focusSectionKey)
         }
     }
 
@@ -119,6 +141,12 @@ class MainActivity : ComponentActivity() {
     private var localNetworkPermGranted by mutableStateOf(true)
     private var autoEnterDexArmed by mutableStateOf(false)
     private var openActivationPulse by mutableIntStateOf(0)
+    private var pendingFocusTab by mutableIntStateOf(-1)
+    private var pendingFocusSectionKey by mutableStateOf<String?>(null)
+    private var pendingFocusPulse by mutableIntStateOf(0)
+    private var showSpotlight by mutableStateOf(false)
+    private val spotlightController = OpalSpotlightController()
+    private var consumedSpotlightToggleKeyUp = false
     private val notifPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { _ -> }
@@ -174,6 +202,12 @@ class MainActivity : ComponentActivity() {
                     needsLocalNetworkPerm = !localNetworkPermGranted,
                     autoEnterDexArmed = autoEnterDexArmed,
                     openActivationPulse = openActivationPulse,
+                    pendingFocusTab = pendingFocusTab,
+                    pendingFocusSectionKey = pendingFocusSectionKey,
+                    pendingFocusPulse = pendingFocusPulse,
+                    showSpotlight = showSpotlight,
+                    spotlightController = spotlightController,
+                    onSetShowSpotlight = { showSpotlight = it },
                     onDisarmAutoEnterDex = { autoEnterDexArmed = false },
                     onRequestLocalNetworkPerm = {
                         if (Build.VERSION.SDK_INT >= 37) {
@@ -208,13 +242,22 @@ class MainActivity : ComponentActivity() {
         val fromDesktop = launchIntent?.getBooleanExtra(EXTRA_FROM_DESKTOP, false) == true
         val bypassAutoEnter = launchIntent?.getBooleanExtra(EXTRA_BYPASS_AUTO_ENTER_DEX, false) == true
         val openActivation = launchIntent?.getBooleanExtra(EXTRA_OPEN_ACTIVATION, false) == true
-        if (fromDesktop || bypassAutoEnter || openActivation) {
+        val focusTab = launchIntent?.getIntExtra(EXTRA_FOCUS_TAB, -1) ?: -1
+        val focusSection = launchIntent?.getStringExtra(EXTRA_FOCUS_SECTION_KEY)?.trim().orEmpty()
+        val hasFocusTarget = focusTab in 0..3 || focusSection.isNotEmpty()
+        if (fromDesktop || bypassAutoEnter || openActivation || hasFocusTarget) {
             autoEnterDexArmed = false
         } else if (isColdCreate) {
             autoEnterDexArmed = AppPrefs.isAutoEnterDexEnabled(this)
         }
         if (openActivation) {
             openActivationPulse++
+        }
+        if (hasFocusTarget) {
+            showSpotlight = false
+            pendingFocusTab = focusTab
+            pendingFocusSectionKey = focusSection.ifEmpty { null }
+            pendingFocusPulse++
         }
     }
 
@@ -257,6 +300,21 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
+        val isSpotlightChord = event.keyCode == KeyEvent.KEYCODE_K && (event.isCtrlPressed || event.isMetaPressed)
+        if (isSpotlightChord && event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            autoEnterDexArmed = false
+            showSpotlight = !showSpotlight
+            if (showSpotlight) spotlightController.resetSelection()
+            consumedSpotlightToggleKeyUp = true
+            return true
+        }
+        if (event.action == KeyEvent.ACTION_UP && event.keyCode == KeyEvent.KEYCODE_K && consumedSpotlightToggleKeyUp) {
+            consumedSpotlightToggleKeyUp = false
+            return true
+        }
+        if (showSpotlight && spotlightController.handleKeyEvent(event)) {
+            return true
+        }
         return super.dispatchKeyEvent(event)
     }
 
@@ -378,6 +436,12 @@ private fun OpalConsoleScreen(
     needsLocalNetworkPerm: Boolean,
     autoEnterDexArmed: Boolean,
     openActivationPulse: Int,
+    pendingFocusTab: Int,
+    pendingFocusSectionKey: String?,
+    pendingFocusPulse: Int,
+    showSpotlight: Boolean,
+    spotlightController: OpalSpotlightController,
+    onSetShowSpotlight: (Boolean) -> Unit,
     onDisarmAutoEnterDex: () -> Unit,
     onRequestLocalNetworkPerm: () -> Unit,
     onEnterDesktop: () -> Unit,
@@ -397,8 +461,12 @@ private fun OpalConsoleScreen(
     val pendingPairing by BridgeClient.pendingPairingFlow.collectAsState()
     val extDisplay by BridgeService.externalDisplayFlow.collectAsState()
     val detectedExtDisplays by BridgeService.detectedExternalDisplaysFlow.collectAsState()
+    val trustedPeers by BridgeClient.trustedPeersFlow.collectAsState()
+    val imeState by BridgeClient.imeStateFlow.collectAsState()
+    val peerRole by OpalPeerCastMutex.roleFlow.collectAsState()
 
-    var selectedTab by remember { mutableIntStateOf(0) }
+    val navController = rememberConsoleNavigationController(initialTab = 0)
+    val selectedTab = navController.selectedTab
     var showActivationModal by remember { mutableStateOf(false) }
     var showUpdateModal by remember { mutableStateOf(false) }
     var showGuideModal by remember { mutableStateOf(false) }
@@ -406,6 +474,22 @@ private fun OpalConsoleScreen(
     var exitingApp by remember { mutableStateOf(false) }
     var floatingPickerTarget by remember { mutableStateOf<Triple<String, Int, String>?>(null) }
     val wallpaperPreset by AppPrefs.wallpaperPresetFlow.collectAsState()
+    val themeMode by AppPrefs.themeModeFlow.collectAsState()
+    val extUiScale by AppPrefs.externalUiScaleFlow.collectAsState()
+    val trackpadSens by AppPrefs.trackpadSensitivityFlow.collectAsState()
+    val customWallpaperPath by AppPrefs.customWallpaperPathFlow.collectAsState()
+    val autoCustomResEnabled by AppPrefs.autoCustomResolutionEnabledFlow.collectAsState()
+    val defaultCustomRes by AppPrefs.defaultCustomResolutionFlow.collectAsState()
+    val globalShortcutsEnabled by AppPrefs.globalShortcutsEnabledFlow.collectAsState()
+    val disabledShortcutIds by AppPrefs.disabledShortcutIdsFlow.collectAsState()
+    val dexImeDisplayMode by AppPrefs.dexImeDisplayModeFlow.collectAsState()
+    val dexLockedImeId by AppPrefs.dexLockedImeIdFlow.collectAsState()
+    val autoBridgeImeOnCast by AppPrefs.autoBridgeImeOnCastFlow.collectAsState()
+    val audioRouteMode by AppPrefs.audioRouteModeFlow.collectAsState()
+    val usbTetherEnabled by AppPrefs.usbTetherCastEnabledFlow.collectAsState()
+    val spotlightRecents by AppPrefs.spotlightRecentsFlow.collectAsState()
+    val notifAccessGranted by io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.accessGrantedFlow.collectAsState()
+    val profileState by ProfileConfigStore.stateFlow.collectAsState()
     val updateState by AppUpdateManager.stateFlow.collectAsState()
     val currentVersion = remember(ctx) { AppUpdateManager.getCurrentVersionName(ctx) }
 
@@ -417,6 +501,18 @@ private fun OpalConsoleScreen(
         if (openActivationPulse > 0) {
             onDisarmAutoEnterDex()
             showActivationModal = true
+        }
+    }
+
+    LaunchedEffect(pendingFocusPulse) {
+        if (pendingFocusPulse > 0) {
+            onDisarmAutoEnterDex()
+            val targetTab = if (pendingFocusTab in 0..3) pendingFocusTab else navController.selectedTab
+            if (!pendingFocusSectionKey.isNullOrBlank()) {
+                navController.jumpToSection(targetTab, pendingFocusSectionKey)
+            } else if (pendingFocusTab in 0..3) {
+                navController.selectedTab = pendingFocusTab
+            }
         }
     }
 
@@ -500,6 +596,11 @@ private fun OpalConsoleScreen(
                             onDisarmAutoEnterDex()
                             showUpdateModal = true
                         },
+                        onOpenSearch = {
+                            onDisarmAutoEnterDex()
+                            spotlightController.resetSelection()
+                            onSetShowSpotlight(true)
+                        },
                     )
 
                     when (selectedTab) {
@@ -544,6 +645,7 @@ private fun OpalConsoleScreen(
                                 onDisarmAutoEnterDex()
                                 showExitConfirmModal = true
                             },
+                            navController = navController,
                         )
                         1 -> ConsoleDisplaySettingsTab(
                             status = status,
@@ -552,6 +654,7 @@ private fun OpalConsoleScreen(
                             detectedExtDisplays = detectedExtDisplays,
                             onProjectSpecificDisplay = onProjectSpecificDisplay,
                             onPickCustomWallpaper = onPickCustomWallpaper,
+                            navController = navController,
                         )
                         2 -> ConsoleEngineSettingsTab(
                             status = status,
@@ -569,6 +672,7 @@ private fun OpalConsoleScreen(
                                 showGuideModal = true
                             },
                             onStopEngine = onStopEngine,
+                            navController = navController,
                         )
                         else -> ConsoleLogsTab(
                             status = status,
@@ -578,6 +682,7 @@ private fun OpalConsoleScreen(
                                 onDisarmAutoEnterDex()
                                 showUpdateModal = true
                             },
+                            navController = navController,
                         )
                     }
                 }
@@ -587,7 +692,7 @@ private fun OpalConsoleScreen(
                 selectedTab = selectedTab,
                 onSelectTab = {
                     onDisarmAutoEnterDex()
-                    selectedTab = it
+                    navController.selectedTab = it
                 },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
@@ -614,13 +719,19 @@ private fun OpalConsoleScreen(
                     when (action) {
                         OpalGuidePolicy.ACTION_OPEN_URL -> openAllowedGuideUrl(ctx, url)
                         OpalGuidePolicy.ACTION_JOIN_QQ -> joinOpalDeskQqGroup(ctx)
-                        OpalGuidePolicy.ACTION_OPEN_SHORTCUTS,
-                        OpalGuidePolicy.ACTION_OPEN_DPI,
+                        OpalGuidePolicy.ACTION_OPEN_SHORTCUTS -> {
+                            showGuideModal = false
+                            navController.jumpToSection(1, ConsoleSectionKeys.KEYBOARD_SHORTCUTS)
+                        }
+                        OpalGuidePolicy.ACTION_OPEN_DPI -> {
+                            showGuideModal = false
+                            navController.jumpToSection(1, ConsoleSectionKeys.PER_APP_DPI)
+                        }
                         OpalGuidePolicy.ACTION_OPEN_TILING,
                         OpalGuidePolicy.ACTION_OPEN_DOCK_SETTINGS,
                         OpalGuidePolicy.ACTION_OPEN_CONTROL_CENTER -> {
                             showGuideModal = false
-                            selectedTab = 1
+                            navController.selectedTab = 1
                         }
                         OpalGuidePolicy.ACTION_OPEN_CONSOLE -> {
                             showGuideModal = false
@@ -692,6 +803,154 @@ private fun OpalConsoleScreen(
 
         pendingPairing?.let { req ->
             PairingConsentModal(request = req)
+        }
+
+        if (showSpotlight) {
+            val working = profileState.workingConfig
+            val activeSlot = profileState.activeSavedSlot
+            val activeShortcuts = WorkstationShortcutCatalog.countActiveGlobalShortcuts(
+                globalShortcutsEnabled,
+                disabledShortcutIds,
+            )
+            val yuyanActive = imeState.pluginImeActive || DexImeCatalog.isYuyanPluginEnabledForDex(
+                pluginInstalled = imeState.pluginImeInstalled,
+                lockedImeId = dexLockedImeId,
+                autoBridgeOnCast = autoBridgeImeOnCast,
+                displayMode = dexImeDisplayMode,
+            )
+            val backendShort = when (status.inputBackendMode) {
+                BridgeProtocol.InputBackend.SYSTEM -> "系统"
+                BridgeProtocol.InputBackend.UHID -> "UHID"
+                else -> "自动"
+            }
+            val effectiveQuota = status.maxVdCount.takeIf { it > 0 } ?: working.maxVdCount
+            val spotlightState = ConsoleSpotlightState(
+                connected = status.connected,
+                rootEnhanced = status.rootEnhanced,
+                windowCount = scene.windows.size,
+                remoteConnected = remote.connected,
+                lanShareActive = remote.isLanShareActive && !peerRole.isReceiving,
+                lanEndpoint = if (remote.lanIp.isNotEmpty()) "${remote.lanIp}:${if (remote.wifiPort > 0) remote.wifiPort else 19878}" else "",
+                extDisplaySummary = extDisplay?.let { "${it.name} · ${it.width}×${it.height} @ ${it.refreshRateHz}Hz" }.orEmpty(),
+                themeModeLabel = when (themeMode) {
+                    AppPrefs.THEME_DARK -> "深色"
+                    AppPrefs.THEME_SYSTEM -> "跟随系统"
+                    else -> "浅色"
+                },
+                targetFpsLabel = if (status.targetFps > 0) "${status.targetFps}Hz" else "自动",
+                uiScaleLabel = "${(extUiScale * 100f).roundToInt()}%",
+                resolutionSummary = when {
+                    extDisplay != null -> formatCompactResolutionBadge(extDisplay!!.width, extDisplay!!.height, extDisplay!!.refreshRateHz)
+                    remote.connected -> formatCompactResolutionBadge(remote.width, remote.height, (remote.fpsX100 / 100f).roundToInt().coerceAtLeast(24))
+                    autoCustomResEnabled -> formatCompactResolutionBadge(defaultCustomRes.width, defaultCustomRes.height, defaultCustomRes.fps)
+                    else -> "自适应 EDID"
+                },
+                perAppDpiSummary = when {
+                    working.appCustomDpis.isNotEmpty() -> "自定义 ${working.appCustomDpis.size} 项"
+                    working.globalCustomDpi > 0 -> "全局 ${working.globalCustomDpi}"
+                    else -> "自动适配"
+                },
+                peripheralsSummary = if (customWallpaperPath.isNotBlank()) {
+                    "相册壁纸 · ${String.format(Locale.US, "%.2f×", trackpadSens)}"
+                } else {
+                    String.format(Locale.US, "%.2f×", trackpadSens)
+                },
+                imeSummary = when {
+                    yuyanActive -> "语燕输入法"
+                    dexLockedImeId.isNotBlank() -> DexImeCatalog.fallbackLabelForImeId(dexLockedImeId).substringBefore(" (").take(10)
+                    else -> DexImeCatalog.displayModeTitle(dexImeDisplayMode)
+                },
+                shortcutsSummary = if (!globalShortcutsEnabled || activeShortcuts == 0) "已关闭" else "已启 $activeShortcuts 项",
+                notifAccessGranted = notifAccessGranted,
+                slotSummary = "槽位 ${profileState.activeSlotId + 1} · ${activeSlot.name.take(6)}",
+                audioSummary = if (audioRouteMode == BridgeProtocol.AudioRoute.SPLIT_BY_APP) "独立分流" else "整机传 DeX",
+                usbTetherEnabled = usbTetherEnabled,
+                inputBackendSummary = "$backendShort · 配额 $effectiveQuota",
+                currentVersion = currentVersion,
+                availableReleaseTag = availableReleaseTag,
+                hostScreenOff = status.hostScreenOff,
+                trustedPeerCount = trustedPeers.size,
+            )
+            val spotlightItems = remember(spotlightState) { ConsoleSearchCatalog.buildItems(spotlightState) }
+            OpalSpotlightOverlay(
+                items = spotlightItems,
+                recentIds = spotlightRecents,
+                placeholder = "搜索控制台设置、功能或拼音首字母（Ctrl+K）",
+                quickChips = ConsoleSearchCatalog.QUICK_CHIPS,
+                controller = spotlightController,
+                onSelectItem = { chosen ->
+                    AppPrefs.recordSpotlightRecent(ctx, chosen.id)
+                    onSetShowSpotlight(false)
+                    onDisarmAutoEnterDex()
+                    if (chosen.category == SpotlightCategory.CONSOLE_SECTION &&
+                        chosen.tabIndex != null && !chosen.sectionKey.isNullOrBlank()
+                    ) {
+                        navController.jumpToSection(chosen.tabIndex, chosen.sectionKey)
+                    } else {
+                        when (chosen.id) {
+                            ConsoleSpotlightActionIds.ENTER_DEX -> {
+                                if (status.connected) onEnterDesktop() else showActivationModal = true
+                            }
+                            ConsoleSpotlightActionIds.OPEN_TRACKPAD -> onOpenRemoteTrackpad()
+                            ConsoleSpotlightActionIds.OPEN_ACTIVATION -> showActivationModal = true
+                            ConsoleSpotlightActionIds.TOGGLE_WIFI_SHARE -> {
+                                if (!status.connected) {
+                                    showActivationModal = true
+                                } else {
+                                    val enable = !remote.isLanShareActive
+                                    if (enable) {
+                                        val check = OpalPeerCastMutex.validateEnableSending(peerRole.isReceiving, peerRole.peerName)
+                                        if (!check.allowed) {
+                                            Toast.makeText(ctx, check.reason, Toast.LENGTH_LONG).show()
+                                            return@OpalSpotlightOverlay
+                                        }
+                                    }
+                                    BridgeClient.setWifiStreamEnabledAsync(enable, 19878, BridgeProtocol.TlsBindScope.ALL) {
+                                        val latest = BridgeClient.remoteStatusFlow.value
+                                        OpalPeerDiscovery.syncAdvertise(
+                                            ctx,
+                                            latest.isLanShareActive,
+                                            latest.wifiPort,
+                                            latest.shortCertFingerprint,
+                                        )
+                                        Toast.makeText(
+                                            ctx,
+                                            if (latest.isLanShareActive) "已开启局域网无线共享" else "已关闭局域网无线共享",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                }
+                            }
+                            ConsoleSpotlightActionIds.CHECK_UPDATE -> {
+                                when (updateState) {
+                                    is AppUpdateManager.UpdateState.UpdateAvailable,
+                                    is AppUpdateManager.UpdateState.Downloading,
+                                    is AppUpdateManager.UpdateState.ReadyToInstall,
+                                    -> showUpdateModal = true
+                                    else -> {
+                                        AppUpdateManager.checkForUpdates(ctx, userInitiated = true)
+                                        showUpdateModal = true
+                                    }
+                                }
+                            }
+                            ConsoleSpotlightActionIds.OPEN_GUIDE -> showGuideModal = true
+                            ConsoleSpotlightActionIds.PICK_WALLPAPER -> onPickCustomWallpaper()
+                            ConsoleSpotlightActionIds.REPORT_ISSUE -> {
+                                navController.jumpToSection(3, ConsoleSectionKeys.DIAGNOSTICS_LOGS)
+                            }
+                            ConsoleSpotlightActionIds.TOGGLE_SCREEN_OFF -> {
+                                if (status.connected) {
+                                    toggleHostScreenPowerWithToast(ctx, screenOn = status.hostScreenOff)
+                                } else {
+                                    showActivationModal = true
+                                }
+                            }
+                            ConsoleSpotlightActionIds.COMPLETE_EXIT -> showExitConfirmModal = true
+                        }
+                    }
+                },
+                onDismiss = { onSetShowSpotlight(false) },
+            )
         }
 
         // Fullscreen client-side double-tap wake guard while physical screen power is off:

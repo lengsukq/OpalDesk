@@ -202,8 +202,10 @@ fun MacDesktopMenuBar(
     showDockFallbackActions: Boolean = false,
     showAppDrawer: Boolean = false,
     showExpose: Boolean = false,
+    showSpotlight: Boolean = false,
     onToggleAppDrawer: () -> Unit = {},
     onToggleExpose: () -> Unit = {},
+    onToggleSpotlight: (() -> Unit)? = null,
     onTogglePhoneTrackpad: () -> Unit = {},
     onToggleHostScreenPower: (Boolean) -> Unit = {},
     onToggleDpiPopover: () -> Unit = {},
@@ -370,6 +372,25 @@ fun MacDesktopMenuBar(
         // Phone Trackpad & Host Screen-Off controls now live cleanly inside Control Center so the
         // top Menu Bar stays uncluttered and never collides with remote PC/Web hover toolbars.
 
+        // Top-Right Spotlight trigger (always handy when compact or when Dock is hidden)
+        if (onToggleSpotlight != null && (isCompactWidth || showDockFallbackActions)) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(if (showSpotlight) OpalPalette.ChipActiveFill else Color.Transparent)
+                    .clickable(onClick = onToggleSpotlight)
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                OpalGlyphIcon(
+                    glyph = ChromeGlyph.SEARCH,
+                    tint = if (showSpotlight) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
+                    size = 13.dp,
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+        }
+
         // Top-Right Notification Center Bell Trigger
         Row(
             modifier = Modifier
@@ -478,6 +499,7 @@ fun DexMacTaskbar(
     windows: List<CompositorWindow>,
     showAppDrawer: Boolean,
     showExpose: Boolean,
+    showSpotlight: Boolean = false,
     isCompactWidth: Boolean = false,
     dockOpacity: Float = DockAppearancePolicy.DEFAULT_OPACITY,
     dockScale: Float = DockAppearancePolicy.DEFAULT_SCALE,
@@ -563,7 +585,7 @@ fun DexMacTaskbar(
             if (!isCompactWidth) {
                 GlassDockButton(
                     glyph = ChromeGlyph.SEARCH,
-                    active = false,
+                    active = showSpotlight,
                     size = searchBtnSize,
                     onClick = onOpenSearch,
                 )
