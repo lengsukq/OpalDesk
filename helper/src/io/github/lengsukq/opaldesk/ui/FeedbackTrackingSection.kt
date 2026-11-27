@@ -58,6 +58,7 @@ private const val DEFAULT_COLLAPSED_RECORDS = 3
 fun FeedbackTrackingSection(
     currentAppVersion: String,
     onOpenUpdateModal: () -> Unit,
+    cardModifier: Modifier = Modifier,
 ) {
     val ctx = LocalContext.current
     LaunchedEffect(Unit) {
@@ -138,7 +139,7 @@ fun FeedbackTrackingSection(
     }
 
     ConsoleSectionTitle("我的反馈追踪")
-    MacGlassSectionCard {
+    MacGlassSectionCard(modifier = cardModifier) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,

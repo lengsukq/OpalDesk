@@ -217,6 +217,48 @@ class WorkstationKeyImePolicyTest {
     @Test
     fun `resolves all workstation shortcuts when enabled and respects master off switch`() {
         assertEquals(
+            GlobalShortcutAction.OpenSpotlight,
+            WorkstationShortcutCatalog.resolveGlobalShortcutAction(
+                keyCode = KeyEvent.KEYCODE_SPACE,
+                metaState = KeyEvent.META_ALT_ON,
+                hasFocusedWindow = false,
+                focusedIsFullscreen = false,
+                globalEnabled = true,
+                disabledIds = emptySet(),
+            ),
+        )
+        assertEquals(
+            GlobalShortcutAction.OpenSpotlight,
+            WorkstationShortcutCatalog.resolveGlobalShortcutAction(
+                keyCode = KeyEvent.KEYCODE_K,
+                metaState = KeyEvent.META_CTRL_ON,
+                hasFocusedWindow = false,
+                focusedIsFullscreen = false,
+                globalEnabled = true,
+                disabledIds = emptySet(),
+            ),
+        )
+        assertNull(
+            WorkstationShortcutCatalog.resolveGlobalShortcutAction(
+                keyCode = KeyEvent.KEYCODE_SPACE,
+                metaState = KeyEvent.META_ALT_ON,
+                hasFocusedWindow = true,
+                focusedIsFullscreen = false,
+                globalEnabled = true,
+                disabledIds = setOf(WorkstationShortcutId.OPEN_SPOTLIGHT.prefKey),
+            ),
+        )
+        assertNull(
+            WorkstationShortcutCatalog.resolveGlobalShortcutAction(
+                keyCode = KeyEvent.KEYCODE_K,
+                metaState = KeyEvent.META_CTRL_ON,
+                hasFocusedWindow = true,
+                focusedIsFullscreen = false,
+                globalEnabled = false,
+                disabledIds = emptySet(),
+            ),
+        )
+        assertEquals(
             GlobalShortcutAction.SwitchNextWindow,
             WorkstationShortcutCatalog.resolveGlobalShortcutAction(
                 keyCode = KeyEvent.KEYCODE_TAB,
@@ -362,8 +404,8 @@ class WorkstationKeyImePolicyTest {
                 disabledIds = disabled,
             ),
         )
-        assertEquals(11, WorkstationShortcutCatalog.totalGlobalShortcutCount)
-        assertEquals(3, WorkstationShortcutCatalog.countActiveGlobalShortcuts(true, disabled))
+        assertEquals(12, WorkstationShortcutCatalog.totalGlobalShortcutCount)
+        assertEquals(4, WorkstationShortcutCatalog.countActiveGlobalShortcuts(true, disabled))
         assertEquals(0, WorkstationShortcutCatalog.countActiveGlobalShortcuts(false, emptySet()))
         assertTrue(WorkstationShortcutCatalog.hasCustomizations(true, disabled))
         assertFalse(WorkstationShortcutCatalog.hasCustomizations(true, emptySet()))

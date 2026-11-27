@@ -110,6 +110,12 @@ class DesktopActivity : ComponentActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
+                    if (WorkstationKeyDispatcher.handleActiveSpotlightKeyEvent(
+                            KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE),
+                        )
+                    ) {
+                        return
+                    }
                     if (io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.softKeyboardVisibleFlow.value) {
                         io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.hideSoftKeyboard()
                         return
@@ -241,6 +247,7 @@ class DesktopActivity : ComponentActivity() {
                         onLocalOverlayNeedsFocusChanged = { localOverlayNeedsFocus = it },
                         onPickCustomWallpaper = { wallpaperPicker.launch("image/*") },
                         onOpenConsole = ::openConsole,
+                        onOpenConsoleSection = { tab, sectionKey -> openConsoleSection(tab, sectionKey) },
                         onExitDesktop = { finish() },
                     )
                     if (composingText.isNotEmpty()) {
@@ -349,6 +356,7 @@ class DesktopActivity : ComponentActivity() {
         if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
         if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
+        if (WorkstationKeyDispatcher.handleActiveSpotlightKeyEvent(event)) return true
 
         val isPhysicalKey = WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)
         val forwardImeSwitch = WorkstationKeyDispatcher.shouldForwardImeSwitchToWindow(
@@ -388,6 +396,17 @@ class DesktopActivity : ComponentActivity() {
     private fun openConsole() {
         startActivity(
             MainActivity.createLaunchIntent(this, fromDesktop = true),
+        )
+    }
+
+    private fun openConsoleSection(tabIndex: Int, sectionKey: String) {
+        startActivity(
+            MainActivity.createLaunchIntent(
+                ctx = this,
+                fromDesktop = true,
+                focusTab = tabIndex,
+                focusSectionKey = sectionKey,
+            ),
         )
     }
 

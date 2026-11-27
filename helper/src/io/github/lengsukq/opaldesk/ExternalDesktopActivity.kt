@@ -179,6 +179,12 @@ class ExternalDesktopActivity : ComponentActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
+                    if (WorkstationKeyDispatcher.handleActiveSpotlightKeyEvent(
+                            KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE),
+                        )
+                    ) {
+                        return
+                    }
                     sendBackToFocusedWindow()
                 }
             },
@@ -699,6 +705,7 @@ class ExternalDesktopActivity : ComponentActivity() {
                                 virtualCursorPx = directCursor ?: remoteCursor,
                                 onPickCustomWallpaper = { wallpaperPicker.launch("image/*") },
                                 onOpenConsole = ::openConsoleOnPrimaryDisplay,
+                                onOpenConsoleSection = ::openConsoleSectionOnPrimaryDisplay,
                                 onExitDesktop = { finishAndRemoveTask() },
                             )
                             if (directComposingText.isNotEmpty()) {
@@ -917,6 +924,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
         if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
+        if (WorkstationKeyDispatcher.handleActiveSpotlightKeyEvent(event)) return true
 
         val hostSoftImeVisible = directImeVisible || (presentation?.isImeActive == true)
         val isPhysicalKey = WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)
@@ -1015,6 +1023,23 @@ class ExternalDesktopActivity : ComponentActivity() {
 
     private fun openConsoleOnPrimaryDisplay() {
         val intent = MainActivity.createLaunchIntent(this, fromDesktop = true)
+        try {
+            val opts = android.app.ActivityOptions.makeBasic()
+                .setLaunchDisplayId(Display.DEFAULT_DISPLAY)
+                .toBundle()
+            startActivity(intent, opts)
+        } catch (_: Throwable) {
+            startActivity(intent)
+        }
+    }
+
+    private fun openConsoleSectionOnPrimaryDisplay(tabIndex: Int, sectionKey: String) {
+        val intent = MainActivity.createLaunchIntent(
+            ctx = this,
+            fromDesktop = true,
+            focusTab = tabIndex,
+            focusSectionKey = sectionKey,
+        )
         try {
             val opts = android.app.ActivityOptions.makeBasic()
                 .setLaunchDisplayId(Display.DEFAULT_DISPLAY)

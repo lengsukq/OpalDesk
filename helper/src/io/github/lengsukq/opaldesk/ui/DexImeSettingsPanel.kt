@@ -413,6 +413,69 @@ fun DexImeSettingsPopover(
 }
 
 /**
+ * Flat inner content for [OpalCollapsibleSectionCard] in Tab 1 ("显示与外设") so the IME card
+ * opens directly with display-position switcher, Yuyan plugin controls, and locked keyboard list.
+ */
+@Composable
+fun ConsoleDexImeSectionContent() {
+    val ctx = LocalContext.current
+    val status by BridgeClient.statusFlow.collectAsState()
+    val imeState by BridgeClient.imeStateFlow.collectAsState()
+    val bridgeEditor by OpalDeskImeChannel.editorStateFlow.collectAsState()
+    val displayMode by AppPrefs.dexImeDisplayModeFlow.collectAsState()
+    val lockedImeId by AppPrefs.dexLockedImeIdFlow.collectAsState()
+    val muteHostOnCast by AppPrefs.muteHostImeOnCastFlow.collectAsState()
+    val hardKbdMode by AppPrefs.hardKbdSoftImeModeFlow.collectAsState()
+    val autoBridgeOnCast by AppPrefs.autoBridgeImeOnCastFlow.collectAsState()
+    var localImes by remember { mutableStateOf<List<DexImeOption>>(emptyList()) }
+
+    LaunchedEffect(status.connected) {
+        AppPrefs.hydrateFlows(ctx)
+        localImes = DexImeCatalog.loadLocalEnabledImes(ctx)
+        if (status.connected) {
+            BridgeClient.refreshDexImeStateAsync()
+        }
+    }
+
+    val options = remember(localImes, imeState.enabledImeIds, lockedImeId, imeState.currentImeId, imeState.pluginImeInstalled) {
+        DexImeCatalog.mergeOptions(
+            localOptions = localImes,
+            daemonEnabledIds = imeState.enabledImeIds,
+            lockedImeId = lockedImeId,
+            currentSystemImeId = imeState.currentImeId,
+            pluginImeInstalled = imeState.pluginImeInstalled,
+        )
+    }
+
+    DexImeSettingsBody(
+        connected = status.connected,
+        imeState = imeState,
+        bridgeEditor = bridgeEditor,
+        options = options,
+        displayMode = displayMode,
+        lockedImeId = lockedImeId,
+        muteHostOnCast = muteHostOnCast,
+        hardKbdMode = hardKbdMode,
+        autoBridgeOnCast = autoBridgeOnCast,
+        compact = false,
+        showDisplayModeSection = true,
+        onOpenSystemImeSettings = { openSystemImeSettingsFallback(ctx) },
+        onApplyConfig = { nextMode, nextLocked, nextMute, nextHardKbd, nextAutoBridge, toastMsg ->
+            applyDexImeConfig(
+                ctx = ctx,
+                connected = status.connected,
+                displayMode = nextMode,
+                lockedImeId = nextLocked,
+                muteHostOnCast = nextMute,
+                hardKbdMode = nextHardKbd,
+                autoBridgeOnCast = nextAutoBridge,
+                successMessage = toastMsg,
+            )
+        },
+    )
+}
+
+/**
  * Console Settings card under "显示与外设 → 键鼠与壁纸" so users can configure DeX IME display
  * routing and locked DeX keyboard before or during a workstation session.
  */
