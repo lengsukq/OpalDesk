@@ -7,10 +7,14 @@ struct InjectDeniedSmartBanner: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "exclamationmark.shield.fill")
-                .font(.system(size: 16))
-                .foregroundStyle(.orange)
+        HStack(spacing: OpalSpacing.md) {
+            OpalIconBadge(
+                systemName: "exclamationmark.shield.fill",
+                tint: .orange,
+                size: 32,
+                iconSize: 15,
+                cornerRadius: 10
+            )
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("手机系统阻止了默认输入注入（如安全限制 / 未开模拟点击）")
@@ -21,28 +25,24 @@ struct InjectDeniedSmartBanner: View {
             }
 
             Button(action: onSwitchToUHID) {
-                Label("一键切换 UHID 虚拟键鼠", systemImage: "keyboard.badge.ellipsis")
+                Label("一键切换 UHID", systemImage: "keyboard.badge.ellipsis")
                     .font(.system(size: 11, weight: .semibold))
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
 
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("暂时隐藏此提示")
+            OpalGlassIconButton(
+                systemName: "xmark",
+                tint: .secondary,
+                size: 24,
+                iconSize: 10.5,
+                helpText: "暂时隐藏此提示",
+                action: onDismiss
+            )
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, OpalSpacing.md)
         .padding(.vertical, 10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.orange.opacity(0.4), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.32), radius: 12, y: 5)
+        .opalGlassSurface(.stageOverlay, cornerRadius: OpalRadius.card, tint: .orange)
     }
 }
 
@@ -53,7 +53,7 @@ struct FileTransferToastStack: View {
     let onDismiss: (UInt32) -> Void
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 8) {
+        VStack(alignment: .trailing, spacing: OpalSpacing.sm) {
             ForEach(transfers) { transfer in
                 transferRow(transfer)
             }
@@ -61,67 +61,72 @@ struct FileTransferToastStack: View {
     }
 
     private func transferRow(_ transfer: FileTransferProgress) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: transferIcon(for: transfer.status))
-                .foregroundStyle(transferColor(for: transfer.status))
+        HStack(spacing: OpalSpacing.md) {
+            OpalIconBadge(
+                systemName: transferIcon(for: transfer.status),
+                tint: transferColor(for: transfer.status),
+                size: 30,
+                iconSize: 14,
+                cornerRadius: 9
+            )
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(transfer.fileName)
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
+                    .truncationMode(.middle)
 
-                switch transfer.status {
-                case .sending:
-                    ProgressView(value: transfer.fractionCompleted)
-                        .frame(width: 170)
-                case .awaitingAck:
-                    Text("等待手机端落盘确认...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                case .completed(let remotePath):
-                    Text(remotePath.isEmpty ? "已发送到手机" : "已保存：\(remotePath)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                case .failed(let reason):
-                    Text("失败：\(reason)")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .lineLimit(2)
-                case .cancelled:
-                    Text("已取消")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                transferStatusDetail(transfer)
             }
 
             if transfer.status == .sending {
-                Button {
-                    onCancel(transfer.transferId)
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-                .help("取消传输")
+                OpalGlassIconButton(
+                    systemName: "xmark",
+                    tint: .secondary,
+                    size: 24,
+                    iconSize: 10.5,
+                    helpText: "取消传输"
+                ) { onCancel(transfer.transferId) }
             } else {
-                Button {
-                    onDismiss(transfer.transferId)
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-                .help("关闭提示")
+                OpalGlassIconButton(
+                    systemName: "xmark",
+                    tint: .secondary,
+                    size: 24,
+                    iconSize: 10.5,
+                    helpText: "关闭提示"
+                ) { onDismiss(transfer.transferId) }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.8)
-        )
+        .padding(.horizontal, OpalSpacing.md)
+        .padding(.vertical, 9)
+        .opalGlassSurface(.stageOverlay, cornerRadius: OpalRadius.tile)
+    }
+
+    @ViewBuilder
+    private func transferStatusDetail(_ transfer: FileTransferProgress) -> some View {
+        switch transfer.status {
+        case .sending:
+            ProgressView(value: transfer.fractionCompleted)
+                .frame(width: 170)
+        case .awaitingAck:
+            Text("等待手机端落盘确认…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .completed(let remotePath):
+            Text(remotePath.isEmpty ? "已发送到手机" : "已保存：\(remotePath)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        case .failed(let reason):
+            Text("失败：\(reason)")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .lineLimit(2)
+        case .cancelled:
+            Text("已取消")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func transferIcon(for status: FileTransferStatus) -> String {

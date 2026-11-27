@@ -2,7 +2,7 @@ import AppKit
 import OpalDeskCore
 import SwiftUI
 
-/// In-app diagnostic logs, issue reporting & feature request tab aligned with Android `ConsoleLogsTab`.
+/// In-app diagnostic logs, issue reporting & feature request tab styled with unified Liquid Glass tokens.
 public struct DiagnosticsLogView: View {
     private static let defaultDisplayLimit = 180
 
@@ -34,14 +34,12 @@ public struct DiagnosticsLogView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: OpalSpacing.xl) {
             heroCard
             FeedbackTrackingView(model: model)
             logStreamSection
         }
-        .onAppear {
-            model.refreshFeedbackQuota()
-        }
+        .onAppear { model.refreshFeedbackQuota() }
         .sheet(item: $activeModalKind) { kind in
             ReportIssueSheet(model: model, initialKind: kind) {
                 activeModalKind = nil
@@ -49,15 +47,16 @@ public struct DiagnosticsLogView: View {
         }
     }
 
-    // MARK: - 1. Luminous Diagnostic Hero Card
+    // MARK: - 1. Diagnostic Hero Card
 
     private var heroCard: some View {
         let quota = model.feedbackQuota
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
+        return VStack(alignment: .leading, spacing: OpalSpacing.md) {
+            HStack(alignment: .center, spacing: OpalSpacing.md) {
+                OpalIconBadge(systemName: "waveform.path.ecg.rectangle", tint: .accentColor, size: 40, iconSize: 18, cornerRadius: 12)
+                VStack(alignment: .leading, spacing: 2) {
                     Text("反馈、需求与诊断")
-                        .font(.title3.weight(.bold))
+                        .font(.title3.weight(.semibold))
                     Text("\(model.macDeviceSummary) · v\(model.appVersionString)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -69,7 +68,7 @@ public struct DiagnosticsLogView: View {
                 )
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: OpalSpacing.sm) {
                 metricTile(title: "悬浮小窗", value: "\(model.activePopoutCount)/\(PopoutWindowManager.maxConcurrentWindows)")
                 metricTile(title: "本地日志", value: "\(model.logEntries.count) 条")
                 metricTile(
@@ -78,18 +77,13 @@ public struct DiagnosticsLogView: View {
                 )
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: OpalSpacing.sm) {
                 Button {
                     model.refreshFeedbackQuota()
-                    if !model.feedbackQuota.isExhausted {
-                        activeModalKind = .bug
-                    }
+                    if !model.feedbackQuota.isExhausted { activeModalKind = .bug }
                 } label: {
-                    Label(
-                        quota.isExhausted ? "今日上报已达上限" : "上报问题与日志",
-                        systemImage: "ant.fill"
-                    )
-                    .frame(maxWidth: .infinity)
+                    Label(quota.isExhausted ? "今日上报已达上限" : "上报问题与日志", systemImage: "ant.fill")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -97,58 +91,43 @@ public struct DiagnosticsLogView: View {
 
                 Button {
                     model.refreshFeedbackQuota()
-                    if !model.feedbackQuota.isExhausted {
-                        activeModalKind = .feature
-                    }
+                    if !model.feedbackQuota.isExhausted { activeModalKind = .feature }
                 } label: {
                     Label("提功能需求", systemImage: "lightbulb.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .tint(.cyan)
                 .controlSize(.large)
                 .disabled(quota.isExhausted)
             }
 
             if quota.isExhausted {
-                Text(FeedbackRateLimiter.limitReachedMessage)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.red)
+                OpalNoticeBanner(tone: .error, message: FeedbackRateLimiter.limitReachedMessage)
             }
 
-            // QQ Community Strip
-            HStack(spacing: 12) {
+            HStack(spacing: OpalSpacing.md) {
+                OpalIconBadge(systemName: "bubble.left.and.bubble.right.fill", tint: .accentColor, size: 34, iconSize: 14, cornerRadius: 10)
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Circle().fill(Color.accentColor).frame(width: 7, height: 7)
-                        Text("交流反馈 QQ 群 · \(FeedbackHistoryLogic.qqGroupNumber)")
-                            .font(.subheadline.weight(.bold))
-                    }
+                    Text("交流反馈 QQ 群 · \(FeedbackHistoryLogic.qqGroupNumber)")
+                        .font(.subheadline.weight(.semibold))
                     Text("问题解答、最新版本与需求改动都会在群内第一时间同步")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("复制群号") {
-                    model.copyQqGroupNumber()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                Button("复制群号") { model.copyQqGroupNumber() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, OpalSpacing.md)
             .padding(.vertical, 10)
-            .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.accentColor.opacity(0.32), lineWidth: 1)
-            )
+            .opalGlassSurface(.inset, cornerRadius: OpalRadius.card, tint: .accentColor)
 
-            HStack(spacing: 8) {
+            HStack(spacing: OpalSpacing.sm) {
                 Button {
                     model.copyDiagnosticReport(warningsOnly: warningsOnly, query: searchQuery)
                 } label: {
-                    Label("复制报告", systemImage: "doc.on.doc")
-                        .frame(maxWidth: .infinity)
+                    Label("复制报告", systemImage: "doc.on.doc").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -156,11 +135,9 @@ public struct DiagnosticsLogView: View {
                 Button {
                     model.exportDiagnosticReport(warningsOnly: warningsOnly, query: searchQuery)
                 } label: {
-                    Label("导出日志文件", systemImage: "square.and.arrow.up")
-                        .frame(maxWidth: .infinity)
+                    Label("导出日志文件", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .tint(.cyan)
                 .controlSize(.small)
 
                 Button(role: .destructive) {
@@ -172,8 +149,8 @@ public struct DiagnosticsLogView: View {
                 .controlSize(.small)
             }
         }
-        .padding(18)
-        .opalDeskCardContainer(cornerRadius: 22, borderOpacity: 0.24)
+        .padding(OpalSpacing.xl)
+        .opalGlassSurface(.panel)
     }
 
     private func metricTile(title: String, value: String) -> some View {
@@ -181,20 +158,17 @@ public struct DiagnosticsLogView: View {
             Text(title).font(.caption2).foregroundStyle(.secondary)
             Text(value).font(.subheadline.weight(.semibold).monospacedDigit())
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, OpalSpacing.md)
+        .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
     }
 
     // MARK: - 2. Real-Time Log Stream
 
     private var logStreamSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("实时日志流 (\(filteredEntries.count))", systemImage: "terminal")
-                    .font(.headline)
-                Spacer()
+        VStack(alignment: .leading, spacing: OpalSpacing.md) {
+            OpalSectionHeader(title: "实时日志流 (\(filteredEntries.count))", systemImage: "terminal") {
                 Toggle("仅警告/错误", isOn: $warningsOnly)
                     .toggleStyle(.checkbox)
                     .font(.caption)
@@ -208,8 +182,10 @@ public struct DiagnosticsLogView: View {
                 .controlSize(.small)
             }
 
-            TextField("按关键字筛选（如 ADB / TLS / popout / video / feedback）", text: $searchQuery)
-                .textFieldStyle(.roundedBorder)
+            OpalSearchField(
+                placeholder: "按关键字筛选（如 ADB / TLS / popout / video / feedback）",
+                text: $searchQuery
+            )
 
             VStack(alignment: .leading, spacing: 4) {
                 if visibleEntries.isEmpty {
@@ -220,7 +196,7 @@ public struct DiagnosticsLogView: View {
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(12)
+                    .padding(OpalSpacing.md)
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 4) {
@@ -232,29 +208,27 @@ public struct DiagnosticsLogView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
-                        .padding(12)
+                        .padding(OpalSpacing.md)
                     }
                     .frame(minHeight: 180, maxHeight: 300)
 
                     if !showAllLines && filteredEntries.count > Self.defaultDisplayLimit {
-                        Button("展开全部 \(filteredEntries.count) 条日志") {
-                            showAllLines = true
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .padding([.horizontal, .bottom], 10)
+                        Button("展开全部 \(filteredEntries.count) 条日志") { showAllLines = true }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .padding([.horizontal, .bottom], 10)
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.black.opacity(0.84), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(Color.black.opacity(0.84), in: RoundedRectangle(cornerRadius: OpalRadius.card, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.8)
+                RoundedRectangle(cornerRadius: OpalRadius.card, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.9)
             )
         }
-        .padding(16)
-        .opalDeskCardContainer(cornerRadius: 20, borderOpacity: 0.18)
+        .padding(OpalSpacing.lg)
+        .opalGlassSurface(.panel)
     }
 
     private func color(for level: OpalLogLevel) -> Color {

@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Configures the hosting macOS `NSWindow` chrome cleanly between immersive full-bleed dark canvas
-/// (`DisplayWindowView`) and standard native window chrome (`DeviceHubView`).
+/// (`DisplayWindowView`) and native Liquid Glass unified-titlebar macOS windows (`DeviceHubView`,
+/// `RemoteFileBrowserWindowView`).
 struct WindowChromeConfigurator: NSViewRepresentable {
     let isImmersiveCanvas: Bool
     var onWindowChanged: ((NSWindow?) -> Void)? = nil
@@ -40,19 +41,14 @@ struct WindowChromeConfigurator: NSViewRepresentable {
             }
             lastAppliedMode = isImmersiveCanvas
 
-            if isImmersiveCanvas {
-                window.titlebarAppearsTransparent = true
-                window.titleVisibility = .visible
-                window.backgroundColor = .windowBackgroundColor
-                window.appearance = nil
-                window.isMovableByWindowBackground = false
-            } else {
-                window.titlebarAppearsTransparent = false
-                window.titleVisibility = .visible
-                window.backgroundColor = .windowBackgroundColor
-                window.appearance = nil
-                window.isMovableByWindowBackground = false
-            }
+            // Seamless macOS translucent titlebar lets the ambient opalescent backdrop flow behind
+            // system traffic lights while keeping native window controls and title positioning intact.
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .visible
+            window.toolbarStyle = .unified
+            window.backgroundColor = isImmersiveCanvas ? DeXTheme.canvasNSColor : .windowBackgroundColor
+            window.appearance = isImmersiveCanvas ? NSAppearance(named: .darkAqua) : nil
+            window.isMovableByWindowBackground = false
         }
     }
 }

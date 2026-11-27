@@ -13,10 +13,8 @@ public enum ApkInstallState: Sendable, Equatable {
 
     public var isInProgress: Bool {
         switch self {
-        case .uploading, .extracting, .installing:
-            return true
-        case .idle, .succeeded, .failed:
-            return false
+        case .uploading, .extracting, .installing: return true
+        case .idle, .succeeded, .failed: return false
         }
     }
 
@@ -26,27 +24,19 @@ public enum ApkInstallState: Sendable, Equatable {
              let .extracting(progress, _),
              let .installing(progress, _):
             return min(1.0, max(0.0, progress))
-        case .succeeded:
-            return 1.0
-        case .idle, .failed:
-            return nil
+        case .succeeded: return 1.0
+        case .idle, .failed: return nil
         }
     }
 
     public var stageTitle: String {
         switch self {
-        case .idle:
-            return "就绪"
-        case .uploading:
-            return "正在传输安装包到手机…"
-        case .extracting:
-            return "正在手机端解包分包资源…"
-        case .installing:
-            return "正在调用系统安装器安装…"
-        case .succeeded:
-            return "安装完成"
-        case .failed:
-            return "安装失败"
+        case .idle: return "就绪"
+        case .uploading: return "正在传输安装包到手机…"
+        case .extracting: return "正在手机端解包分包资源…"
+        case .installing: return "正在调用系统安装器安装…"
+        case .succeeded: return "安装完成"
+        case .failed: return "安装失败"
         }
     }
 
@@ -65,8 +55,7 @@ public enum ApkInstallState: Sendable, Equatable {
     }
 }
 
-/// Standalone SwiftUI preview & installation dialog for `.apk` / `.apks` / `.apkm` / `.xapk` packages.
-/// Decoupled from `AppModel` so Wave 2 integration only needs to bind `installState` and callbacks.
+/// Standalone SwiftUI Liquid Glass preview & installation sheet for `.apk` / `.apks` / `.apkm` / `.xapk` packages.
 public struct ApkInstallerSheet: View {
     public let packageURL: URL
     public let preloadedInfo: AndroidPackageInfo?
@@ -100,19 +89,30 @@ public struct ApkInstallerSheet: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: OpalSpacing.lg) {
             if isLoading {
-                loadingView
+                OpalNoticeBanner(
+                    tone: .loading,
+                    title: "正在解析安装包…",
+                    message: packageURL.lastPathComponent
+                )
             } else if let parseError {
-                parseErrorView(parseError)
+                OpalNoticeBanner(
+                    tone: .error,
+                    title: "无法解析安装包",
+                    message: parseError
+                )
             } else if let info = packageInfo {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: OpalSpacing.md) {
                         headerCard(info)
                         metadataGrid(info)
 
                         if !info.warnings.isEmpty {
-                            warningsBanner(info.warnings)
+                            OpalNoticeBanner(
+                                tone: .warning,
+                                message: info.warnings.joined(separator: "\n")
+                            )
                         }
 
                         if !info.splits.isEmpty || !info.obbFiles.isEmpty {
@@ -124,7 +124,7 @@ public struct ApkInstallerSheet: View {
                     }
                     .padding(.vertical, 2)
                 }
-                .frame(maxHeight: 380)
+                .frame(maxHeight: 400)
             }
 
             if installState != .idle {
@@ -133,8 +133,8 @@ public struct ApkInstallerSheet: View {
 
             footerBar
         }
-        .padding(22)
-        .frame(width: 500)
+        .padding(OpalSpacing.xxl)
+        .opalModalSheetChrome(width: 520)
         .task(id: packageURL) {
             await loadPackageInfo()
         }
@@ -142,50 +142,19 @@ public struct ApkInstallerSheet: View {
 
     // MARK: - Subviews
 
-    private var loadingView: some View {
-        HStack(spacing: 12) {
-            ProgressView()
-                .controlSize(.regular)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("正在解析安装包…")
-                    .font(.headline)
-                Text(packageURL.lastPathComponent)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer()
-        }
-        .padding(18)
-        .opalDeskCardContainer(cornerRadius: 16, borderOpacity: 0.16)
-    }
-
-    private func parseErrorView(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.title2)
-                .foregroundStyle(.red)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("无法解析安装包")
-                    .font(.headline)
-                Text(message)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-        }
-        .padding(16)
-        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
     private func headerCard(_ info: AndroidPackageInfo) -> some View {
-        HStack(alignment: .center, spacing: 14) {
-            appIconView(iconData: info.iconData)
+        HStack(alignment: .center, spacing: OpalSpacing.md) {
+            OpalAppMonogram(
+                label: info.appName,
+                packageKey: info.packageName.isEmpty ? info.appName : info.packageName,
+                iconData: info.iconData,
+                fallbackSymbol: "shippingbox.fill",
+                size: OpalControlSize.appIconLarge,
+                cornerRadius: 14
+            )
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
+                HStack(spacing: OpalSpacing.sm) {
                     Text(info.appName)
                         .font(.title3.weight(.semibold))
                         .lineLimit(1)
@@ -196,11 +165,7 @@ public struct ApkInstallerSheet: View {
                     )
 
                     if let targetDeviceName, !targetDeviceName.isEmpty {
-                        StatusBadgeView(
-                            text: targetDeviceName,
-                            color: .secondary,
-                            backgroundOpacity: 0.12
-                        )
+                        StatusBadgeView(text: targetDeviceName, color: .secondary, backgroundOpacity: 0.12)
                     }
                 }
 
@@ -210,72 +175,44 @@ public struct ApkInstallerSheet: View {
                     .textSelection(.enabled)
                     .lineLimit(1)
 
-                HStack(spacing: 10) {
+                HStack(spacing: OpalSpacing.sm) {
                     Text(versionSummary(info))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("·")
-                        .foregroundStyle(.tertiary)
+                    Text("·").foregroundStyle(.tertiary)
                     Text(formattedBytes(info.fileSizeBytes))
-                        .font(.caption)
+                        .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
             }
 
             Spacer(minLength: 0)
         }
-        .padding(14)
-        .opalDeskCardContainer(cornerRadius: 16, borderOpacity: 0.18)
-    }
-
-    @ViewBuilder
-    private func appIconView(iconData: Data?) -> some View {
-        if let iconData, let image = NSImage(data: iconData) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 56, height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
-                )
-        } else {
-            ZStack {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.14))
-                Image(systemName: "shippingbox.fill")
-                    .font(.system(size: 24))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .frame(width: 56, height: 56)
-        }
+        .padding(OpalSpacing.lg)
+        .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
     }
 
     private func metadataGrid(_ info: AndroidPackageInfo) -> some View {
         LazyVGrid(
-            columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
-            spacing: 10
+            columns: [GridItem(.flexible(), spacing: OpalSpacing.sm), GridItem(.flexible(), spacing: OpalSpacing.sm)],
+            spacing: OpalSpacing.sm
         ) {
             metadataTile(
                 icon: "cpu",
                 title: "原生架构 (ABI)",
                 value: info.supportedAbis.isEmpty ? "通用 / 纯 Java" : info.supportedAbis.joined(separator: ", ")
             )
-
             metadataTile(
                 icon: "slider.horizontal.3",
                 title: "Android SDK",
                 value: sdkSummary(info)
             )
-
             metadataTile(
                 icon: info.signature.isSigned ? "checkmark.seal.fill" : "exclamationmark.shield.fill",
                 title: "应用签名",
                 value: info.signature.summaryText,
                 tint: info.signature.isSigned ? .green : .orange
             )
-
             metadataTile(
                 icon: "square.stack.3d.up.fill",
                 title: "安装包结构",
@@ -290,7 +227,7 @@ public struct ApkInstallerSheet: View {
         value: String,
         tint: Color = .accentColor
     ) -> some View {
-        HStack(alignment: .top, spacing: 9) {
+        HStack(alignment: .top, spacing: OpalSpacing.sm) {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(tint)
@@ -308,35 +245,16 @@ public struct ApkInstallerSheet: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 9)
-        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-    }
-
-    private func warningsBanner(_ warnings: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            ForEach(warnings, id: \.self) { warning in
-                HStack(alignment: .top, spacing: 7) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .padding(.top, 2)
-                    Text(warning)
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                }
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, OpalSpacing.md)
+        .padding(.vertical, 10)
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
     }
 
     private func splitsDisclosure(_ info: AndroidPackageInfo) -> some View {
         DisclosureGroup(isExpanded: $showSplits) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: OpalSpacing.xs) {
                 ForEach(info.splits) { split in
-                    HStack(spacing: 8) {
+                    HStack(spacing: OpalSpacing.sm) {
                         StatusBadgeView(
                             text: split.kind.displayBadge,
                             color: split.isBase ? .accentColor : .secondary,
@@ -348,12 +266,12 @@ public struct ApkInstallerSheet: View {
                             .truncationMode(.middle)
                         Spacer()
                         Text(formattedBytes(split.uncompressedSize))
-                            .font(.caption2)
+                            .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                 }
                 ForEach(info.obbFiles) { obb in
-                    HStack(spacing: 8) {
+                    HStack(spacing: OpalSpacing.sm) {
                         StatusBadgeView(text: "OBB", color: .indigo)
                         Text((obb.entryPath as NSString).lastPathComponent)
                             .font(.system(.caption, design: .monospaced))
@@ -361,14 +279,14 @@ public struct ApkInstallerSheet: View {
                             .truncationMode(.middle)
                         Spacer()
                         Text(formattedBytes(obb.sizeBytes))
-                            .font(.caption2)
+                            .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                 }
             }
-            .padding(.top, 8)
+            .padding(.top, OpalSpacing.sm)
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: OpalSpacing.sm) {
                 Label("分包与扩展文件", systemImage: "shippingbox")
                     .font(.callout.weight(.medium))
                 Spacer()
@@ -378,9 +296,9 @@ public struct ApkInstallerSheet: View {
                 )
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, OpalSpacing.md)
         .padding(.vertical, 10)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
     }
 
     private func permissionsDisclosure(_ info: AndroidPackageInfo) -> some View {
@@ -389,23 +307,23 @@ public struct ApkInstallerSheet: View {
                 Text("此安装包未声明特殊系统权限")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.top, 6)
+                    .padding(.top, OpalSpacing.xs)
             } else {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: OpalSpacing.sm) {
                     ForEach(info.permissionGroups) { group in
                         VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 6) {
+                            HStack(spacing: OpalSpacing.xs) {
                                 Image(systemName: group.category.sfSymbol)
                                     .font(.caption)
                                     .foregroundStyle(group.isSensitive ? .orange : .secondary)
                                 Text(group.category.displayName)
                                     .font(.caption.weight(.semibold))
                                 if group.isSensitive {
-                                    StatusBadgeView(text: "敏感", color: .orange, horizontalPadding: 5, verticalPadding: 1)
+                                    StatusBadgeView(text: "敏感", color: .orange, horizontalPadding: 6, verticalPadding: 1)
                                 }
                             }
                             ForEach(group.permissions) { perm in
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                HStack(alignment: .firstTextBaseline, spacing: OpalSpacing.xs) {
                                     Text("• \(perm.displayName)")
                                         .font(.caption)
                                     Spacer()
@@ -414,15 +332,15 @@ public struct ApkInstallerSheet: View {
                                         .foregroundStyle(.tertiary)
                                         .lineLimit(1)
                                 }
-                                .padding(.leading, 16)
+                                .padding(.leading, OpalSpacing.lg)
                             }
                         }
                     }
                 }
-                .padding(.top, 8)
+                .padding(.top, OpalSpacing.sm)
             }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: OpalSpacing.sm) {
                 Label("申请权限（\(info.permissions.count) 项）", systemImage: "hand.raised.fill")
                     .font(.callout.weight(.medium))
                 Spacer()
@@ -433,13 +351,13 @@ public struct ApkInstallerSheet: View {
                 }
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, OpalSpacing.md)
         .padding(.vertical, 10)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
     }
 
     private var installOptionsCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: OpalSpacing.sm) {
             Toggle(isOn: $replaceExisting) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("覆盖安装已有应用 (-r)")
@@ -450,6 +368,8 @@ public struct ApkInstallerSheet: View {
                 }
             }
             .disabled(installState.isInProgress)
+
+            Divider()
 
             Toggle(isOn: $allowDowngrade) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -462,8 +382,8 @@ public struct ApkInstallerSheet: View {
             }
             .disabled(installState.isInProgress)
         }
-        .padding(12)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(OpalSpacing.md)
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
     }
 
     @ViewBuilder
@@ -473,10 +393,9 @@ public struct ApkInstallerSheet: View {
             EmptyView()
 
         case .uploading, .extracting, .installing:
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: OpalSpacing.sm) {
                 HStack {
-                    ProgressView()
-                        .controlSize(.small)
+                    ProgressView().controlSize(.small)
                     Text(installState.stageTitle)
                         .font(.callout.weight(.semibold))
                     Spacer()
@@ -496,55 +415,25 @@ public struct ApkInstallerSheet: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(12)
-            .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(OpalSpacing.md)
+            .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile, tint: .accentColor)
 
         case let .succeeded(message):
-            HStack(spacing: 10) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(.green)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("安装成功")
-                        .font(.callout.weight(.semibold))
-                    if let message, !message.isEmpty {
-                        Text(message)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-            }
-            .padding(12)
-            .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            OpalNoticeBanner(
+                tone: .success,
+                title: "安装成功",
+                message: (message?.isEmpty == false) ? message! : "已成功安装到目标 Android 设备。"
+            )
 
         case let .failed(message):
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "xmark.octagon.fill")
-                    .font(.title3)
-                    .foregroundStyle(.red)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("安装失败")
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(.red)
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-            }
-            .padding(12)
-            .background(Color.red.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            OpalNoticeBanner(tone: .error, title: "安装失败", message: message)
         }
     }
 
     private var footerBar: some View {
         HStack {
-            Button(installState == .succeeded(message: installState.detailMessage) ? "完成" : "取消", role: .cancel) {
-                onCancel()
-            }
-            .keyboardShortcut(.cancelAction)
+            Button(isSucceeded ? "完成" : "取消", role: .cancel, action: onCancel)
+                .keyboardShortcut(.cancelAction)
 
             Spacer()
 
@@ -561,16 +450,17 @@ public struct ApkInstallerSheet: View {
 
     // MARK: - Formatting & Loading
 
+    private var isSucceeded: Bool {
+        if case .succeeded = installState { return true }
+        return false
+    }
+
     private var primaryActionTitle: String {
         switch installState {
-        case .uploading, .extracting, .installing:
-            return "正在安装…"
-        case .failed:
-            return "重新安装"
-        case .succeeded:
-            return "再次安装"
-        case .idle:
-            return "安装到手机"
+        case .uploading, .extracting, .installing: return "正在安装…"
+        case .failed: return "重新安装"
+        case .succeeded: return "再次安装"
+        case .idle: return "安装到手机"
         }
     }
 
@@ -616,12 +506,8 @@ public struct ApkInstallerSheet: View {
     }
 
     private func structureSummary(_ info: AndroidPackageInfo) -> String {
-        if info.splits.isEmpty {
-            return "独立单包 APK"
-        }
-        if info.obbFiles.isEmpty {
-            return "\(info.splits.count) 个 Split APK"
-        }
+        if info.splits.isEmpty { return "独立单包 APK" }
+        if info.obbFiles.isEmpty { return "\(info.splits.count) 个 Split APK" }
         return "\(info.splits.count) 个分包 + \(info.obbFiles.count) 个 OBB"
     }
 

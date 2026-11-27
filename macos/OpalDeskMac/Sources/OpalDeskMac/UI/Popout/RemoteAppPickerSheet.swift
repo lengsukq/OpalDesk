@@ -2,7 +2,7 @@ import OpalDeskCore
 import SwiftUI
 
 /// Liquid Glass sheet for browsing remote Android apps, viewing recent floating-app history,
-/// managing up to 3 concurrent floating windows, and launching apps in desktop or standalone mode.
+/// managing up to 3 concurrent floating windows, creating Spotlight shortcuts, and launching apps.
 public struct RemoteAppPickerSheet: View {
     @Bindable public var model: AppModel
     public let context: RemoteAppPickerContext
@@ -45,16 +45,38 @@ public struct RemoteAppPickerSheet: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            headerRow
+        VStack(alignment: .leading, spacing: OpalSpacing.md) {
+            OpalSheetHeader(
+                icon: "macwindow.on.rectangle",
+                iconTint: .accentColor,
+                title: "远程应用与悬浮小窗",
+                subtitle: "来自「\(context.deviceName)」· 最多同时开启 \(maxCount) 个独立悬浮窗",
+                badgeText: "已开 \(activeCount)/\(maxCount)",
+                badgeColor: activeCount >= maxCount ? .orange : .accentColor
+            ) {
+                HStack(spacing: OpalSpacing.sm) {
+                    Button {
+                        onDismiss()
+                        model.openShortcutManager()
+                    } label: {
+                        Label("快捷方式", systemImage: "sparkles.rectangle.stack")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("管理已创建的 Spotlight / 桌面快捷方式")
+
+                    Button("关闭", action: onDismiss)
+                        .keyboardShortcut(.cancelAction)
+                }
+            }
 
             if !model.popoutManager.controllers.isEmpty || !relevantHistory.isEmpty {
                 quickHistoryStrip
             }
 
-            HStack(spacing: 8) {
-                TextField("搜索「\(context.deviceName)」上的应用…", text: $searchQuery)
-                    .textFieldStyle(.roundedBorder)
+            HStack(spacing: OpalSpacing.sm) {
+                OpalSearchField(placeholder: "搜索「\(context.deviceName)」上的应用…", text: $searchQuery)
 
                 Button {
                     sortByUsage.toggle()
@@ -66,59 +88,27 @@ public struct RemoteAppPickerSheet: View {
                 .tint(sortByUsage ? .accentColor : nil)
                 .controlSize(.small)
 
-                Button {
+                OpalGlassIconButton(
+                    systemName: "arrow.clockwise",
+                    size: 28,
+                    iconSize: 12.5,
+                    helpText: "刷新应用列表"
+                ) {
                     model.refreshRemoteAppPicker()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
                 .disabled(context.isLoading)
-                .help("刷新应用列表")
             }
 
             bodyList
         }
-        .padding(20)
-        .frame(width: 560, height: 600)
-    }
-
-    private var headerRow: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 8) {
-                    Text("远程应用与悬浮小窗")
-                        .font(.title3.weight(.semibold))
-                    StatusBadgeView(
-                        text: "已开小窗 \(activeCount)/\(maxCount)",
-                        color: activeCount >= maxCount ? .orange : .accentColor
-                    )
-                }
-                Text("来自「\(context.deviceName)」· 最多可同时打开 \(maxCount) 个独立悬浮窗，支持窗口置顶")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button {
-                onDismiss()
-                model.openShortcutManager()
-            } label: {
-                Label("管理快捷方式", systemImage: "sparkles.rectangle.stack")
-                    .font(.caption)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("管理已创建的 Spotlight / 桌面快捷方式")
-
-            Button("关闭", action: onDismiss)
-                .keyboardShortcut(.cancelAction)
-        }
+        .padding(OpalSpacing.xl)
+        .opalModalSheetChrome(width: 580, height: 620)
     }
 
     private var quickHistoryStrip: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: OpalSpacing.sm) {
             HStack {
-                Label("历史 APP 小窗 & 运行中", systemImage: "clock.arrow.circlepath")
+                Label("运行中与历史小窗", systemImage: "clock.arrow.circlepath")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -133,120 +123,132 @@ public struct RemoteAppPickerSheet: View {
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: OpalSpacing.sm) {
                     ForEach(model.popoutManager.controllers) { ctrl in
-                        HStack(spacing: 5) {
-                            Circle().fill(Color.green).frame(width: 6, height: 6)
-                            Text(ctrl.appLabel)
-                                .font(.caption.weight(.semibold))
-                                .lineLimit(1)
-                            Button {
-                                ctrl.togglePinnedOnTop()
-                            } label: {
-                                Image(systemName: ctrl.isPinnedOnTop ? "pin.fill" : "pin")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(ctrl.isPinnedOnTop ? .orange : .secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .help(ctrl.isPinnedOnTop ? "取消置顶" : "窗口置顶")
-
-                            Button {
-                                model.requestPopoutLaunch(
-                                    pkg: ctrl.appPackage,
-                                    cls: ctrl.appActivity,
-                                    label: ctrl.appLabel,
-                                    pickerContext: context
-                                )
-                            } label: {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 10))
-                            }
-                            .buttonStyle(.plain)
-                            .help("聚焦或重载小窗+应用")
-
-                            Button {
-                                model.popoutManager.closeWindow(id: ctrl.id, sendDisconnect: true)
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .help("关闭此小窗")
-                        }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
-                        .background(Color.green.opacity(0.14), in: Capsule())
-                        .overlay(Capsule().strokeBorder(Color.green.opacity(0.35), lineWidth: 0.8))
-                        .onTapGesture {
-                            model.popoutManager.focusWindow(id: ctrl.id)
-                        }
+                        activeControllerPill(ctrl)
                     }
-
                     ForEach(relevantHistory.filter { !model.isPopoutActive(pkg: $0.appPackage) }) { entry in
-                        Button {
-                            model.requestPopoutLaunch(
-                                pkg: entry.appPackage,
-                                cls: entry.appActivity,
-                                label: entry.displayLabel,
-                                pickerContext: context
-                            )
-                        } label: {
-                            HStack(spacing: 5) {
-                                if entry.pinnedOnTop {
-                                    Image(systemName: "pin.fill")
-                                        .font(.system(size: 9))
-                                        .foregroundStyle(.orange)
-                                }
-                                Text(entry.displayLabel)
-                                    .font(.caption.weight(.medium))
-                                    .lineLimit(1)
-                            }
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 5)
-                            .background(Color.secondary.opacity(0.12), in: Capsule())
-                        }
-                        .buttonStyle(.plain)
+                        historyEntryPill(entry)
                     }
                 }
             }
         }
-        .padding(10)
-        .opalDeskCardContainer(cornerRadius: 14, borderOpacity: 0.16)
+        .padding(OpalSpacing.md)
+        .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
+    }
+
+    private func activeControllerPill(_ ctrl: PopoutAppController) -> some View {
+        HStack(spacing: 5) {
+            Circle().fill(Color.green).frame(width: 6, height: 6)
+            Text(ctrl.appLabel)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+
+            OpalGlassIconButton(
+                systemName: ctrl.isPinnedOnTop ? "pin.fill" : "pin",
+                tint: ctrl.isPinnedOnTop ? .orange : .secondary,
+                size: 18,
+                iconSize: 9.5,
+                helpText: ctrl.isPinnedOnTop ? "取消置顶" : "窗口置顶"
+            ) { ctrl.togglePinnedOnTop() }
+
+            OpalGlassIconButton(
+                systemName: "arrow.clockwise",
+                tint: .secondary,
+                size: 18,
+                iconSize: 9.5,
+                helpText: "聚焦或重载小窗+应用"
+            ) {
+                model.requestPopoutLaunch(
+                    pkg: ctrl.appPackage,
+                    cls: ctrl.appActivity,
+                    label: ctrl.appLabel,
+                    pickerContext: context
+                )
+            }
+
+            OpalGlassIconButton(
+                systemName: "xmark",
+                tint: .secondary,
+                size: 18,
+                iconSize: 9,
+                helpText: "关闭此小窗"
+            ) { model.popoutManager.closeWindow(id: ctrl.id, sendDisconnect: true) }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.green.opacity(0.14), in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.green.opacity(0.32), lineWidth: 0.8))
+        .onTapGesture {
+            model.popoutManager.focusWindow(id: ctrl.id)
+        }
+    }
+
+    private func historyEntryPill(_ entry: PopoutHistoryEntry) -> some View {
+        Button {
+            model.requestPopoutLaunch(
+                pkg: entry.appPackage,
+                cls: entry.appActivity,
+                label: entry.displayLabel,
+                pickerContext: context
+            )
+        } label: {
+            HStack(spacing: 5) {
+                if entry.pinnedOnTop {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.orange)
+                }
+                Text(entry.displayLabel)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.primary.opacity(0.06), in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.65))
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
     private var bodyList: some View {
         if context.isLoading && context.apps.isEmpty {
-            VStack(spacing: 12) {
+            VStack(spacing: OpalSpacing.md) {
                 ProgressView()
                 Text(context.statusMessage.isEmpty ? "正在加载手机应用列表…" : context.statusMessage)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
         } else if let error = context.errorMessage, context.apps.isEmpty {
-            VStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.orange)
+            VStack(spacing: OpalSpacing.md) {
+                OpalIconBadge(systemName: "exclamationmark.triangle.fill", tint: .orange, size: 46, iconSize: 22, cornerRadius: 14)
                 Text(error)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
                 Button("重试获取") { model.refreshRemoteAppPicker() }
                     .buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
         } else if filteredApps.isEmpty {
             ContentUnavailableView("未找到匹配应用", systemImage: "magnifyingglass")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
         } else {
-            List(filteredApps) { app in
-                appRow(app)
+            ScrollView {
+                LazyVStack(spacing: OpalSpacing.xs) {
+                    ForEach(filteredApps) { app in
+                        appRow(app)
+                    }
+                }
+                .padding(OpalSpacing.sm)
             }
-            .listStyle(.inset)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
         }
     }
 
@@ -254,11 +256,17 @@ public struct RemoteAppPickerSheet: View {
         let isOpen = model.isPopoutActive(pkg: app.pkg)
         let isLimitHit = !isOpen && activeCount >= maxCount
 
-        return HStack(spacing: 10) {
-            appMonogram(app.displayLabel, pkg: app.pkg)
+        return HStack(spacing: OpalSpacing.md) {
+            OpalAppMonogram(
+                label: app.displayLabel,
+                packageKey: app.pkg,
+                size: 36,
+                cornerRadius: 10,
+                showActiveIndicator: isOpen
+            )
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+                HStack(spacing: OpalSpacing.xs) {
                     Text(app.displayLabel)
                         .font(.body.weight(.medium))
                         .lineLimit(1)
@@ -272,20 +280,21 @@ public struct RemoteAppPickerSheet: View {
                     .lineLimit(1)
             }
 
-            Spacer()
+            Spacer(minLength: OpalSpacing.sm)
 
-            Button {
+            OpalGlassIconButton(
+                systemName: "plus.app",
+                tint: .secondary,
+                size: 26,
+                iconSize: 12.5,
+                helpText: "创建 Spotlight 快捷方式（~/Applications/OpalDesk Apps/）"
+            ) {
                 model.createSpotlightShortcut(
                     for: app,
                     deviceKey: context.deviceKey,
                     deviceName: context.deviceName
                 )
-            } label: {
-                Image(systemName: "plus.app")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("创建 Spotlight 快捷方式（~/Applications/OpalDesk Apps/）")
 
             if context.allowLaunchInDesktop && model.isAuthenticated {
                 Button("大屏打开") {
@@ -309,21 +318,9 @@ public struct RemoteAppPickerSheet: View {
             .controlSize(.small)
             .disabled(isLimitHit)
         }
-        .padding(.vertical, 3)
-    }
-
-    private func appMonogram(_ label: String, pkg: String) -> some View {
-        let palette: [Color] = [.blue, .green, .indigo, .orange, .cyan, .pink, .purple]
-        let idx = abs(pkg.hashValue) % palette.count
-        let tint = palette[idx]
-        let initial = String(label.trimmingCharacters(in: .whitespaces).prefix(1))
-        return ZStack {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(tint.opacity(0.16))
-                .frame(width: 34, height: 34)
-            Text(initial.isEmpty ? "A" : initial)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(tint)
-        }
+        .padding(.horizontal, OpalSpacing.md)
+        .padding(.vertical, 8)
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile, tint: isOpen ? .green : nil)
+        .opalInteractiveHover(cornerRadius: OpalRadius.tile, tint: isOpen ? .green : nil)
     }
 }

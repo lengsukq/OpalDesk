@@ -2,7 +2,7 @@ import AppKit
 import OpalDeskCore
 import SwiftUI
 
-/// In-app feedback history & resolution status tracker aligned with Android `FeedbackTrackingSection`.
+/// In-app feedback history & resolution status tracker styled with unified Liquid Glass surfaces.
 public struct FeedbackTrackingView: View {
     private static let defaultCollapsedCount = 3
 
@@ -25,8 +25,8 @@ public struct FeedbackTrackingView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 8) {
+        VStack(alignment: .leading, spacing: OpalSpacing.md) {
+            HStack(alignment: .center, spacing: OpalSpacing.sm) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.feedbackRecords.isEmpty ? "我的反馈追踪" : "我的反馈追踪 (\(model.feedbackRecords.count))")
                         .font(.headline)
@@ -40,54 +40,47 @@ public struct FeedbackTrackingView: View {
                     syncNotice = nil
                 }
                 .buttonStyle(.bordered)
-                .tint(lookupOpen ? .cyan : nil)
+                .tint(lookupOpen ? .accentColor : nil)
                 .controlSize(.small)
 
-                Button(syncing ? "同步中…" : "刷新状态") {
-                    triggerRefresh()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(!model.isFeedbackStatusSyncConfigured || syncing || !hasSyncableRecords)
+                Button(syncing ? "同步中…" : "刷新状态") { triggerRefresh() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!model.isFeedbackStatusSyncConfigured || syncing || !hasSyncableRecords)
             }
 
             if lookupOpen {
-                HStack(spacing: 8) {
+                HStack(spacing: OpalSpacing.sm) {
                     TextField("输入 8 位反馈码（如 A1B2C3D4）", text: $lookupCodeInput)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { triggerLookup() }
-                    Button(lookingUp ? "查询中…" : "查询") {
-                        triggerLookup()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.cyan)
-                    .controlSize(.small)
-                    .disabled(!model.isFeedbackStatusSyncConfigured || lookingUp || lookupCodeInput.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button(lookingUp ? "查询中…" : "查询") { triggerLookup() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(!model.isFeedbackStatusSyncConfigured || lookingUp || lookupCodeInput.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
 
             if let notice = syncNotice {
-                Text(notice.message)
-                    .font(.caption)
-                    .foregroundStyle(notice.isError ? .red : .green)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background((notice.isError ? Color.red : Color.green).opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                OpalNoticeBanner(
+                    tone: notice.isError ? .error : .success,
+                    message: notice.message,
+                    onDismiss: { syncNotice = nil }
+                )
             }
 
             if model.feedbackRecords.isEmpty {
                 Text("暂无本地反馈记录。提交问题或功能建议后会自动在这里追踪处理进度、开发者回复与发布版本；重装或换机可用「查反馈码」找回。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(12)
+                    .padding(OpalSpacing.md)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
             } else {
                 let visible = showAllRecords || model.feedbackRecords.count <= Self.defaultCollapsedCount
                     ? model.feedbackRecords
                     : Array(model.feedbackRecords.prefix(Self.defaultCollapsedCount))
-                VStack(spacing: 8) {
+                VStack(spacing: OpalSpacing.sm) {
                     ForEach(visible) { rec in
                         recordCard(rec)
                     }
@@ -102,8 +95,8 @@ public struct FeedbackTrackingView: View {
                 }
             }
         }
-        .padding(16)
-        .opalDeskCardContainer(cornerRadius: 20, borderOpacity: 0.18)
+        .padding(OpalSpacing.lg)
+        .opalGlassSurface(.panel)
         .task {
             if model.isFeedbackStatusSyncConfigured {
                 _ = await model.refreshFeedbackStatuses(force: false)
@@ -129,8 +122,8 @@ public struct FeedbackTrackingView: View {
         let badge = resolveBadge(record: record, relation: relation)
         let isFeature = record.kind == .feature
 
-        return VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 6) {
+        return VStack(alignment: .leading, spacing: OpalSpacing.xs) {
+            HStack(spacing: OpalSpacing.xs) {
                 Button("#\(record.shortCode)") {
                     let pb = NSPasteboard.general
                     pb.clearContents()
@@ -144,10 +137,7 @@ public struct FeedbackTrackingView: View {
                 .controlSize(.mini)
                 .font(.caption.monospaced().weight(.bold))
 
-                StatusBadgeView(
-                    text: isFeature ? "需求" : "问题",
-                    color: isFeature ? .cyan : .accentColor
-                )
+                StatusBadgeView(text: isFeature ? "需求" : "问题", color: isFeature ? .cyan : .accentColor)
 
                 let meta = (record.reportedVersion.isEmpty ? "" : "v\(record.reportedVersion) · ")
                     + Self.formatTime(record.createdAtMs)
@@ -171,7 +161,7 @@ public struct FeedbackTrackingView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .opalGlassSurface(.inset, cornerRadius: OpalRadius.control, tint: .accentColor)
             }
 
             HStack {
@@ -180,20 +170,14 @@ public struct FeedbackTrackingView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
-                Button("移除") {
-                    model.removeFeedbackRecord(eventId: record.eventId)
-                }
-                .buttonStyle(.borderless)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                Button("移除") { model.removeFeedbackRecord(eventId: record.eventId) }
+                    .buttonStyle(.borderless)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(12)
-        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8)
-        )
+        .padding(OpalSpacing.md)
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
     }
 
     private func triggerRefresh() {

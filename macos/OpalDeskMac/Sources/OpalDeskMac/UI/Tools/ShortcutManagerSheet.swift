@@ -61,8 +61,7 @@ public enum ShortcutDirectoryPreset: String, CaseIterable, Identifiable, Sendabl
     }
 }
 
-/// Standalone SwiftUI management sheet for Spotlight / Desktop `.app` shortcuts created by OpalDesk.
-/// Completely decoupled from `AppModel`; hosts pass candidates and optional action closures.
+/// Standalone SwiftUI Liquid Glass management sheet for Spotlight / Desktop `.app` shortcuts.
 public struct ShortcutManagerSheet: View {
     public let availableApps: [ShortcutAppCandidate]
     public let initialDirectory: URL
@@ -118,69 +117,51 @@ public struct ShortcutManagerSheet: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            headerSection
+        VStack(alignment: .leading, spacing: OpalSpacing.md) {
+            OpalSheetHeader(
+                icon: "app.badge.checkmark.fill",
+                iconTint: .purple,
+                title: "Spotlight 与桌面快捷方式",
+                subtitle: "为手机应用生成原生 macOS .app 入口，支持 Spotlight 聚焦搜索与双击打开独立小窗。",
+                badgeText: "\(shortcuts.count) 个已创建",
+                badgeColor: .accentColor
+            )
+
             directoryBar
             tabAndSearchBar
 
             if let errorBanner {
-                bannerView(text: errorBanner, icon: "exclamationmark.triangle.fill", color: .red)
+                OpalNoticeBanner(tone: .error, message: errorBanner, onDismiss: { self.errorBanner = nil })
             } else if let statusBanner {
-                bannerView(text: statusBanner, icon: "checkmark.circle.fill", color: .green)
+                OpalNoticeBanner(tone: .success, message: statusBanner, onDismiss: { self.statusBanner = nil })
             }
 
             Group {
                 switch selectedTab {
-                case .installed:
-                    installedShortcutsList
-                case .createBatch:
-                    batchCreateList
+                case .installed: installedShortcutsList
+                case .createBatch: batchCreateList
                 }
             }
-            .frame(minHeight: 270, maxHeight: 340)
+            .frame(minHeight: 270, maxHeight: 350)
 
             footerSection
         }
-        .padding(20)
-        .frame(width: 580)
-        .onAppear {
-            reloadShortcuts()
-        }
+        .padding(OpalSpacing.xl)
+        .opalModalSheetChrome(width: 600)
+        .onAppear { reloadShortcuts() }
         .alert("移除当前目录全部快捷方式？", isPresented: $confirmClearAll) {
             Button("取消", role: .cancel) {}
-            Button("全部移除", role: .destructive) {
-                removeAllInActiveDirectory()
-            }
+            Button("全部移除", role: .destructive) { removeAllInActiveDirectory() }
         } message: {
             Text("仅移除由 OpalDesk 生成的 .app 快捷方式（共 \(shortcuts.count) 项），不会影响目录内的其他文件。")
         }
     }
 
-    // MARK: - Header & Controls
-
-    private var headerSection: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "app.badge.checkmark.fill")
-                .font(.system(size: 28))
-                .foregroundStyle(Color.accentColor)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Spotlight 与桌面快捷方式")
-                    .font(.title3.weight(.semibold))
-                Text("为手机应用生成原生 macOS .app 入口，支持 Spotlight 聚焦搜索与双击独立窗口打开。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            StatusBadgeView(text: "\(shortcuts.count) 个已创建", color: .accentColor)
-        }
-    }
+    // MARK: - Controls
 
     private var directoryBar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: OpalSpacing.sm) {
+            HStack(spacing: OpalSpacing.sm) {
                 Picker("目标目录", selection: $directoryPreset) {
                     Text("Spotlight 目录").tag(ShortcutDirectoryPreset.spotlightApps)
                     Text("桌面").tag(ShortcutDirectoryPreset.desktop)
@@ -201,18 +182,17 @@ public struct ShortcutManagerSheet: View {
                     }
                 }
 
-                Button("选择目录…") {
-                    pickCustomDirectory()
-                }
-                .controlSize(.small)
+                Button("选择目录…") { pickCustomDirectory() }
+                    .controlSize(.small)
 
-                Button {
+                OpalGlassIconButton(
+                    systemName: "folder",
+                    size: 26,
+                    iconSize: 12,
+                    helpText: "在 Finder 中打开目录"
+                ) {
                     NSWorkspace.shared.open(activeDirectory)
-                } label: {
-                    Image(systemName: "folder")
                 }
-                .controlSize(.small)
-                .help("在 Finder 中打开目录")
             }
 
             Text(activeDirectory.path)
@@ -221,12 +201,12 @@ public struct ShortcutManagerSheet: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .padding(11)
-        .opalDeskCardContainer(cornerRadius: 14, borderOpacity: 0.16)
+        .padding(OpalSpacing.md)
+        .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
     }
 
     private var tabAndSearchBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: OpalSpacing.sm) {
             Picker("视图", selection: $selectedTab) {
                 Text("已创建 (\(shortcuts.count))").tag(SheetTab.installed)
                 Text("批量创建 (\(availableApps.count))").tag(SheetTab.createBatch)
@@ -237,27 +217,8 @@ public struct ShortcutManagerSheet: View {
 
             Spacer()
 
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-                TextField("搜索应用名或包名…", text: $searchQuery)
-                    .textFieldStyle(.plain)
-                    .font(.callout)
-                if !searchQuery.isEmpty {
-                    Button {
-                        searchQuery = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .frame(width: 220)
+            OpalSearchField(placeholder: "搜索应用名或包名…", text: $searchQuery)
+                .frame(width: 230)
         }
     }
 
@@ -276,40 +237,45 @@ public struct ShortcutManagerSheet: View {
     @ViewBuilder
     private var installedShortcutsList: some View {
         if filteredShortcuts.isEmpty {
-            VStack(spacing: 8) {
-                Image(systemName: "sparkles.rectangle.stack")
-                    .font(.system(size: 32))
-                    .foregroundStyle(.tertiary)
+            VStack(spacing: OpalSpacing.sm) {
+                OpalIconBadge(systemName: "sparkles.rectangle.stack", tint: .secondary, size: 46, iconSize: 20, cornerRadius: 14)
                 Text(shortcuts.isEmpty ? "当前目录尚未创建快捷方式" : "没有匹配的快捷方式")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
                 if !availableApps.isEmpty && shortcuts.isEmpty {
-                    Button("前往批量创建") {
-                        selectedTab = .createBatch
-                    }
-                    .controlSize(.small)
+                    Button("前往批量创建") { selectedTab = .createBatch }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
         } else {
             ScrollView {
-                LazyVStack(spacing: 8) {
+                LazyVStack(spacing: OpalSpacing.xs) {
                     ForEach(filteredShortcuts) { shortcut in
                         shortcutRow(shortcut)
                     }
                 }
-                .padding(2)
+                .padding(OpalSpacing.sm)
             }
+            .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
         }
     }
 
     private func shortcutRow(_ shortcut: CreatedAppShortcut) -> some View {
-        HStack(spacing: 12) {
-            iconThumbnail(data: shortcut.iconData)
+        HStack(spacing: OpalSpacing.md) {
+            OpalAppMonogram(
+                label: shortcut.displayName,
+                packageKey: shortcut.packageName,
+                iconData: shortcut.iconData,
+                fallbackSymbol: "app.fill",
+                size: 36,
+                cornerRadius: 10
+            )
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+                HStack(spacing: OpalSpacing.xs) {
                     Text(shortcut.displayName)
                         .font(.callout.weight(.semibold))
                         .lineLimit(1)
@@ -323,36 +289,38 @@ public struct ShortcutManagerSheet: View {
                     .lineLimit(1)
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: OpalSpacing.sm)
 
-            HStack(spacing: 6) {
+            HStack(spacing: OpalSpacing.xs) {
                 Button {
                     launchShortcut(shortcut)
                 } label: {
                     Label("测试启动", systemImage: "play.fill")
                 }
+                .buttonStyle(.bordered)
                 .controlSize(.small)
 
-                Button {
-                    revealShortcut(shortcut)
-                } label: {
-                    Image(systemName: "folder")
-                }
-                .controlSize(.small)
-                .help("在 Finder 中显示")
+                OpalGlassIconButton(
+                    systemName: "folder",
+                    tint: .secondary,
+                    size: 26,
+                    iconSize: 12,
+                    helpText: "在 Finder 中显示"
+                ) { revealShortcut(shortcut) }
 
-                Button(role: .destructive) {
-                    deleteShortcut(shortcut)
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .controlSize(.small)
-                .help("删除快捷方式")
+                OpalGlassIconButton(
+                    systemName: "trash",
+                    tint: .red,
+                    size: 26,
+                    iconSize: 12,
+                    helpText: "删除快捷方式"
+                ) { deleteShortcut(shortcut) }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .padding(.horizontal, OpalSpacing.md)
+        .padding(.vertical, 8)
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
+        .opalInteractiveHover(cornerRadius: OpalRadius.tile)
     }
 
     // MARK: - Batch Creation List
@@ -373,10 +341,8 @@ public struct ShortcutManagerSheet: View {
     @ViewBuilder
     private var batchCreateList: some View {
         if availableApps.isEmpty {
-            VStack(spacing: 8) {
-                Image(systemName: "apps.iphone")
-                    .font(.system(size: 32))
-                    .foregroundStyle(.tertiary)
+            VStack(spacing: OpalSpacing.sm) {
+                OpalIconBadge(systemName: "apps.iphone", tint: .secondary, size: 46, iconSize: 20, cornerRadius: 14)
                 Text("暂无可创建的手机应用列表")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
@@ -387,9 +353,9 @@ public struct ShortcutManagerSheet: View {
                     .frame(maxWidth: 360)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
         } else {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: OpalSpacing.sm) {
                 HStack {
                     Button("全选当前列表") {
                         selectedCandidateIds.formUnion(filteredCandidates.map(\.id))
@@ -405,18 +371,19 @@ public struct ShortcutManagerSheet: View {
                     Spacer()
 
                     Text("已选 \(selectedCandidateIds.count) 项")
-                        .font(.caption)
+                        .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
 
                 ScrollView {
-                    LazyVStack(spacing: 6) {
+                    LazyVStack(spacing: OpalSpacing.xs) {
                         ForEach(filteredCandidates) { candidate in
                             candidateRow(candidate)
                         }
                     }
-                    .padding(2)
+                    .padding(OpalSpacing.sm)
                 }
+                .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
             }
         }
     }
@@ -425,25 +392,27 @@ public struct ShortcutManagerSheet: View {
         let isSelected = selectedCandidateIds.contains(candidate.id)
         let alreadyExists = existingPackageNames.contains(candidate.packageName)
 
-        return HStack(spacing: 11) {
+        return HStack(spacing: OpalSpacing.md) {
             Toggle(isOn: Binding(
                 get: { isSelected },
                 set: { checked in
-                    if checked {
-                        selectedCandidateIds.insert(candidate.id)
-                    } else {
-                        selectedCandidateIds.remove(candidate.id)
-                    }
+                    if checked { selectedCandidateIds.insert(candidate.id) }
+                    else { selectedCandidateIds.remove(candidate.id) }
                 }
-            )) {
-                EmptyView()
-            }
-            .toggleStyle(.checkbox)
+            )) { EmptyView() }
+                .toggleStyle(.checkbox)
 
-            iconThumbnail(data: candidate.iconPNGData)
+            OpalAppMonogram(
+                label: candidate.appLabel,
+                packageKey: candidate.packageName,
+                iconData: candidate.iconPNGData,
+                fallbackSymbol: "app.fill",
+                size: 34,
+                cornerRadius: 9
+            )
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+                HStack(spacing: OpalSpacing.xs) {
                     Text(candidate.appLabel)
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
@@ -459,86 +428,38 @@ public struct ShortcutManagerSheet: View {
 
             Spacer()
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, OpalSpacing.md)
         .padding(.vertical, 7)
-        .background(
-            (isSelected ? Color.accentColor.opacity(0.09) : Color.primary.opacity(0.035)),
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-        )
-        .contentShape(Rectangle())
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile, tint: isSelected ? .accentColor : nil)
+        .opalInteractiveHover(cornerRadius: OpalRadius.tile)
+        .contentShape(RoundedRectangle(cornerRadius: OpalRadius.tile, style: .continuous))
         .onTapGesture {
-            if isSelected {
-                selectedCandidateIds.remove(candidate.id)
-            } else {
-                selectedCandidateIds.insert(candidate.id)
-            }
+            if isSelected { selectedCandidateIds.remove(candidate.id) }
+            else { selectedCandidateIds.insert(candidate.id) }
         }
     }
 
-    // MARK: - Footer & Shared Helpers
+    // MARK: - Footer & Actions
 
     private var footerSection: some View {
         HStack {
             if selectedTab == .installed {
-                Button("清空当前目录", role: .destructive) {
-                    confirmClearAll = true
-                }
-                .disabled(shortcuts.isEmpty)
+                Button("清空当前目录", role: .destructive) { confirmClearAll = true }
+                    .disabled(shortcuts.isEmpty)
 
-                Button("刷新") {
-                    reloadShortcuts()
-                }
+                Button("刷新") { reloadShortcuts() }
             } else {
-                Button("批量创建 (\(selectedCandidateIds.count))") {
-                    createSelectedShortcuts()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(selectedCandidateIds.isEmpty)
+                Button("批量创建 (\(selectedCandidateIds.count))") { createSelectedShortcuts() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(selectedCandidateIds.isEmpty)
             }
 
             Spacer()
 
-            Button("关闭") {
-                onClose()
-            }
-            .keyboardShortcut(.cancelAction)
+            Button("关闭", action: onClose)
+                .keyboardShortcut(.cancelAction)
         }
     }
-
-    @ViewBuilder
-    private func iconThumbnail(data: Data?) -> some View {
-        if let data, let img = NSImage(data: data) {
-            Image(nsImage: img)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 34, height: 34)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        } else {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.14))
-                Image(systemName: "app.fill")
-                    .foregroundStyle(Color.accentColor)
-            }
-            .frame(width: 34, height: 34)
-        }
-    }
-
-    private func bannerView(text: String, icon: String, color: Color) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .foregroundStyle(color)
-            Text(text)
-                .font(.caption)
-                .foregroundStyle(color == .red ? .red : .primary)
-            Spacer()
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-    }
-
-    // MARK: - Actions
 
     private func reloadShortcuts() {
         do {

@@ -2,15 +2,14 @@ import AppKit
 import OpalDeskCore
 import SwiftUI
 
-/// Frameless-style standalone Android floating app window view.
-/// Shows a pure, zero-clutter phone screen when idle, and smoothly reveals a translucent hover bar
-/// near the top edge with always-on-top pin (`⌘⇧T`), opacity, aspect presets, DPI reload, Back,
-/// return-to-desktop (when connected), and close controls.
+/// Frameless-style standalone Android floating app window with continuous macOS squircle chrome
+/// and a Liquid Glass floating hover bar (pin, opacity, aspect presets, audio, capture, DPI, Back, close).
 public struct PopoutAppWindowView: View {
     private static let opacityStep: Double = 0.05
 
     @Bindable public var controller: PopoutAppController
     public let onFilesDropped: ([URL]) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var toolbar = HoverToolbarController(
         initialRevealSeconds: 2.0,
@@ -30,9 +29,13 @@ public struct PopoutAppWindowView: View {
         toolbar.isVisible(forceVisible: !controller.isAuthenticated && !controller.isMigratingConnection)
     }
 
+    private var windowShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: OpalRadius.popoutWindow, style: .continuous)
+    }
+
     public var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color.black
 
             InteractiveDisplayNSView(
                 videoRenderer: controller.videoRenderer,
@@ -47,7 +50,9 @@ public struct PopoutAppWindowView: View {
                     toolbar: toolbar,
                     onFilesDropped: onFilesDropped,
                     onDragHoverChange: { hovering in
-                        withAnimation(.easeInOut(duration: 0.15)) { isDragOverCanvas = hovering }
+                        withAnimation(OpalMotion.animation(OpalMotion.hover, reduceMotion: reduceMotion)) {
+                            isDragOverCanvas = hovering
+                        }
                     },
                     onResize: { size, scale in controller.handleCanvasResize(viewSize: size, backingScale: scale) },
                     onTogglePin: {
@@ -56,43 +61,23 @@ public struct PopoutAppWindowView: View {
                     }
                 )
             )
-            .ignoresSafeArea()
 
             if controller.isShowingLoadingOverlay { loadingOverlay }
-            if isDragOverCanvas { dropHighlightOverlay }
+            if isDragOverCanvas {
+                OpalDropZoneOverlay(
+                    icon: "arrow.down.doc.fill",
+                    title: "发送文件",
+                    subtitle: nil,
+                    cornerRadius: OpalRadius.card,
+                    insetPadding: 10,
+                    isCompact: true
+                )
+            }
 
-            VStack(spacing: 4) {
+            VStack(spacing: OpalSpacing.xxs) {
                 if !shouldShowToolbar {
-                    HStack {
-                        if controller.isRecording {
-                            Button {
-                                controller.stopRecording()
-                            } label: {
-                                HStack(spacing: 5) {
-                                    Circle().fill(Color.red).frame(width: 7, height: 7)
-                                    Text(controller.formattedRecordingDuration)
-                                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(.white)
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .floatingCapsuleChrome(strokeColor: Color.red.opacity(0.6), lineWidth: 0.9, shadowRadius: 6, shadowY: 2, shadowOpacity: 0.3)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.leading, 8)
-                            .padding(.top, 6)
-                            .help("点击停止录屏")
-                        }
-                        Spacer()
-                    }
-                    .overlay(alignment: .top) {
-                        Capsule()
-                            .fill(controller.isPinnedOnTop ? Color.orange.opacity(0.65) : Color.white.opacity(0.35))
-                            .frame(width: 38, height: 4)
-                            .padding(.top, 5)
-                            .allowsHitTesting(false)
-                    }
-                    .transition(.opacity)
+                    collapsedTopIndicator
+                        .transition(.opacity)
                 } else {
                     hoverControlBar
                         .padding(.top, 10)
@@ -100,6 +85,7 @@ public struct PopoutAppWindowView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                         .onHover { toolbar.handleToolbarHover($0) }
                 }
+
                 Spacer()
 
                 if let toast = controller.toastNotice {
@@ -110,23 +96,73 @@ public struct PopoutAppWindowView: View {
                             { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                         }
                     )
-                    .padding(.bottom, 12)
+                    .padding(.bottom, OpalSpacing.md)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
         }
+        .clipShape(windowShape)
+        .overlay(
+            windowShape
+                .strokeBorder(
+                    LinearGradient(
+                        colors: controller.isPinnedOnTop
+                            ? [Color.orange.opacity(0.68), Color.orange.opacity(0.24), Color.orange.opacity(0.45)]
+                            : [Color.white.opacity(0.26), Color.white.opacity(0.06), Color.white.opacity(0.14)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: controller.isPinnedOnTop ? 1.35 : 0.9
+                )
+                .allowsHitTesting(false)
+        )
+        .ignoresSafeArea()
         .preferredColorScheme(.dark)
-        .animation(.easeOut(duration: 0.16), value: shouldShowToolbar)
-        .animation(.easeOut(duration: 0.2), value: controller.toastNotice)
+        .animation(OpalMotion.animation(OpalMotion.quick, reduceMotion: reduceMotion), value: shouldShowToolbar)
+        .animation(OpalMotion.animation(OpalMotion.smooth, reduceMotion: reduceMotion), value: controller.toastNotice)
         .onChange(of: isOpacityPopoverShown) { _, shown in toolbar.setLockedOpen(shown) }
         .onAppear { toolbar.onAppear() }
         .onDisappear { toolbar.onDisappear() }
     }
 
-    // MARK: - Translucent Hover Control Bar
+    // MARK: - Collapsed Top Handle & Recording Pill
+
+    private var collapsedTopIndicator: some View {
+        HStack {
+            if controller.isRecording {
+                Button {
+                    controller.stopRecording()
+                } label: {
+                    HStack(spacing: 5) {
+                        Circle().fill(Color.red).frame(width: 7, height: 7)
+                        Text(controller.formattedRecordingDuration)
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3.5)
+                    .opalFloatingGlassCapsule(strokeColor: Color.red.opacity(0.62))
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 10)
+                .padding(.top, 8)
+                .help("点击停止录屏")
+            }
+            Spacer()
+        }
+        .overlay(alignment: .top) {
+            Capsule()
+                .fill(controller.isPinnedOnTop ? Color.orange.opacity(0.72) : Color.white.opacity(0.38))
+                .frame(width: 40, height: 4)
+                .padding(.top, 6)
+                .allowsHitTesting(false)
+        }
+    }
+
+    // MARK: - Liquid Glass Floating Hover Control Bar
 
     private var hoverControlBar: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             HStack(spacing: 5) {
                 Circle()
                     .fill(controller.isAuthenticated ? Color.green : Color.orange)
@@ -136,86 +172,118 @@ public struct PopoutAppWindowView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            .padding(.leading, 4)
+            .padding(.leading, 5)
             .padding(.trailing, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay { PopoutWindowDragArea() }
             .help("按住拖动移动悬浮小窗")
 
-            iconButton(
-                controller.isPinnedOnTop ? "pin.fill" : "pin",
-                tint: controller.isPinnedOnTop ? .orange : .primary,
-                highlighted: controller.isPinnedOnTop,
-                help: controller.isPinnedOnTop ? "取消置顶 (⌘⇧T)" : "窗口置顶 (⌘⇧T)"
+            OpalGlassIconButton(
+                systemName: controller.isPinnedOnTop ? "pin.fill" : "pin",
+                tint: controller.isPinnedOnTop ? .orange : .white,
+                isActive: controller.isPinnedOnTop,
+                size: 24,
+                iconSize: 11,
+                helpText: controller.isPinnedOnTop ? "取消置顶 (⌘⇧T)" : "窗口置顶 (⌘⇧T)"
             ) { controller.togglePinnedOnTop() }
 
             Button { isOpacityPopoverShown.toggle() } label: {
                 let tinted = controller.windowOpacity < 0.99
                 Image(systemName: "circle.lefthalf.filled")
                     .font(.system(size: 11, weight: .medium))
-                    .frame(width: 24, height: 22)
+                    .frame(width: 24, height: 24)
                     .background(tinted ? Color.accentColor.opacity(0.24) : Color.clear, in: Capsule())
-                    .foregroundStyle(tinted ? Color.accentColor : Color.primary)
+                    .foregroundStyle(tinted ? Color.accentColor : Color.white)
             }
             .buttonStyle(.plain)
             .help("调节窗口透明度 (\(Int((controller.windowOpacity * 100).rounded()))%)")
+            .accessibilityLabel("调节窗口透明度")
             .popover(isPresented: $isOpacityPopoverShown, arrowEdge: .bottom) { opacityPopoverContent }
 
             aspectPresetMenu
 
-            iconButton(
-                controller.isAudioMuted ? "speaker.slash" : "speaker.wave.2",
-                tint: controller.isAudioMuted ? .secondary : .primary,
-                highlighted: !controller.isAudioMuted,
-                help: controller.isAudioMuted ? "已静音 · 点击恢复音频回传" : "静音此小窗音频回传"
+            OpalGlassIconButton(
+                systemName: controller.isAudioMuted ? "speaker.slash" : "speaker.wave.2",
+                tint: controller.isAudioMuted ? .secondary : .white,
+                isActive: !controller.isAudioMuted,
+                size: 24,
+                iconSize: 11,
+                helpText: controller.isAudioMuted ? "已静音 · 点击恢复音频回传" : "静音此小窗音频回传"
             ) { controller.toggleAudioMute() }
 
-            iconButton(
-                "camera",
-                help: "一键截图到桌面并复制剪贴板"
+            OpalGlassIconButton(
+                systemName: "camera",
+                tint: .white,
+                size: 24,
+                iconSize: 11,
+                helpText: "一键截图到桌面并复制剪贴板"
             ) { controller.captureScreenshot() }
 
-            Button {
-                controller.toggleRecording()
-            } label: {
-                if controller.isRecording {
-                    HStack(spacing: 3) {
-                        Circle().fill(Color.red).frame(width: 6, height: 6)
-                        Text(controller.formattedRecordingDuration)
-                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                    }
-                    .padding(.horizontal, 6)
-                    .frame(height: 22)
-                    .background(Color.red.opacity(0.24), in: Capsule())
-                    .foregroundStyle(Color.red)
-                } else {
-                    Image(systemName: "record.circle")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 24, height: 22)
-                        .foregroundStyle(Color.primary)
-                }
-            }
-            .buttonStyle(.plain)
-            .help(controller.isRecording ? "停止录屏并保存 MP4" : "录制小窗 MP4 视频")
+            recordingButton
 
-            iconButton("textformat.size", help: "重载 App DPI（修复字体过大或缩放异常）") { controller.reloadAppDPI() }
-            iconButton("chevron.backward", help: "Android 返回") { controller.sendAndroidBack() }
+            OpalGlassIconButton(
+                systemName: "textformat.size",
+                tint: .white,
+                size: 24,
+                iconSize: 11,
+                helpText: "重载 App DPI（修复字体过大或缩放异常）"
+            ) { controller.reloadAppDPI() }
+
+            OpalGlassIconButton(
+                systemName: "chevron.backward",
+                tint: .white,
+                size: 24,
+                iconSize: 11,
+                helpText: "Android 返回"
+            ) { controller.sendAndroidBack() }
+
             if controller.canReturnToDesktop {
-                iconButton("macwindow.on.rectangle", tint: .accentColor, help: "收回主大屏并关闭小窗") {
-                    controller.returnToDesktop()
-                }
+                OpalGlassIconButton(
+                    systemName: "macwindow.on.rectangle",
+                    tint: .accentColor,
+                    size: 24,
+                    iconSize: 11,
+                    helpText: "收回主大屏并关闭小窗"
+                ) { controller.returnToDesktop() }
             }
-            iconButton("xmark.circle.fill", tint: .red, help: "关闭悬浮小窗") { controller.close(sendDisconnect: true) }
+
+            OpalGlassIconButton(
+                systemName: "xmark.circle.fill",
+                tint: .red,
+                size: 24,
+                iconSize: 12,
+                helpText: "关闭悬浮小窗"
+            ) { controller.close(sendDisconnect: true) }
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .floatingCapsuleChrome(
-            strokeColor: controller.isPinnedOnTop ? Color.orange.opacity(0.62) : Color.white.opacity(0.18),
-            lineWidth: controller.isPinnedOnTop ? 1.25 : 0.8,
-            shadowRadius: 10,
-            shadowY: 4,
-            shadowOpacity: 0.38
-        )
+        .padding(.vertical, 4)
+        .opalFloatingGlassCapsule(strokeColor: controller.isPinnedOnTop ? Color.orange.opacity(0.64) : nil)
+    }
+
+    private var recordingButton: some View {
+        Button {
+            controller.toggleRecording()
+        } label: {
+            if controller.isRecording {
+                HStack(spacing: 3) {
+                    Circle().fill(Color.red).frame(width: 6, height: 6)
+                    Text(controller.formattedRecordingDuration)
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                }
+                .padding(.horizontal, 7)
+                .frame(height: 24)
+                .background(Color.red.opacity(0.24), in: Capsule())
+                .foregroundStyle(.red)
+            } else {
+                Image(systemName: "record.circle")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 24, height: 24)
+                    .foregroundStyle(.white)
+            }
+        }
+        .buttonStyle(.plain)
+        .help(controller.isRecording ? "停止录屏并保存 MP4" : "录制小窗 MP4 视频")
+        .accessibilityLabel(controller.isRecording ? "停止录屏" : "录制视频")
     }
 
     private var aspectPresetMenu: some View {
@@ -234,15 +302,15 @@ public struct PopoutAppWindowView: View {
             Button("重载悬浮小窗", systemImage: "arrow.clockwise") { controller.retryStart() }
             Button("刷新关键帧 (IDR)", systemImage: "arrow.triangle.2.circlepath") { controller.requestIDR() }
         } label: {
-            HStack(spacing: 2) {
+            HStack(spacing: 3) {
                 Image(systemName: controller.activePreset?.systemImage ?? "aspectratio")
                     .font(.system(size: 10, weight: .semibold))
                 Text(controller.activePreset?.title ?? "自由")
                     .font(.system(size: 10, weight: .medium))
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(Color.primary.opacity(0.08), in: Capsule())
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(0.10), in: Capsule())
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -250,7 +318,7 @@ public struct PopoutAppWindowView: View {
     }
 
     private var opacityPopoverContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: OpalSpacing.sm) {
             HStack {
                 Text("窗口透明度").font(.caption.weight(.semibold))
                 Spacer()
@@ -259,37 +327,18 @@ public struct PopoutAppWindowView: View {
                     .foregroundStyle(.secondary)
             }
             Slider(value: $controller.windowOpacity, in: DisplayPresets.popoutOpacityRange, step: Self.opacityStep)
-                .frame(width: 170)
+                .frame(width: 176)
                 .onChange(of: controller.windowOpacity) { _, newValue in
                     controller.setWindowOpacity(newValue)
                 }
         }
-        .padding(12)
+        .padding(OpalSpacing.md)
     }
 
-    private func iconButton(
-        _ icon: String,
-        tint: Color = .primary,
-        highlighted: Bool = false,
-        help: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 11, weight: .semibold))
-                .frame(width: 24, height: 22)
-                .background(highlighted ? tint.opacity(0.24) : Color.clear, in: Capsule())
-                .foregroundStyle(tint)
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(help)
-    }
-
-    // MARK: - Loading & Drop Overlays
+    // MARK: - Loading Overlay
 
     private var loadingOverlay: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: OpalSpacing.sm) {
             if let error = controller.errorMessage {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 26))
@@ -315,16 +364,8 @@ public struct PopoutAppWindowView: View {
                 .multilineTextAlignment(.center)
             }
         }
-        .padding(18)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private var dropHighlightOverlay: some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2.5, dash: [8, 5]))
-            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .padding(10)
-            .allowsHitTesting(false)
+        .padding(OpalSpacing.xl)
+        .opalGlassSurface(.stageOverlay, cornerRadius: OpalRadius.card)
     }
 }
 

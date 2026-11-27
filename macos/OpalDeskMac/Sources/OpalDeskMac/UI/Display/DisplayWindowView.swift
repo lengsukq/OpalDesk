@@ -3,11 +3,12 @@ import OpalDeskCore
 import SwiftUI
 
 /// Pure OpalDesk casting viewport: edge-to-edge projected Android display canvas,
-/// optional top-right telemetry HUD, hover top-edge quick disconnect/exit pill,
-/// file-drop target, and disconnect/reconnect recovery notices.
+/// Liquid Glass floating top hover bar, optional telemetry HUD, unified file-drop stage,
+/// and disconnect/reconnect recovery overlays.
 public struct DisplayWindowView: View {
     @Bindable public var model: AppModel
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var isDragOverCanvas: Bool = false
     @State private var isInjectWarningDismissed: Bool = false
@@ -27,9 +28,9 @@ public struct DisplayWindowView: View {
             .background(WindowChromeConfigurator(isImmersiveCanvas: true) { window in
                 model.mainDisplayWindow = window
             })
-            .animation(.easeOut(duration: 0.2), value: model.toastNotice)
-            .animation(.easeOut(duration: 0.2), value: model.injectStatus)
-            .animation(.easeOut(duration: 0.16), value: isHoveringTopEdge)
+            .animation(OpalMotion.animation(OpalMotion.smooth, reduceMotion: reduceMotion), value: model.toastNotice)
+            .animation(OpalMotion.animation(OpalMotion.smooth, reduceMotion: reduceMotion), value: model.injectStatus)
+            .animation(OpalMotion.animation(OpalMotion.quick, reduceMotion: reduceMotion), value: isHoveringTopEdge)
             .sheet(item: $model.remoteAppPickerContext) { ctx in
                 RemoteAppPickerSheet(model: model, context: ctx) {
                     model.closeRemoteAppPicker()
@@ -83,7 +84,9 @@ public struct DisplayWindowView: View {
                     toolbar: nil,
                     onFilesDropped: { model.handleDroppedFiles($0) },
                     onDragHoverChange: { hovering in
-                        withAnimation(.easeInOut(duration: 0.15)) { isDragOverCanvas = hovering }
+                        withAnimation(OpalMotion.animation(OpalMotion.hover, reduceMotion: reduceMotion)) {
+                            isDragOverCanvas = hovering
+                        }
                     },
                     onResize: { size, scale in model.handleCanvasResize(viewSize: size, backingScale: scale) }
                 )
@@ -107,8 +110,7 @@ public struct DisplayWindowView: View {
                     }
                     Spacer()
                 }
-                .padding(12)
-                .transition(.opacity)
+                .padding(OpalSpacing.md)
             }
 
             if model.preferences.showHUDStats && model.isAuthenticated {
@@ -119,7 +121,7 @@ public struct DisplayWindowView: View {
                     }
                     Spacer()
                 }
-                .padding(12)
+                .padding(OpalSpacing.md)
                 .allowsHitTesting(false)
             }
 
@@ -128,18 +130,22 @@ public struct DisplayWindowView: View {
             }
 
             if isDragOverCanvas {
-                fileDropOverlay
+                OpalDropZoneOverlay(
+                    icon: "arrow.down.doc.fill",
+                    title: "松开鼠标发送文件或安装 APK",
+                    subtitle: "普通文件将保存到 Download/OpalDesk · 单个 .apk/.xapk 将打开安装预览"
+                )
             }
 
             notificationsOverlay
         }
     }
 
-    // MARK: - Hover Top Edge Disconnect / Force Quit Pill
+    // MARK: - Liquid Glass Floating Top Control Bar
 
     private var topHoverControlBar: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 4) {
+            VStack(spacing: OpalSpacing.xxs) {
                 ZStack(alignment: .top) {
                     Color.clear
                         .frame(height: 18)
@@ -148,193 +154,39 @@ public struct DisplayWindowView: View {
 
                     if !isHoveringTopEdge {
                         Capsule()
-                            .fill(.white.opacity(0.36))
+                            .fill(.white.opacity(0.38))
                             .overlay(Capsule().strokeBorder(.black.opacity(0.28), lineWidth: 0.6))
-                            .frame(width: 42, height: 4)
+                            .frame(width: 44, height: 4)
                             .padding(.top, 5)
                             .transition(.opacity)
                     }
                 }
 
                 if isHoveringTopEdge {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 5) {
                         if let conn = model.activeConnection {
-                            Text(conn.deviceName)
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.88))
-                                .lineLimit(1)
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(model.isAuthenticated ? Color.green : Color.orange)
+                                    .frame(width: 6, height: 6)
+                                Text(conn.deviceName)
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.92))
+                                    .lineLimit(1)
+                            }
+                            .padding(.leading, 4)
                             topBarDivider
                         }
 
-                        Button {
-                            model.toggleMicrophone()
-                        } label: {
-                            Image(systemName: model.isMicEnabled ? "mic.fill" : "mic.slash")
-                                .font(.system(size: 11.5, weight: .medium))
-                                .frame(width: 16, height: 14)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(model.isMicEnabled ? .green : nil)
-                        .controlSize(.small)
-                        .help(model.isMicEnabled ? "关闭麦克风" : "开启麦克风")
-
-                        Button {
-                            model.toggleCamera()
-                        } label: {
-                            Image(systemName: model.isCameraEnabled ? "video.fill" : "video.slash")
-                                .font(.system(size: 11.5, weight: .medium))
-                                .frame(width: 16, height: 14)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(model.isCameraEnabled ? .green : nil)
-                        .controlSize(.small)
-                        .help(model.isCameraEnabled ? "关闭摄像头" : "开启摄像头")
-
+                        mediaAndCaptureControls
                         topBarDivider
-
-                        Button {
-                            model.captureMainWindowScreenshot()
-                        } label: {
-                            Image(systemName: "camera")
-                                .font(.system(size: 11.5, weight: .medium))
-                                .frame(width: 16, height: 14)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(!model.isAuthenticated || model.videoMetrics.totalFramesDecoded == 0)
-                        .help("一键截图（保存桌面并复制剪贴板 ⌘⇧S）")
-
-                        Button {
-                            model.toggleMainWindowRecording()
-                        } label: {
-                            if model.isMainWindowRecording {
-                                HStack(spacing: 4) {
-                                    Circle()
-                                        .fill(Color.red)
-                                        .frame(width: 7, height: 7)
-                                    Text(model.formattedRecordingDuration)
-                                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                                }
-                            } else {
-                                Image(systemName: "record.circle")
-                                    .font(.system(size: 11.5, weight: .medium))
-                                    .frame(width: 16, height: 14)
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(model.isMainWindowRecording ? .red : nil)
-                        .controlSize(.small)
-                        .disabled(!model.isAuthenticated || (!model.isMainWindowRecording && model.videoMetrics.totalFramesDecoded == 0))
-                        .help(model.isMainWindowRecording ? "点击停止录屏并保存 MP4" : "开始录制 MP4 屏幕录像 (⌘⇧V)")
-
-                        Button {
-                            openWindow(id: WindowID.fileBrowser)
-                            NSApp.activate(ignoringOtherApps: true)
-                        } label: {
-                            Image(systemName: "folder")
-                                .font(.system(size: 11.5, weight: .medium))
-                                .frame(width: 16, height: 14)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .help("打开手机文件与存储管理 (⌘⇧F)")
-
+                        workspaceAndDisplayControls
                         topBarDivider
-
-                        if model.displayMode == .dex && !model.deviceState.fullscreenWindowTitle.isEmpty {
-                            Button {
-                                model.sendAndroidHome()
-                            } label: {
-                                Label("退出全屏", systemImage: "arrow.down.right.and.arrow.up.left")
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.blue)
-                            .controlSize(.small)
-                            .help("退出远程应用全屏（\(model.deviceState.fullscreenWindowTitle)）")
-                        }
-
-                        Button {
-                            model.openRemoteAppPicker(for: .activeDesktop)
-                        } label: {
-                            Label(
-                                model.activePopoutCount > 0
-                                    ? "小窗 \(model.activePopoutCount)/\(PopoutWindowManager.maxConcurrentWindows)"
-                                    : "应用小窗",
-                                systemImage: "macwindow.on.rectangle"
-                            )
-                            .font(.system(size: 11, weight: .medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(model.activePopoutCount > 0 ? .cyan : nil)
-                        .controlSize(.small)
-                        .disabled(!model.isAuthenticated)
-                        .help("打开手机应用或弹出独立悬浮小窗（最多 3 个）")
-
-                        Button {
-                            model.toggleDisplayMode()
-                        } label: {
-                            Label(
-                                model.displayMode == .dex ? "融合镜像" : "电脑桌面",
-                                systemImage: model.displayMode == .dex ? "rectangle.on.rectangle" : "macwindow.on.rectangle"
-                            )
-                            .font(.system(size: 11, weight: .medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .help(model.displayMode == .dex ? "切换为融合镜像" : "切换为电脑桌面")
-
-                        Button {
-                            model.toggleBlackout()
-                        } label: {
-                            Text(model.isBlackoutActive ? "亮屏" : "黑屏")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(model.isBlackoutActive ? .blue : nil)
-                        .controlSize(.small)
-                        .help(model.isBlackoutActive ? "点亮手机屏幕" : "熄灭手机屏幕")
-
-                        Button {
-                            model.preferences.hideLocalCursor.toggle()
-                        } label: {
-                            Label(
-                                model.preferences.hideLocalCursor ? "单指针" : "本机指针",
-                                systemImage: model.preferences.hideLocalCursor ? "cursorarrow.slash" : "cursorarrow"
-                            )
-                            .font(.system(size: 11, weight: .medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(model.preferences.hideLocalCursor ? .cyan : nil)
-                        .controlSize(.small)
-                        .help("隐藏投屏画布上的 Mac 本机光标，避免与 Android 端指针重叠显示")
-
-                        topBarDivider
-
-                        Button {
-                            model.forceDisconnectAndReturnHome()
-                        } label: {
-                            Text("断开")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .help("断开连接并返回主界面")
-
-                        Button(role: .destructive) {
-                            model.forceTerminateApp()
-                        } label: {
-                            Text("强制退出")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.red.opacity(0.85))
-                        .controlSize(.small)
-                        .help("强制退出 OpalDesk")
+                        sessionExitControls
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .floatingCapsuleChrome(shadowRadius: 10, shadowY: 4, shadowOpacity: 0.38)
+                    .opalFloatingGlassCapsule()
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
@@ -344,10 +196,173 @@ public struct DisplayWindowView: View {
         }
     }
 
+    @ViewBuilder
+    private var mediaAndCaptureControls: some View {
+        OpalGlassIconButton(
+            systemName: model.isMicEnabled ? "mic.fill" : "mic.slash",
+            tint: model.isMicEnabled ? .green : .white,
+            isActive: model.isMicEnabled,
+            helpText: model.isMicEnabled ? "关闭麦克风" : "开启麦克风"
+        ) { model.toggleMicrophone() }
+
+        OpalGlassIconButton(
+            systemName: model.isCameraEnabled ? "video.fill" : "video.slash",
+            tint: model.isCameraEnabled ? .green : .white,
+            isActive: model.isCameraEnabled,
+            helpText: model.isCameraEnabled ? "关闭摄像头" : "开启摄像头"
+        ) { model.toggleCamera() }
+
+        OpalGlassIconButton(
+            systemName: "camera",
+            tint: .white,
+            helpText: "一键截图到桌面并复制到剪贴板 (⌘⇧S)"
+        ) { model.captureMainWindowScreenshot() }
+            .disabled(!model.isAuthenticated || model.videoMetrics.totalFramesDecoded == 0)
+
+        Button {
+            model.toggleMainWindowRecording()
+        } label: {
+            if model.isMainWindowRecording {
+                HStack(spacing: 4) {
+                    Circle().fill(Color.red).frame(width: 7, height: 7)
+                    Text(model.formattedRecordingDuration)
+                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                }
+                .padding(.horizontal, 8)
+                .frame(height: OpalControlSize.iconButtonCompact)
+                .background(Color.red.opacity(0.24), in: Capsule())
+                .foregroundStyle(.red)
+            } else {
+                Image(systemName: "record.circle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: OpalControlSize.iconButtonCompact, height: OpalControlSize.iconButtonCompact)
+                    .foregroundStyle(.white.opacity(0.92))
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!model.isAuthenticated || (!model.isMainWindowRecording && model.videoMetrics.totalFramesDecoded == 0))
+        .help(model.isMainWindowRecording ? "停止录屏并保存 MP4 (⌘⇧V)" : "录制投屏画面为 MP4 视频 (⌘⇧V)")
+        .accessibilityLabel(model.isMainWindowRecording ? "停止录屏" : "开始录屏")
+
+        OpalGlassIconButton(
+            systemName: "folder",
+            tint: .white,
+            helpText: "手机文件与存储管理 (⌘⇧F)"
+        ) {
+            openWindow(id: WindowID.fileBrowser)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        .disabled(!model.isAnyChannelConnected)
+    }
+
+    @ViewBuilder
+    private var workspaceAndDisplayControls: some View {
+        if model.displayMode == .dex && !model.deviceState.fullscreenWindowTitle.isEmpty {
+            Button {
+                model.sendAndroidHome()
+            } label: {
+                Label("退出全屏", systemImage: "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .help("退出远程应用全屏（\(model.deviceState.fullscreenWindowTitle)）")
+        }
+
+        floatingTextPillButton(
+            title: model.activePopoutCount > 0
+                ? "小窗 \(model.activePopoutCount)/\(PopoutWindowManager.maxConcurrentWindows)"
+                : "应用小窗",
+            systemImage: "macwindow.on.rectangle",
+            isActive: model.activePopoutCount > 0,
+            tint: .cyan,
+            help: "打开手机应用或弹出独立悬浮小窗（最多 3 个）"
+        ) { model.openRemoteAppPicker(for: .activeDesktop) }
+            .disabled(!model.isAuthenticated)
+
+        floatingTextPillButton(
+            title: model.displayMode == .dex ? "融合镜像" : "电脑桌面",
+            systemImage: model.displayMode == .dex ? "rectangle.on.rectangle" : "macwindow",
+            isActive: false,
+            tint: .white,
+            help: model.displayMode == .dex ? "切换为融合镜像 (⌘⇧D)" : "切换为电脑桌面 (⌘⇧D)"
+        ) { model.toggleDisplayMode() }
+
+        floatingTextPillButton(
+            title: model.isBlackoutActive ? "亮屏" : "黑屏",
+            systemImage: model.isBlackoutActive ? "iphone" : "iphone.slash",
+            isActive: model.isBlackoutActive,
+            tint: .blue,
+            help: model.isBlackoutActive ? "点亮手机屏幕 (⌘⇧B)" : "熄灭手机屏幕 (⌘⇧B)"
+        ) { model.toggleBlackout() }
+
+        floatingTextPillButton(
+            title: model.preferences.hideLocalCursor ? "单指针" : "本机指针",
+            systemImage: model.preferences.hideLocalCursor ? "cursorarrow.slash" : "cursorarrow",
+            isActive: model.preferences.hideLocalCursor,
+            tint: .cyan,
+            help: "隐藏投屏画布上的 Mac 本机光标，避免与 Android 端指针重叠显示"
+        ) { model.preferences.hideLocalCursor.toggle() }
+    }
+
+    @ViewBuilder
+    private var sessionExitControls: some View {
+        floatingTextPillButton(
+            title: "断开",
+            systemImage: nil,
+            isActive: false,
+            tint: .white,
+            help: "断开连接并返回主界面 (⌘⇧W)"
+        ) { model.forceDisconnectAndReturnHome() }
+
+        Button(role: .destructive) {
+            model.forceTerminateApp()
+        } label: {
+            Text("退出")
+                .font(.system(size: 11, weight: .semibold))
+                .padding(.horizontal, 9)
+                .frame(height: OpalControlSize.iconButtonCompact)
+                .background(Color.red.opacity(0.84), in: Capsule())
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+        .help("强制退出 OpalDesk (⌘⌥Q)")
+    }
+
+    private func floatingTextPillButton(
+        title: String,
+        systemImage: String?,
+        isActive: Bool,
+        tint: Color,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .padding(.horizontal, 9)
+            .frame(height: OpalControlSize.iconButtonCompact)
+            .background(
+                (isActive ? tint.opacity(0.24) : Color.white.opacity(0.10)),
+                in: Capsule()
+            )
+            .foregroundStyle(isActive ? tint : .white.opacity(0.92))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
     private var topBarDivider: some View {
         Rectangle()
             .fill(.white.opacity(0.18))
             .frame(width: 1, height: 14)
+            .padding(.horizontal, 2)
     }
 
     private var recordingStatusPill: some View {
@@ -355,9 +370,7 @@ public struct DisplayWindowView: View {
             model.stopMainWindowRecording()
         } label: {
             HStack(spacing: 6) {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 8, height: 8)
+                Circle().fill(Color.red).frame(width: 8, height: 8)
                 Text("REC \(model.formattedRecordingDuration)")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white)
@@ -365,9 +378,9 @@ public struct DisplayWindowView: View {
                     .font(.system(size: 9))
                     .foregroundStyle(.red)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 11)
             .padding(.vertical, 5)
-            .floatingCapsuleChrome(strokeColor: Color.red.opacity(0.65), lineWidth: 1.0, shadowRadius: 8, shadowY: 3, shadowOpacity: 0.35)
+            .opalFloatingGlassCapsule(strokeColor: Color.red.opacity(0.68))
         }
         .buttonStyle(.plain)
         .help("点击停止录制并保存 MP4")
@@ -395,20 +408,20 @@ public struct DisplayWindowView: View {
                     text: "UHID",
                     color: .green,
                     font: .system(size: 9.5, weight: .bold, design: .rounded),
-                    horizontalPadding: 5,
-                    verticalPadding: 1,
+                    horizontalPadding: 6,
+                    verticalPadding: 1.5,
                     backgroundOpacity: 0.24
                 )
             }
         }
         .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-        .foregroundStyle(.white.opacity(0.84))
-        .padding(.horizontal, 10)
+        .foregroundStyle(.white.opacity(0.86))
+        .padding(.horizontal, 12)
         .padding(.vertical, 5)
-        .floatingCapsuleChrome(shadowRadius: 8, shadowY: 3, shadowOpacity: 0.30)
+        .opalFloatingGlassCapsule()
     }
 
-    // MARK: - Bottom Notifications & Status Overlays
+    // MARK: - Bottom Notifications & Connection Stage Overlay
 
     private var notificationsOverlay: some View {
         VStack(spacing: 10) {
@@ -444,11 +457,11 @@ public struct DisplayWindowView: View {
                 }
             }
         }
-        .padding(14)
+        .padding(OpalSpacing.lg)
     }
 
     private var connectionOverlay: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: OpalSpacing.md) {
             ProgressView().controlSize(.large).tint(.white)
 
             Text(connectionStatusCaption)
@@ -469,60 +482,29 @@ public struct DisplayWindowView: View {
                     .foregroundStyle(.white.opacity(0.72))
             }
 
-            HStack(spacing: 10) {
-                Button("断开并返回") {
-                    model.forceDisconnectAndReturnHome()
-                }
-                .buttonStyle(.bordered)
-                .tint(.white)
+            HStack(spacing: OpalSpacing.md) {
+                Button("断开并返回") { model.forceDisconnectAndReturnHome() }
+                    .buttonStyle(.bordered)
+                    .tint(.white)
 
-                Button("强制退出 App", role: .destructive) {
-                    model.forceTerminateApp()
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.red.opacity(0.88))
+                Button("强制退出 App", role: .destructive) { model.forceTerminateApp() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red.opacity(0.88))
             }
-            .padding(.top, 4)
+            .padding(.top, OpalSpacing.xxs)
         }
-        .padding(26)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .strokeBorder(.white.opacity(0.24), lineWidth: 1)
-        )
+        .padding(28)
+        .opalGlassSurface(.stageOverlay, cornerRadius: OpalRadius.stageOverlay)
     }
 
     private var connectionStatusCaption: String {
         switch model.sessionState {
-        case .connecting: return "正在建立低延迟连接..."
-        case .reconnecting(let attempt): return "投屏连接已中断，正在尝试第 \(attempt)/5 次重连..."
-        case .connected: return model.isAuthenticated ? "正在等待 Android 首个关键帧..." : "正在等待手机端确认连接..."
+        case .connecting: return "正在建立低延迟连接…"
+        case .reconnecting(let attempt): return "投屏连接已中断，正在尝试第 \(attempt)/5 次重连…"
+        case .connected: return model.isAuthenticated ? "正在等待 Android 首个关键帧…" : "正在等待手机端确认连接…"
         case .failed(let msg): return "连接失败：\(msg)"
         case .disconnected: return "投屏连接已断开"
-        default: return "准备显示画面..."
+        default: return "准备显示画面…"
         }
-    }
-
-    private var fileDropOverlay: some View {
-        RoundedRectangle(cornerRadius: 26, style: .continuous)
-            .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [10, 6]))
-            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .overlay {
-                VStack(spacing: 10) {
-                    Image(systemName: "arrow.down.doc.fill")
-                        .font(.system(size: 40))
-                        .foregroundStyle(Color.accentColor)
-                    Text("松开鼠标发送文件到 Android 手机")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white)
-                    Text("默认保存到手机 Download/OpalDesk 目录")
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-                .padding(24)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            }
-            .padding(24)
-            .allowsHitTesting(false)
     }
 }

@@ -104,6 +104,72 @@ struct OpalDeskMacApp: App {
     }
 }
 
+// MARK: - Shared Integration Helpers (DRY across Scenes)
+
+@MainActor
+private func wireSharedAppIntegration(
+    model: AppModel,
+    appDelegate: OpalDeskAppDelegate,
+    openWindow: OpenWindowAction
+) {
+    model.onRequestOpenMainWindow = {
+        openWindow(id: WindowID.main)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    model.onRequestOpenFileBrowserWindow = {
+        openWindow(id: WindowID.fileBrowser)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    appDelegate.onTerminate = {
+        model.cleanupOnTerminate()
+    }
+    appDelegate.onOpenURLs = { urls in
+        model.handleIncomingURLs(urls)
+    }
+    appDelegate.servicesProvider = model.finderServicesProvider
+}
+
+/// Shared APK installer sheet modifier so `MainWindowRootView` and `FileBrowserWindowHostView` stay DRY.
+private struct ApkInstallerSheetHostModifier: ViewModifier {
+    @Bindable var model: AppModel
+    let targetWindow: ApkInstallerContext.PresentationTarget
+
+    func body(content: Content) -> some View {
+        content.sheet(item: installerBinding) { ctx in
+            ApkInstallerSheet(
+                packageURL: ctx.packageURL,
+                preloadedInfo: ctx.preloadedInfo,
+                installState: model.apkInstallState,
+                targetDeviceName: model.isAnyChannelConnected ? model.activeChannelDeviceName : nil,
+                onInstall: { info, replaceExisting, allowDowngrade in
+                    model.startApkInstallation(
+                        info: info,
+                        replaceExisting: replaceExisting,
+                        allowDowngrade: allowDowngrade
+                    )
+                },
+                onCancel: {
+                    model.dismissApkInstaller()
+                }
+            )
+        }
+    }
+
+    private var installerBinding: Binding<ApkInstallerContext?> {
+        Binding(
+            get: {
+                guard let ctx = model.apkInstallerContext, ctx.targetWindow == targetWindow else { return nil }
+                return ctx
+            },
+            set: { newValue in
+                if newValue == nil {
+                    model.dismissApkInstaller()
+                }
+            }
+        )
+    }
+}
+
 // MARK: - Window Root Hosts
 
 private struct MainWindowRootView: View {
@@ -122,28 +188,13 @@ private struct MainWindowRootView: View {
             }
         }
         .frame(minWidth: 680, minHeight: 480)
-        .onAppear(perform: wireAppIntegration)
+        .onAppear {
+            wireSharedAppIntegration(model: model, appDelegate: appDelegate, openWindow: openWindow)
+        }
         .onOpenURL { url in
             model.handleIncomingURL(url)
         }
-        .sheet(item: mainWindowApkInstallerBinding) { ctx in
-            ApkInstallerSheet(
-                packageURL: ctx.packageURL,
-                preloadedInfo: ctx.preloadedInfo,
-                installState: model.apkInstallState,
-                targetDeviceName: model.isAnyChannelConnected ? model.activeChannelDeviceName : nil,
-                onInstall: { info, replaceExisting, allowDowngrade in
-                    model.startApkInstallation(
-                        info: info,
-                        replaceExisting: replaceExisting,
-                        allowDowngrade: allowDowngrade
-                    )
-                },
-                onCancel: {
-                    model.dismissApkInstaller()
-                }
-            )
-        }
+        .modifier(ApkInstallerSheetHostModifier(model: model, targetWindow: .main))
         .sheet(isPresented: $model.isShortcutManagerPresented) {
             ShortcutManagerSheet(
                 availableApps: model.shortcutAppCandidates(),
@@ -156,38 +207,6 @@ private struct MainWindowRootView: View {
                 }
             )
         }
-    }
-
-    private var mainWindowApkInstallerBinding: Binding<ApkInstallerContext?> {
-        Binding(
-            get: {
-                guard let ctx = model.apkInstallerContext, ctx.targetWindow == .main else { return nil }
-                return ctx
-            },
-            set: { newValue in
-                if newValue == nil {
-                    model.dismissApkInstaller()
-                }
-            }
-        )
-    }
-
-    private func wireAppIntegration() {
-        model.onRequestOpenMainWindow = { [openWindow] in
-            openWindow(id: WindowID.main)
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        model.onRequestOpenFileBrowserWindow = { [openWindow] in
-            openWindow(id: WindowID.fileBrowser)
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        appDelegate.onTerminate = { [model] in
-            model.cleanupOnTerminate()
-        }
-        appDelegate.onOpenURLs = { [model] urls in
-            model.handleIncomingURLs(urls)
-        }
-        appDelegate.servicesProvider = model.finderServicesProvider
     }
 
     private var windowTitle: String {
@@ -214,6 +233,7 @@ private struct FileBrowserWindowHostView: View {
             transfers: model.fileBrowserTransfers,
             actions: model.makeFileBrowserActions()
         )
+        .background(WindowChromeConfigurator(isImmersiveCanvas: false))
         .onAppear {
             model.ensureFileBrowserInitialLoad()
         }
@@ -222,38 +242,7 @@ private struct FileBrowserWindowHostView: View {
                 model.ensureFileBrowserInitialLoad()
             }
         }
-        .sheet(item: fileBrowserApkInstallerBinding) { ctx in
-            ApkInstallerSheet(
-                packageURL: ctx.packageURL,
-                preloadedInfo: ctx.preloadedInfo,
-                installState: model.apkInstallState,
-                targetDeviceName: model.isAnyChannelConnected ? model.activeChannelDeviceName : nil,
-                onInstall: { info, replaceExisting, allowDowngrade in
-                    model.startApkInstallation(
-                        info: info,
-                        replaceExisting: replaceExisting,
-                        allowDowngrade: allowDowngrade
-                    )
-                },
-                onCancel: {
-                    model.dismissApkInstaller()
-                }
-            )
-        }
-    }
-
-    private var fileBrowserApkInstallerBinding: Binding<ApkInstallerContext?> {
-        Binding(
-            get: {
-                guard let ctx = model.apkInstallerContext, ctx.targetWindow == .fileBrowser else { return nil }
-                return ctx
-            },
-            set: { newValue in
-                if newValue == nil {
-                    model.dismissApkInstaller()
-                }
-            }
-        )
+        .modifier(ApkInstallerSheetHostModifier(model: model, targetWindow: .fileBrowser))
     }
 }
 
@@ -265,21 +254,7 @@ private struct MenuBarHostView: View {
     var body: some View {
         MenuBarView(model: model)
             .onAppear {
-                model.onRequestOpenMainWindow = { [openWindow] in
-                    openWindow(id: WindowID.main)
-                    NSApp.activate(ignoringOtherApps: true)
-                }
-                model.onRequestOpenFileBrowserWindow = { [openWindow] in
-                    openWindow(id: WindowID.fileBrowser)
-                    NSApp.activate(ignoringOtherApps: true)
-                }
-                appDelegate.onTerminate = { [model] in
-                    model.cleanupOnTerminate()
-                }
-                appDelegate.onOpenURLs = { [model] urls in
-                    model.handleIncomingURLs(urls)
-                }
-                appDelegate.servicesProvider = model.finderServicesProvider
+                wireSharedAppIntegration(model: model, appDelegate: appDelegate, openWindow: openWindow)
             }
     }
 }
@@ -292,30 +267,22 @@ private struct OpalDeskCommands: Commands {
 
     var body: some Commands {
         CommandMenu("投屏控制") {
-            Button("返回") {
-                model.sendAndroidBack()
-            }
-            .keyboardShortcut("[", modifiers: [.command])
-            .disabled(!model.isAuthenticated)
+            Button("返回") { model.sendAndroidBack() }
+                .keyboardShortcut("[", modifiers: [.command])
+                .disabled(!model.isAuthenticated)
 
-            Button("桌面") {
-                model.sendAndroidHome()
-            }
-            .keyboardShortcut("h", modifiers: [.command, .shift])
-            .disabled(!model.isAuthenticated)
+            Button("桌面") { model.sendAndroidHome() }
+                .keyboardShortcut("h", modifiers: [.command, .shift])
+                .disabled(!model.isAuthenticated)
 
-            Button("多任务") {
-                model.sendAndroidRecents()
-            }
-            .disabled(!model.isAuthenticated)
+            Button("多任务") { model.sendAndroidRecents() }
+                .disabled(!model.isAuthenticated)
 
             Divider()
 
-            Button("一键截图（保存桌面并复制）") {
-                model.captureMainWindowScreenshot()
-            }
-            .keyboardShortcut("s", modifiers: [.command, .shift])
-            .disabled(!model.isAuthenticated || model.videoMetrics.totalFramesDecoded == 0)
+            Button("一键截图（保存桌面并复制）") { model.captureMainWindowScreenshot() }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .disabled(!model.isAuthenticated || model.videoMetrics.totalFramesDecoded == 0)
 
             Button(model.isMainWindowRecording ? "停止屏幕录制 (\(model.formattedRecordingDuration))" : "开始录制 MP4 视频") {
                 model.toggleMainWindowRecording()
@@ -325,71 +292,53 @@ private struct OpalDeskCommands: Commands {
 
             Divider()
 
-            Button("手机文件与存储...") {
+            Button("手机文件与存储…") {
                 openWindow(id: WindowID.fileBrowser)
                 NSApp.activate(ignoringOtherApps: true)
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
 
-            Button("安装 Android 安装包 (.apk/.xapk)...") {
+            Button("安装 Android 安装包 (.apk/.xapk)…") {
                 model.presentApkFileChooser(targetWindow: .main)
             }
             .keyboardShortcut("i", modifiers: [.command, .shift])
 
-            Button("Spotlight 快捷方式管理...") {
-                model.openShortcutManager()
-            }
+            Button("Spotlight 快捷方式管理…") { model.openShortcutManager() }
 
             Divider()
 
-            Button("重载当前应用 DPI") {
-                model.reloadCurrentAppDPI()
-            }
-            .disabled(!model.isAuthenticated || model.deviceState.topAppPackage.isEmpty)
+            Button("重载当前应用 DPI") { model.reloadCurrentAppDPI() }
+                .disabled(!model.isAuthenticated || model.deviceState.topAppPackage.isEmpty)
 
             Divider()
 
-            Button(model.isBlackoutActive ? "点亮手机主屏" : "熄灭手机主屏") {
-                model.toggleBlackout()
-            }
-            .keyboardShortcut("b", modifiers: [.command, .shift])
-            .disabled(!model.isAuthenticated)
+            Button(model.isBlackoutActive ? "点亮手机主屏" : "熄灭手机主屏") { model.toggleBlackout() }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
+                .disabled(!model.isAuthenticated)
 
-            Button(model.isAudioMuted ? "取消静音" : "静音音频") {
-                model.toggleAudio()
-            }
-            .keyboardShortcut("m", modifiers: [.command, .shift])
-            .disabled(!model.isAuthenticated)
+            Button(model.isAudioMuted ? "取消静音" : "静音音频") { model.toggleAudio() }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(!model.isAuthenticated)
 
-            Button("切换 DeX / 镜像") {
-                model.toggleDisplayMode()
-            }
-            .keyboardShortcut("d", modifiers: [.command, .shift])
-            .disabled(!model.isAuthenticated)
+            Button("切换 DeX / 镜像") { model.toggleDisplayMode() }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(!model.isAuthenticated)
 
-            Button("顺时针旋转 90°") {
-                model.rotateClockwise()
-            }
-            .keyboardShortcut("r", modifiers: [.command, .shift])
-            .disabled(!model.isAuthenticated)
+            Button("顺时针旋转 90°") { model.rotateClockwise() }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(!model.isAuthenticated)
 
-            Button("强制刷新关键帧 (IDR)") {
-                model.requestIDR()
-            }
-            .disabled(!model.isAuthenticated)
+            Button("强制刷新关键帧 (IDR)") { model.requestIDR() }
+                .disabled(!model.isAuthenticated)
 
             Divider()
 
-            Button("断开并返回列表") {
-                model.forceDisconnectAndReturnHome()
-            }
-            .keyboardShortcut("w", modifiers: [.command, .shift])
-            .disabled(model.activeConnection == nil && !model.isConnectingFlow)
+            Button("断开并返回列表") { model.forceDisconnectAndReturnHome() }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+                .disabled(model.activeConnection == nil && !model.isConnectingFlow)
 
-            Button("强制退出 OpalDesk") {
-                model.forceTerminateApp()
-            }
-            .keyboardShortcut("q", modifiers: [.command, .option])
+            Button("强制退出 OpalDesk") { model.forceTerminateApp() }
+                .keyboardShortcut("q", modifiers: [.command, .option])
         }
     }
 }

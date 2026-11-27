@@ -204,7 +204,8 @@ public final class PopoutWindowManager {
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = false
         window.isReleasedWhenClosed = false
-        window.backgroundColor = .black
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.appearance = NSAppearance(named: .darkAqua)
         window.minSize = Layout.minWindowSize
         window.hasShadow = true
