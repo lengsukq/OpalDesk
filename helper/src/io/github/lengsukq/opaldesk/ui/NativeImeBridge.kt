@@ -153,7 +153,7 @@ object WorkstationKeyDispatcher {
             deviceId = devId,
             name = dev.name,
             isVirtual = dev.isVirtual,
-            isExternal = dev.isExternal,
+            isExternal = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) dev.isExternal else false,
             keyboardType = dev.keyboardType,
         )
     }
@@ -187,9 +187,34 @@ object WorkstationKeyDispatcher {
         localOverlayNeedsFocus: Boolean,
         localTextFieldFocused: Boolean,
         hostSoftImeVisible: Boolean,
+    ): Boolean = shouldSetCompositorWindowNotFocusable(
+        focusedWindowDisplayId = focusedWindowDisplayId,
+        keyboardRoutedDisplayId = keyboardRoutedDisplayId,
+        bridgeImeActive = false,
+        localOverlayNeedsFocus = localOverlayNeedsFocus,
+        localTextFieldFocused = localTextFieldFocused,
+        hostSoftImeVisible = hostSoftImeVisible,
+    )
+
+    /**
+     * Unified focus-isolation invariant across ALL compositor host windows (`DesktopActivity`,
+     * `ExternalDesktopActivity`, and `ExternalMonitorPresentation`):
+     * keeps the host window `FLAG_NOT_FOCUSABLE` whenever a live `OpalWin-*` VirtualDisplay is
+     * focused and either OpalDesk's built-in channel IME (`bridgeImeActive`) or physical keyboard
+     * routing (`keyboardRoutedDisplayId > 0`) is active, unless an OpalDesk-own overlay or
+     * search `TextField` requires focus.
+     */
+    fun shouldSetCompositorWindowNotFocusable(
+        focusedWindowDisplayId: Int,
+        keyboardRoutedDisplayId: Int,
+        bridgeImeActive: Boolean,
+        localOverlayNeedsFocus: Boolean,
+        localTextFieldFocused: Boolean,
+        hostSoftImeVisible: Boolean,
     ): Boolean {
         if (localOverlayNeedsFocus || localTextFieldFocused || hostSoftImeVisible) return false
-        return focusedWindowDisplayId > 0 && keyboardRoutedDisplayId > 0
+        if (focusedWindowDisplayId <= 0) return false
+        return bridgeImeActive || keyboardRoutedDisplayId > 0
     }
 
     /**

@@ -2,6 +2,7 @@ package io.github.lengsukq.opaldesk.ui
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
@@ -57,6 +58,8 @@ data class DexImeOption(
     val packageName: String,
     val enabledInSystem: Boolean = true,
     val isBuiltInBridge: Boolean = false,
+    val isYuyanPlugin: Boolean = false,
+    val isStockYuyan: Boolean = false,
 )
 
 /**
@@ -64,31 +67,85 @@ data class DexImeOption(
  * resolving display labels, and formatting user-facing status badges.
  */
 object DexImeCatalog {
-    const val BUILT_IN_BRIDGE_LABEL = "OpalDesk 通道输入法"
+    const val BUILT_IN_BRIDGE_LABEL = "OpalDesk 投屏直输通道"
+    const val YUYAN_PLUGIN_LABEL = "OpalDesk 语燕输入法插件"
+    const val YUYAN_PLUGIN_RELEASE_URL = "https://github.com/lengsukq?tab=repositories"
+
+    val YUYAN_PLUGIN_SCHEMAS: List<Pair<String, String>> = listOf(
+        "pinyin" to "全拼",
+        "double_pinyin_flypy" to "小鹤双拼",
+        "double_pinyin" to "自然码",
+        "double_pinyin_sogou" to "搜狗双拼",
+        "double_pinyin_mspy" to "微软双拼",
+        "t9" to "九宫格",
+    )
 
     fun isBuiltInBridgeIme(imeId: String): Boolean =
         imeId.trim() == BridgeProtocol.OPALDESK_BRIDGE_IME_ID
+
+    fun isYuyanPluginIme(imeId: String): Boolean =
+        imeId.trim() == BridgeProtocol.OPALDESK_IME_PLUGIN_ID
+
+    fun isYuyanPluginEnabledForDex(
+        pluginInstalled: Boolean,
+        lockedImeId: String,
+        autoBridgeOnCast: Boolean,
+        displayMode: Int,
+    ): Boolean {
+        if (!pluginInstalled) return false
+        val clean = lockedImeId.trim()
+        if (isYuyanPluginIme(clean)) return true
+        if (clean.isNotEmpty()) return false
+        return autoBridgeOnCast && displayMode != BridgeProtocol.DexImeDisplayMode.FALLBACK_HOST
+    }
+
+    fun isStockYuyanIme(imeId: String): Boolean {
+        val pkg = extractPackageName(imeId)
+        return pkg.startsWith("com.yuyan.pinyin")
+    }
 
     fun mergeOptions(
         localOptions: List<DexImeOption>,
         daemonEnabledIds: List<String>,
         lockedImeId: String,
         currentSystemImeId: String,
+        pluginImeInstalled: Boolean = false,
     ): List<DexImeOption> {
         val byId = LinkedHashMap<String, DexImeOption>()
-        // Always surface OpalDesk's built-in invisible channel IME first so users can lock it with
-        // one tap (daemon auto-enables it via `ime enable` on first lock).
+        if (pluginImeInstalled ||
+            isYuyanPluginIme(lockedImeId) ||
+            isYuyanPluginIme(currentSystemImeId) ||
+            daemonEnabledIds.any(::isYuyanPluginIme) ||
+            localOptions.any { isYuyanPluginIme(it.id) }
+        ) {
+            byId[BridgeProtocol.OPALDESK_IME_PLUGIN_ID] = DexImeOption(
+                id = BridgeProtocol.OPALDESK_IME_PLUGIN_ID,
+                label = YUYAN_PLUGIN_LABEL,
+                packageName = "跨屏光标跟随候选栏 · 小窗零遮挡 · 切回主屏自动还原",
+                enabledInSystem = pluginImeInstalled || daemonEnabledIds.any(::isYuyanPluginIme) ||
+                    localOptions.any { isYuyanPluginIme(it.id) },
+                isBuiltInBridge = false,
+                isYuyanPlugin = true,
+            )
+        }
+        // Surface OpalDesk's built-in 5 KB zero-UI cast channel IME so users can inspect or select it
         byId[BridgeProtocol.OPALDESK_BRIDGE_IME_ID] = DexImeOption(
             id = BridgeProtocol.OPALDESK_BRIDGE_IME_ID,
             label = BUILT_IN_BRIDGE_LABEL,
-            packageName = "无感直输 · 不弹本机键盘 · 不占剪贴板",
+            packageName = "仅投屏零剪贴板直输 · 主包零词库体积膨胀",
             enabledInSystem = true,
             isBuiltInBridge = true,
         )
         localOptions.forEach { opt ->
             val id = opt.id.trim()
-            if (id.isNotEmpty() && !isBuiltInBridgeIme(id)) {
-                byId[id] = opt.copy(id = id, enabledInSystem = true, isBuiltInBridge = false)
+            if (id.isNotEmpty() && !isBuiltInBridgeIme(id) && !isYuyanPluginIme(id)) {
+                byId[id] = opt.copy(
+                    id = id,
+                    enabledInSystem = true,
+                    isBuiltInBridge = false,
+                    isYuyanPlugin = false,
+                    isStockYuyan = isStockYuyanIme(id),
+                )
             }
         }
         daemonEnabledIds.forEach { rawId ->
@@ -99,6 +156,8 @@ object DexImeCatalog {
                     label = fallbackLabelForImeId(id),
                     packageName = extractPackageName(id),
                     enabledInSystem = true,
+                    isYuyanPlugin = isYuyanPluginIme(id),
+                    isStockYuyan = isStockYuyanIme(id),
                 )
             }
         }
@@ -109,6 +168,8 @@ object DexImeCatalog {
                 label = fallbackLabelForImeId(cleanCur),
                 packageName = extractPackageName(cleanCur),
                 enabledInSystem = true,
+                isYuyanPlugin = isYuyanPluginIme(cleanCur),
+                isStockYuyan = isStockYuyanIme(cleanCur),
             )
         }
         val cleanLocked = lockedImeId.trim()
@@ -118,6 +179,8 @@ object DexImeCatalog {
                 label = fallbackLabelForImeId(cleanLocked),
                 packageName = extractPackageName(cleanLocked),
                 enabledInSystem = false,
+                isYuyanPlugin = isYuyanPluginIme(cleanLocked),
+                isStockYuyan = isStockYuyanIme(cleanLocked),
             )
         }
         return byId.values.toList()
@@ -131,7 +194,9 @@ object DexImeCatalog {
     fun fallbackLabelForImeId(imeId: String): String {
         val clean = imeId.trim()
         if (clean.isEmpty()) return "跟随系统"
+        if (isYuyanPluginIme(clean)) return YUYAN_PLUGIN_LABEL
         if (isBuiltInBridgeIme(clean)) return BUILT_IN_BRIDGE_LABEL
+        if (isStockYuyanIme(clean)) return "语燕输入法 (${extractPackageName(clean)})"
         val pkg = extractPackageName(clean)
         val service = clean.substringAfter('/', "").substringAfterLast('.')
         return if (service.isNotEmpty()) "$service ($pkg)" else pkg
@@ -248,12 +313,13 @@ fun DexImeSettingsPopover(
         refreshAll()
     }
 
-    val options = remember(localImes, imeState.enabledImeIds, lockedImeId, imeState.currentImeId) {
+    val options = remember(localImes, imeState.enabledImeIds, lockedImeId, imeState.currentImeId, imeState.pluginImeInstalled) {
         DexImeCatalog.mergeOptions(
             localOptions = localImes,
             daemonEnabledIds = imeState.enabledImeIds,
             lockedImeId = lockedImeId,
             currentSystemImeId = imeState.currentImeId,
+            pluginImeInstalled = imeState.pluginImeInstalled,
         )
     }
 
@@ -378,12 +444,13 @@ fun ConsoleDexImeCard(
         refreshAll()
     }
 
-    val options = remember(localImes, imeState.enabledImeIds, lockedImeId, imeState.currentImeId) {
+    val options = remember(localImes, imeState.enabledImeIds, lockedImeId, imeState.currentImeId, imeState.pluginImeInstalled) {
         DexImeCatalog.mergeOptions(
             localOptions = localImes,
             daemonEnabledIds = imeState.enabledImeIds,
             lockedImeId = lockedImeId,
             currentSystemImeId = imeState.currentImeId,
+            pluginImeInstalled = imeState.pluginImeInstalled,
         )
     }
 
@@ -403,15 +470,16 @@ fun ConsoleDexImeCard(
             }
             Spacer(Modifier.width(8.dp))
             OpalStatusBadge(
-                label = if (displayMode == BridgeProtocol.DexImeDisplayMode.ALWAYS_LOCAL || lockedImeId.isNotBlank()) {
-                    "已自定义"
-                } else {
-                    "智能自动"
+                label = when {
+                    imeState.pluginImeActive -> "语燕插件接管"
+                    imeState.pluginImeInstalled -> "语燕插件已装"
+                    displayMode == BridgeProtocol.DexImeDisplayMode.ALWAYS_LOCAL || lockedImeId.isNotBlank() -> "已自定义"
+                    else -> "智能自动"
                 },
-                color = if (displayMode == BridgeProtocol.DexImeDisplayMode.ALWAYS_LOCAL || lockedImeId.isNotBlank()) {
-                    OpalPalette.AccentEmerald
-                } else {
-                    OpalPalette.AccentBlue
+                color = when {
+                    imeState.pluginImeActive || imeState.pluginImeInstalled -> OpalPalette.AccentEmerald
+                    displayMode == BridgeProtocol.DexImeDisplayMode.ALWAYS_LOCAL || lockedImeId.isNotBlank() -> OpalPalette.AccentEmerald
+                    else -> OpalPalette.AccentBlue
                 },
             )
         }
@@ -463,7 +531,7 @@ fun ConsoleDexImeCard(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             OpalText(
-                text = if (expanded) "收起输入法锁定与投屏选项" else "选择 DeX 锁定输入法与进阶选项",
+                text = if (expanded) "收起输入法锁定与语燕插件选项" else "查看语燕插件状态、锁定输入法与投屏选项",
                 fontSize = 12.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = OpalPalette.AccentBlue,
@@ -533,10 +601,181 @@ private fun DexImeSettingsBody(
         toastMsg: String,
     ) -> Unit,
 ) {
+    val ctx = LocalContext.current
+    val pluginState by OpalDeskImeChannel.pluginStateFlow.collectAsState()
+    val yuyanEnabledForDex = DexImeCatalog.isYuyanPluginEnabledForDex(
+        pluginInstalled = imeState.pluginImeInstalled,
+        lockedImeId = lockedImeId,
+        autoBridgeOnCast = autoBridgeOnCast,
+        displayMode = displayMode,
+    )
     val cardShape = RoundedCornerShape(13.dp)
     val sectionGap = if (compact) 8.dp else 10.dp
 
     Column(verticalArrangement = Arrangement.spacedBy(sectionGap)) {
+        // Optional Companion YuyanIme Plugin Status & Quick Schema Bar
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(cardShape)
+                .background(
+                    if (imeState.pluginImeInstalled) {
+                        OpalPalette.AccentEmerald.copy(alpha = if (OpalPalette.isDark) 0.14f else 0.08f)
+                    } else {
+                        OpalPalette.ChipFill
+                    },
+                )
+                .border(
+                    0.75.dp,
+                    if (imeState.pluginImeInstalled) OpalPalette.AccentEmerald.copy(alpha = 0.30f) else OpalPalette.BorderHairline,
+                    cardShape,
+                )
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                OpalText(
+                    text = "OpalDesk 语燕输入法插件（可选增强）",
+                    fontSize = if (compact) 11.5.sp else 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = OpalPalette.TextPrimary,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                )
+                Spacer(Modifier.width(6.dp))
+                OpalStatusBadge(
+                    label = when {
+                        imeState.pluginImeActive -> "已接管 DeX"
+                        imeState.pluginImeInstalled && yuyanEnabledForDex -> "已启用"
+                        imeState.pluginImeInstalled -> "已安装 · 未启用"
+                        else -> "未安装 · 零膨胀"
+                    },
+                    color = if (imeState.pluginImeInstalled && yuyanEnabledForDex) OpalPalette.AccentEmerald else OpalPalette.TextSecondary,
+                )
+            }
+            OpalText(
+                text = if (imeState.pluginImeInstalled) {
+                    "已通过同签名 SHA-256 校验：可在下方自由选择是否在本机 DeX 桌面与外接屏启用；关闭时保持系统原输入法。"
+                } else {
+                    "主包默认不内置词库，保持原输入法习惯；可按需前往 GitHub Releases 下载安装同签名语燕插件 APK，支持本机 DeX 与外接屏自由开关。"
+                },
+                fontSize = if (compact) 9.8.sp else 10.8.sp,
+                color = OpalPalette.TextSecondary,
+            )
+            if (imeState.pluginImeInstalled) {
+                OpalSwitchRow(
+                    title = "在 DeX 桌面使用内置语燕输入法（含本机桌面）",
+                    subtitle = "开启后本机 DeX 与外接屏自动启用跨屏候选栏与软键盘；关闭则使用原系统输入法",
+                    checked = yuyanEnabledForDex,
+                    onCheckedChange = { enablePlugin ->
+                        if (enablePlugin) {
+                            onApplyConfig(
+                                displayMode,
+                                BridgeProtocol.OPALDESK_IME_PLUGIN_ID,
+                                muteHostOnCast,
+                                hardKbdMode,
+                                true,
+                                "已在 DeX 桌面（含本机桌面）启用内置语燕输入法",
+                            )
+                        } else {
+                            val nextLocked = if (DexImeCatalog.isYuyanPluginIme(lockedImeId)) "" else lockedImeId
+                            onApplyConfig(
+                                displayMode,
+                                nextLocked,
+                                muteHostOnCast,
+                                hardKbdMode,
+                                false,
+                                "已关闭内置语燕输入法，恢复使用原系统输入法",
+                            )
+                        }
+                    },
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                OpalButton(
+                    label = if (imeState.pluginImeInstalled) "Releases 下载更新" else "前往 Releases 下载安装",
+                    compact = true,
+                    filled = !imeState.pluginImeInstalled,
+                    accent = OpalPalette.AccentBlue,
+                    onClick = { openYuyanPluginReleasePage(ctx) },
+                )
+                OpalButton(
+                    label = "系统输入法设置",
+                    compact = true,
+                    filled = false,
+                    accent = OpalPalette.AccentCyan,
+                    onClick = onOpenSystemImeSettings,
+                )
+            }
+            OpalText(
+                text = "官方下载地址：${DexImeCatalog.YUYAN_PLUGIN_RELEASE_URL.removePrefix("https://")}",
+                fontSize = if (compact) 9.2.sp else 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = OpalPalette.TextMuted,
+                maxLines = 1,
+            )
+            if (pluginState.pluginConnected) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    DexImeCatalog.YUYAN_PLUGIN_SCHEMAS.take(4).forEach { (schemaId, label) ->
+                        val active = pluginState.schemaId == schemaId
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (active) OpalPalette.AccentBlue else OpalPalette.ChipFill)
+                                .clickable { OpalDeskImeChannel.selectSchema(schemaId) }
+                                .padding(vertical = 5.dp, horizontal = 4.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            OpalText(
+                                text = label,
+                                fontSize = 10.sp,
+                                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                                color = if (active) Color.White else OpalPalette.TextPrimary,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    DexImeCatalog.YUYAN_PLUGIN_SCHEMAS.drop(4).forEach { (schemaId, label) ->
+                        val active = pluginState.schemaId == schemaId
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (active) OpalPalette.AccentBlue else OpalPalette.ChipFill)
+                                .clickable { OpalDeskImeChannel.selectSchema(schemaId) }
+                                .padding(vertical = 5.dp, horizontal = 4.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            OpalText(
+                                text = label,
+                                fontSize = 10.sp,
+                                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                                color = if (active) Color.White else OpalPalette.TextPrimary,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Live Daemon IME Status Summary
         if (connected && imeState.synced) {
             val activeLabel = DexImeCatalog.resolveLabel(imeState.currentImeId, options)
@@ -573,17 +812,23 @@ private fun DexImeSettingsBody(
                     )
                 }
                 val lockSummary = when {
+                    imeState.yieldedToDisplay0 ->
+                        "当前在手机主屏输入，已临时让回原手机输入法（点回 DeX 窗口自动接管）"
+                    imeState.pluginImeActive && bridgeEditor.inputActive && bridgeEditor.acceptingText ->
+                        "语燕插件跨屏组词中 (${pluginState.schemaLabel} · ${bridgeEditor.packageName.ifEmpty { "窗口" }})"
+                    imeState.pluginImeActive ->
+                        "语燕输入法插件已接管 · 跨屏悬浮候选栏就绪（退出自动恢复原输入法）"
                     imeState.bridgeImeActive && bridgeEditor.inputActive && bridgeEditor.acceptingText ->
-                        "内置通道直输运行中 · 已绑定输入框 (${bridgeEditor.packageName.ifEmpty { "窗口" }})"
+                        "内置投屏直输通道运行中 · 已绑定输入框 (${bridgeEditor.packageName.ifEmpty { "窗口" }})"
                     imeState.bridgeImeActive ->
-                        "内置通道输入法已生效 · 本机零弹窗，直输不污染剪贴板（退出自动恢复）"
+                        "内置投屏直输通道已生效 · 本机零弹窗，直输不污染剪贴板（退出自动恢复）"
                     imeState.imeLockApplied ->
                         "DeX 输入法锁定已生效 · 退出 DeX 或停止服务自动恢复原输入法"
                     lockedImeId.isNotBlank() && !imeState.dexSessionActive ->
                         "已预约锁定 · 进入 DeX 或投屏后自动切换"
                     lockedImeId.isNotBlank() && imeState.dexSessionActive ->
                         "锁定未生效（请确认所选输入法已在系统启用）"
-                    else -> "当前跟随系统默认输入法"
+                    else -> "当前保持用户系统默认输入法（底层跨屏焦点防抢占已生效）"
                 }
                 val kbdNote = if (imeState.physicalKeyboardDetected) " · 已检测到实体/磁吸键盘" else ""
                 OpalText(
@@ -659,7 +904,7 @@ private fun DexImeSettingsBody(
                         color = OpalPalette.TextPrimary,
                     )
                     OpalText(
-                        text = "进入 DeX 自动切换，退出自动恢复（多屏推荐 Gboard / 微信输入法）",
+                        text = "未安装插件时跟随原系统输入法；安装语燕插件后默认自动接管 DeX",
                         fontSize = if (compact) 9.8.sp else 10.8.sp,
                         color = OpalPalette.TextMuted,
                     )
@@ -674,13 +919,15 @@ private fun DexImeSettingsBody(
                 )
             }
 
-            // Follow system option
+            // Follow system / auto plugin option
             ImeRadioOptionRow(
-                title = "跟随系统默认",
-                subtitle = "不自动切换系统输入法",
+                title = if (imeState.pluginImeInstalled && autoBridgeOnCast) "智能默认（优先语燕插件）" else "跟随系统默认",
+                subtitle = if (imeState.pluginImeInstalled && autoBridgeOnCast) "DeX 内自动启用语燕插件，切出自动还原原输入法" else "保持原系统输入法，不自动切换",
                 selected = lockedImeId.isBlank(),
                 isSystemCurrent = false,
                 isBuiltInBridge = false,
+                isYuyanPlugin = false,
+                isStockYuyan = false,
                 disabledWarning = false,
                 compact = compact,
                 onClick = {
@@ -690,7 +937,7 @@ private fun DexImeSettingsBody(
                         muteHostOnCast,
                         hardKbdMode,
                         autoBridgeOnCast,
-                        "已取消输入法锁定，恢复跟随系统默认",
+                        "已恢复默认输入法策略",
                     )
                 },
             )
@@ -711,6 +958,8 @@ private fun DexImeSettingsBody(
                         selected = lockedImeId == opt.id,
                         isSystemCurrent = imeState.synced && imeState.currentImeId == opt.id,
                         isBuiltInBridge = opt.isBuiltInBridge,
+                        isYuyanPlugin = opt.isYuyanPlugin,
+                        isStockYuyan = opt.isStockYuyan,
                         disabledWarning = !opt.enabledInSystem,
                         compact = compact,
                         onClick = {
@@ -739,8 +988,8 @@ private fun DexImeSettingsBody(
             verticalArrangement = Arrangement.spacedBy(7.dp),
         ) {
             OpalSwitchRow(
-                title = "投屏时自动启用内置通道输入法",
-                subtitle = "投屏至电脑/平板时直输中英文、不污染剪贴板、且手机本机绝不弹键盘；断开投屏自动还原",
+                title = "投屏与插件自动接管直输通道",
+                subtitle = "安装语燕插件后在 DeX 内自动启用；未装插件时仅在无线投屏电脑/平板时启用轻量直输通道",
                 checked = autoBridgeOnCast,
                 onCheckedChange = { enabled ->
                     onApplyConfig(
@@ -749,7 +998,7 @@ private fun DexImeSettingsBody(
                         muteHostOnCast,
                         hardKbdMode,
                         enabled,
-                        if (enabled) "已开启：投屏时自动启用内置通道直输输入法" else "已关闭投屏自动通道输入法",
+                        if (enabled) "已开启自动接管直输通道" else "已关闭自动接管，仅保持系统当前输入法",
                     )
                 },
             )
@@ -813,6 +1062,8 @@ private fun ImeRadioOptionRow(
     selected: Boolean,
     isSystemCurrent: Boolean,
     isBuiltInBridge: Boolean,
+    isYuyanPlugin: Boolean = false,
+    isStockYuyan: Boolean = false,
     disabledWarning: Boolean,
     compact: Boolean,
     onClick: () -> Unit,
@@ -846,9 +1097,32 @@ private fun ImeRadioOptionRow(
                     color = if (selected) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
                     maxLines = 1,
                 )
+                if (isYuyanPlugin) {
+                    OpalText(
+                        text = "语燕插件",
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = OpalPalette.AccentEmerald,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(OpalPalette.AccentEmerald.copy(alpha = 0.16f))
+                            .padding(horizontal = 5.dp, vertical = 1.dp),
+                    )
+                } else if (isStockYuyan) {
+                    OpalText(
+                        text = "语燕",
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = OpalPalette.AccentCyan,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(OpalPalette.AccentCyan.copy(alpha = 0.16f))
+                            .padding(horizontal = 5.dp, vertical = 1.dp),
+                    )
+                }
                 if (isBuiltInBridge) {
                     OpalText(
-                        text = "内置通道",
+                        text = "投屏通道",
                         fontSize = 9.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = OpalPalette.AccentCyan,
@@ -886,7 +1160,7 @@ private fun ImeRadioOptionRow(
             OpalText(
                 text = subtitle,
                 fontSize = if (compact) 9.8.sp else 10.8.sp,
-                fontFamily = if (isBuiltInBridge) FontFamily.Default else FontFamily.Monospace,
+                fontFamily = if (isBuiltInBridge || isYuyanPlugin) FontFamily.Default else FontFamily.Monospace,
                 color = OpalPalette.TextMuted,
                 maxLines = 1,
             )
@@ -950,5 +1224,16 @@ private fun openSystemImeSettingsFallback(ctx: Context) {
         )
     } catch (_: Throwable) {
         Toast.makeText(ctx, "无法打开系统输入法设置", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun openYuyanPluginReleasePage(ctx: Context) {
+    try {
+        ctx.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(DexImeCatalog.YUYAN_PLUGIN_RELEASE_URL))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    } catch (_: Throwable) {
+        Toast.makeText(ctx, "无法打开浏览器，请访问 ${DexImeCatalog.YUYAN_PLUGIN_RELEASE_URL}", Toast.LENGTH_LONG).show()
     }
 }

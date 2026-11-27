@@ -120,9 +120,13 @@ data class DexImeRuntimeState(
     val originalImeId: String = "",
     val lockedImeId: String = "",
     val bridgeImeId: String = BridgeProtocol.OPALDESK_BRIDGE_IME_ID,
+    val pluginImeId: String = BridgeProtocol.OPALDESK_IME_PLUGIN_ID,
+    val pluginImeInstalled: Boolean = false,
+    val pluginImeActive: Boolean = false,
     val bridgeImeActive: Boolean = false,
     val autoBridgeImeOnCast: Boolean = true,
     val imeLockApplied: Boolean = false,
+    val yieldedToDisplay0: Boolean = false,
     val hardKbdOverrideApplied: Boolean = false,
     val dexSessionActive: Boolean = false,
     val dexImeDisplayMode: Int = BridgeProtocol.DexImeDisplayMode.AUTO,
@@ -170,9 +174,13 @@ object DexImeStateParser {
             originalImeId = strMap["originalImeId"].orEmpty(),
             lockedImeId = strMap["lockedImeId"].orEmpty(),
             bridgeImeId = strMap["bridgeImeId"].orEmpty().ifEmpty { BridgeProtocol.OPALDESK_BRIDGE_IME_ID },
+            pluginImeId = strMap["pluginImeId"].orEmpty().ifEmpty { BridgeProtocol.OPALDESK_IME_PLUGIN_ID },
+            pluginImeInstalled = boolMap["pluginImeInstalled"] == true,
+            pluginImeActive = boolMap["pluginImeActive"] == true,
             bridgeImeActive = boolMap["bridgeImeActive"] == true,
             autoBridgeImeOnCast = boolMap["autoBridgeImeOnCast"] ?: true,
             imeLockApplied = boolMap["imeLockApplied"] == true,
+            yieldedToDisplay0 = boolMap["yieldedToDisplay0"] == true,
             hardKbdOverrideApplied = boolMap["hardKbdOverrideApplied"] == true,
             dexSessionActive = boolMap["dexSessionActive"] == true,
             dexImeDisplayMode = numMap["dexImeDisplayMode"] ?: BridgeProtocol.DexImeDisplayMode.AUTO,
@@ -384,6 +392,7 @@ data class CompositorScene(
     val activeVdCount: Int = 0,
     val maxVdCount: Int = 6,
     val keyboardRoutedDisplayId: Int = -1,
+    val comboKeyboardOnOuterDisplay: Boolean = false,
     val windows: List<CompositorWindow> = emptyList(),
 ) {
     val visibleWindows: List<CompositorWindow>
@@ -467,6 +476,7 @@ object CompositorSceneParser {
                 activeVdCount = root.optInt("activeVdCount", 0),
                 maxVdCount = root.optInt("maxVdCount", 6),
                 keyboardRoutedDisplayId = root.optInt("kbdRoutedDisplayId", -1),
+                comboKeyboardOnOuterDisplay = root.optBoolean("comboKbdOuter", false),
                 windows = list,
             )
         } catch (_: Throwable) {

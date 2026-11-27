@@ -60,6 +60,7 @@ class DesktopActivity : ComponentActivity() {
     }
 
     private var imeVisible by mutableStateOf(false)
+    private var localOverlayNeedsFocus by mutableStateOf(false)
     private var activeImeController: io.github.lengsukq.opaldesk.ui.NativeImeHostController? = null
     private var composingText by mutableStateOf("")
 
@@ -80,7 +81,8 @@ class DesktopActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         OpalLogStore.init(applicationContext)
-        val currentDisplayId = display?.displayId ?: Display.DEFAULT_DISPLAY
+        val currentDisplayId = display?.displayId
+            ?: Display.DEFAULT_DISPLAY
         OpalLogStore.i("Desktop", "DesktopActivity.onCreate displayId=$currentDisplayId")
         if (currentDisplayId > Display.DEFAULT_DISPLAY) {
             val extIntent = Intent(this, ExternalDesktopActivity::class.java).apply {
@@ -108,6 +110,10 @@ class DesktopActivity : ComponentActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
+                    if (io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.softKeyboardVisibleFlow.value) {
+                        io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.hideSoftKeyboard()
+                        return
+                    }
                     val focused = BridgeClient.sceneFlow.value.focusedWindow
                     if (focused != null && !focused.isMinimized) {
                         BridgeClient.sendWindowActionAsync(focused.windowId, BridgeProtocol.WinAction.SEND_BACK)
@@ -123,11 +129,31 @@ class DesktopActivity : ComponentActivity() {
                 val imeController = rememberNativeImeHostController()
                 activeImeController = imeController
                 val status by BridgeClient.statusFlow.collectAsState()
+                val imeState by BridgeClient.imeStateFlow.collectAsState()
                 val imeRequest by BridgeClient.imeBridgeRequestFlow.collectAsState()
                 val scene by BridgeClient.sceneFlow.collectAsState()
                 val remote by BridgeClient.remoteStatusFlow.collectAsState()
+                val localTextFieldFocused by OpalImeFocusTracker.localComposeTextFieldFocusedFlow.collectAsState()
+                val pluginState by io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.pluginStateFlow.collectAsState()
+                val pluginSoftKbdVisible by io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.softKeyboardVisibleFlow.collectAsState()
                 var lastHandledImeSeq by remember {
                     mutableLongStateOf(BridgeClient.imeBridgeRequestFlow.value?.seq ?: 0L)
+                }
+
+                val focusedLiveDisplayId = scene.focusedWindow
+                    ?.takeIf { !it.isMinimized && it.isLive }
+                    ?.displayId ?: -1
+                val hostNotFocusable = WorkstationKeyDispatcher.shouldSetCompositorWindowNotFocusable(
+                    focusedWindowDisplayId = focusedLiveDisplayId,
+                    keyboardRoutedDisplayId = scene.keyboardRoutedDisplayId,
+                    bridgeImeActive = imeState.bridgeImeActive ||
+                        imeState.effectiveWindowImePolicy == BridgeProtocol.DisplayImePolicy.LOCAL,
+                    localOverlayNeedsFocus = localOverlayNeedsFocus,
+                    localTextFieldFocused = localTextFieldFocused,
+                    hostSoftImeVisible = imeVisible,
+                )
+                LaunchedEffect(hostNotFocusable) {
+                    setHostWindowNotFocusable(hostNotFocusable)
                 }
 
                 // Sync host panel refresh rate with the user's targetFps so LTPO displays don't stay throttled at 60Hz
@@ -146,6 +172,13 @@ class DesktopActivity : ComponentActivity() {
                     val req = imeRequest ?: return@LaunchedEffect
                     if (req.seq <= lastHandledImeSeq) return@LaunchedEffect
                     lastHandledImeSeq = req.seq
+                    if (io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.isPluginSessionConnected) {
+                        if (!req.show) {
+                            io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.hideSoftKeyboard()
+                            if (imeVisible) imeController.hideKeyboard()
+                        }
+                        return@LaunchedEffect
+                    }
                     if (req.show) {
                         val activeLocally = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) &&
                             !BridgeClient.remoteStatusFlow.value.connected &&
@@ -156,6 +189,7 @@ class DesktopActivity : ComponentActivity() {
                             (req.windowId <= 0 || req.windowId == focused.windowId) &&
                             !OpalImeFocusTracker.localComposeTextFieldFocused
                         ) {
+                            setHostWindowNotFocusable(false)
                             imeController.showKeyboard(req.inputType)
                         }
                     } else if (imeVisible) {
@@ -165,10 +199,11 @@ class DesktopActivity : ComponentActivity() {
 
                 LaunchedEffect(scene.focusedWindow?.windowId, scene.focusedWindow?.isMinimized) {
                     val focused = scene.focusedWindow
-                    if (imeVisible && !OpalImeFocusTracker.localComposeTextFieldFocused
-                        && (focused == null || focused.isMinimized)
-                    ) {
-                        imeController.hideKeyboard()
+                    if (focused == null || focused.isMinimized) {
+                        io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.hideSoftKeyboard()
+                        if (imeVisible && !OpalImeFocusTracker.localComposeTextFieldFocused) {
+                            imeController.hideKeyboard()
+                        }
                     }
                 }
 
@@ -194,8 +229,16 @@ class DesktopActivity : ComponentActivity() {
                     )
                     OpalCompositorWorkspace(
                         isExternalMonitor = false,
-                        imeActive = imeVisible,
-                        onToggleSoftKeyboard = { imeController.toggleKeyboard(imeVisible) },
+                        imeActive = imeVisible || (pluginState.pluginConnected && pluginSoftKbdVisible),
+                        onToggleSoftKeyboard = {
+                            if (io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.isPluginSessionConnected) {
+                                io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.toggleSoftKeyboard()
+                            } else {
+                                if (!imeVisible) setHostWindowNotFocusable(false)
+                                imeController.toggleKeyboard(imeVisible)
+                            }
+                        },
+                        onLocalOverlayNeedsFocusChanged = { localOverlayNeedsFocus = it },
                         onPickCustomWallpaper = { wallpaperPicker.launch("image/*") },
                         onOpenConsole = ::openConsole,
                         onExitDesktop = { finish() },
@@ -371,6 +414,16 @@ class DesktopActivity : ComponentActivity() {
             lp.preferredDisplayModeId = chosen.modeId
             lp.preferredRefreshRate = chosen.refreshRate
             window.attributes = lp
+        }
+    }
+
+    private fun setHostWindowNotFocusable(notFocusable: Boolean) {
+        val hasFlag = (window.attributes.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) != 0
+        if (notFocusable == hasFlag) return
+        if (notFocusable) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
         }
     }
 

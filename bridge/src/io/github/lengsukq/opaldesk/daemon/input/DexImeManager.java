@@ -15,13 +15,8 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Crash-safe lifecycle manager for DeX IME locking and physical-keyboard soft-IME overrides.
- *
- * <p>When a DeX workspace (local desktop, external monitor, or OpalCast session) becomes active and
- * the user has configured a locked DeX IME, this manager atomically backs up the device's original
- * {@code default_input_method} (and optional {@code show_ime_with_hard_keyboard} value) before
- * switching. Exiting DeX, losing the helper process, shutting down the daemon, or restarting after
- * an unexpected crash automatically restores the user's original phone IME.
+ * Crash-safe lifecycle manager for DeX IME locking, optional cert-pinned YuyanIme plugin
+ * auto-activation, Display 0 smart handoff, and physical-keyboard soft-IME overrides.
  *
  * <p>Pure Java 11 with zero hard Android Binder dependencies so every transition and crash-recovery
  * path is verified deterministically in JVM unit tests.
@@ -33,6 +28,9 @@ public final class DexImeManager {
         boolean setDefaultInputMethodId(String imeId);
         int getShowImeWithHardKeyboard();
         boolean setShowImeWithHardKeyboard(int value);
+        default boolean isImePluginVerifiedAndInstalled() {
+            return false;
+        }
     }
 
     private final Object lock = new Object();
@@ -46,6 +44,7 @@ public final class DexImeManager {
     private int backedUpOriginalHardKbd = BridgeProtocol.HARD_KBD_SOFT_IME_SYSTEM;
     private boolean imeLockApplied = false;
     private boolean hardKbdOverrideApplied = false;
+    private volatile boolean yieldedToDisplay0 = false;
 
     public DexImeManager(DaemonConfig config, SystemImeBridge bridge) {
         this.config = config;
@@ -81,6 +80,9 @@ public final class DexImeManager {
         synchronized (lock) {
             if (clientDexSessionActive == active) return;
             clientDexSessionActive = active;
+            if (!clientDexSessionActive && !remoteSessionActive) {
+                yieldedToDisplay0 = false;
+            }
             reconcileLocked();
         }
     }
@@ -89,12 +91,24 @@ public final class DexImeManager {
         synchronized (lock) {
             if (remoteSessionActive == active) return;
             remoteSessionActive = active;
+            if (!clientDexSessionActive && !remoteSessionActive) {
+                yieldedToDisplay0 = false;
+            }
             reconcileLocked();
         }
     }
 
     public void onConfigUpdated() {
         synchronized (lock) {
+            yieldedToDisplay0 = false;
+            reconcileLocked();
+        }
+    }
+
+    /** Reconciles IME state immediately when the optional YuyanIme plugin APK is installed or removed. */
+    public void onPluginPackageChanged() {
+        synchronized (lock) {
+            yieldedToDisplay0 = false;
             reconcileLocked();
         }
     }
@@ -103,8 +117,59 @@ public final class DexImeManager {
         synchronized (lock) {
             clientDexSessionActive = false;
             remoteSessionActive = false;
+            yieldedToDisplay0 = false;
             restoreAllLocked();
         }
+    }
+
+    /**
+     * Temporarily hands Display 0 back to the user's original phone IME (e.g. Sogou / WeType / Gboard)
+     * while an external monitor or wireless cast session remains active in the background, preserving
+     * the crash-recovery backup so the next DeX click/keystroke seamlessly reclaims the DeX IME.
+     *
+     * @return the restored original IME ID, or {@code ""} if no yield was applicable.
+     */
+    public String yieldToDisplay0OriginalIme() {
+        synchronized (lock) {
+            if (!clientDexSessionActive && !remoteSessionActive) return "";
+            String orig = backedUpOriginalImeId;
+            if (orig.isEmpty()
+                    || BridgeProtocol.isManagedOpalImeId(orig)
+                    || bridge == null) {
+                return "";
+            }
+            yieldedToDisplay0 = true;
+            String cur = safeTrim(bridge.getDefaultInputMethodId());
+            if (!orig.equals(cur)) {
+                boolean ok = bridge.setDefaultInputMethodId(orig);
+                System.out.println("OPALDESK_IME_YIELD_DISPLAY0 orig=" + orig + " prev=" + cur + " ok=" + ok);
+                if (!ok) {
+                    yieldedToDisplay0 = false;
+                    return "";
+                }
+            }
+            return orig;
+        }
+    }
+
+    /**
+     * Fast-path check called on {@code ACTION_DOWN} / {@code KeyEvent} targeting any DeX or OpalCast
+     * display: if Display 0 had temporarily borrowed the phone's original IME, switches back to the
+     * desired DeX IME before {@code ACTION_UP} triggers {@code showSoftInput()}.
+     */
+    public boolean reclaimBridgeImeIfYielded() {
+        if (!yieldedToDisplay0) return false;
+        synchronized (lock) {
+            if (!yieldedToDisplay0) return false;
+            yieldedToDisplay0 = false;
+            reconcileLocked();
+            System.out.println("OPALDESK_IME_RECLAIMED_FOR_DEX active=" + getCurrentDefaultImeIdSafe());
+            return true;
+        }
+    }
+
+    public boolean isYieldedToDisplay0() {
+        return yieldedToDisplay0;
     }
 
     public boolean isDexSessionActive() {
@@ -131,9 +196,14 @@ public final class DexImeManager {
         return (val != null) ? val.trim() : "";
     }
 
+    public boolean isPluginImeInstalledSafe() {
+        return bridge != null && bridge.isImePluginVerifiedAndInstalled();
+    }
+
     /** Serializes the full authoritative IME & policy state for Helper UI inspection. */
     public String toStateJson(int effectiveWindowImePolicy, boolean physicalKeyboardDetected) {
         String currentIme = getCurrentDefaultImeIdSafe();
+        boolean pluginInstalled = isPluginImeInstalledSafe();
         List<String> enabledList = (bridge != null) ? bridge.listEnabledInputMethodIds() : Collections.emptyList();
         if (enabledList == null) enabledList = Collections.emptyList();
 
@@ -150,7 +220,11 @@ public final class DexImeManager {
                     .put("originalImeId", backedUpOriginalImeId)
                     .put("lockedImeId", config != null ? config.getDexLockedImeId() : "")
                     .put("bridgeImeId", BridgeProtocol.OPALDESK_BRIDGE_IME_ID)
-                    .put("bridgeImeActive", BridgeProtocol.OPALDESK_BRIDGE_IME_ID.equals(currentIme))
+                    .put("pluginImeId", BridgeProtocol.OPALDESK_IME_PLUGIN_ID)
+                    .put("pluginImeInstalled", pluginInstalled)
+                    .put("pluginImeActive", BridgeProtocol.OPALDESK_IME_PLUGIN_ID.equals(currentIme))
+                    .put("bridgeImeActive", BridgeProtocol.isManagedOpalImeId(currentIme))
+                    .put("yieldedToDisplay0", yieldedToDisplay0)
                     .put("autoBridgeImeOnCast", config != null && config.isAutoBridgeImeOnCast())
                     .put("imeLockApplied", imeLockApplied)
                     .put("hardKbdOverrideApplied", hardKbdOverrideApplied)
@@ -165,15 +239,38 @@ public final class DexImeManager {
         }
     }
 
+    /** Backward-compatible 5-arg overload assuming the optional plugin APK is not installed. */
+    public static String resolveDesiredImeId(
+            boolean clientDexSessionActive,
+            boolean remoteSessionActive,
+            int dexImeDisplayMode,
+            String lockedImeId,
+            boolean autoBridgeImeOnCast) {
+        return resolveDesiredImeId(
+                clientDexSessionActive,
+                remoteSessionActive,
+                dexImeDisplayMode,
+                lockedImeId,
+                autoBridgeImeOnCast,
+                false);
+    }
+
     /**
      * Resolves the effective target IME ID to lock for the current session state:
      * <ul>
-     *   <li>During remote OpalCast sessions with {@code autoBridgeImeOnCast} enabled (unless the user
-     *       explicitly chose {@code ALWAYS_LOCAL} with a specific third-party IME), automatically locks
-     *       OpalDesk's built-in invisible channel IME ({@link BridgeProtocol#OPALDESK_BRIDGE_IME_ID})
-     *       for zero-clipboard direct {@code InputConnection.commitText()} and zero host popup.</li>
-     *   <li>Otherwise honors the user's configured {@code lockedImeId} whenever a DeX or remote
-     *       session is active.</li>
+     *   <li><b>Optional YuyanIme Companion Plugin installed ({@code pluginImeInstalled == true})</b>:
+     *       In {@code AUTO} and {@code ALWAYS_LOCAL} DeX/Cast sessions (unless the user explicitly
+     *       locked a different third-party IME), automatically activates
+     *       {@link BridgeProtocol#OPALDESK_IME_PLUGIN_ID}.</li>
+     *   <li><b>Plugin NOT installed ({@code pluginImeInstalled == false})</b>:
+     *       <ul>
+     *         <li>During remote OpalCast sessions with {@code autoBridgeImeOnCast}: activates the
+     *             zero-UI {@link BridgeProtocol#OPALDESK_BRIDGE_IME_ID} pipe so remote PC/Tablet
+     *             receivers get direct UTF-8 commits without phone keyboard popups.</li>
+     *         <li>During local/external DeX sessions: honors any user-selected {@code lockedImeId},
+     *             otherwise returns {@code ""} so the user's native system IME remains untouched.</li>
+     *       </ul>
+     *   </li>
      * </ul>
      */
     public static String resolveDesiredImeId(
@@ -181,46 +278,82 @@ public final class DexImeManager {
             boolean remoteSessionActive,
             int dexImeDisplayMode,
             String lockedImeId,
-            boolean autoBridgeImeOnCast) {
+            boolean autoBridgeImeOnCast,
+            boolean pluginImeInstalled) {
+        if (!clientDexSessionActive && !remoteSessionActive) {
+            return "";
+        }
         String cleanLocked = (lockedImeId != null) ? lockedImeId.trim() : "";
+        if (BridgeProtocol.OPALDESK_IME_PLUGIN_ID.equals(cleanLocked) && !pluginImeInstalled) {
+            cleanLocked = "";
+        }
+
         if (remoteSessionActive && autoBridgeImeOnCast) {
             boolean explicitLocalThirdParty = (dexImeDisplayMode == BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL)
-                    && !cleanLocked.isEmpty();
+                    && !cleanLocked.isEmpty()
+                    && !BridgeProtocol.isManagedOpalImeId(cleanLocked);
             if (!explicitLocalThirdParty) {
-                return BridgeProtocol.OPALDESK_BRIDGE_IME_ID;
+                if (BridgeProtocol.OPALDESK_BRIDGE_IME_ID.equals(cleanLocked)) {
+                    return BridgeProtocol.OPALDESK_BRIDGE_IME_ID;
+                }
+                return pluginImeInstalled
+                        ? BridgeProtocol.OPALDESK_IME_PLUGIN_ID
+                        : BridgeProtocol.OPALDESK_BRIDGE_IME_ID;
             }
         }
-        if ((clientDexSessionActive || remoteSessionActive) && !cleanLocked.isEmpty()) {
+
+        if (!cleanLocked.isEmpty()) {
             return cleanLocked;
+        }
+
+        if (pluginImeInstalled
+                && autoBridgeImeOnCast
+                && dexImeDisplayMode != BridgeProtocol.DEX_IME_DISPLAY_FALLBACK_HOST) {
+            return BridgeProtocol.OPALDESK_IME_PLUGIN_ID;
         }
         return "";
     }
 
     public boolean isBridgeImeCurrentlyActive() {
-        return BridgeProtocol.OPALDESK_BRIDGE_IME_ID.equals(getCurrentDefaultImeIdSafe());
+        return BridgeProtocol.isManagedOpalImeId(getCurrentDefaultImeIdSafe());
+    }
+
+    public boolean isBridgeImeConfiguredOrActive() {
+        synchronized (lock) {
+            if (yieldedToDisplay0) return true;
+        }
+        return isBridgeImeCurrentlyActive();
     }
 
     private void reconcileLocked() {
         if (config == null || bridge == null) return;
         boolean sessionActive = clientDexSessionActive || remoteSessionActive;
+        if (yieldedToDisplay0 && sessionActive) {
+            syncBackupFileLocked();
+            return;
+        }
         reconcileLockedImeLocked(sessionActive);
         reconcileHardKeyboardSoftImeLocked(sessionActive);
         syncBackupFileLocked();
     }
 
     private void reconcileLockedImeLocked(boolean sessionActive) {
+        boolean pluginInstalled = bridge.isImePluginVerifiedAndInstalled();
         String desiredIme = resolveDesiredImeId(
                 clientDexSessionActive,
                 remoteSessionActive,
                 config.getDexImeDisplayMode(),
                 config.getDexLockedImeId(),
-                config.isAutoBridgeImeOnCast());
+                config.isAutoBridgeImeOnCast(),
+                pluginInstalled);
         if (!sessionActive || desiredIme.isEmpty()) {
             restoreImeOnlyLocked();
             return;
         }
         String currentIme = safeTrim(bridge.getDefaultInputMethodId());
-        if (backedUpOriginalImeId.isEmpty() && DaemonConfig.PackagePolicy.isValidImeId(currentIme)) {
+        if (backedUpOriginalImeId.isEmpty()
+                && DaemonConfig.PackagePolicy.isValidImeId(currentIme)
+                && !BridgeProtocol.isManagedOpalImeId(currentIme)) {
             backedUpOriginalImeId = currentIme;
             // Persist backup atomically BEFORE switching system IME so crash recovery always knows the original.
             writeBackupLocked();
@@ -234,6 +367,7 @@ public final class DexImeManager {
         System.out.println("OPALDESK_IME_LOCK_APPLY target=" + desiredIme
                 + " prev=" + currentIme
                 + " orig=" + backedUpOriginalImeId
+                + " pluginInstalled=" + pluginInstalled
                 + " ok=" + ok);
         if (!ok && backedUpOriginalImeId.equals(currentIme)) {
             // Switch failed while still on original IME — no active override to keep backed up.

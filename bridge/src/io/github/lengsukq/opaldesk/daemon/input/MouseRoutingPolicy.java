@@ -280,9 +280,8 @@ public final class MouseRoutingPolicy {
     }
 
     /**
-     * Returns {@code true} when a physical alphabetic keyboard should be associated directly with
-     * the focused {@code OpalWin-*} VirtualDisplay so CJK IMEs receive direct keystrokes with zero
-     * outer-display focus ping-pong.
+     * Returns {@code true} when a physical alphabetic keyboard should be treated as a standalone
+     * window keyboard (rather than an outer-display mouse/touchpad).
      *
      * <p>Covers both pure keyboards AND composite Bluetooth/2.4GHz keyboards (such as mechanical
      * keyboards with a knob / {@code System Multi Axis} / boot-mouse HID descriptor that also set
@@ -312,11 +311,6 @@ public final class MouseRoutingPolicy {
     /**
      * Returns {@code true} when pure physical keyboards should be associated directly with the
      * focused {@code OpalWin-*} VirtualDisplay instead of the outer desktop/external display.
-     *
-     * <p>Direct association delivers keystrokes straight from Android's {@code InputDispatcher}
-     * into the app window and its local CJK IME, eliminating the outer-display <-> VirtualDisplay
-     * window-focus ping-pong that otherwise triggers {@code IMMS.unbindIme()} and cancels
-     * {@code ACTION_UP} on every keystroke.
      */
     public static boolean shouldRoutePhysicalKeyboardToFocusedWindow(
             boolean workstationDisplayActive,
@@ -325,6 +319,37 @@ public final class MouseRoutingPolicy {
             int dexImeDisplayMode,
             int focusedWindowDisplayId,
             boolean hasFocusedWindowUniqueId) {
+        return shouldRoutePhysicalKeyboardToFocusedWindow(
+                workstationDisplayActive,
+                remoteDesktopActive,
+                localImeActive,
+                dexImeDisplayMode,
+                focusedWindowDisplayId,
+                hasFocusedWindowUniqueId,
+                false);
+    }
+
+    /**
+     * Returns {@code true} when pure physical keyboards should be associated directly with the
+     * focused {@code OpalWin-*} VirtualDisplay.
+     *
+     * <p>Even when {@code bridgeImeActive} ({@code OpalYuyanImeService} / {@code OpalDeskImeService})
+     * is active, physical Bluetooth/USB keyboards MUST be associated directly with the focused
+     * {@code OpalWin-*} VirtualDisplay while a DeX window is active: on Android 14–17 / HyperOS,
+     * leaving Bluetooth keyboards unassociated while {@code DesktopActivity} carries
+     * {@code FLAG_NOT_FOCUSABLE} causes keystrokes to route to Display 0 ({@code mCurrentFocus=null})
+     * instead of entering the VirtualDisplay's {@code InputMethodService.onKeyDown()}.
+     * Whenever {@code localImeActive} becomes {@code true} (e.g. OpalDesk search box) or the
+     * workstation exits, this returns {@code false} and immediately unbinds back to Display 0.
+     */
+    public static boolean shouldRoutePhysicalKeyboardToFocusedWindow(
+            boolean workstationDisplayActive,
+            boolean remoteDesktopActive,
+            boolean localImeActive,
+            int dexImeDisplayMode,
+            int focusedWindowDisplayId,
+            boolean hasFocusedWindowUniqueId,
+            boolean bridgeImeActive) {
         if (!workstationDisplayActive || remoteDesktopActive || localImeActive) {
             return false;
         }
@@ -332,6 +357,28 @@ public final class MouseRoutingPolicy {
             return false;
         }
         return focusedWindowDisplayId > 0 && hasFocusedWindowUniqueId;
+    }
+
+    /**
+     * Decides whether a candidate peripheral should be bound to {@code outerDisplayId} via
+     * {@code UniqueIdAssociation}.
+     *
+     * <p>When {@code bridgeImeActive} is {@code true} (and the host compositor window carries
+     * {@code FLAG_NOT_FOCUSABLE}), ONLY pointer-bearing devices that are NOT standalone/composite
+     * window keyboards (i.e. dedicated mice, or sole-pointer keyboard+touchpad combos) bind to
+     * {@code outerDisplayId}; pure/composite alphabetic keyboards stay unassociated so their keys
+     * follow {@code mTopFocusedDisplayId} directly instead of dropping on an unfocusable host.
+     */
+    public static boolean shouldAssociateDeviceToOuterDisplay(
+            boolean isMouse,
+            boolean isWindowKbd,
+            boolean isExternal,
+            int keyboardType,
+            boolean bridgeImeActive) {
+        if (bridgeImeActive) {
+            return isMouse && !isWindowKbd;
+        }
+        return isMouse || (isExternal && keyboardType == KEYBOARD_TYPE_ALPHABETIC);
     }
 
     /**
@@ -366,18 +413,13 @@ public final class MouseRoutingPolicy {
                 displayIsTrusted,
                 dexImeDisplayMode,
                 muteHostImeOnCast,
+                false,
                 false);
     }
 
     /**
      * Resolves the Android {@code DisplayImePolicy} ({@code 0 = LOCAL}, {@code 1 = FALLBACK_DISPLAY},
      * {@code 2 = HIDE}) for a managed {@code OpalWin-*} VirtualDisplay.
-     *
-     * <p>When a physical external monitor ({@code hasPhysicalExternalDisplay}) is active without a
-     * physical keyboard, soft keyboards must render on the physical external monitor's
-     * {@code NativeImeBridgeHost} rather than inside the system-decor-less {@code OpalWin-*}
-     * VirtualDisplay, so {@code OpalWin-*} stays on {@code FALLBACK_DISPLAY} to trigger the host
-     * bridge cleanly even in {@code ALWAYS_LOCAL} mode.
      */
     public static int resolveWindowDisplayImePolicy(
             boolean hasPhysicalKeyboard,
@@ -386,6 +428,37 @@ public final class MouseRoutingPolicy {
             int dexImeDisplayMode,
             boolean muteHostImeOnCast,
             boolean hasPhysicalExternalDisplay) {
+        return resolveWindowDisplayImePolicy(
+                hasPhysicalKeyboard,
+                remoteDesktopActive,
+                displayIsTrusted,
+                dexImeDisplayMode,
+                muteHostImeOnCast,
+                hasPhysicalExternalDisplay,
+                false);
+    }
+
+    /**
+     * Resolves the Android {@code DisplayImePolicy} ({@code 0 = LOCAL}, {@code 1 = FALLBACK_DISPLAY},
+     * {@code 2 = HIDE}) for a managed {@code OpalWin-*} VirtualDisplay.
+     *
+     * <p>When {@code bridgeImeActive} ({@code OpalDeskImeService}) is active on a trusted display,
+     * ALWAYS returns {@code DISPLAY_IME_POLICY_LOCAL (0)}: {@code OpalDeskImeService} renders a
+     * {@code 0x0} invisible view (zero window occlusion), while {@code LOCAL} keeps IMMS bound
+     * directly to {@code ws.displayId > 0} (distinguishing DeX windows from Display 0 phone apps)
+     * and completely bypasses Android 16/17 {@code RemoteInsetsControlTarget} fallback aborts.
+     */
+    public static int resolveWindowDisplayImePolicy(
+            boolean hasPhysicalKeyboard,
+            boolean remoteDesktopActive,
+            boolean displayIsTrusted,
+            int dexImeDisplayMode,
+            boolean muteHostImeOnCast,
+            boolean hasPhysicalExternalDisplay,
+            boolean bridgeImeActive) {
+        if (bridgeImeActive && displayIsTrusted) {
+            return 0; // BridgeProtocol.DISPLAY_IME_POLICY_LOCAL
+        }
         if (remoteDesktopActive) {
             if (dexImeDisplayMode == 1 /* DEX_IME_DISPLAY_ALWAYS_LOCAL */ && displayIsTrusted) {
                 return 0; // BridgeProtocol.DISPLAY_IME_POLICY_LOCAL
@@ -420,6 +493,23 @@ public final class MouseRoutingPolicy {
             int dexImeDisplayMode,
             boolean muteHostImeOnCast,
             boolean displayIsTrusted) {
+        return resolveRemoteOuterDisplayImePolicy(
+                dexImeDisplayMode, muteHostImeOnCast, displayIsTrusted, false);
+    }
+
+    /**
+     * Resolves the Android {@code DisplayImePolicy} for an outer remote OpalCast VirtualDisplay
+     * ({@code OpalDesk-Remote} or {@code OpalDesk-App-*}), using {@code LOCAL} whenever the
+     * invisible {@code OpalDeskImeService} bus is active on a trusted VirtualDisplay.
+     */
+    public static int resolveRemoteOuterDisplayImePolicy(
+            int dexImeDisplayMode,
+            boolean muteHostImeOnCast,
+            boolean displayIsTrusted,
+            boolean bridgeImeActive) {
+        if (bridgeImeActive && displayIsTrusted) {
+            return 0; // BridgeProtocol.DISPLAY_IME_POLICY_LOCAL
+        }
         if (dexImeDisplayMode == 1 /* DEX_IME_DISPLAY_ALWAYS_LOCAL */ && displayIsTrusted) {
             return 0; // BridgeProtocol.DISPLAY_IME_POLICY_LOCAL
         }
@@ -513,12 +603,6 @@ public final class MouseRoutingPolicy {
      * Returns {@code true} when a physical keyboard {@code KeyEvent} targeting an isolated
      * {@code VirtualDisplay} should prefer Linux {@code /dev/uhid} keyboard injection over
      * {@code IInputManager.injectInputEvent}.
-     *
-     * <p>AOSP {@code InputDispatcher::injectInputEvent} forcibly rewrites {@code deviceId} to
-     * {@code VIRTUAL_KEYBOARD_ID (-1)}, which causes many Chinese IMEs (Gboard, Sogou, WeType, Baidu)
-     * to bypass hardware-keyboard Pinyin composition or suppress their candidate bar. Delivering the
-     * keypress through a display-associated kernel UHID keyboard preserves authentic physical HID
-     * semantics while keeping {@code INPUT_BACKEND_SYSTEM} strictly system-only.
      */
     public static boolean shouldPreferUhidForPhysicalKey(
             int inputBackendMode,
@@ -550,18 +634,13 @@ public final class MouseRoutingPolicy {
             boolean remoteDesktopActive,
             int dexImeDisplayMode) {
         return shouldRunFallbackImeProbe(
-                localImeActive, hasPhysicalKeyboard, remoteDesktopActive, dexImeDisplayMode, false);
+                localImeActive, hasPhysicalKeyboard, remoteDesktopActive, dexImeDisplayMode, false, false);
     }
 
     /**
      * Returns {@code true} when {@code OpalDeskDaemon} should probe {@code dumpsys input_method}
      * after a tap inside a window, taking the user's DeX IME display mode and physical external
      * monitor state into account.
-     *
-     * <p>When {@code DEX_IME_DISPLAY_ALWAYS_LOCAL} is selected on local Display 0, the window
-     * VirtualDisplay hosts the IME locally. When an active physical external monitor is running
-     * without a physical keyboard, probing stays enabled so taps inside windows summon
-     * {@code NativeImeBridgeHost} directly on the external monitor.
      */
     public static boolean shouldRunFallbackImeProbe(
             boolean localImeActive,
@@ -569,7 +648,25 @@ public final class MouseRoutingPolicy {
             boolean remoteDesktopActive,
             int dexImeDisplayMode,
             boolean hasPhysicalExternalDisplay) {
-        if (localImeActive) return false;
+        return shouldRunFallbackImeProbe(
+                localImeActive, hasPhysicalKeyboard, remoteDesktopActive, dexImeDisplayMode,
+                hasPhysicalExternalDisplay, false);
+    }
+
+    /**
+     * Returns {@code true} when {@code OpalDeskDaemon} should probe {@code dumpsys input_method}
+     * after a tap inside a window. Never runs when {@code bridgeImeActive} ({@code OpalDeskImeService})
+     * is active, because {@code OpalDeskImeService.onShowInputRequested} delivers 0ms deterministic
+     * IME events directly without {@code dumpsys} polling.
+     */
+    public static boolean shouldRunFallbackImeProbe(
+            boolean localImeActive,
+            boolean hasPhysicalKeyboard,
+            boolean remoteDesktopActive,
+            int dexImeDisplayMode,
+            boolean hasPhysicalExternalDisplay,
+            boolean bridgeImeActive) {
+        if (bridgeImeActive || localImeActive) return false;
         if (dexImeDisplayMode == 1 /* DEX_IME_DISPLAY_ALWAYS_LOCAL */) {
             return hasPhysicalExternalDisplay && !remoteDesktopActive && !hasPhysicalKeyboard;
         }
@@ -580,9 +677,7 @@ public final class MouseRoutingPolicy {
 
     /**
      * Returns {@code true} when {@code OpalDeskDaemon} should summon the host-side IME bridge
-     * even if {@code dumpsys input_method} reports {@code mInputShown=true} (indicating Android's
-     * cross-display fallback popped on Display 0 while the user is interacting with a remote cast
-     * receiver or an external portable touchscreen monitor).
+     * even if {@code dumpsys input_method} reports {@code mInputShown=true}.
      */
     public static boolean shouldBridgeHostImeWhenSystemInputShown(
             boolean remoteDesktopActive,

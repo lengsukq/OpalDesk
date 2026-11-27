@@ -311,19 +311,7 @@ class RemoteTrackpadActivity : ComponentActivity() {
     }
 
     private fun commitTextToFocusedWindow(text: String) {
-        if (text.isEmpty()) return
-        try {
-            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            cm?.setPrimaryClip(ClipData.newPlainText("OpalDesk", text))
-        } catch (_: Throwable) {
-        }
-        val focused = BridgeClient.sceneFlow.value.focusedWindow ?: return
-        if (focused.isMinimized) return
-        val ctrl = KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
-        mainHandler.postDelayed({
-            BridgeClient.injectWindowKeyAsync(focused.windowId, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_V, ctrl)
-            BridgeClient.injectWindowKeyAsync(focused.windowId, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_V, ctrl)
-        }, 45L)
+        WorkstationKeyDispatcher.commitTextToFocusedWindow(this, text)
     }
 
     private fun openConsole() {

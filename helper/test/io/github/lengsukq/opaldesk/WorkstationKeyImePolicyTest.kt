@@ -191,6 +191,27 @@ class WorkstationKeyImePolicyTest {
                 hostSoftImeVisible = false,
             ),
         )
+
+        assertTrue(
+            WorkstationKeyDispatcher.shouldSetCompositorWindowNotFocusable(
+                focusedWindowDisplayId = 85,
+                keyboardRoutedDisplayId = -1,
+                bridgeImeActive = true,
+                localOverlayNeedsFocus = false,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = false,
+            ),
+        )
+        assertFalse(
+            WorkstationKeyDispatcher.shouldSetCompositorWindowNotFocusable(
+                focusedWindowDisplayId = 85,
+                keyboardRoutedDisplayId = -1,
+                bridgeImeActive = true,
+                localOverlayNeedsFocus = true,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = false,
+            ),
+        )
     }
 
     @Test

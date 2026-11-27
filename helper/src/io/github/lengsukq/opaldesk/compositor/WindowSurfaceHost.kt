@@ -815,14 +815,14 @@ private fun forwardMotionEventToWindow(
 ): Boolean {
     if (ev == null || viewW <= 0 || viewH <= 0) return false
     val masked = ev.actionMasked
+    val canvasX = win.frame.left + ev.x
+    val canvasY = win.frame.top + (if (win.isFullscreen) 0 else headerHeightPx) + ev.y
     // Geometric Z-order occlusion guard: never accept clicks/hovers underneath a higher-Z floating window
     if (masked == MotionEvent.ACTION_DOWN ||
         masked == MotionEvent.ACTION_HOVER_ENTER ||
         masked == MotionEvent.ACTION_HOVER_MOVE ||
         masked == MotionEvent.ACTION_SCROLL
     ) {
-        val canvasX = win.frame.left + ev.x
-        val canvasY = win.frame.top + headerHeightPx + ev.y
         if (CompositorGeometry.isPointOccludedByHigherWindow(
                 target = win,
                 canvasX = canvasX,
@@ -833,10 +833,27 @@ private fun forwardMotionEventToWindow(
             return false
         }
     }
-    if (!win.focused && masked == MotionEvent.ACTION_DOWN) {
-        onFocusRequested()
+    if (masked == MotionEvent.ACTION_DOWN) {
+        val isMouseDown = isMouseMotionEvent(ev)
+        io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.recordWindowPointerDown(
+            windowId = win.windowId,
+            displayId = win.displayId,
+            canvasX = canvasX,
+            canvasY = canvasY,
+            modality = if (isMouseDown) {
+                io.github.lengsukq.opaldesk.ime.InputModality.MOUSE
+            } else {
+                io.github.lengsukq.opaldesk.ime.InputModality.TOUCH
+            },
+            uptimeMs = ev.eventTime.takeIf { it > 0L } ?: SystemClock.uptimeMillis(),
+        )
     }
-    if (!win.isLive || win.displayId <= 0) return true
+    if (!win.isLive || win.displayId <= 0) {
+        if (!win.focused && masked == MotionEvent.ACTION_DOWN) {
+            onFocusRequested()
+        }
+        return true
+    }
 
     val count = ev.pointerCount.coerceIn(1, 10)
     val ids = IntArray(count)

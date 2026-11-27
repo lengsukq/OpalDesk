@@ -78,6 +78,10 @@ public final class HelperClientBridge {
     private volatile boolean preferExternalProviderCall = false;
     private final AtomicLong lastBinderPushAttemptMs = new AtomicLong(0L);
 
+    private final Object pluginUidLock = new Object();
+    private volatile int cachedPluginUid = -2; // -2 = unprobed, -1 = absent/untrusted, >0 = verified
+    private volatile long lastPluginProbeMs = 0L;
+
     private static final class ResolvedHelper {
         final int uid;
         final int userId;
@@ -174,7 +178,107 @@ public final class HelperClientBridge {
         if (callingUid < 0) return false;
         if (callingUid == android.os.Process.myUid() || isTrustedDaemonServerUid(callingUid)) return true;
         int verifiedUid = getVerifiedHelperUid();
-        return verifiedUid > 0 && callingUid == verifiedUid;
+        if (verifiedUid > 0 && callingUid == verifiedUid) return true;
+        int pluginUid = getVerifiedImePluginUid();
+        return pluginUid > 0 && callingUid == pluginUid;
+    }
+
+    public void invalidateImePluginCache() {
+        synchronized (pluginUidLock) {
+            cachedPluginUid = -2;
+            lastPluginProbeMs = 0L;
+        }
+    }
+
+    public boolean isOptionalImePluginVerified() {
+        return getVerifiedImePluginUid() > 0;
+    }
+
+    /**
+     * Verifies whether the optional {@code io.github.lengsukq.opaldesk.ime} YuyanIme companion APK
+     * is installed AND signed with the exact {@link BridgeBuildConfig#EXPECTED_HELPER_CERT_SHA256}.
+     */
+    public int getVerifiedImePluginUid() {
+        if (services.context == null && services.systemContext == null) return -1;
+        long now = SystemClock.uptimeMillis();
+        int cached = cachedPluginUid;
+        if (cached != -2 && (now - lastPluginProbeMs) < HELPER_UID_CACHE_MS) {
+            return cached;
+        }
+        synchronized (pluginUidLock) {
+            now = SystemClock.uptimeMillis();
+            if (cachedPluginUid != -2 && (now - lastPluginProbeMs) < HELPER_UID_CACHE_MS) {
+                return cachedPluginUid;
+            }
+            int resolved = resolveVerifiedSameCertPackageUid(
+                    BridgeProtocol.OPALDESK_IME_PLUGIN_PACKAGE,
+                    verifiedHelperUserId);
+            cachedPluginUid = resolved > 0 ? resolved : -1;
+            lastPluginProbeMs = now;
+            return cachedPluginUid;
+        }
+    }
+
+    private int resolveVerifiedSameCertPackageUid(String pkgName, int preferredUserId) {
+        List<Context> contexts = collectContexts(services.context, services.systemContext);
+        Object iPm = getIPackageManagerQuietly();
+        int[] users = preferredUserId > 0 ? new int[]{preferredUserId, 0} : new int[]{0};
+        for (int userId : users) {
+            int uid = -1;
+            for (Context ctx : contexts) {
+                try {
+                    uid = resolvePackageUid(ctx.getPackageManager(), pkgName, userId);
+                    if (uid > 0) break;
+                } catch (PackageManager.NameNotFoundException | RuntimeException ignored) {
+                }
+            }
+            if (uid <= 0 && iPm != null) {
+                try {
+                    uid = resolvePackageUidViaIPm(iPm, pkgName, userId);
+                } catch (Throwable ignored) {
+                }
+            }
+            PackageInfo pi = null;
+            int[] flagAttempts = {
+                    PackageManager.GET_SIGNING_CERTIFICATES,
+                    PackageManager.GET_SIGNING_CERTIFICATES | PackageManager.GET_SIGNATURES,
+            };
+            for (int flags : flagAttempts) {
+                for (Context ctx : contexts) {
+                    try {
+                        pi = resolvePackageInfo(ctx.getPackageManager(), pkgName, flags, userId);
+                        if (pi != null && (pi.signingInfo != null || (pi.signatures != null && pi.signatures.length > 0))) {
+                            break;
+                        }
+                    } catch (PackageManager.NameNotFoundException | RuntimeException ignored) {
+                    }
+                }
+                if (pi != null && (pi.signingInfo != null || (pi.signatures != null && pi.signatures.length > 0))) {
+                    break;
+                }
+                if (iPm != null) {
+                    try {
+                        pi = resolvePackageInfoViaIPm(iPm, pkgName, flags, userId);
+                        if (pi != null && (pi.signingInfo != null || (pi.signatures != null && pi.signatures.length > 0))) {
+                            break;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+            HelperPackageResolver.CertCheckResult check = verifyPackageInfoCertificate(pi);
+            if (check.status == HelperPackageResolver.CertCheckStatus.VERIFIED) {
+                if (uid <= 0 && pi != null && pi.applicationInfo != null) {
+                    uid = pi.applicationInfo.uid;
+                }
+                if (uid > 0) return uid;
+            } else if (check.status == HelperPackageResolver.CertCheckStatus.CERT_MISMATCH
+                    || check.status == HelperPackageResolver.CertCheckStatus.MULTI_SIGNER_REJECTED) {
+                System.err.println("OPALDESK_SECURITY_REJECT untrusted plugin " + pkgName + " reason=" + check.status.name());
+                return -1;
+            }
+        }
+        return -1;
     }
 
     public boolean isHelperAlive() {

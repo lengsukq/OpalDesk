@@ -489,6 +489,29 @@ public class ExternalMouseRouterTest {
     }
 
     @Test
+    public void managedOpalImeRoutesBluetoothKeyboardsToFocusedWindowAndKeepsWindowImeLocal() {
+        assertTrue(MouseRoutingPolicy.shouldRoutePhysicalKeyboardToFocusedWindow(
+                true, false, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, 82, true, true));
+        assertTrue(MouseRoutingPolicy.shouldRoutePhysicalKeyboardToFocusedWindow(
+                true, false, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, 82, true, false));
+        assertFalse(MouseRoutingPolicy.shouldRoutePhysicalKeyboardToFocusedWindow(
+                true, false, true, BridgeProtocol.DEX_IME_DISPLAY_AUTO, 82, true, true));
+
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_LOCAL,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(
+                        false, false, true, BridgeProtocol.DEX_IME_DISPLAY_AUTO, false, true, true));
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_LOCAL,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(
+                        false, true, true, BridgeProtocol.DEX_IME_DISPLAY_AUTO, true, false, true));
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_LOCAL,
+                MouseRoutingPolicy.resolveRemoteOuterDisplayImePolicy(
+                        BridgeProtocol.DEX_IME_DISPLAY_AUTO, true, true, true));
+
+        assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                false, false, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, true, true));
+    }
+
+    @Test
     public void passiveHoverClassificationAndDisplay0MousePinningPreventGhostCursors() {
         assertTrue(MouseRoutingPolicy.isPassiveHoverAction(MouseRoutingPolicy.ACTION_HOVER_ENTER));
         assertTrue(MouseRoutingPolicy.isPassiveHoverAction(MouseRoutingPolicy.ACTION_HOVER_MOVE));

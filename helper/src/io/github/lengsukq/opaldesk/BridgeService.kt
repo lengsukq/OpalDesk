@@ -69,7 +69,7 @@ class BridgeService : Service() {
                 nm.cancel(PAIRING_NOTIF_ID)
                 return
             }
-            val channel = NotificationChannel(
+            val ch = NotificationChannel(
                 PAIRING_CHANNEL_ID,
                 "无线投屏连接确认",
                 NotificationManager.IMPORTANCE_HIGH,
@@ -77,7 +77,7 @@ class BridgeService : Service() {
                 description = "当局域网内其他设备请求连接投屏时立即弹出确认横幅"
                 enableVibration(true)
             }
-            nm.createNotificationChannel(channel)
+            nm.createNotificationChannel(ch)
 
             val openIntent = Intent(appCtx, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -201,12 +201,7 @@ class BridgeService : Service() {
             val appCtx = ctx?.applicationContext ?: return
             if (sUserStopping) return
             try {
-                val intent = Intent(appCtx, BridgeService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    appCtx.startForegroundService(intent)
-                } else {
-                    appCtx.startService(intent)
-                }
+                appCtx.startForegroundService(Intent(appCtx, BridgeService::class.java))
             } catch (t: Throwable) {
                 Log.d(TAG, "startForegroundService deferred: ${t.message}")
             }
@@ -317,6 +312,7 @@ class BridgeService : Service() {
     private var mediaRouterRegistered = false
     private var lastProjectedDisplayId = -1
     private var screenWakeReceiverRegistered = false
+    private var imePackageReceiverRegistered = false
 
     @Suppress("DEPRECATION")
     private val mediaRouterCallback = object : MediaRouter.SimpleCallback() {
@@ -344,6 +340,33 @@ class BridgeService : Service() {
                 if (BridgeClient.statusFlow.value.hostScreenOff) {
                     BridgeClient.setHostScreenPowerAsync(true)
                 }
+            }
+        }
+    }
+
+    private val imePackageReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action ?: return
+            if (action != Intent.ACTION_PACKAGE_ADDED &&
+                action != Intent.ACTION_PACKAGE_REPLACED &&
+                action != Intent.ACTION_PACKAGE_REMOVED
+            ) {
+                return
+            }
+            val pkg = intent.data?.schemeSpecificPart?.trim().orEmpty()
+            if (pkg == BridgeProtocol.OPALDESK_IME_PLUGIN_PACKAGE ||
+                pkg.startsWith("com.yuyan.pinyin")
+            ) {
+                OpalLogStore.i("IME", "Detected IME package change ($action): $pkg -> syncing daemon IME state")
+                BridgeClient.notifyBridgeImeEventAsync(
+                    eventType = BridgeProtocol.BridgeImeEvent.PLUGIN_PKG_CHANGED,
+                    imeDisplayId = 0,
+                    inputType = 0,
+                    pkg = pkg,
+                )
+                handler.postDelayed({
+                    BridgeClient.refreshDexImeStateAsync()
+                }, 280L)
             }
         }
     }
@@ -388,6 +411,20 @@ class BridgeService : Service() {
             }
             screenWakeReceiverRegistered = true
         }
+        runCatching {
+            val pkgFilter = IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REPLACED)
+                addAction(Intent.ACTION_PACKAGE_REMOVED)
+                addDataScheme("package")
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(imePackageReceiver, pkgFilter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(imePackageReceiver, pkgFilter)
+            }
+            imePackageReceiverRegistered = true
+        }
         senderWifiLowLatencyLock = WifiLowLatencyLock(this, "OpalDesk:WifiCastTx")
         serviceScope.launch {
             BridgeClient.remoteStatusFlow.collect { remote ->
@@ -428,6 +465,10 @@ class BridgeService : Service() {
         if (screenWakeReceiverRegistered) {
             runCatching { unregisterReceiver(screenWakeReceiver) }
             screenWakeReceiverRegistered = false
+        }
+        if (imePackageReceiverRegistered) {
+            runCatching { unregisterReceiver(imePackageReceiver) }
+            imePackageReceiverRegistered = false
         }
         if (mediaRouterRegistered) {
             @Suppress("DEPRECATION")
@@ -523,14 +564,14 @@ class BridgeService : Service() {
 
     private fun startSessionForeground(): Boolean {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return false
-        val channel = NotificationChannel(
+        val ch = NotificationChannel(
             CHANNEL_ID,
             "OpalDesk 桌面引擎服务",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
             description = "保持多窗口虚拟屏池与外接显示器自动投射运行"
         }
-        nm.createNotificationChannel(channel)
+        nm.createNotificationChannel(ch)
 
         val openPi = PendingIntent.getActivity(
             this,

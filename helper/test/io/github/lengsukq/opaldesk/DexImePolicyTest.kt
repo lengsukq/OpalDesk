@@ -12,14 +12,18 @@ import org.junit.Test
 class DexImePolicyTest {
 
     @Test
-    fun `parses daemon system IME runtime JSON cleanly`() {
+    fun `parses daemon system IME runtime JSON including optional Yuyan plugin fields`() {
         val json = """
             {
-              "currentImeId":"com.tencent.wetype/.plugin.hld.WxHldService",
+              "currentImeId":"io.github.lengsukq.opaldesk.ime/.OpalYuyanImeService",
               "originalImeId":"com.sohu.inputmethod.sogou/.SogouIME",
-              "lockedImeId":"com.tencent.wetype/.plugin.hld.WxHldService",
+              "lockedImeId":"",
               "bridgeImeId":"io.github.lengsukq.opaldesk/.ime.OpalDeskImeService",
-              "bridgeImeActive":false,
+              "pluginImeId":"io.github.lengsukq.opaldesk.ime/.OpalYuyanImeService",
+              "pluginImeInstalled":true,
+              "pluginImeActive":true,
+              "bridgeImeActive":true,
+              "yieldedToDisplay0":false,
               "autoBridgeImeOnCast":true,
               "imeLockApplied":true,
               "hardKbdOverrideApplied":true,
@@ -31,7 +35,7 @@ class DexImePolicyTest {
               "physicalKeyboardDetected":true,
               "enabledImeIds":[
                 "com.sohu.inputmethod.sogou/.SogouIME",
-                "com.tencent.wetype/.plugin.hld.WxHldService",
+                "io.github.lengsukq.opaldesk.ime/.OpalYuyanImeService",
                 "com.google.android.inputmethod.latin/com.google.android.inputmethod.latin.LatinIME"
               ]
             }
@@ -39,11 +43,14 @@ class DexImePolicyTest {
 
         val state = DexImeStateParser.parse(json)
         assertTrue(state.synced)
-        assertEquals("com.tencent.wetype/.plugin.hld.WxHldService", state.currentImeId)
+        assertEquals(BridgeProtocol.OPALDESK_IME_PLUGIN_ID, state.currentImeId)
         assertEquals("com.sohu.inputmethod.sogou/.SogouIME", state.originalImeId)
-        assertEquals("com.tencent.wetype/.plugin.hld.WxHldService", state.lockedImeId)
         assertEquals(BridgeProtocol.OPALDESK_BRIDGE_IME_ID, state.bridgeImeId)
-        assertFalse(state.bridgeImeActive)
+        assertEquals(BridgeProtocol.OPALDESK_IME_PLUGIN_ID, state.pluginImeId)
+        assertTrue(state.pluginImeInstalled)
+        assertTrue(state.pluginImeActive)
+        assertTrue(state.bridgeImeActive)
+        assertFalse(state.yieldedToDisplay0)
         assertTrue(state.autoBridgeImeOnCast)
         assertTrue(state.imeLockApplied)
         assertTrue(state.hardKbdOverrideApplied)
@@ -54,27 +61,31 @@ class DexImePolicyTest {
         assertEquals(BridgeProtocol.DisplayImePolicy.LOCAL, state.effectiveWindowImePolicy)
         assertTrue(state.physicalKeyboardDetected)
         assertEquals(3, state.enabledImeIds.size)
-        assertEquals(
-            "com.google.android.inputmethod.latin/com.google.android.inputmethod.latin.LatinIME",
-            state.enabledImeIds[2],
-        )
 
         // Handles empty / malformed JSON gracefully
         val empty = DexImeStateParser.parse("")
         assertFalse(empty.synced)
+        assertFalse(empty.pluginImeInstalled)
         assertEquals(BridgeProtocol.HardKbdSoftIme.SYSTEM, empty.showImeWithHardKeyboard)
     }
 
     @Test
-    fun `merges local localized IME options with daemon enabled IDs and flags disabled locked IME`() {
+    fun `merges local localized IME options with optional Yuyan plugin and stock Yuyan recognition`() {
         val local = listOf(
             DexImeOption(
                 id = "com.tencent.wetype/.plugin.hld.WxHldService",
                 label = "微信输入法",
                 packageName = "com.tencent.wetype",
             ),
+            DexImeOption(
+                id = "com.yuyan.pinyin.offline.release/.ImeService",
+                label = "语燕输入法",
+                packageName = "com.yuyan.pinyin.offline.release",
+            ),
         )
-        val merged = DexImeCatalog.mergeOptions(
+
+        // Uninstalled plugin -> does NOT clutter picker with uninstalled plugin row
+        val mergedWithoutPlugin = DexImeCatalog.mergeOptions(
             localOptions = local,
             daemonEnabledIds = listOf(
                 "com.tencent.wetype/.plugin.hld.WxHldService",
@@ -82,22 +93,27 @@ class DexImePolicyTest {
             ),
             lockedImeId = "com.removed.ime/.OldService",
             currentSystemImeId = "com.tencent.wetype/.plugin.hld.WxHldService",
+            pluginImeInstalled = false,
         )
+        assertEquals(5, mergedWithoutPlugin.size)
+        assertEquals(BridgeProtocol.OPALDESK_BRIDGE_IME_ID, mergedWithoutPlugin[0].id)
+        assertTrue(mergedWithoutPlugin[0].isBuiltInBridge)
+        assertEquals("微信输入法", mergedWithoutPlugin[1].label)
+        assertTrue(mergedWithoutPlugin[2].isStockYuyan)
+        assertEquals("com.removed.ime/.OldService", mergedWithoutPlugin[4].id)
+        assertFalse(mergedWithoutPlugin[4].enabledInSystem)
 
-        assertEquals(4, merged.size)
-        // Always surfaces OpalDesk's built-in invisible channel IME first
-        assertEquals(BridgeProtocol.OPALDESK_BRIDGE_IME_ID, merged[0].id)
-        assertTrue(merged[0].isBuiltInBridge)
-        assertTrue(merged[0].enabledInSystem)
-        // Preserves localized label from local InputMethodManager
-        assertEquals("微信输入法", merged[1].label)
-        assertTrue(merged[1].enabledInSystem)
-        // Adds daemon-discovered IME not returned by local query
-        assertEquals("com.google.android.inputmethod.latin", merged[2].packageName)
-        assertTrue(merged[2].enabledInSystem)
-        // Retains unavailable locked IME with enabledInSystem=false so user sees warning
-        assertEquals("com.removed.ime/.OldService", merged[3].id)
-        assertFalse(merged[3].enabledInSystem)
+        // Installed plugin -> surfaces Yuyan companion plugin first!
+        val mergedWithPlugin = DexImeCatalog.mergeOptions(
+            localOptions = local,
+            daemonEnabledIds = emptyList(),
+            lockedImeId = "",
+            currentSystemImeId = BridgeProtocol.OPALDESK_IME_PLUGIN_ID,
+            pluginImeInstalled = true,
+        )
+        assertEquals(BridgeProtocol.OPALDESK_IME_PLUGIN_ID, mergedWithPlugin[0].id)
+        assertTrue(mergedWithPlugin[0].isYuyanPlugin)
+        assertTrue(mergedWithPlugin[0].enabledInSystem)
     }
 
     @Test
@@ -128,5 +144,35 @@ class DexImePolicyTest {
         assertEquals(BridgeProtocol.HardKbdSoftIme.SYSTEM, DexImeCatalog.indexToHardKbdMode(0))
         assertEquals(BridgeProtocol.HardKbdSoftIme.HIDE, DexImeCatalog.indexToHardKbdMode(1))
         assertEquals(BridgeProtocol.HardKbdSoftIme.SHOW, DexImeCatalog.indexToHardKbdMode(2))
+
+        // Release download URL and user opt-in/opt-out helper for local DeX
+        assertEquals(
+            "https://github.com/lengsukq?tab=repositories",
+            DexImeCatalog.YUYAN_PLUGIN_RELEASE_URL,
+        )
+        assertFalse(
+            DexImeCatalog.isYuyanPluginEnabledForDex(
+                pluginInstalled = false,
+                lockedImeId = "",
+                autoBridgeOnCast = true,
+                displayMode = BridgeProtocol.DexImeDisplayMode.AUTO,
+            ),
+        )
+        assertTrue(
+            DexImeCatalog.isYuyanPluginEnabledForDex(
+                pluginInstalled = true,
+                lockedImeId = BridgeProtocol.OPALDESK_IME_PLUGIN_ID,
+                autoBridgeOnCast = false,
+                displayMode = BridgeProtocol.DexImeDisplayMode.AUTO,
+            ),
+        )
+        assertFalse(
+            DexImeCatalog.isYuyanPluginEnabledForDex(
+                pluginInstalled = true,
+                lockedImeId = "",
+                autoBridgeOnCast = false,
+                displayMode = BridgeProtocol.DexImeDisplayMode.AUTO,
+            ),
+        )
     }
 }

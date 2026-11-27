@@ -23,12 +23,25 @@ public final class BridgeProtocol {
     public static final String OPALDESK_BRIDGE_IME_ID =
             io.github.lengsukq.opaldesk.daemon.BridgeBuildConfig.HELPER_PACKAGE + OPALDESK_BRIDGE_IME_SERVICE_SUFFIX;
 
+    /** Optional standalone same-cert Yuyan/Rime companion IME plugin APK. */
+    public static final String OPALDESK_IME_PLUGIN_PACKAGE = "io.github.lengsukq.opaldesk.ime";
+    public static final String OPALDESK_IME_PLUGIN_SERVICE_SUFFIX = "/.OpalYuyanImeService";
+    public static final String OPALDESK_IME_PLUGIN_ID =
+            OPALDESK_IME_PLUGIN_PACKAGE + OPALDESK_IME_PLUGIN_SERVICE_SUFFIX;
+
+    public static boolean isManagedOpalImeId(String imeId) {
+        if (imeId == null || imeId.isEmpty()) return false;
+        String clean = imeId.trim();
+        return OPALDESK_BRIDGE_IME_ID.equals(clean) || OPALDESK_IME_PLUGIN_ID.equals(clean);
+    }
+
     public static final String PROVIDER_METHOD_SET_BINDER = "setBinder";
     public static final String PROVIDER_METHOD_SYNC_SCENE = "syncScene";
     public static final String PROVIDER_METHOD_PAIRING_EVENT = "pairingEvent";
     public static final String PROVIDER_METHOD_IME_REQUEST = "imeRequest";
     public static final String PROVIDER_METHOD_IME_COMMIT_TEXT = "imeCommitText";
     public static final String PROVIDER_METHOD_REMOTE_STATE_CHANGED = "remoteStateChanged";
+    public static final String PROVIDER_METHOD_PLUGIN_IME_SYNC = "pluginImeSync";
 
     public static final String EXTRA_SYNC_SCENE_JSON = "sceneJson";
     public static final String EXTRA_SYNC_STATE_SEQ = "stateSeq";
@@ -84,7 +97,15 @@ public final class BridgeProtocol {
     public static final int TX_SET_DEX_IME_CONFIG = 46;
     public static final int TX_SET_DEX_IME_SESSION_ACTIVE = 47;
     public static final int TX_GET_SYSTEM_IME_STATE = 48;
+    public static final int TX_NOTIFY_BRIDGE_IME_EVENT = 49;
     public static final int TX_SHUTDOWN = 99;
+
+    // ---- Built-in / Companion Plugin IME Event Codes (TX_NOTIFY_BRIDGE_IME_EVENT) ----
+    public static final int BRIDGE_IME_EVT_START_INPUT = 1;
+    public static final int BRIDGE_IME_EVT_SHOW_REQUESTED = 2;
+    public static final int BRIDGE_IME_EVT_HIDE_OR_FINISH = 3;
+    public static final int BRIDGE_IME_EVT_YIELD_TO_DISPLAY0 = 4;
+    public static final int BRIDGE_IME_EVT_PLUGIN_PKG_CHANGED = 5;
 
     // ---- Downlink Audio Routing Modes (OpalCast DeX) ----
     /** Legacy/default: capture all system playback audio (REMOTE_SUBMIX) to DeX receiver. */

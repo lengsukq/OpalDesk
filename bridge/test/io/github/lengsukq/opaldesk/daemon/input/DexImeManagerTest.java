@@ -315,4 +315,73 @@ public class DexImeManagerTest {
         assertEquals("", mgr.getBackedUpOriginalImeId());
         assertFalse(cfg.getImeBackupFile().exists());
     }
+
+    @Test
+    public void autoEnablesOptionalYuyanPluginOnDexWhenInstalledAndYieldsOnDisplay0() throws Exception {
+        DaemonConfig cfg = newTempConfig();
+        FakeImeBridge bridge = new FakeImeBridge();
+        final boolean[] pluginInstalled = new boolean[] { false };
+        DexImeManager mgr = new DexImeManager(cfg, new DexImeManager.SystemImeBridge() {
+            @Override public String getDefaultInputMethodId() { return bridge.getDefaultInputMethodId(); }
+            @Override public List<String> listEnabledInputMethodIds() { return bridge.listEnabledInputMethodIds(); }
+            @Override public boolean setDefaultInputMethodId(String imeId) { return bridge.setDefaultInputMethodId(imeId); }
+            @Override public int getShowImeWithHardKeyboard() { return bridge.getShowImeWithHardKeyboard(); }
+            @Override public boolean setShowImeWithHardKeyboard(int value) { return bridge.setShowImeWithHardKeyboard(value); }
+            @Override public boolean isImePluginVerifiedAndInstalled() { return pluginInstalled[0]; }
+        });
+
+        // 1. Plugin NOT installed: entering local DeX in AUTO mode leaves user's phone IME (Sogou) untouched!
+        mgr.setClientDexSessionActive(true);
+        assertEquals(IME_SOGOU, bridge.currentIme);
+        assertFalse(mgr.isBridgeImeCurrentlyActive());
+        assertFalse(mgr.isPluginImeInstalledSafe());
+
+        // 2. User installs same-cert io.github.lengsukq.opaldesk.ime plugin APK at runtime -> hot-enables!
+        pluginInstalled[0] = true;
+        mgr.onPluginPackageChanged();
+        assertEquals(BridgeProtocol.OPALDESK_IME_PLUGIN_ID, bridge.currentIme);
+        assertTrue(mgr.isBridgeImeCurrentlyActive());
+        assertTrue(mgr.isPluginImeInstalledSafe());
+        assertEquals(IME_SOGOU, mgr.getBackedUpOriginalImeId());
+
+        // 3. User taps an EditText on Phone Display 0 while DeX is on external monitor -> yields back to Sogou!
+        assertEquals(IME_SOGOU, mgr.yieldToDisplay0OriginalIme());
+        assertEquals(IME_SOGOU, bridge.currentIme);
+        assertTrue(mgr.isYieldedToDisplay0());
+
+        // 4. User taps or types back inside a DeX window -> reclaims Yuyan plugin automatically!
+        mgr.reclaimBridgeImeIfYielded();
+        assertFalse(mgr.isYieldedToDisplay0());
+        assertEquals(BridgeProtocol.OPALDESK_IME_PLUGIN_ID, bridge.currentIme);
+
+        // 4b. User freely opts OUT of using built-in Yuyan plugin on local DeX without uninstalling it!
+        cfg.updateDexImeConfig(
+                BridgeProtocol.DEX_IME_DISPLAY_AUTO,
+                "",
+                false,
+                BridgeProtocol.HARD_KBD_SOFT_IME_SYSTEM,
+                false);
+        mgr.onConfigUpdated();
+        assertEquals(IME_SOGOU, bridge.currentIme);
+        assertFalse(mgr.isBridgeImeCurrentlyActive());
+
+        // Re-enabling explicitly restores Yuyan plugin immediately on local DeX!
+        cfg.updateDexImeConfig(
+                BridgeProtocol.DEX_IME_DISPLAY_AUTO,
+                BridgeProtocol.OPALDESK_IME_PLUGIN_ID,
+                false,
+                BridgeProtocol.HARD_KBD_SOFT_IME_SYSTEM,
+                true);
+        mgr.onConfigUpdated();
+        assertEquals(BridgeProtocol.OPALDESK_IME_PLUGIN_ID, bridge.currentIme);
+
+        // 5. User uninstalls plugin while in DeX -> seamlessly restores Sogou!
+        pluginInstalled[0] = false;
+        mgr.onPluginPackageChanged();
+        assertEquals(IME_SOGOU, bridge.currentIme);
+        assertFalse(mgr.isPluginImeInstalledSafe());
+
+        mgr.setClientDexSessionActive(false);
+        assertEquals(IME_SOGOU, bridge.currentIme);
+    }
 }

@@ -1,27 +1,39 @@
 package io.github.lengsukq.opaldesk.protocol
 
+import android.content.Context
+import android.content.pm.PackageManager
 import android.os.IBinder
 import android.os.Process
 import android.util.Log
 
 /**
  * ABI-aligned Kotlin mirror of {@code io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol}
- * and caller UID / Binder descriptor trust verification.
+ * and caller UID / Binder descriptor / same-cert plugin trust verification.
  */
 object BridgeProtocol {
     const val PROTOCOL_VERSION = 2
     const val BINDER_DESC = "io.github.lengsukq.opaldesk.daemon.IBridgeControl"
+    const val PLUGIN_IME_BINDER_DESC = "io.github.lengsukq.opaldesk.ime.IOpalImePluginSession"
     const val CTL_SOCKET_NAME = "io.github.lengsukq.opaldesk.daemon.ctl"
     const val ACTION_NEED_BINDER = "io.github.lengsukq.opaldesk.daemon.NEED_BINDER"
 
     const val PROVIDER_AUTHORITY = "io.github.lengsukq.opaldesk.provider"
     const val OPALDESK_BRIDGE_IME_ID = "io.github.lengsukq.opaldesk/.ime.OpalDeskImeService"
+    const val OPALDESK_IME_PLUGIN_PACKAGE = "io.github.lengsukq.opaldesk.ime"
+    const val OPALDESK_IME_PLUGIN_ID = "io.github.lengsukq.opaldesk.ime/.OpalYuyanImeService"
+
+    fun isManagedOpalImeId(imeId: String?): Boolean {
+        val clean = imeId?.trim().orEmpty()
+        return clean == OPALDESK_BRIDGE_IME_ID || clean == OPALDESK_IME_PLUGIN_ID
+    }
+
     const val PROVIDER_METHOD_SET_BINDER = "setBinder"
     const val PROVIDER_METHOD_SYNC_SCENE = "syncScene"
     const val PROVIDER_METHOD_PAIRING_EVENT = "pairingEvent"
     const val PROVIDER_METHOD_IME_REQUEST = "imeRequest"
     const val PROVIDER_METHOD_IME_COMMIT_TEXT = "imeCommitText"
     const val PROVIDER_METHOD_REMOTE_STATE_CHANGED = "remoteStateChanged"
+    const val PROVIDER_METHOD_PLUGIN_IME_SYNC = "pluginImeSync"
 
     const val EXTRA_CALLBACK_BINDER = "cb"
     const val EXTRA_PROC_TOKEN = "proc"
@@ -74,7 +86,34 @@ object BridgeProtocol {
         const val SET_DEX_IME_CONFIG = 46
         const val SET_DEX_IME_SESSION_ACTIVE = 47
         const val GET_SYSTEM_IME_STATE = 48
+        const val NOTIFY_BRIDGE_IME_EVENT = 49
         const val SHUTDOWN = 99
+    }
+
+    object BridgeImeEvent {
+        const val START_INPUT = 1
+        const val SHOW_REQUESTED = 2
+        const val HIDE_OR_FINISH = 3
+        const val YIELD_TO_DISPLAY0 = 4
+        const val PLUGIN_PKG_CHANGED = 5
+    }
+
+    object PluginImeTx {
+        const val COMMIT_TEXT = 1
+        const val SOFT_KEY_CHAR = 2
+        const val SOFT_SPECIAL_ACTION = 3
+        const val SELECT_CANDIDATE = 4
+        const val SEND_KEY_TAP = 5
+        const val SELECT_SCHEMA = 6
+
+        const val SPECIAL_BACKSPACE = 1
+        const val SPECIAL_SPACE = 2
+        const val SPECIAL_ENTER = 3
+        const val SPECIAL_TOGGLE_LANG = 4
+        const val SPECIAL_NEXT_PAGE = 5
+        const val SPECIAL_PREV_PAGE = 6
+        const val SPECIAL_DISMISS_COMPOSING = 7
+        const val SPECIAL_CYCLE_SCHEMA = 8
     }
 
     object DisplayImePolicy {
@@ -200,12 +239,34 @@ object IpcTrustVerifier {
     fun isTrustedCallerUid(uid: Int, selfUid: Int = Process.myUid()): Boolean =
         isTrustedDaemonUid(uid) || (selfUid >= 0 && uid == selfUid)
 
+    fun isTrustedSameCertPluginUid(ctx: Context?, callerUid: Int, selfUid: Int = Process.myUid()): Boolean {
+        if (ctx == null || callerUid <= 0 || selfUid <= 0) return false
+        if (callerUid == selfUid) return true
+        return try {
+            val pm = ctx.packageManager
+            val pkgs = pm.getPackagesForUid(callerUid).orEmpty()
+            if (!pkgs.contains(BridgeProtocol.OPALDESK_IME_PLUGIN_PACKAGE)) return false
+            pm.checkSignatures(selfUid, callerUid) == PackageManager.SIGNATURE_MATCH
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     fun isValidDaemonBinder(binder: IBinder?): Boolean {
         if (binder == null || !binder.pingBinder()) return false
         return try {
             binder.interfaceDescriptor == BridgeProtocol.BINDER_DESC
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to verify daemon binder descriptor", t)
+            false
+        }
+    }
+
+    fun isValidPluginImeBinder(binder: IBinder?): Boolean {
+        if (binder == null || !binder.pingBinder()) return false
+        return try {
+            binder.interfaceDescriptor == BridgeProtocol.PLUGIN_IME_BINDER_DESC
+        } catch (_: Throwable) {
             false
         }
     }

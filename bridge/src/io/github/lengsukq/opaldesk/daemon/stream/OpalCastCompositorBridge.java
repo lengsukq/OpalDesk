@@ -242,6 +242,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     private DisplayManager.DisplayListener mirrorDisplayListener;
     private volatile Runnable remoteStateChangeListener;
     private volatile DirectImeTextCommitter directImeCommitter;
+    private volatile java.util.function.BooleanSupplier bridgeImeActiveSupplier = () -> false;
 
     public OpalCastCompositorBridge(
             AndroidServices services,
@@ -291,6 +292,15 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
 
     public void setDirectImeTextCommitter(DirectImeTextCommitter committer) {
         this.directImeCommitter = committer;
+    }
+
+    public void setBridgeImeActiveSupplier(java.util.function.BooleanSupplier supplier) {
+        this.bridgeImeActiveSupplier = supplier != null ? supplier : () -> false;
+    }
+
+    private boolean isBridgeImeActive() {
+        java.util.function.BooleanSupplier sup = this.bridgeImeActiveSupplier;
+        return sup != null && sup.getAsBoolean();
     }
 
     private void notifyRemoteStateChanged() {
@@ -431,14 +441,17 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         if (services == null || config == null) return;
         int mode = config.getDexImeDisplayMode();
         boolean muteHost = config.isMuteHostImeOnCast();
+        boolean bridgeImeActive = isBridgeImeActive();
         for (ActiveRemoteSession s : new ArrayList<>(sessions.values())) {
             if (s == null || s.closed || s.isMirror() || s.displayId <= 0) continue;
-            int policy = MouseRoutingPolicy.resolveRemoteOuterDisplayImePolicy(mode, muteHost, s.vdTrusted);
+            int policy = MouseRoutingPolicy.resolveRemoteOuterDisplayImePolicy(
+                    mode, muteHost, s.vdTrusted, bridgeImeActive);
             boolean ok = services.setDisplayImePolicy(s.displayId, policy);
             System.out.println("OPALDESK_REMOTE_VD_IME_POLICY sid=" + s.sessionId
                     + " displayId=" + s.displayId
                     + " policy=" + policy
                     + " trusted=" + s.vdTrusted
+                    + " bridgeIme=" + bridgeImeActive
                     + " ok=" + ok);
         }
     }
@@ -458,8 +471,50 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         }
     }
 
+    /**
+     * Zero-latency callback invoked directly when {@code OpalDeskImeService.onShowInputRequested}
+     * fires on a managed {@code OpalWin-*} or standalone {@code OpalDesk-App-*} VirtualDisplay.
+     */
+    public void onBridgeImeShowRequested(int imeDisplayId, String pkg, int rawInputType) {
+        if (imeDisplayId <= 0) return;
+        int hostType = ImmsDumpInspector.sanitizeHostInputType(rawInputType);
+        for (ActiveRemoteSession s : sessions.values()) {
+            if (s != null && !s.closed && s.standalone && s.displayId == imeDisplayId) {
+                server.sendImeRequest(s.sessionId, true, hostType);
+                return;
+            }
+        }
+        int deskSid = desktopSessionId;
+        ActiveRemoteSession desk = (deskSid > 0) ? sessions.get(deskSid) : null;
+        if (desk != null && !desk.closed && !desk.isMirror()) {
+            WindowSession focused = compositor.getFocusedLiveWindow();
+            if ((focused != null && focused.displayId == imeDisplayId) || desk.displayId == imeDisplayId) {
+                server.sendImeRequest(deskSid, true, hostType);
+            }
+        }
+    }
+
+    /** Zero-latency hide callback paired with {@link #onBridgeImeShowRequested(int, String, int)}. */
+    public void onBridgeImeHideRequested(int imeDisplayId) {
+        if (imeDisplayId <= 0) return;
+        for (ActiveRemoteSession s : sessions.values()) {
+            if (s != null && !s.closed && s.standalone && s.displayId == imeDisplayId) {
+                server.sendImeRequest(s.sessionId, false, 0);
+                return;
+            }
+        }
+        int deskSid = desktopSessionId;
+        ActiveRemoteSession desk = (deskSid > 0) ? sessions.get(deskSid) : null;
+        if (desk != null && !desk.closed && !desk.isMirror()) {
+            WindowSession focused = compositor.getFocusedLiveWindow();
+            if ((focused != null && focused.displayId == imeDisplayId) || desk.displayId == imeDisplayId) {
+                server.sendImeRequest(deskSid, false, 0);
+            }
+        }
+    }
+
     private void scheduleStandaloneImeProbe(ActiveRemoteSession s, long tapDownMs) {
-        if (s == null || !s.standalone || s.closed || s.displayId <= 0) return;
+        if (s == null || !s.standalone || s.closed || s.displayId <= 0 || isBridgeImeActive()) return;
         final long gen = ++s.imeProbeGen;
         final int targetDisplayId = s.displayId;
         worker.execute(() -> {
@@ -654,6 +709,9 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             s.mouseButtons = msg.buttons != 0 ? msg.buttons : MotionEvent.BUTTON_PRIMARY;
             s.mouseDownTimeMs = now;
             androidAction = MotionEvent.ACTION_DOWN;
+            if ((s.standalone || s.isMirror()) && !localHostTextFieldFocused && services != null) {
+                services.focusDisplay(targetDisplayId);
+            }
         } else if (msg.action == OpalCastProtocol.MOUSE_BUTTON_UP) {
             s.mouseButtons = msg.buttons;
             androidAction = MotionEvent.ACTION_UP;
@@ -722,7 +780,12 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         } else if (action == OpalCastProtocol.TOUCH_POINTER_UP) {
             action = MotionEvent.ACTION_POINTER_UP | (msg.actionIndex << MotionEvent.ACTION_POINTER_INDEX_SHIFT);
         }
-        if (msg.action == OpalCastProtocol.TOUCH_DOWN) s.touchDownTimeMs = now;
+        if (msg.action == OpalCastProtocol.TOUCH_DOWN) {
+            s.touchDownTimeMs = now;
+            if ((s.standalone || s.isMirror()) && !localHostTextFieldFocused && services != null) {
+                services.focusDisplay(targetDisplayId);
+            }
+        }
         MotionEvent ev = MotionEvent.obtain(
                 s.touchDownTimeMs > 0L ? s.touchDownTimeMs : now,
                 now, action, count, props, coords,
@@ -1219,7 +1282,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             bindVirtualDisplayMetadataLocked(s, vd);
             if (!s.isMirror()) {
                 int remoteImePolicy = MouseRoutingPolicy.resolveRemoteOuterDisplayImePolicy(
-                        config.getDexImeDisplayMode(), config.isMuteHostImeOnCast(), s.vdTrusted);
+                        config.getDexImeDisplayMode(), config.isMuteHostImeOnCast(), s.vdTrusted, isBridgeImeActive());
                 services.configureVirtualDisplayWindowing(s.displayId, remoteImePolicy);
             }
 
@@ -1385,7 +1448,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                         s.vdTrusted = (chosenFlags[0] & BridgeProtocol.VD_FLAG_TRUSTED) != 0;
                         bindVirtualDisplayMetadataLocked(s, dexVd);
                         int remoteImePolicy = MouseRoutingPolicy.resolveRemoteOuterDisplayImePolicy(
-                                config.getDexImeDisplayMode(), config.isMuteHostImeOnCast(), s.vdTrusted);
+                                config.getDexImeDisplayMode(), config.isMuteHostImeOnCast(), s.vdTrusted, isBridgeImeActive());
                         services.configureVirtualDisplayWindowing(s.displayId, remoteImePolicy);
                         s.displayMode = OpalCastProtocol.DISPLAY_MODE_DEX;
                         s.width = alignedW;

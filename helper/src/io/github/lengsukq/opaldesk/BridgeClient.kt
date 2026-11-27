@@ -122,6 +122,8 @@ object BridgeClient {
     @Volatile
     private var localDesktopMousePinned: Boolean = false
 
+    fun isLocalDesktopPinned(): Boolean = localDesktopMousePinned
+
     @Suppress("DEPRECATION")
     fun onTrimMemory(level: Int) {
         when {
@@ -1439,6 +1441,51 @@ object BridgeClient {
         ioExec.execute {
             val state = refreshDexImeState()
             if (onDone != null) mainHandler.post { onDone(state) }
+        }
+    }
+
+    /**
+     * Reports a 0ms event from [io.github.lengsukq.opaldesk.ime.OpalDeskImeService] to the daemon
+     * so remote OpalCast clients receive instant keyboard show/hide triggers without polling.
+     */
+    fun notifyBridgeImeEventAsync(
+        eventType: Int,
+        imeDisplayId: Int,
+        inputType: Int = 0,
+        pkg: String = "",
+        onYieldResult: ((String) -> Unit)? = null,
+    ) {
+        inputExec.execute {
+            val svc = getService()
+            if (svc == null) {
+                if (onYieldResult != null) mainHandler.post { onYieldResult("") }
+                return@execute
+            }
+            val oneway = onYieldResult == null && eventType != BridgeProtocol.BridgeImeEvent.YIELD_TO_DISPLAY0
+            val yieldedImeId = transact(
+                svc,
+                BridgeProtocol.Tx.NOTIFY_BRIDGE_IME_EVENT,
+                oneway = oneway,
+                writeArgs = { d ->
+                    d.writeInt(eventType)
+                    d.writeInt(imeDisplayId)
+                    d.writeInt(inputType)
+                    d.writeString(pkg)
+                },
+            ) { r ->
+                if (!oneway) {
+                    r.readInt()
+                    if (r.dataAvail() > 0) r.readString().orEmpty() else ""
+                } else {
+                    ""
+                }
+            }.orEmpty()
+            if (eventType == BridgeProtocol.BridgeImeEvent.YIELD_TO_DISPLAY0) {
+                ioExec.execute { refreshDexImeState() }
+            }
+            if (onYieldResult != null) {
+                mainHandler.post { onYieldResult(yieldedImeId) }
+            }
         }
     }
 

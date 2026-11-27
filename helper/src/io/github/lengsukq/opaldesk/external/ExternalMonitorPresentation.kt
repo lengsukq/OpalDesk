@@ -150,17 +150,22 @@ class ExternalMonitorPresentation(
                     val uiScale by AppPrefs.externalUiScaleFlow.collectAsState()
                     val overscanPct by AppPrefs.externalOverscanPctFlow.collectAsState()
                     val status by BridgeClient.statusFlow.collectAsState()
+                    val imeState by BridgeClient.imeStateFlow.collectAsState()
                     val scene by BridgeClient.sceneFlow.collectAsState()
                     val imeRequest by BridgeClient.imeBridgeRequestFlow.collectAsState()
                     val localTextFieldFocused by OpalImeFocusTracker.localComposeTextFieldFocusedFlow.collectAsState()
+                    val pluginState by io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.pluginStateFlow.collectAsState()
+                    val pluginSoftKbdVisible by io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.softKeyboardVisibleFlow.collectAsState()
                     val controller = rememberNativeImeHostController()
                     imeController = controller
                     val focusedLiveDisplayId = scene.focusedWindow
                         ?.takeIf { !it.isMinimized && it.isLive }
                         ?.displayId ?: -1
-                    val avoidFocusSteal = WorkstationKeyDispatcher.shouldAvoidPresentationFocusSteal(
+                    val avoidFocusSteal = WorkstationKeyDispatcher.shouldSetCompositorWindowNotFocusable(
                         focusedWindowDisplayId = focusedLiveDisplayId,
                         keyboardRoutedDisplayId = scene.keyboardRoutedDisplayId,
+                        bridgeImeActive = imeState.bridgeImeActive ||
+                            imeState.effectiveWindowImePolicy == io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DisplayImePolicy.LOCAL,
                         localOverlayNeedsFocus = localOverlayNeedsFocus,
                         localTextFieldFocused = localTextFieldFocused,
                         hostSoftImeVisible = imeVisible,
@@ -195,6 +200,13 @@ class ExternalMonitorPresentation(
                         val req = imeRequest ?: return@LaunchedEffect
                         if (req.seq <= lastHandledImeSeq) return@LaunchedEffect
                         lastHandledImeSeq = req.seq
+                        if (io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.isPluginSessionConnected) {
+                            if (!req.show) {
+                                io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.hideSoftKeyboard()
+                                if (imeVisible) controller.hideKeyboard()
+                            }
+                            return@LaunchedEffect
+                        }
                         if (req.show) {
                             val activeHere = isShowing &&
                                 ownLifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
@@ -213,8 +225,11 @@ class ExternalMonitorPresentation(
                     }
                     LaunchedEffect(scene.focusedWindow?.windowId, scene.focusedWindow?.isMinimized) {
                         val focused = scene.focusedWindow
-                        if (imeVisible && !OpalImeFocusTracker.localComposeTextFieldFocused && (focused == null || focused.isMinimized)) {
-                            controller.hideKeyboard()
+                        if (focused == null || focused.isMinimized) {
+                            io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.hideSoftKeyboard()
+                            if (imeVisible && !OpalImeFocusTracker.localComposeTextFieldFocused) {
+                                controller.hideKeyboard()
+                            }
                         }
                     }
                     val baseDensity = LocalDensity.current
@@ -246,10 +261,14 @@ class ExternalMonitorPresentation(
                             OpalCompositorWorkspace(
                                 isExternalMonitor = true,
                                 externalMonitorSummary = monitorSummary,
-                                imeActive = imeVisible,
+                                imeActive = imeVisible || (pluginState.pluginConnected && pluginSoftKbdVisible),
                                 onToggleSoftKeyboard = {
-                                    if (!imeVisible) setPresentationNotFocusable(false)
-                                    controller.toggleKeyboard(imeVisible)
+                                    if (io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.isPluginSessionConnected) {
+                                        io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.toggleSoftKeyboard()
+                                    } else {
+                                        if (!imeVisible) setPresentationNotFocusable(false)
+                                        controller.toggleKeyboard(imeVisible)
+                                    }
                                 },
                                 onLocalOverlayNeedsFocusChanged = { localOverlayNeedsFocus = it },
                                 virtualCursorPx = if (pointerDispatcher.showVirtualCursorState.value) {

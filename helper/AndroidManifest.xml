@@ -27,6 +27,10 @@
         <intent>
             <action android:name="android.view.InputMethod" />
         </intent>
+        <package android:name="io.github.lengsukq.opaldesk.ime" />
+        <package android:name="com.yuyan.pinyin.offline.release" />
+        <package android:name="com.yuyan.pinyin.online.release" />
+        <package android:name="com.yuyan.pinyin" />
         <package android:name="moe.shizuku.privileged.api" />
     </queries>
 

@@ -129,6 +129,8 @@ public final class ExternalMouseRouter {
     private volatile int focusedWindowDisplayId = -1;
     private volatile String focusedWindowUniqueId = null;
     private volatile int keyboardRoutedDisplayId = -1;
+    private volatile boolean comboKeyboardBoundToOuter = false;
+    private volatile boolean bridgeImeActive = false;
     private volatile boolean localImeActive = false;
     private volatile boolean remoteDesktopActive = false;
     private int imePolicyOverriddenDisplayId = -1;
@@ -185,6 +187,25 @@ public final class ExternalMouseRouter {
     /** Returns the {@code OpalWin-*} displayId currently bound to a physical keyboard directly, or {@code -1}. */
     public int getKeyboardRoutedDisplayId() {
         return keyboardRoutedDisplayId;
+    }
+
+    /**
+     * Returns {@code true} when a sole-pointer keyboard+touchpad combo (such as a K400 receiver
+     * without a separate mouse) is bound to the outer display and needs host key forwarding.
+     */
+    public boolean hasComboKeyboardBoundToOuterDisplay() {
+        return comboKeyboardBoundToOuter;
+    }
+
+    public void setBridgeImeActive(boolean active) {
+        boolean changed;
+        synchronized (lock) {
+            changed = (bridgeImeActive != active);
+            bridgeImeActive = active;
+        }
+        if (changed) {
+            resyncBindings();
+        }
     }
 
     public void start() {
@@ -549,9 +570,12 @@ public final class ExternalMouseRouter {
         if (services == null || services.inputManager == null) return 0;
         int prevKbdRouted;
         int nextKbdRouted;
+        boolean prevComboOuter;
+        boolean nextComboOuter;
         int boundMouseCount;
         synchronized (lock) {
             prevKbdRouted = keyboardRoutedDisplayId;
+            prevComboOuter = comboKeyboardBoundToOuter;
             int outerDisplayId = -1;
             String outerUniqueId = null;
             int outerPort = -1;
@@ -588,11 +612,13 @@ public final class ExternalMouseRouter {
                     localImeActive,
                     dexImeMode,
                     focusedWindowDisplayId,
-                    focusedWindowUniqueId != null && !focusedWindowUniqueId.isEmpty());
+                    focusedWindowUniqueId != null && !focusedWindowUniqueId.isEmpty(),
+                    bridgeImeActive);
 
             if (outerDisplayId < 0 && !routeKbdToWindow) {
                 unbindLocked();
                 nextKbdRouted = keyboardRoutedDisplayId;
+                nextComboOuter = comboKeyboardBoundToOuter;
                 boundMouseCount = 0;
             } else {
                 int[] ids = null;
@@ -664,6 +690,7 @@ public final class ExternalMouseRouter {
                 }
 
                 Set<String> stillPresentKeys = new HashSet<>();
+                boolean sawComboKbdOnOuter = false;
                 for (Map.Entry<String, CandidateDevice> entry : candidatesByKey.entrySet()) {
                     String key = entry.getKey();
                     CandidateDevice cand = entry.getValue();
@@ -679,7 +706,8 @@ public final class ExternalMouseRouter {
                         desiredPort = -1;
                         boundAsMouse = false;
                         boundAsWindowKbd = true;
-                    } else if (cand.isMouse || (cand.isExternal && cand.keyboardType == MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC)) {
+                    } else if (MouseRoutingPolicy.shouldAssociateDeviceToOuterDisplay(
+                            cand.isMouse, cand.isWindowKbd, cand.isExternal, cand.keyboardType, bridgeImeActive)) {
                         if (outerDisplayId < 0) continue;
                         desiredDisplayId = outerDisplayId;
                         desiredUniqueId = outerUniqueId;
@@ -687,8 +715,8 @@ public final class ExternalMouseRouter {
                         boundAsMouse = cand.isMouse;
                         boundAsWindowKbd = false;
                     } else {
-                        // Built-in Pogo-Pin keyboard when not routing directly to a focused OpalWin-*
-                        // stays unassociated on Display 0.
+                        // Unassociated alphabetic keyboards follow mTopFocusedDisplayId naturally
+                        // across OpalWin-*, OpalDesk search fields, and Phone Display 0 apps!
                         continue;
                     }
 
@@ -702,6 +730,9 @@ public final class ExternalMouseRouter {
                             && ((desiredUniqueId == null && existing.displayUniqueId == null)
                                     || (desiredUniqueId != null && desiredUniqueId.equals(existing.displayUniqueId)));
                     if (sameTarget) {
+                        if (boundAsMouse && cand.keyboardType == MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC) {
+                            sawComboKbdOnOuter = true;
+                        }
                         continue;
                     }
                     if (existing != null) {
@@ -710,6 +741,9 @@ public final class ExternalMouseRouter {
                     }
                     int kind = bindSingle(cand.descriptor, cand.location, desiredUniqueId, desiredPort);
                     if (kind > 0) {
+                        if (boundAsMouse && cand.keyboardType == MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC) {
+                            sawComboKbdOnOuter = true;
+                        }
                         boundByKey.put(key, new BoundMouse(
                                 cand.descriptor,
                                 cand.location,
@@ -749,11 +783,13 @@ public final class ExternalMouseRouter {
                     }
                 }
                 keyboardRoutedDisplayId = routedDisp;
+                comboKeyboardBoundToOuter = sawComboKbdOnOuter;
                 nextKbdRouted = routedDisp;
+                nextComboOuter = sawComboKbdOnOuter;
                 boundMouseCount = getBoundMouseCount();
             }
         }
-        if (prevKbdRouted != nextKbdRouted) {
+        if (prevKbdRouted != nextKbdRouted || prevComboOuter != nextComboOuter) {
             KeyboardRoutingListener listener = this.keyboardRoutingListener;
             if (listener != null) {
                 try {
@@ -906,6 +942,7 @@ public final class ExternalMouseRouter {
 
     private void unbindLocked() {
         keyboardRoutedDisplayId = -1;
+        comboKeyboardBoundToOuter = false;
         if (boundByKey.isEmpty()) return;
         for (BoundMouse bm : boundByKey.values()) {
             unbindSingle(bm);

@@ -8,11 +8,13 @@ import android.os.Binder
 import android.os.Bundle
 import android.util.Log
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
+import io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.IpcTrustVerifier
 
 /**
- * Receives daemon Binder handshakes (`setBinder`) and zero-roundtrip compositor scene pushes (`syncScene`).
+ * Receives daemon Binder handshakes (`setBinder`), zero-roundtrip compositor scene pushes (`syncScene`),
+ * and cert-verified companion YuyanIme plugin state syncs (`pluginImeSync`).
  */
 class BridgeProvider : ContentProvider() {
     companion object {
@@ -24,6 +26,15 @@ class BridgeProvider : ContentProvider() {
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
         val callerUid = Binder.getCallingUid()
+        if (method == BridgeProtocol.PROVIDER_METHOD_PLUGIN_IME_SYNC) {
+            if (!IpcTrustVerifier.isTrustedSameCertPluginUid(context, callerUid) &&
+                !IpcTrustVerifier.isTrustedCallerUid(callerUid)
+            ) {
+                Log.w(TAG, "Rejected pluginImeSync from untrusted uid=$callerUid")
+                return Bundle().apply { putBoolean("ok", false) }
+            }
+            return OpalDeskImeChannel.handlePluginProviderSync(arg.orEmpty(), extras)
+        }
         if (!IpcTrustVerifier.isTrustedCallerUid(callerUid)) {
             Log.w(TAG, "Rejected BridgeProvider.call($method) from untrusted uid=$callerUid")
             if (method == BridgeProtocol.PROVIDER_METHOD_SET_BINDER) {
@@ -101,7 +112,7 @@ class BridgeProvider : ContentProvider() {
         val committed = if (!BridgeService.sUserStopping && extras != null) {
             val text = extras.getString(BridgeProtocol.EXTRA_IME_COMMIT_TEXT).orEmpty()
             if (text.isNotEmpty()) {
-                io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.commitTextSync(
+                OpalDeskImeChannel.commitTextSync(
                     text = text,
                     rejectSelfPackage = false,
                 )

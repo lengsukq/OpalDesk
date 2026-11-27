@@ -128,6 +128,7 @@ class ExternalDesktopActivity : ComponentActivity() {
     private var runningInPresentationMode by mutableStateOf(false)
     private var activeIsWirelessDisplay by mutableStateOf(false)
     private var directImeVisible by mutableStateOf(false)
+    private var directLocalOverlayNeedsFocus by mutableStateOf(false)
     private var directComposingText by mutableStateOf("")
     private var directImeController: NativeImeHostController? = null
     private var pendingRecoveryRunnable: Runnable? = null
@@ -140,12 +141,13 @@ class ExternalDesktopActivity : ComponentActivity() {
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
         override fun onDisplayChanged(displayId: Int) {
-            val actualDisplayId = display?.displayId ?: Display.DEFAULT_DISPLAY
+            val activeDisp = this@ExternalDesktopActivity.display
+            val actualDisplayId = activeDisp?.displayId ?: Display.DEFAULT_DISPLAY
             if (!runningInPresentationMode
                 && actualDisplayId > Display.DEFAULT_DISPLAY
                 && displayId == actualDisplayId
             ) {
-                applyPreferredPeakDisplayMode(display)
+                applyPreferredPeakDisplayMode(activeDisp)
                 refreshDirectSessionMetadata(actualDisplayId)
             }
         }
@@ -181,7 +183,8 @@ class ExternalDesktopActivity : ComponentActivity() {
             },
         )
 
-        val currentDisplayId = display?.displayId ?: Display.DEFAULT_DISPLAY
+        val currentDisplayId = display?.displayId
+            ?: Display.DEFAULT_DISPLAY
         val requestedId = intent?.getIntExtra(EXTRA_TARGET_DISPLAY_ID, -1) ?: -1
         val requestedWireless = intent?.getBooleanExtra(EXTRA_IS_WIRELESS_DISPLAY, false) == true
         val shellLaunched = intent?.getBooleanExtra(EXTRA_SHELL_LAUNCHED, false) == true
@@ -502,8 +505,9 @@ class ExternalDesktopActivity : ComponentActivity() {
     }
 
     private fun bindDirectExtendedWorkspaceUi(currentDisplayId: Int) {
-        applyPreferredPeakDisplayMode(display)
-        val curMode = display?.mode
+        val activeDisp = display
+        applyPreferredPeakDisplayMode(activeDisp)
+        val curMode = activeDisp?.mode
         val defaultW = curMode?.physicalWidth?.coerceAtLeast(640) ?: resources.displayMetrics.widthPixels.coerceAtLeast(640)
         val defaultH = curMode?.physicalHeight?.coerceAtLeast(480) ?: resources.displayMetrics.heightPixels.coerceAtLeast(480)
         val dispatcher = ExternalPointerDispatcher(
@@ -542,10 +546,30 @@ class ExternalDesktopActivity : ComponentActivity() {
                     val curExtSession by ExternalTrackpadBridge.sessionFlow.collectAsState()
                     val remoteCursor by BridgeClient.remoteTrackpadCursorFlow.collectAsState()
                     val status by BridgeClient.statusFlow.collectAsState()
+                    val imeState by BridgeClient.imeStateFlow.collectAsState()
                     val scene by BridgeClient.sceneFlow.collectAsState()
                     val imeRequest by BridgeClient.imeBridgeRequestFlow.collectAsState()
+                    val localTextFieldFocused by OpalImeFocusTracker.localComposeTextFieldFocusedFlow.collectAsState()
+                    val pluginState by io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.pluginStateFlow.collectAsState()
+                    val pluginSoftKbdVisible by io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.softKeyboardVisibleFlow.collectAsState()
                     val imeController = rememberNativeImeHostController()
                     directImeController = imeController
+                    val focusedLiveDisplayId = scene.focusedWindow
+                        ?.takeIf { !it.isMinimized && it.isLive }
+                        ?.displayId ?: -1
+                    val directNotFocusable = !runningInPresentationMode &&
+                        WorkstationKeyDispatcher.shouldSetCompositorWindowNotFocusable(
+                            focusedWindowDisplayId = focusedLiveDisplayId,
+                            keyboardRoutedDisplayId = scene.keyboardRoutedDisplayId,
+                            bridgeImeActive = imeState.bridgeImeActive ||
+                                imeState.effectiveWindowImePolicy == BridgeProtocol.DisplayImePolicy.LOCAL,
+                            localOverlayNeedsFocus = directLocalOverlayNeedsFocus,
+                            localTextFieldFocused = localTextFieldFocused,
+                            hostSoftImeVisible = directImeVisible,
+                        )
+                    LaunchedEffect(directNotFocusable) {
+                        setDirectWindowNotFocusable(directNotFocusable)
+                    }
                     LaunchedEffect(status.targetFps) {
                         applyPreferredPeakDisplayMode(display, status.targetFps)
                     }
@@ -568,6 +592,13 @@ class ExternalDesktopActivity : ComponentActivity() {
                         val req = imeRequest ?: return@LaunchedEffect
                         if (req.seq <= lastHandledImeSeq) return@LaunchedEffect
                         lastHandledImeSeq = req.seq
+                        if (io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.isPluginSessionConnected) {
+                            if (!req.show) {
+                                io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.hideSoftKeyboard()
+                                if (directImeVisible) imeController.hideKeyboard()
+                            }
+                            return@LaunchedEffect
+                        }
                         if (req.show) {
                             val activeHere = !isFinishing && !isDestroyed && !runningInPresentationMode &&
                                 lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
@@ -577,6 +608,7 @@ class ExternalDesktopActivity : ComponentActivity() {
                                 (req.windowId <= 0 || req.windowId == focused.windowId) &&
                                 !OpalImeFocusTracker.localComposeTextFieldFocused
                             ) {
+                                setDirectWindowNotFocusable(false)
                                 imeController.showKeyboard(req.inputType)
                             }
                         } else if (directImeVisible) {
@@ -585,8 +617,11 @@ class ExternalDesktopActivity : ComponentActivity() {
                     }
                     LaunchedEffect(scene.focusedWindow?.windowId, scene.focusedWindow?.isMinimized) {
                         val focused = scene.focusedWindow
-                        if (directImeVisible && !OpalImeFocusTracker.localComposeTextFieldFocused && (focused == null || focused.isMinimized)) {
-                            imeController.hideKeyboard()
+                        if (focused == null || focused.isMinimized) {
+                            io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.hideSoftKeyboard()
+                            if (directImeVisible && !OpalImeFocusTracker.localComposeTextFieldFocused) {
+                                imeController.hideKeyboard()
+                            }
                         }
                     }
                     val baseDensity = LocalDensity.current
@@ -630,8 +665,16 @@ class ExternalDesktopActivity : ComponentActivity() {
                                 isExternalMonitor = true,
                                 externalMonitorSummary = directDisplaySummary,
                                 suppressFullscreenExitOverlay = curExtSession.isRemoteCastDisplay,
-                                imeActive = directImeVisible,
-                                onToggleSoftKeyboard = { imeController.toggleKeyboard(directImeVisible) },
+                                imeActive = directImeVisible || (pluginState.pluginConnected && pluginSoftKbdVisible),
+                                onToggleSoftKeyboard = {
+                                    if (io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.isPluginSessionConnected) {
+                                        io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.toggleSoftKeyboard()
+                                    } else {
+                                        if (!directImeVisible) setDirectWindowNotFocusable(false)
+                                        imeController.toggleKeyboard(directImeVisible)
+                                    }
+                                },
+                                onLocalOverlayNeedsFocusChanged = { directLocalOverlayNeedsFocus = it },
                                 virtualCursorPx = directCursor ?: remoteCursor,
                                 onPickCustomWallpaper = { wallpaperPicker.launch("image/*") },
                                 onOpenConsole = ::openConsoleOnPrimaryDisplay,
@@ -710,7 +753,8 @@ class ExternalDesktopActivity : ComponentActivity() {
             return ExternalDesktopSession()
         }
         val curDisplay = displayManager?.getDisplay(currentDisplayId)
-            ?: display?.takeIf { it.displayId == currentDisplayId }
+            ?: display
+                ?.takeIf { it.displayId == currentDisplayId }
         val curMode = curDisplay?.mode
         val realPt = android.graphics.Point()
         if (curDisplay != null) {
@@ -772,7 +816,8 @@ class ExternalDesktopActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        val currentDisplayId = display?.displayId ?: Display.DEFAULT_DISPLAY
+        val currentDisplayId = display?.displayId
+            ?: Display.DEFAULT_DISPLAY
         if (!runningInPresentationMode && currentDisplayId > Display.DEFAULT_DISPLAY) {
             targetDisplayId = currentDisplayId
             refreshDirectSessionMetadata(currentDisplayId)
@@ -950,10 +995,22 @@ class ExternalDesktopActivity : ComponentActivity() {
     private fun openConsoleOnPrimaryDisplay() {
         val intent = MainActivity.createLaunchIntent(this, fromDesktop = true)
         try {
-            val opts = ActivityOptions.makeBasic().setLaunchDisplayId(Display.DEFAULT_DISPLAY)
-            startActivity(intent, opts.toBundle())
+            val opts = android.app.ActivityOptions.makeBasic()
+                .setLaunchDisplayId(Display.DEFAULT_DISPLAY)
+                .toBundle()
+            startActivity(intent, opts)
         } catch (_: Throwable) {
             startActivity(intent)
+        }
+    }
+
+    private fun setDirectWindowNotFocusable(notFocusable: Boolean) {
+        val hasFlag = (window.attributes.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) != 0
+        if (notFocusable == hasFlag) return
+        if (notFocusable) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
         }
     }
 

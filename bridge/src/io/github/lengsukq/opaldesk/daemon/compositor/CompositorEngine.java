@@ -119,6 +119,7 @@ public final class CompositorEngine {
     private int nextZOrder = 1;
     private volatile IntConsumer backReconcileScheduler;
     private volatile java.util.function.IntSupplier keyboardRoutedDisplayIdSupplier;
+    private volatile java.util.function.BooleanSupplier comboKeyboardOuterSupplier;
 
     public CompositorEngine(
             DaemonConfig config,
@@ -137,6 +138,10 @@ public final class CompositorEngine {
 
     public void setKeyboardRoutedDisplayIdSupplier(java.util.function.IntSupplier supplier) {
         this.keyboardRoutedDisplayIdSupplier = supplier;
+    }
+
+    public void setComboKeyboardOuterSupplier(java.util.function.BooleanSupplier supplier) {
+        this.comboKeyboardOuterSupplier = supplier;
     }
 
     /** Notifies the engine that a Back key was dispatched to {@code windowId} so root-Back exit is detected immediately. */
@@ -1287,6 +1292,8 @@ public final class CompositorEngine {
             }
             java.util.function.IntSupplier kbdSup = this.keyboardRoutedDisplayIdSupplier;
             int kbdRoutedDisplayId = (kbdSup != null) ? kbdSup.getAsInt() : -1;
+            java.util.function.BooleanSupplier comboSup = this.comboKeyboardOuterSupplier;
+            boolean comboKbdOuter = comboSup != null && comboSup.getAsBoolean();
             return new SimpleJson.ObjectBuilder()
                     .put("seq", stateSeq.get())
                     .put("canvasW", config.getCanvasWidth())
@@ -1295,6 +1302,7 @@ public final class CompositorEngine {
                     .put("activeVdCount", vdPool.getActiveCount())
                     .put("maxVdCount", vdPool.getEffectiveMaxDisplays())
                     .put("kbdRoutedDisplayId", kbdRoutedDisplayId)
+                    .put("comboKbdOuter", comboKbdOuter)
                     .putRaw("windows", arr.build())
                     .build();
         }

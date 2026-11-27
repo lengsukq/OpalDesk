@@ -236,6 +236,12 @@ public final class BridgeBinderService extends Binder {
                     pressures[i] = data.readFloat();
                 }
                 WindowSession ws = compositor.getWindowSnapshot(winId);
+                if ((action & android.view.MotionEvent.ACTION_MASK) == android.view.MotionEvent.ACTION_DOWN
+                        && ws != null && !ws.focused) {
+                    inputRouter.releaseAllHeldKeys();
+                    compositor.performWindowAction(winId, BridgeProtocol.WIN_ACTION_FOCUS, null);
+                    ws = compositor.getWindowSnapshot(winId);
+                }
                 boolean ok = inputRouter.injectWindowMotion(
                         ws, action, downTime, eventTime, source, buttonState, actionButton,
                         hScroll, vScroll, ids, toolTypes, xs, ys, pressures);
@@ -617,15 +623,59 @@ public final class BridgeBinderService extends Binder {
                 boolean physKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
                 boolean physExt = mouseRouter != null && mouseRouter.hasPhysicalExternalDisplay();
                 boolean remoteDesktop = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
+                boolean bridgeImeActive = mgr != null && mgr.isBridgeImeConfiguredOrActive();
                 int effPolicy = io.github.lengsukq.opaldesk.daemon.input.MouseRoutingPolicy.resolveWindowDisplayImePolicy(
                         physKbd,
                         remoteDesktop,
                         true,
                         config.getDexImeDisplayMode(),
                         config.isMuteHostImeOnCast(),
-                        physExt);
+                        physExt,
+                        bridgeImeActive);
                 String json = (mgr != null) ? mgr.toStateJson(effPolicy, physKbd) : "{}";
                 if (reply != null) reply.writeString(json);
+                return true;
+            }
+            case BridgeProtocol.TX_NOTIFY_BRIDGE_IME_EVENT: {
+                int evtType = data.readInt();
+                int imeDisplayId = data.readInt();
+                int inputType = data.readInt();
+                String pkg = data.readString();
+                DexImeManager mgr = this.imeManager;
+                String yieldedImeId = "";
+                if (evtType == BridgeProtocol.BRIDGE_IME_EVT_YIELD_TO_DISPLAY0) {
+                    boolean localDesktopPinned = mouseRouter != null && mouseRouter.isLocalDesktopPinned();
+                    if (!localDesktopPinned && mgr != null) {
+                        yieldedImeId = mgr.yieldToDisplay0OriginalIme();
+                        Runnable sync = this.imePolicySyncTrigger;
+                        if (sync != null && !yieldedImeId.isEmpty()) {
+                            sync.run();
+                        }
+                    }
+                } else if (evtType == BridgeProtocol.BRIDGE_IME_EVT_PLUGIN_PKG_CHANGED) {
+                    if (helperBridge != null) {
+                        helperBridge.invalidateImePluginCache();
+                    }
+                    if (mgr != null) {
+                        mgr.onPluginPackageChanged();
+                    }
+                    Runnable sync = this.imePolicySyncTrigger;
+                    if (sync != null) {
+                        sync.run();
+                    }
+                } else if (evtType == BridgeProtocol.BRIDGE_IME_EVT_SHOW_REQUESTED) {
+                    if (remoteBridge != null) {
+                        remoteBridge.onBridgeImeShowRequested(imeDisplayId, pkg != null ? pkg : "", inputType);
+                    }
+                } else if (evtType == BridgeProtocol.BRIDGE_IME_EVT_HIDE_OR_FINISH) {
+                    if (remoteBridge != null) {
+                        remoteBridge.onBridgeImeHideRequested(imeDisplayId);
+                    }
+                }
+                if (reply != null) {
+                    reply.writeInt(1);
+                    reply.writeString(yieldedImeId != null ? yieldedImeId : "");
+                }
                 return true;
             }
             case BridgeProtocol.TX_SHUTDOWN: {

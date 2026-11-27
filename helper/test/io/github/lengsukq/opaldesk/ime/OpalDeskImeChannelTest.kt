@@ -179,4 +179,96 @@ class OpalDeskImeChannelTest {
         core.onServiceDetached(conn)
         assertFalse(core.currentEditorSnapshot().serviceBound)
     }
+
+    @Test
+    fun `evaluates Display 0 yield, touch vs mouse soft keyboard popup, and canvas caret mapping`() {
+        assertTrue(
+            OpalDeskImeChannelCore.shouldYieldToDisplay0OriginalIme(
+                imeDisplayId = 0,
+                localDesktopPinned = false,
+                acceptingText = true,
+                focusedLiveWindowPkg = "com.android.chrome",
+                focusedLiveWindowImePolicyLocal = true,
+                targetPkg = "com.tencent.mm",
+            ),
+        )
+        assertFalse(
+            OpalDeskImeChannelCore.shouldYieldToDisplay0OriginalIme(
+                imeDisplayId = 42,
+                localDesktopPinned = false,
+                acceptingText = true,
+                focusedLiveWindowPkg = "com.tencent.mm",
+                focusedLiveWindowImePolicyLocal = true,
+                targetPkg = "com.tencent.mm",
+            ),
+        )
+        assertFalse(
+            OpalDeskImeChannelCore.shouldYieldToDisplay0OriginalIme(
+                imeDisplayId = 0,
+                localDesktopPinned = true,
+                acceptingText = true,
+                focusedLiveWindowPkg = "com.tencent.mm",
+                focusedLiveWindowImePolicyLocal = true,
+                targetPkg = "com.tencent.mm",
+            ),
+        )
+
+        assertTrue(
+            OpalDeskImeChannelCore.shouldAutoShowCompositorSoftKeyboard(
+                acceptingText = true,
+                isRemoteCastDisplay = false,
+                physicalKeyboardDetected = true,
+                showImeWithHardKeyboardMode = io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM,
+                lastModality = InputModality.TOUCH,
+                msSinceLastPointerDown = 180L,
+            ),
+        )
+        assertFalse(
+            OpalDeskImeChannelCore.shouldAutoShowCompositorSoftKeyboard(
+                acceptingText = true,
+                isRemoteCastDisplay = false,
+                physicalKeyboardDetected = true,
+                showImeWithHardKeyboardMode = io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM,
+                lastModality = InputModality.MOUSE,
+                msSinceLastPointerDown = 120L,
+            ),
+        )
+
+        val win = io.github.lengsukq.opaldesk.protocol.CompositorWindow(
+            windowId = 7,
+            pkg = "com.tencent.mm",
+            activityClass = ".ui.LauncherUI",
+            title = "微信",
+            profileName = "DESKTOP",
+            profileCode = io.github.lengsukq.opaldesk.protocol.BridgeProtocol.Profile.DESKTOP,
+            state = io.github.lengsukq.opaldesk.protocol.BridgeProtocol.WinState.LIVE,
+            presentation = io.github.lengsukq.opaldesk.protocol.BridgeProtocol.Presentation.FLOATING,
+            frame = io.github.lengsukq.opaldesk.protocol.WindowRect(100, 60, 900, 696),
+            contentWidth = 1600,
+            contentHeight = 1200,
+            contentDpi = 240,
+            displayId = 42,
+            taskId = 10,
+            zOrder = 1,
+            focused = true,
+            snapshotVersion = 0L,
+            hasSnapshot = false,
+        )
+        val anchor = OpalDeskImeChannelCore.mapDisplayAnchorToCanvas(
+            window = win,
+            cursorAnchor = ImeCursorAnchorSnapshot(
+                valid = true,
+                insertionMarkerHorizontal = 800f,
+                insertionMarkerTop = 600f,
+                insertionMarkerBaseline = 628f,
+                insertionMarkerBottom = 640f,
+                imeDisplayId = 42,
+            ),
+            tapAnchor = WindowTapAnchor(),
+            headerHeightPx = 36,
+        )
+        assertTrue(anchor.valid)
+        assertEquals(500f, anchor.x, 0.5f)
+        assertEquals(396f, anchor.topY, 0.5f)
+    }
 }

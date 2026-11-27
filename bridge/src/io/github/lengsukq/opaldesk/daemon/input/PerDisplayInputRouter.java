@@ -35,6 +35,15 @@ public final class PerDisplayInputRouter {
         void onWindowTapUp(int windowId, int displayId, long tapDownUptimeMs);
     }
 
+    /**
+     * Callback invoked synchronously BEFORE {@code ACTION_DOWN} or {@code KeyEvent} is injected
+     * into a DeX {@code VirtualDisplay}, allowing {@code DexImeManager} to reclaim
+     * {@code OpalDeskImeService} immediately if Display 0 had temporarily borrowed the phone IME.
+     */
+    public interface DexInteractionListener {
+        void onDexDisplayInteraction(int displayId, boolean isTouch);
+    }
+
     /** Callback notified whenever effective input injection status changes (SYSTEM / UHID / BLOCKED). */
     public interface InjectStatusListener {
         void onInjectStatusChanged(int newStatus);
@@ -54,6 +63,7 @@ public final class PerDisplayInputRouter {
     private volatile java.util.function.BooleanSupplier hostMouseAnchoredProvider;
     private volatile int lastKeyTargetDisplayId = -1;
     private volatile TapUpListener tapUpListener;
+    private volatile DexInteractionListener dexInteractionListener;
 
     private int lastDownWinId = -1;
     private float lastDownX = 0f;
@@ -92,6 +102,20 @@ public final class PerDisplayInputRouter {
 
     public void setTapUpListener(TapUpListener listener) {
         this.tapUpListener = listener;
+    }
+
+    public void setDexInteractionListener(DexInteractionListener listener) {
+        this.dexInteractionListener = listener;
+    }
+
+    private void notifyDexInteraction(int displayId, boolean isTouch) {
+        DexInteractionListener listener = this.dexInteractionListener;
+        if (listener != null && displayId > 0) {
+            try {
+                listener.onDexDisplayInteraction(displayId, isTouch);
+            } catch (RuntimeException ignored) {
+            }
+        }
     }
 
     public void setInjectStatusListener(InjectStatusListener listener) {
@@ -205,9 +229,6 @@ public final class PerDisplayInputRouter {
 
         boolean triggerTapUpCheck = false;
         long tapDownTs = 0L;
-        // 0 = none, 1 = focusDisplayTaskOnly, 2 = focusDisplay (executed AFTER ACTION_UP dispatch
-        // so WMGlobalLock / wm_set_resumed_activity never churn mid-click before InputDispatcher sees UP).
-        int postDispatchFocusMode = 0;
         if (masked == MotionEvent.ACTION_DOWN) {
             ws.lastActiveAtMs = System.currentTimeMillis();
             lastDownWinId = ws.windowId;
@@ -215,10 +236,14 @@ public final class PerDisplayInputRouter {
             lastDownY = ys[0];
             lastDownUptimeMs = SystemClock.uptimeMillis();
             tapMovedTooFar = false;
+            notifyDexInteraction(ws.displayId, !isMouse);
             if (!localImeActive) {
-                // Focus the task inside its VirtualDisplay WITHOUT calling moveDisplayToTop mid-press,
-                // which would steal top display focus from Display 0 and abort external USB mouse clicks!
-                services.focusDisplayTaskOnly(ws.displayId);
+                // Establish top display focus BEFORE ACTION_DOWN reaches the app window so
+                // WindowManagerService.hasInputMethodClientFocus() is 100% true when EditText
+                // invokes IMM.showSoftInput() on ACTION_UP! Because all compositor host windows
+                // carry FLAG_NOT_FOCUSABLE and physical mice are display-associated, focusing
+                // ws.displayId here never hijacks hardware cursors or gets stolen back mid-click.
+                services.focusDisplay(ws.displayId);
             }
         } else if (masked == MotionEvent.ACTION_MOVE && ws.windowId == lastDownWinId && !tapMovedTooFar) {
             float dx = xs[0] - lastDownX;
@@ -229,25 +254,9 @@ public final class PerDisplayInputRouter {
         } else if (masked == MotionEvent.ACTION_UP) {
             ws.lastActiveAtMs = System.currentTimeMillis();
             boolean isTap = (ws.windowId == lastDownWinId && !tapMovedTooFar);
-            boolean mouseAnchored = isMouse
-                    && physicalKeyboardConnected
-                    && hostMouseAnchoredProvider != null
-                    && hostMouseAnchoredProvider.getAsBoolean();
             if (isTap) {
                 triggerTapUpCheck = !localImeActive;
                 tapDownTs = lastDownUptimeMs;
-            }
-            if (!localImeActive && (isTap || mouseAnchored)) {
-                if (isMouse && !mouseAnchored) {
-                    // Keep unanchored hardware mouse pointer on Display 0 / External Monitor while
-                    // TapUpListener still probes IMMS to raise NativeImeBridgeHost if an EditText focused.
-                    postDispatchFocusMode = 1;
-                } else {
-                    // Touch taps, or clicks/drags from a display-anchored mouse while a physical keyboard
-                    // is routed to this window: move top focus cleanly after ACTION_UP so the window's
-                    // local CJK IME stays bound without stealing an anchored hardware cursor.
-                    postDispatchFocusMode = 2;
-                }
             }
             lastDownWinId = -1;
         } else if (masked == MotionEvent.ACTION_CANCEL) {
@@ -327,11 +336,6 @@ public final class PerDisplayInputRouter {
         try {
             boolean ok = dispatchToDisplay(
                     ev, ws.displayId, ws.vdUniqueId, ws.contentWidth, ws.contentHeight, !isPassiveHover);
-            if (postDispatchFocusMode == 1) {
-                services.focusDisplayTaskOnly(ws.displayId);
-            } else if (postDispatchFocusMode == 2) {
-                services.focusDisplay(ws.displayId);
-            }
             if (ok && triggerTapUpCheck) {
                 TapUpListener listener = tapUpListener;
                 if (listener != null) {
@@ -358,6 +362,9 @@ public final class PerDisplayInputRouter {
             int repeatCount) {
         if (ws == null || !ws.isLive() || ws.displayId <= 0) return false;
         ws.lastActiveAtMs = System.currentTimeMillis();
+        if (action == KeyEvent.ACTION_DOWN) {
+            notifyDexInteraction(ws.displayId, false);
+        }
         int prevDisplay = lastKeyTargetDisplayId;
         if (prevDisplay > 0 && prevDisplay != ws.displayId) {
             releaseHeldKeysOnDisplay(prevDisplay);
@@ -436,10 +443,15 @@ public final class PerDisplayInputRouter {
         if (ev == null || displayId < 0) return false;
         boolean isPassiveHover = false;
         if (ev instanceof MotionEvent) {
-            int masked = ((MotionEvent) ev).getActionMasked();
+            MotionEvent me = (MotionEvent) ev;
+            int masked = me.getActionMasked();
             isPassiveHover = MouseRoutingPolicy.isPassiveHoverAction(masked);
             if (isPassiveHover && dispatcher.isUsingUhid()) {
                 return true;
+            }
+            if (displayId > 0 && masked == MotionEvent.ACTION_DOWN) {
+                boolean isMouse = (me.getSource() & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE;
+                notifyDexInteraction(displayId, !isMouse);
             }
         }
         return dispatchToDisplay(ev, displayId, vdUniqueId, dispW, dispH, !isPassiveHover);
@@ -449,6 +461,9 @@ public final class PerDisplayInputRouter {
     public boolean injectRawKeyToDisplay(
             int displayId, String vdUniqueId, int dispW, int dispH, int action, int keyCode, int metaState) {
         if (displayId < 0) return false;
+        if (displayId > 0 && action == KeyEvent.ACTION_DOWN) {
+            notifyDexInteraction(displayId, false);
+        }
         services.focusDisplay(displayId);
         long now = SystemClock.uptimeMillis();
         KeyEvent ev = new KeyEvent(

@@ -1458,6 +1458,15 @@ fun OpalCompositorWorkspace(
                 )
             }
 
+            // Cross-display Yuyan companion plugin Floating Candidate Bar + Desktop Soft Keyboard
+            io.github.lengsukq.opaldesk.ime.OpalCompositorImeOverlay(
+                focusedWindow = scene.focusedWindow,
+                canvasW = canvasW,
+                canvasH = canvasH,
+                dockInsetDp = if (fullscreenWin == null && dockVisible) effectiveDockInsetDp else 0f,
+                modifier = Modifier.zIndex(10_045f),
+            )
+
             // Crisp macOS Arrow Cursor Overlay (for External Monitor Presentation Trackpad / Mouse mode)
             virtualCursorPx?.let { pos ->
                 Box(modifier = Modifier.fillMaxSize().zIndex(10_050f)) {
