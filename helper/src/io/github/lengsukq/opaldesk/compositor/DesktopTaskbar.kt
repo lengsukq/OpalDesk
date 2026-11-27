@@ -367,73 +367,8 @@ fun MacDesktopMenuBar(
 
         Spacer(Modifier.width(8.dp))
 
-        if (showPhoneTrackpadButton) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(if (phoneTrackpadVisible) OpalPalette.AccentBlue.copy(alpha = 0.20f) else OpalPalette.ChipFill)
-                    .clickable(onClick = onTogglePhoneTrackpad)
-                    .padding(horizontal = if (isCompactWidth) 6.dp else 8.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(if (phoneTrackpadVisible) OpalPalette.AccentBlue else OpalPalette.TextMuted),
-                )
-                OpalText(
-                    text = if (isCompactWidth) "触控板" else "手机触控板",
-                    fontSize = 10.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (phoneTrackpadVisible) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
-                    maxLines = 1,
-                )
-            }
-            Spacer(Modifier.width(6.dp))
-        }
-
-        // Top-Bar Host Screen-Off Quick Toggle & Live Status Pill (External Display / Remote Cast)
-        if (showHostScreenToggle || hostScreenOff) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(
-                        if (hostScreenOff) OpalPalette.AccentEmerald.copy(alpha = 0.22f)
-                        else OpalPalette.ChipFill,
-                    )
-                    .clickable { onToggleHostScreenPower(hostScreenOff) }
-                    .padding(horizontal = if (isCompactWidth) 6.dp else 8.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(if (hostScreenOff) OpalPalette.AccentEmerald else OpalPalette.TextMuted),
-                )
-                OpalGlyphIcon(
-                    glyph = ChromeGlyph.SCREEN_OFF,
-                    tint = if (hostScreenOff) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
-                    size = 11.5.dp,
-                )
-                OpalText(
-                    text = when {
-                        hostScreenOff && isCompactWidth -> "已息屏"
-                        hostScreenOff -> "本机已息屏"
-                        isCompactWidth -> "息屏"
-                        else -> "本机息屏"
-                    },
-                    fontSize = 10.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (hostScreenOff) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
-                    maxLines = 1,
-                )
-            }
-            Spacer(Modifier.width(6.dp))
-        }
+        // Phone Trackpad & Host Screen-Off controls now live cleanly inside Control Center so the
+        // top Menu Bar stays uncluttered and never collides with remote PC/Web hover toolbars.
 
         // Top-Right Notification Center Bell Trigger
         Row(
@@ -1072,6 +1007,7 @@ fun MacControlCenterPopover(
     var orientationMode by remember(ctx) { mutableIntStateOf(ControlCenterActions.readOrientationMode(ctx)) }
     var selectedTab by remember(initialTab) { mutableIntStateOf(initialTab.coerceIn(0, 2)) } // 0=快捷, 1=窗口, 2=显示
     var showMoreTiling by remember { mutableStateOf(false) }
+    var showRemoteAdvanced by remember { mutableStateOf(false) }
 
     fun applyMediaVolume(target: Int) {
         val clamped = target.coerceIn(0, maxVolume)
@@ -1288,8 +1224,8 @@ fun MacControlCenterPopover(
                             )
                         } else if (showHostScreenToggle || hostScreenOff) {
                             ControlBentoTile(
-                                title = "本机熄屏",
-                                subtitle = if (hostScreenOff) "已熄屏省电" else "点击熄屏",
+                                title = "本机息屏",
+                                subtitle = if (hostScreenOff) "已息屏省电" else "点击息屏",
                                 active = hostScreenOff,
                                 accent = OpalPalette.AccentEmerald,
                                 iconContent = { tint ->
@@ -1307,65 +1243,50 @@ fun MacControlCenterPopover(
                         }
                     }
 
-                    // Quick External-Display IME Sync Row (1-tap for touchscreen external monitors)
-                    if (isExternalMonitor) {
+                    // External / Cast Quick Bento Row: Phone Trackpad + External Display IME Sync
+                    if (showPhoneTrackpadSection || isExternalMonitor) {
                         val imeLocalEnabled = dexImeDisplayMode == BridgeProtocol.DexImeDisplayMode.ALWAYS_LOCAL
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(infoCardShape)
-                                .background(
-                                    if (imeLocalEnabled) OpalPalette.AccentEmerald.copy(alpha = 0.14f)
-                                    else OpalPalette.ChipFill,
-                                )
-                                .border(
-                                    0.75.dp,
-                                    if (imeLocalEnabled) OpalPalette.AccentEmerald.copy(alpha = 0.45f)
-                                    else OpalPalette.BorderHairline,
-                                    infoCardShape,
-                                )
-                                .clickable { onToggleExternalImeSync(!imeLocalEnabled) }
-                                .padding(horizontal = 11.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                OpalGlyphIcon(
-                                    glyph = ChromeGlyph.KEYBOARD,
-                                    tint = if (imeLocalEnabled) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
-                                    size = 15.dp,
+                            if (showPhoneTrackpadSection) {
+                                ControlBentoTile(
+                                    title = "手机触控板",
+                                    subtitle = if (phoneTrackpadVisible) "运行中 · 点击关闭" else "点击开启",
+                                    active = phoneTrackpadVisible,
+                                    accent = OpalPalette.AccentBlue,
+                                    iconContent = { tint ->
+                                        OpalGlyphIcon(
+                                            glyph = ChromeGlyph.EXTERNAL_MONITOR,
+                                            tint = tint,
+                                            size = 14.dp,
+                                        )
+                                    },
+                                    onClick = onTogglePhoneTrackpad,
+                                    modifier = Modifier.weight(1f),
                                 )
-                                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                    OpalText(
-                                        text = "输入法同步外接屏",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (imeLocalEnabled) OpalPalette.AccentEmerald else OpalPalette.TextPrimary,
-                                    )
-                                    OpalText(
-                                        text = if (imeLocalEnabled) {
-                                            "已开启 · 触屏显示器直接弹出输入法"
-                                        } else {
-                                            "点击开启 · 方便触屏显示器就地打字"
-                                        },
-                                        fontSize = 10.sp,
-                                        color = OpalPalette.TextSecondary,
-                                        maxLines = 1,
-                                    )
-                                }
                             }
-                            Spacer(Modifier.width(8.dp))
-                            OpalButton(
-                                label = "更多",
-                                compact = true,
-                                filled = false,
-                                accent = OpalPalette.AccentBlue,
-                                onClick = onOpenImeSettings,
-                            )
+                            if (isExternalMonitor) {
+                                ControlBentoTile(
+                                    title = "外屏输入法",
+                                    subtitle = if (imeLocalEnabled) "同步外接屏" else "智能位置",
+                                    active = imeLocalEnabled,
+                                    accent = OpalPalette.AccentEmerald,
+                                    iconContent = { tint ->
+                                        OpalGlyphIcon(
+                                            glyph = ChromeGlyph.KEYBOARD,
+                                            tint = tint,
+                                            size = 14.dp,
+                                        )
+                                    },
+                                    onClick = { onToggleExternalImeSync(!imeLocalEnabled) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            if (!showPhoneTrackpadSection || !isExternalMonitor) {
+                                Spacer(Modifier.weight(1f))
+                            }
                         }
                     }
 
@@ -1483,106 +1404,13 @@ fun MacControlCenterPopover(
                         )
                     }
 
-                    // Quick Dock Bar Toggle + Jump to Full Dock Customization
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(infoCardShape)
-                            .background(OpalPalette.ChipFill)
-                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
-                            .padding(horizontal = 11.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                            OpalText(text = "底部 Dock 栏", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
-                            OpalText(
-                                text = if (dockVisible) {
-                                    "大小 ${DockAppearancePolicy.formatScaleLabel(dockScale)} · 不透明度 ${DockAppearancePolicy.formatOpacityLabel(dockOpacity)}"
-                                } else {
-                                    "已隐藏 · 顶栏可打开应用与多任务"
-                                },
-                                fontSize = 10.sp,
-                                color = OpalPalette.TextSecondary,
-                                maxLines = 1,
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            OpalButton(
-                                label = if (dockVisible) "隐藏" else "开启",
-                                compact = true,
-                                filled = !dockVisible,
-                                accent = if (dockVisible) OpalPalette.AccentAmber else OpalPalette.AccentBlue,
-                                onClick = { onToggleDockVisible(!dockVisible) },
-                            )
-                            OpalButton(
-                                label = "自定义",
-                                compact = true,
-                                filled = false,
-                                accent = OpalPalette.AccentBlue,
-                                onClick = { selectedTab = 2 },
-                            )
-                        }
-                    }
-
-                    // Phone Trackpad On-Screen Control (External Display only)
-                    if (showPhoneTrackpadSection) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(infoCardShape)
-                                .background(
-                                    if (phoneTrackpadVisible) OpalPalette.AccentBlue.copy(alpha = 0.12f) else OpalPalette.ChipFill,
-                                )
-                                .border(
-                                    width = 0.8.dp,
-                                    color = if (phoneTrackpadVisible) OpalPalette.AccentBlue.copy(alpha = 0.40f) else OpalPalette.BorderHairline,
-                                    shape = infoCardShape,
-                                )
-                                .padding(horizontal = 11.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(7.dp),
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    OpalText(
-                                        text = if (phoneTrackpadVisible) "手机触控板运行中" else "手机屏幕触控板",
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (phoneTrackpadVisible) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
-                                    )
-                                }
-                                Spacer(Modifier.width(8.dp))
-                                OpalButton(
-                                    label = if (phoneTrackpadVisible) "关闭" else "开启",
-                                    compact = true,
-                                    filled = !phoneTrackpadVisible,
-                                    accent = if (phoneTrackpadVisible) OpalPalette.AccentEmerald else OpalPalette.AccentBlue,
-                                    onClick = onTogglePhoneTrackpad,
-                                )
-                            }
-                            if (showAutoTrackpadSwitch) {
-                                Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
-                                OpalSwitchRow(
-                                    title = "外接屏自动显示触控板",
-                                    subtitle = "关闭后仅在此手动打开",
-                                    checked = autoShowPhoneTrackpad,
-                                    onCheckedChange = onToggleAutoPhoneTrackpad,
-                                )
-                            }
-                        }
-                    }
-
-                    // Audio Split Mode + Remote Mic & Root Camera Mapping Controls (remote OpalCast sessions only)
-                    if (showRemoteMediaSection) {
+                    // Collapsible Secondary Peripherals & Cross-Device Media (keeps Quick tab clean & scannable)
+                    if (showRemoteMediaSection || showAutoTrackpadSwitch) {
                         val remoteMicEnabled by AppPrefs.remoteMicEnabledFlow.collectAsState()
                         val remoteCameraEnabled by AppPrefs.remoteCameraEnabledFlow.collectAsState()
                         val audioRouteMode by AppPrefs.audioRouteModeFlow.collectAsState()
                         val splitAudioOn = audioRouteMode == BridgeProtocol.AudioRoute.SPLIT_BY_APP
+                        val effectiveCameraEnabled = rootEnhanced && remoteCameraEnabled
                         LaunchedEffect(Unit) {
                             AppPrefs.hydrateFlows(ctx)
                         }
@@ -1595,101 +1423,120 @@ fun MacControlCenterPopover(
                                 .padding(horizontal = 11.dp, vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            val effectiveCameraEnabled = rootEnhanced && remoteCameraEnabled
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showRemoteAdvanced = !showRemoteAdvanced },
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween,
                             ) {
                                 OpalText(
-                                    text = "跨端音频与媒体",
+                                    text = "跨端音视频与触控板选项",
                                     fontSize = 11.5.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = OpalPalette.TextPrimary,
                                 )
-                                OpalText(
-                                    text = when {
-                                        splitAudioOn -> "独立分流"
-                                        remoteMicEnabled || effectiveCameraEnabled -> "已启用"
-                                        else -> "默认"
-                                    },
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = if (splitAudioOn || remoteMicEnabled || effectiveCameraEnabled) OpalPalette.AccentEmerald else OpalPalette.TextMuted,
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                ) {
+                                    val activeSummary = when {
+                                        showRemoteMediaSection && splitAudioOn -> "独立分流"
+                                        showRemoteMediaSection && (remoteMicEnabled || effectiveCameraEnabled) -> "已启用"
+                                        else -> ""
+                                    }
+                                    if (activeSummary.isNotEmpty()) {
+                                        OpalText(
+                                            text = activeSummary,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = OpalPalette.AccentEmerald,
+                                        )
+                                    }
+                                    OpalText(
+                                        text = if (showRemoteAdvanced) "收起 ▴" else "展开 ▾",
+                                        fontSize = 10.5.sp,
+                                        color = OpalPalette.TextSecondary,
+                                    )
+                                }
                             }
-                            OpalSegmentedRow(
-                                options = listOf("整机传 DeX", "应用独立分流"),
-                                selectedIndex = audioRouteMode.coerceIn(
-                                    BridgeProtocol.AudioRoute.ALL_TO_DEX,
-                                    BridgeProtocol.AudioRoute.SPLIT_BY_APP,
-                                ),
-                                onSelect = { mode ->
-                                    io.github.lengsukq.opaldesk.BridgeClient.setAudioRouteModeAsync(ctx, mode) {
-                                        val msg = if (mode == BridgeProtocol.AudioRoute.SPLIT_BY_APP) {
-                                            "已开启应用独立音频分流：手机与 DeX 各自发声"
-                                        } else {
-                                            "已切换为整机声音传至 DeX 投屏端"
-                                        }
-                                        android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                            )
-                            OpalText(
-                                text = if (splitAudioOn) {
-                                    "手机主屏应用由手机发声，DeX 窗口应用由投屏端发声"
-                                } else {
-                                    "全部声音传至 DeX 投屏端；切至「应用独立分流」可各自发声"
-                                },
-                                fontSize = 10.sp,
-                                color = OpalPalette.TextMuted,
-                            )
-                            Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
-                            OpalSwitchRow(
-                                title = "远端麦克风回传",
-                                subtitle = if (remoteMicEnabled) "已开启 · 允许投屏端注入" else "已关闭 · Android 13+ 免 Root",
-                                checked = remoteMicEnabled,
-                                onCheckedChange = { enabled ->
-                                    io.github.lengsukq.opaldesk.BridgeClient.setRemoteMediaConfigAsync(ctx, enabled, effectiveCameraEnabled) {
-                                        android.widget.Toast.makeText(
-                                            ctx,
-                                            if (enabled) "已开启远端麦克风回传" else "已关闭远端麦克风回传",
-                                            android.widget.Toast.LENGTH_SHORT,
-                                        ).show()
-                                    }
-                                },
-                            )
-                            Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
-                            OpalSwitchRow(
-                                title = "Root 摄像头映射",
-                                subtitle = when {
-                                    !rootEnhanced -> "需 Root 权限 · 未启用 Root 增强不可开启"
-                                    effectiveCameraEnabled -> "已开启 · Android 15+ 系统虚拟摄像头就绪"
-                                    else -> "已关闭 · Root 模式可用（Android 15+ 原生注入）"
-                                },
-                                checked = effectiveCameraEnabled,
-                                onCheckedChange = { enabled ->
-                                    if (enabled && !rootEnhanced) {
-                                        if (remoteCameraEnabled) {
-                                            AppPrefs.setRemoteCameraEnabled(ctx, false)
-                                        }
-                                        android.widget.Toast.makeText(
-                                            ctx,
-                                            "未获得 Root 增强权限，无法开启摄像头映射（请先用 Root 模式激活引擎）",
-                                            android.widget.Toast.LENGTH_LONG,
-                                        ).show()
-                                        return@OpalSwitchRow
-                                    }
-                                    io.github.lengsukq.opaldesk.BridgeClient.setRemoteMediaConfigAsync(ctx, remoteMicEnabled, enabled) { ok ->
-                                        val msg = when {
-                                            !enabled -> "已关闭 Root 摄像头映射"
-                                            ok -> "已开启 Root 摄像头映射"
-                                            else -> "未获得 Root 增强权限，无法开启摄像头映射"
-                                        }
-                                        android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                            )
+                            if (showRemoteAdvanced) {
+                                if (showAutoTrackpadSwitch) {
+                                    Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+                                    OpalSwitchRow(
+                                        title = "外接屏自动显示触控板",
+                                        subtitle = "关闭后仅在此手动打开",
+                                        checked = autoShowPhoneTrackpad,
+                                        onCheckedChange = onToggleAutoPhoneTrackpad,
+                                    )
+                                }
+                                if (showRemoteMediaSection) {
+                                    Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+                                    OpalSegmentedRow(
+                                        options = listOf("整机传 DeX", "应用独立分流"),
+                                        selectedIndex = audioRouteMode.coerceIn(
+                                            BridgeProtocol.AudioRoute.ALL_TO_DEX,
+                                            BridgeProtocol.AudioRoute.SPLIT_BY_APP,
+                                        ),
+                                        onSelect = { mode ->
+                                            io.github.lengsukq.opaldesk.BridgeClient.setAudioRouteModeAsync(ctx, mode) {
+                                                val msg = if (mode == BridgeProtocol.AudioRoute.SPLIT_BY_APP) {
+                                                    "已开启应用独立音频分流：手机与 DeX 各自发声"
+                                                } else {
+                                                    "已切换为整机声音传至 DeX 投屏端"
+                                                }
+                                                android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                    )
+                                    Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+                                    OpalSwitchRow(
+                                        title = "远端麦克风回传",
+                                        subtitle = if (remoteMicEnabled) "已开启 · 允许投屏端注入" else "已关闭 · Android 13+ 免 Root",
+                                        checked = remoteMicEnabled,
+                                        onCheckedChange = { enabled ->
+                                            io.github.lengsukq.opaldesk.BridgeClient.setRemoteMediaConfigAsync(ctx, enabled, effectiveCameraEnabled) {
+                                                android.widget.Toast.makeText(
+                                                    ctx,
+                                                    if (enabled) "已开启远端麦克风回传" else "已关闭远端麦克风回传",
+                                                    android.widget.Toast.LENGTH_SHORT,
+                                                ).show()
+                                            }
+                                        },
+                                    )
+                                    Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+                                    OpalSwitchRow(
+                                        title = "Root 摄像头映射",
+                                        subtitle = when {
+                                            !rootEnhanced -> "需 Root 权限 · 未启用 Root 增强不可开启"
+                                            effectiveCameraEnabled -> "已开启 · Android 15+ 系统虚拟摄像头就绪"
+                                            else -> "已关闭 · Root 模式可用（Android 15+ 原生注入）"
+                                        },
+                                        checked = effectiveCameraEnabled,
+                                        onCheckedChange = { enabled ->
+                                            if (enabled && !rootEnhanced) {
+                                                if (remoteCameraEnabled) {
+                                                    AppPrefs.setRemoteCameraEnabled(ctx, false)
+                                                }
+                                                android.widget.Toast.makeText(
+                                                    ctx,
+                                                    "未获得 Root 增强权限，无法开启摄像头映射（请先用 Root 模式激活引擎）",
+                                                    android.widget.Toast.LENGTH_LONG,
+                                                ).show()
+                                                return@OpalSwitchRow
+                                            }
+                                            io.github.lengsukq.opaldesk.BridgeClient.setRemoteMediaConfigAsync(ctx, remoteMicEnabled, enabled) { ok ->
+                                                val msg = when {
+                                                    !enabled -> "已关闭 Root 摄像头映射"
+                                                    ok -> "已开启 Root 摄像头映射"
+                                                    else -> "未获得 Root 增强权限，无法开启摄像头映射"
+                                                }
+                                                android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1803,6 +1650,37 @@ fun MacControlCenterPopover(
                             enabled = totalWindows > 0,
                             accent = OpalPalette.AccentAmber,
                             onClick = onCloseAll,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+
+                    // Compact Window & Input Tool Row (replaces 3 bulky cards previously crowding Display tab)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        OpalButton(
+                            label = "窗口 DPI",
+                            compact = true,
+                            filled = false,
+                            accent = OpalPalette.AccentBlue,
+                            onClick = onOpenDpiSettings,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OpalButton(
+                            label = "输入法",
+                            compact = true,
+                            filled = false,
+                            accent = OpalPalette.AccentEmerald,
+                            onClick = onOpenImeSettings,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OpalButton(
+                            label = "快捷键",
+                            compact = true,
+                            filled = false,
+                            accent = OpalPalette.AccentCyan,
+                            onClick = onOpenKeyboardShortcuts,
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -2008,136 +1886,7 @@ fun MacControlCenterPopover(
                         }
                     }
 
-                    // Compact Single-Row Real-time Visual DPI Entry
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(infoCardShape)
-                            .background(OpalPalette.ChipFill)
-                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
-                            .padding(horizontal = 11.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                            OpalText(text = "实时窗口 DPI", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            OpalText(
-                                text = "全局与单应用实时滑块预览",
-                                fontSize = 10.sp,
-                                color = OpalPalette.TextSecondary,
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        OpalButton(
-                            label = "调节",
-                            compact = true,
-                            filled = true,
-                            onClick = onOpenDpiSettings,
-                        )
-                    }
-
-                    // Compact Single-Row DeX IME Display Routing & Keyboard Lock Entry
-                    val localImesForSummary = remember(ctx, selectedTab) {
-                        io.github.lengsukq.opaldesk.ui.DexImeCatalog.loadLocalEnabledImes(ctx)
-                    }
-                    val imeCustomized = dexImeDisplayMode == BridgeProtocol.DexImeDisplayMode.ALWAYS_LOCAL ||
-                        dexLockedImeId.isNotBlank()
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(infoCardShape)
-                            .background(OpalPalette.ChipFill)
-                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
-                            .clickable(onClick = onOpenImeSettings)
-                            .padding(horizontal = 11.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                            OpalText(text = "输入法与键盘锁定", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            OpalText(
-                                text = io.github.lengsukq.opaldesk.ui.DexImeCatalog.formatCompactEntrySubtitle(
-                                    dexImeDisplayMode,
-                                    dexLockedImeId,
-                                    localImesForSummary,
-                                ),
-                                fontSize = 10.sp,
-                                color = if (imeCustomized) OpalPalette.AccentEmerald else OpalPalette.TextSecondary,
-                                maxLines = 1,
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        OpalButton(
-                            label = "设置",
-                            compact = true,
-                            filled = false,
-                            accent = OpalPalette.AccentBlue,
-                            onClick = onOpenImeSettings,
-                        )
-                    }
-
-                    // Compact Single-Row Keyboard Shortcuts Cheatsheet & Toggle Entry
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(infoCardShape)
-                            .background(OpalPalette.ChipFill)
-                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
-                            .clickable(onClick = onOpenKeyboardShortcuts)
-                            .padding(horizontal = 11.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                            OpalText(text = "键盘快捷键", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            OpalText(
-                                text = io.github.lengsukq.opaldesk.ui.WorkstationShortcutCatalog.formatDetailSubtitle(
-                                    globalShortcutsEnabled,
-                                    disabledShortcutIds,
-                                ),
-                                fontSize = 10.sp,
-                                color = if (globalShortcutsEnabled) OpalPalette.TextSecondary else OpalPalette.AccentAmber,
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        OpalButton(
-                            label = "查看",
-                            compact = true,
-                            filled = false,
-                            accent = OpalPalette.AccentBlue,
-                            onClick = onOpenKeyboardShortcuts,
-                        )
-                    }
-
-                    // Compact Single-Row Built-in Feature Guide Entry (always accessible even if desktop icon is hidden)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(infoCardShape)
-                            .background(OpalPalette.ChipFill)
-                            .border(0.75.dp, OpalPalette.BorderHairline, infoCardShape)
-                            .clickable(onClick = onOpenFeatureGuide)
-                            .padding(horizontal = 11.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                            OpalText(text = "使用指南与特性", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            OpalText(
-                                text = if (showDesktopGuideIcon) "云端热更新 · 桌面图标显示中" else "云端热更新 · 桌面图标已隐藏",
-                                fontSize = 10.sp,
-                                color = OpalPalette.TextSecondary,
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        OpalButton(
-                            label = "打开",
-                            compact = true,
-                            filled = false,
-                            accent = OpalPalette.AccentBlue,
-                            onClick = onOpenFeatureGuide,
-                        )
-                    }
+                    // DPI, IME & Shortcuts moved to compact 1-row toolbar in Window tab to keep Display tab uncluttered.
 
                     if (isExternalMonitor) {
                         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -2225,9 +1974,17 @@ fun MacControlCenterPopover(
             }
         }
 
-        // Pinned Bottom Action Row (2 global actions, zero duplicates)
+        // Pinned Bottom Action Row (Guide / Console / Exit DeX)
         Spacer(Modifier.height(9.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            OpalButton(
+                label = "使用指南",
+                compact = true,
+                filled = false,
+                accent = OpalPalette.AccentCyan,
+                onClick = onOpenFeatureGuide,
+                modifier = Modifier.weight(0.95f),
+            )
             OpalButton(
                 label = "主控制台",
                 compact = true,

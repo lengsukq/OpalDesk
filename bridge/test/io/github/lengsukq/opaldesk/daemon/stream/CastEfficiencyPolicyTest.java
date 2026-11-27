@@ -201,11 +201,16 @@ public class CastEfficiencyPolicyTest {
         assertEquals(DisplayGeometryUtil.WIRED_MAX_BITRATE_KBPS, tetherCap);
         assertEquals(DisplayGeometryUtil.WIRELESS_MAX_BITRATE_KBPS, wifiCap);
 
-        // Wired USB allows 45 Mbps; wireless clamps at 32 Mbps.
+        // Wired USB allows up to 100 Mbps and clamps extreme custom requests (e.g. 10,000 Mbps);
+        // wireless allows up to 80 Mbps.
         assertEquals(45_000, DisplayGeometryUtil.resolveSessionBitrateKbps(
                 45_000, 3840, 2160, 60f, true, wiredCap));
-        assertEquals(32_000, DisplayGeometryUtil.resolveSessionBitrateKbps(
-                45_000, 3840, 2160, 60f, true, wifiCap));
+        assertEquals(100_000, DisplayGeometryUtil.resolveSessionBitrateKbps(
+                100_000, 3840, 2160, 60f, true, wiredCap));
+        assertEquals(100_000, DisplayGeometryUtil.resolveSessionBitrateKbps(
+                10_000_000, 3840, 2160, 60f, true, wiredCap));
+        assertEquals(80_000, DisplayGeometryUtil.resolveSessionBitrateKbps(
+                100_000, 3840, 2160, 60f, true, wifiCap));
 
         // Reconfigure fast-path classifier: NO_OP, BITRATE_ONLY, DPI_ONLY, FULL_RECONFIGURE.
         assertEquals(DisplayGeometryUtil.ReconfigureAction.NO_OP,

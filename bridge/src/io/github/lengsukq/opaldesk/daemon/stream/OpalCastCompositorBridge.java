@@ -1934,11 +1934,45 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     }
 
     public void applyRemoteMediaPolicy(boolean micEnabled, boolean cameraEnabled) {
+        applyRemoteMediaPolicy(micEnabled, cameraEnabled, false, false);
+    }
+
+    public void applyRemoteMediaPolicy(
+            boolean micEnabled,
+            boolean cameraEnabled,
+            boolean triggerMicStart,
+            boolean triggerCameraStart) {
         if (!micEnabled) {
             stopRemoteMic(true);
+        } else if (triggerMicStart) {
+            int deskSid = desktopSessionId;
+            ActiveRemoteSession s = (deskSid > 0) ? sessions.get(deskSid) : null;
+            if (s != null && !s.closed && micOwnerSessionId != deskSid) {
+                server.sendMicState(deskSid, new OpalCastProtocol.MicStateMsg(
+                        true,
+                        true,
+                        OpalCastProtocol.DEFAULT_MIC_SAMPLE_RATE,
+                        OpalCastProtocol.DEFAULT_MIC_CHANNELS,
+                        ""));
+            }
         }
         if (!cameraEnabled) {
             stopRemoteCamera(true);
+        } else if (triggerCameraStart && config.isRootEnhanced()) {
+            int deskSid = desktopSessionId;
+            ActiveRemoteSession s = (deskSid > 0) ? sessions.get(deskSid) : null;
+            if (s != null && !s.closed && cameraOwnerSessionId != deskSid) {
+                server.sendCameraState(deskSid, new OpalCastProtocol.CameraStateMsg(
+                        true,
+                        true,
+                        false,
+                        OpalCastProtocol.DEFAULT_CAMERA_WIDTH,
+                        OpalCastProtocol.DEFAULT_CAMERA_HEIGHT,
+                        OpalCastProtocol.DEFAULT_CAMERA_FPS,
+                        "",
+                        "",
+                        "front"));
+            }
         }
     }
 

@@ -348,7 +348,7 @@ public final class AudioStreamCapturer {
 
             int minBuf = AudioRecord.getMinBufferSize(
                     SAMPLE_RATE, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
-            int bufSize = Math.max(Math.max(minBuf, 8192) * 2, 16_384);
+            int bufSize = Math.max(minBuf, 8_192);
             AudioRecord rec = buildSplitSinkRecord(policy, mix, mixFmt, bufSize);
             if (rec == null || rec.getState() != AudioRecord.STATE_INITIALIZED) {
                 if (rec != null) {
@@ -475,7 +475,7 @@ public final class AudioStreamCapturer {
         if (minBuf <= 0) {
             minBuf = 8192;
         }
-        int bufSize = Math.max(minBuf * 2, 16_384);
+        int bufSize = Math.max(minBuf, 8_192);
         AudioFormat af = new AudioFormat.Builder()
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                 .setSampleRate(SAMPLE_RATE)

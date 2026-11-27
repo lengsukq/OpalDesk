@@ -199,8 +199,12 @@ fun WindowSurfaceHost(
                         val change = ev.changes.firstOrNull() ?: continue
                         if (ev.type == PointerEventType.Scroll) {
                             val delta = change.scrollDelta
-                            val vScroll = -delta.y
-                            val hScroll = delta.x
+                            // Android app windows inside OpalWin-* run at higher content DPI and apply
+                            // native wheel-step scaling (RecyclerView / WebView), making raw trackpad
+                            // ticks 2x-3x faster than the desktop App Drawer; damp slightly for parity.
+                            val appScrollDamp = 0.55f
+                            val vScroll = -delta.y * appScrollDamp
+                            val hScroll = delta.x * appScrollDamp
                             if (vScroll != 0f || hScroll != 0f) {
                                 val win = currentWin
                                 val canvasX = win.frame.left + change.position.x

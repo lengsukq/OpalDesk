@@ -153,7 +153,7 @@ class OpalCastClient(
         private const val USB_TETHER_SOCKET_RECV_BUF_BYTES = 1024 * 1024
         private const val SOCKET_SEND_BUF_BYTES = 256 * 1024
         private const val REALTIME_MEDIA_TRAFFIC_CLASS = 0xB8
-        private const val AUDIO_PREFILL_FRAMES = 2
+        private const val AUDIO_PREFILL_FRAMES = 1
         private const val AUDIO_IDLE_PAUSE_MS = 260L
         private const val CLIENT_PLATFORM_ANDROID = "android"
 
@@ -201,7 +201,7 @@ class OpalCastClient(
     private val closed = AtomicBoolean(false)
     private val authCompleted = AtomicBoolean(false)
     private val outQueue = LinkedBlockingQueue<UplinkFrame>(256)
-    private val audioQueue = LinkedBlockingQueue<Pair<ByteArray, Long>>(16)
+    private val audioQueue = LinkedBlockingQueue<Pair<ByteArray, Long>>(6)
     private val textSeq = AtomicLong(1L)
     private val lastIdrRequestMs = AtomicLong(0L)
     private val lastRxActivityMs = AtomicLong(0L)
@@ -777,6 +777,11 @@ class OpalCastClient(
 
     private fun enqueueAudioFrame(payload: ByteArray, tsUs: Long) {
         if (payload.isEmpty()) return
+        if (audioQueue.size >= 4) {
+            while (audioQueue.size > 2) {
+                if (audioQueue.poll() == null) break
+            }
+        }
         if (!audioQueue.offer(payload to tsUs)) {
             audioQueue.poll()
             audioQueue.offer(payload to tsUs)

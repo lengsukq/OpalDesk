@@ -224,12 +224,17 @@ class OpalCastPeerClientSocketTest {
         )
         assertEquals(22_000, wifi2k120)
 
-        // AudioTrack buffer provides >=160ms (~32 KiB at 48kHz stereo PCM16) to absorb Wi-Fi jitter bursts.
+        // Low-latency AudioTrack buffer stays tight (~64-85ms) without 4x inflation on high-minBuf OEMs.
         val audioBuf = OpalCastPeerClient.computeAudioTrackBufferBytes(
             minBufBytes = 7680, sampleRate = 48_000, channels = 2,
         )
-        assertTrue("Expected >= 32 KiB AudioTrack buffer, got $audioBuf", audioBuf >= 32_768)
+        assertTrue("Expected low-latency AudioTrack buffer in 12..20 KiB, got $audioBuf", audioBuf in 12_288..20_480)
         assertEquals(0, audioBuf % 4096)
+
+        val oemMinBuf = OpalCastPeerClient.computeAudioTrackBufferBytes(
+            minBufBytes = 15_360, sampleRate = 48_000, channels = 2,
+        )
+        assertEquals(16_384, oemMinBuf)
 
         // USB Tethering boosts headroom significantly above Wi-Fi.
         val usb2k120 = OpalCastPeerClient.computeTargetBitrateKbps(

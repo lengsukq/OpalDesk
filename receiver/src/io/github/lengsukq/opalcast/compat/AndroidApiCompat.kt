@@ -169,12 +169,24 @@ object AndroidApiCompat {
             .setChannelMask(chMask)
             .build()
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            AudioTrack.Builder()
-                .setAudioAttributes(attrs)
-                .setAudioFormat(format)
-                .setBufferSizeInBytes(bufferBytes)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
+            try {
+                val builder = AudioTrack.Builder()
+                    .setAudioAttributes(attrs)
+                    .setAudioFormat(format)
+                    .setBufferSizeInBytes(bufferBytes)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                }
+                builder.build()
+            } catch (_: Throwable) {
+                AudioTrack.Builder()
+                    .setAudioAttributes(attrs)
+                    .setAudioFormat(format)
+                    .setBufferSizeInBytes(bufferBytes)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+            }
         } else {
             AudioTrack(attrs, format, bufferBytes, AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE)
         }

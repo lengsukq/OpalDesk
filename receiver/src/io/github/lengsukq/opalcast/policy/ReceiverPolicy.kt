@@ -247,11 +247,11 @@ object ReceiverPolicy {
     }
 
     fun computeAudioTrackBufferBytes(minBufBytes: Int, sampleRate: Int, channels: Int): Int {
-        val safeMin = minBufBytes.coerceAtLeast(4096)
+        val safeMin = ((minBufBytes.coerceAtLeast(4096) + 4095) / 4096) * 4096
         val bytesPerSecond = sampleRate.coerceIn(16_000, 96_000) * channels.coerceIn(1, 2) * 2
-        val target160Ms = (bytesPerSecond * 160L / 1000L).toInt()
-        val frameAligned = ((target160Ms + 4095) / 4096) * 4096
-        return maxOf(safeMin * 4, frameAligned, 32_768)
+        val target64Ms = (bytesPerSecond * 64L / 1000L).toInt()
+        val frameAligned = ((target64Ms + 4095) / 4096) * 4096
+        return maxOf(safeMin, frameAligned, 12_288)
     }
 
     fun computeTargetBitrateKbps(

@@ -232,7 +232,15 @@ class PeerCastViewerActivity : ComponentActivity() {
                 LaunchedEffect(remoteImeReqSeq) {
                     if (remoteImeReqSeq <= 0L || showAppPicker) return@LaunchedEffect
                     if (remoteImeShow) {
-                        imeController.showKeyboard(remoteImeInputType)
+                        // When a Bluetooth / USB physical keyboard is attached to the receiver tablet,
+                        // do NOT summon the tablet's local IME (NativeImeBridgeHost): forward all
+                        // hardware keys directly to the casting phone so the phone's Yuyan IME
+                        // handles input and renders its cursor-following candidate bar cleanly.
+                        if (!hasConnectedPhysicalKeyboard()) {
+                            imeController.showKeyboard(remoteImeInputType)
+                        } else if (imeVisible) {
+                            imeController.hideKeyboard()
+                        }
                     } else if (imeVisible) {
                         imeController.hideKeyboard()
                     }
@@ -453,6 +461,8 @@ class PeerCastViewerActivity : ComponentActivity() {
                         if (!active) {
                             stopLocalMicCaptureOnly()
                             micEnabled = false
+                        } else if (micCapturer == null) {
+                            startRemoteMicFromHost()
                         } else {
                             micEnabled = true
                         }
@@ -474,13 +484,17 @@ class PeerCastViewerActivity : ComponentActivity() {
                             stopLocalCameraCaptureOnly()
                             cameraEnabled = false
                         } else {
-                            cameraEnabled = true
                             if (facing.isNotBlank()) {
                                 val nextFacing = PeerCameraGeometry.normalizeFacing(facing)
                                 if (nextFacing != cameraFacing) {
                                     cameraFacing = nextFacing
                                     cameraCapturer?.switchFacing(nextFacing)
                                 }
+                            }
+                            if (cameraCapturer == null) {
+                                startRemoteCameraFromHost()
+                            } else {
+                                cameraEnabled = true
                             }
                         }
                         if (message.isNotBlank()) {
@@ -586,6 +600,17 @@ class PeerCastViewerActivity : ComponentActivity() {
         }
     }
 
+    private fun startRemoteMicFromHost() {
+        if (!connected || micCapturer != null) return
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            enableRemoteMic()
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     private fun toggleRemoteMic() {
         if (!connected) {
             Toast.makeText(this, "请等待投屏连接完成后再开启麦克风", Toast.LENGTH_SHORT).show()
@@ -595,13 +620,7 @@ class PeerCastViewerActivity : ComponentActivity() {
             disableRemoteMic()
             return
         }
-        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
-            PackageManager.PERMISSION_GRANTED
-        if (granted) {
-            enableRemoteMic()
-        } else {
-            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
+        startRemoteMicFromHost()
     }
 
     private fun enableRemoteMic() {
@@ -636,6 +655,17 @@ class PeerCastViewerActivity : ComponentActivity() {
         micCapturer = null
     }
 
+    private fun startRemoteCameraFromHost() {
+        if (!connected || cameraCapturer != null) return
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            enableRemoteCamera()
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
     private fun toggleRemoteCamera() {
         if (!connected) {
             Toast.makeText(this, "请等待投屏连接完成后再开启摄像头映射", Toast.LENGTH_SHORT).show()
@@ -645,13 +675,7 @@ class PeerCastViewerActivity : ComponentActivity() {
             disableRemoteCamera()
             return
         }
-        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
-            PackageManager.PERMISSION_GRANTED
-        if (granted) {
-            enableRemoteCamera()
-        } else {
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-        }
+        startRemoteCameraFromHost()
     }
 
     private fun enableRemoteCamera() {
@@ -707,16 +731,41 @@ class PeerCastViewerActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    private fun hasConnectedPhysicalKeyboard(): Boolean {
+        val cfg = resources.configuration
+        if (cfg.keyboard != android.content.res.Configuration.KEYBOARD_NOKEYS &&
+            cfg.hardKeyboardHidden == android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
+        ) {
+            return true
+        }
+        return try {
+            android.view.InputDevice.getDeviceIds().any { id ->
+                val dev = android.view.InputDevice.getDevice(id) ?: return@any false
+                val ext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) dev.isExternal else false
+                WorkstationKeyDispatcher.isPhysicalKeyboardDevice(
+                    deviceId = id,
+                    name = dev.name,
+                    isVirtual = dev.isVirtual,
+                    isExternal = ext,
+                    keyboardType = dev.keyboardType,
+                )
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
         if (connected && (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP)) {
             if (!WorkstationKeyDispatcher.isForwardableKey(event.keyCode)) {
                 return super.dispatchKeyEvent(event)
             }
-            // When user intentionally opened the receiver tablet's built-in IME (e.g. Chinese Pinyin),
-            // let non-shortcut keys flow through the IME InputConnection first while keeping Alt/Ctrl shortcuts direct.
+            // Physical/Bluetooth keyboard events bypass the receiver tablet's local IME completely
+            // and stream directly to the casting phone as if the keyboard were attached to the phone.
+            val isPhysicalKey = WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)
             val isDirectShortcut = event.isAltPressed || event.isCtrlPressed || event.keyCode == KeyEvent.KEYCODE_ESCAPE
-            if (imeVisible && !isDirectShortcut && super.dispatchKeyEvent(event)) {
+            if (!isPhysicalKey && imeVisible && !isDirectShortcut && super.dispatchKeyEvent(event)) {
                 return true
             }
             if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN) {
@@ -926,44 +975,6 @@ private fun PeerCastViewerContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(if (connected) OpalPalette.AccentEmerald else OpalPalette.AccentAmber),
-                )
-                OpalText(
-                    text = "$peerName · $statusText",
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    modifier = Modifier.widthIn(max = 210.dp),
-                )
-                OpalTopPillDivider()
-                OpalTopPillIconButton(
-                    glyph = ChromeGlyph.MIC,
-                    contentDescription = if (micEnabled) "关闭麦克风" else "开启麦克风",
-                    active = micEnabled,
-                    activeColor = OpalPalette.AccentEmerald,
-                    onClick = onToggleMic,
-                )
-                OpalTopPillIconButton(
-                    glyph = ChromeGlyph.CAMERA,
-                    contentDescription = if (cameraEnabled) "关闭摄像头" else "开启摄像头",
-                    active = cameraEnabled,
-                    activeColor = OpalPalette.AccentEmerald,
-                    onClick = onToggleCamera,
-                )
-                if (cameraEnabled) {
-                    OpalTopPillChip(
-                        label = if (cameraFacing == "back") "后" else "前",
-                        glyph = ChromeGlyph.CAMERA_FLIP,
-                        tint = OpalPalette.AccentCyan,
-                        active = true,
-                        activeColor = OpalPalette.AccentCyan,
-                        onClick = onFlipCamera,
-                    )
-                }
                 OpalTopPillIconButton(
                     glyph = ChromeGlyph.KEYBOARD,
                     contentDescription = if (imeVisible) "收起输入法" else "输入法",
@@ -1009,22 +1020,6 @@ private fun PeerCastViewerContent(
                     active = remoteBlackout,
                     activeColor = OpalPalette.AccentAmber,
                     onClick = onToggleBlackout,
-                )
-                OpalTopPillDivider()
-                OpalTopPillIconButton(
-                    glyph = ChromeGlyph.BACK,
-                    contentDescription = "返回",
-                    onClick = onSendBack,
-                )
-                OpalTopPillIconButton(
-                    glyph = ChromeGlyph.HOME_HOUSE,
-                    contentDescription = "桌面",
-                    onClick = onSendHome,
-                )
-                OpalTopPillIconButton(
-                    glyph = ChromeGlyph.RELOAD,
-                    contentDescription = "刷新画面",
-                    onClick = onRequestIdr,
                 )
                 OpalTopPillDivider()
                 OpalTopPillIconButton(

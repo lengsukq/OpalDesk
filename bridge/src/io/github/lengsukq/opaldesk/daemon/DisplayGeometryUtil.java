@@ -369,8 +369,9 @@ public final class DisplayGeometryUtil {
     }
 
     public static final int MIN_SESSION_BITRATE_KBPS = 2_500;
-    public static final int WIRELESS_MAX_BITRATE_KBPS = 32_000;
-    public static final int WIRED_MAX_BITRATE_KBPS = 50_000;
+    public static final int WIRELESS_MAX_BITRATE_KBPS = 80_000;
+    public static final int WIRED_MAX_BITRATE_KBPS = 100_000;
+    public static final int AUTO_RECOMMENDED_MAX_BITRATE_KBPS = 32_000;
     public static final int HEVC_BITRATE_SCALE_PCT = 75;
     public static final int MIN_STATUS_BAR_INSET_SDK = 34;
 
@@ -531,7 +532,8 @@ public final class DisplayGeometryUtil {
         boolean highRes = pixels >= 2_800_000L; // >= 2560x1100
         boolean highFps = fps >= 85f;
         int baseKbps;
-        if (uhd && highFps) baseKbps = maxBitrateKbps;
+        int autoCeiling = Math.min(maxBitrateKbps, AUTO_RECOMMENDED_MAX_BITRATE_KBPS);
+        if (uhd && highFps) baseKbps = autoCeiling;
         else if (uhd) baseKbps = 24_000;
         else if (highRes && highFps) baseKbps = 22_000;
         else if (highRes) baseKbps = 16_000;

@@ -83,18 +83,20 @@ public final class RemoteStreamSink implements DisplaySink {
         final int maxW;
         final int maxH;
         final float maxFps;
+        final int maxBitrateKbps; // 0 = unknown
         final int preferredProfile;
         final int preferredLevel;
 
         SelectedEncoder(
                 String codecName, int alignW, int alignH, int maxW, int maxH, float maxFps,
-                int preferredProfile, int preferredLevel) {
+                int maxBitrateKbps, int preferredProfile, int preferredLevel) {
             this.codecName = codecName;
             this.alignW = alignW;
             this.alignH = alignH;
             this.maxW = maxW;
             this.maxH = maxH;
             this.maxFps = maxFps;
+            this.maxBitrateKbps = maxBitrateKbps;
             this.preferredProfile = preferredProfile;
             this.preferredLevel = preferredLevel;
         }
@@ -498,6 +500,9 @@ public final class RemoteStreamSink implements DisplaySink {
                     ? OpalCastProtocol.VIDEO_CODEC_HEVC
                     : OpalCastProtocol.VIDEO_CODEC_H264;
             SelectedEncoder selected = selectPreferredEncoder(mime);
+            int effectiveBitrateKbps = (selected.maxBitrateKbps > 0)
+                    ? Math.min(bitrateKbps, Math.max(MIN_BITRATE_KBPS, selected.maxBitrateKbps))
+                    : bitrateKbps;
             int[][] dimCandidates = buildDimensionCandidates(
                     reqW, reqH, selected.alignW, selected.alignH, selected.maxW, selected.maxH);
             float[] fpsCandidates = DisplayGeometryUtil.buildEncoderFpsCandidates(fps, selected.maxFps);
@@ -522,7 +527,7 @@ public final class RemoteStreamSink implements DisplaySink {
                                         : MediaCodec.createEncoderByType(mime);
                                 String activeName = (codecName != null) ? codecName : codec.getName();
                                 MediaFormat fmt = buildVideoFormat(
-                                        mime, activeName, w, h, candFps, bitrateKbps,
+                                        mime, activeName, w, h, candFps, effectiveBitrateKbps,
                                         selected.preferredProfile, selected.preferredLevel,
                                         repeatPreviousFrameAfterUs, tier);
                                 codec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -534,7 +539,7 @@ public final class RemoteStreamSink implements DisplaySink {
                                 System.out.println("OPALDESK_ENCODER_STARTED mime=" + mime
                                         + " codec=" + (activeName != null ? activeName : "default")
                                         + " size=" + w + "x" + h + "@" + dpi + "dpi fps=" + candFps
-                                        + " bitrate=" + bitrateKbps + "kbps tier=" + tier
+                                        + " bitrate=" + effectiveBitrateKbps + "kbps tier=" + tier
                                         + " repeatUs=" + repeatPreviousFrameAfterUs);
                                 return new EncoderSession(codec, surf, codecId, w, h, dpi, candFps, displayMode, rotation);
                             } catch (Throwable t) {
@@ -591,7 +596,7 @@ public final class RemoteStreamSink implements DisplaySink {
         } catch (Throwable t) {
             System.err.println("OPALDESK_ENCODER_SCAN_WARN mime=" + mime + ": " + t.getMessage());
         }
-        return new SelectedEncoder(null, DEFAULT_ALIGNMENT, DEFAULT_ALIGNMENT, 0, 0, 0f, 0, 0);
+        return new SelectedEncoder(null, DEFAULT_ALIGNMENT, DEFAULT_ALIGNMENT, 0, 0, 0f, 0, 0, 0);
     }
 
     private static SelectedEncoder buildSelectedEncoder(MediaCodecInfo info, String matchedType) {
@@ -600,6 +605,7 @@ public final class RemoteStreamSink implements DisplaySink {
         int maxW = 0;
         int maxH = 0;
         float maxFps = 0f;
+        int maxBitrateKbps = 0;
         int preferredProfile = 0;
         int preferredLevel = 0;
         try {
@@ -611,9 +617,13 @@ public final class RemoteStreamSink implements DisplaySink {
                 android.util.Range<Integer> wRange = vc.getSupportedWidths();
                 android.util.Range<Integer> hRange = vc.getSupportedHeights();
                 android.util.Range<Integer> fpsRange = vc.getSupportedFrameRates();
+                android.util.Range<Integer> brRange = vc.getBitrateRange();
                 if (wRange != null && wRange.getUpper() != null) maxW = wRange.getUpper();
                 if (hRange != null && hRange.getUpper() != null) maxH = hRange.getUpper();
                 if (fpsRange != null && fpsRange.getUpper() != null) maxFps = fpsRange.getUpper();
+                if (brRange != null && brRange.getUpper() != null && brRange.getUpper() > 0) {
+                    maxBitrateKbps = brRange.getUpper() / 1000;
+                }
             }
             if (caps != null && caps.profileLevels != null && caps.profileLevels.length > 0) {
                 int[] profiles = new int[caps.profileLevels.length];
@@ -633,7 +643,7 @@ public final class RemoteStreamSink implements DisplaySink {
             System.err.println("OPALDESK_ENCODER_CAPS_WARN codec=" + info.getName() + ": " + e.getMessage());
         }
         return new SelectedEncoder(
-                info.getName(), alignW, alignH, maxW, maxH, maxFps, preferredProfile, preferredLevel);
+                info.getName(), alignW, alignH, maxW, maxH, maxFps, maxBitrateKbps, preferredProfile, preferredLevel);
     }
 
     private static String matchSupportedType(MediaCodecInfo info, String mime) {

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildStandaloneWindowQuery,
+  clampCustomBitrateMbps,
+  computeAdaptiveAutoBitrateStep,
   normalizeCastPrefs,
   OpalDesktopBridge,
   sanitizeCustomAdbPath,
@@ -123,20 +125,29 @@ test('desktop bridge forwards standalone pin, reload, and feedback Tauri command
 test('normalizeCastPrefs validates codec, fps, bitrate, cursor, and ADB path; bridge updates native prefs', async () => {
   const norm = normalizeCastPrefs({
     preferredCodec: 'hevc',
-    targetFps: 120,
+    targetFps: 144,
     bitrateKbps: 22000,
+    resizeMode: '2560x1440',
+    liveDpi: 240,
     audioEnabled: false,
     hideLocalCursor: true,
     customAdbPath: '  C:\\Android\\adb.exe  ',
   });
   assert.deepEqual(norm, {
     preferredCodec: 'hevc',
-    targetFps: 120,
+    targetFps: 144,
     bitrateKbps: 22000,
+    bitrateMode: '',
+    resizeMode: '2560x1440',
+    liveDpi: 240,
     audioEnabled: false,
     hideLocalCursor: true,
     customAdbPath: 'C:\\Android\\adb.exe',
   });
+
+  assert.equal(normalizeCastPrefs({ targetFps: 165 }).targetFps, 165);
+  assert.equal(normalizeCastPrefs({ resizeMode: '9999x9999', liveDpi: 999 }).resizeMode, '');
+  assert.equal(normalizeCastPrefs({ resizeMode: '9999x9999', liveDpi: 999 }).liveDpi, 0);
 
   const invalid = normalizeCastPrefs({
     preferredCodec: 'vp9',
@@ -241,4 +252,56 @@ test('sanitizeCustomAdbPath strips Windows Copy-as-path quotes and bridge preser
     cmd: 'set_custom_adb_path',
     args: { path: null },
   });
+});
+
+test('clampCustomBitrateMbps enforces 4-100 Mbps safe bounds and auto adaptive ABR adjusts smoothly', () => {
+  assert.deepEqual(clampCustomBitrateMbps(50), { mbps: 50, kbps: 50000, clamped: false });
+  assert.deepEqual(clampCustomBitrateMbps(80), { mbps: 80, kbps: 80000, clamped: false });
+  assert.deepEqual(clampCustomBitrateMbps(100), { mbps: 100, kbps: 100000, clamped: false });
+  assert.deepEqual(clampCustomBitrateMbps(10000), { mbps: 100, kbps: 100000, clamped: true });
+  assert.deepEqual(clampCustomBitrateMbps(1), { mbps: 4, kbps: 4000, clamped: true });
+
+  const customNorm = normalizeCastPrefs({ bitrateMode: 'custom', bitrateKbps: 80000 });
+  assert.equal(customNorm.bitrateMode, 'custom');
+  assert.equal(customNorm.bitrateKbps, 80000);
+
+  const autoNorm = normalizeCastPrefs({ bitrateMode: 'auto', bitrateKbps: 0 });
+  assert.equal(autoNorm.bitrateMode, 'auto');
+  assert.equal(autoNorm.bitrateKbps, 0);
+
+  // High RTT / lag -> steps down immediately (-20%)
+  const down = computeAdaptiveAutoBitrateStep({
+    currentKbps: 20000,
+    targetFps: 60,
+    actualFps: 42,
+    rttMs: 75,
+    isWired: false,
+  });
+  assert.equal(down.reason, 'down');
+  assert.equal(down.changed, true);
+  assert.equal(down.nextKbps, 16000);
+
+  // Healthy streak >= 2 -> ramps up gently toward ceiling
+  const firstHealthy = computeAdaptiveAutoBitrateStep({
+    currentKbps: 16000,
+    targetFps: 60,
+    actualFps: 60,
+    rttMs: 12,
+    isWired: true,
+    healthyStreak: 0,
+  });
+  assert.equal(firstHealthy.changed, false);
+  assert.equal(firstHealthy.healthyStreak, 1);
+
+  const secondHealthy = computeAdaptiveAutoBitrateStep({
+    currentKbps: 16000,
+    targetFps: 60,
+    actualFps: 60,
+    rttMs: 12,
+    isWired: true,
+    healthyStreak: firstHealthy.healthyStreak,
+  });
+  assert.equal(secondHealthy.reason, 'up');
+  assert.equal(secondHealthy.changed, true);
+  assert.ok(secondHealthy.nextKbps > 16000 && secondHealthy.nextKbps <= 60000);
 });

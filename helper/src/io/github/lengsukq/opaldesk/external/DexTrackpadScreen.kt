@@ -956,7 +956,8 @@ private class PrecisionTrackpadView(
                 totalDistance += hypot(dx, dy)
 
                 if (count >= 2) {
-                    val scrollScale = 0.045f * getSensitivity()
+                    val density = resources.displayMetrics.density.coerceAtLeast(1f)
+                    val scrollScale = (0.045f / density) * getSensitivity()
                     onScroll(-dx * scrollScale, dy * scrollScale)
                 } else {
                     val speed = hypot(dx, dy)

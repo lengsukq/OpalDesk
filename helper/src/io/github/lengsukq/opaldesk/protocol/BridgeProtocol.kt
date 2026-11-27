@@ -114,6 +114,7 @@ object BridgeProtocol {
         const val SPECIAL_PREV_PAGE = 6
         const val SPECIAL_DISMISS_COMPOSING = 7
         const val SPECIAL_CYCLE_SCHEMA = 8
+        const val SPECIAL_HIDE_SELF = 9
     }
 
     object DisplayImePolicy {

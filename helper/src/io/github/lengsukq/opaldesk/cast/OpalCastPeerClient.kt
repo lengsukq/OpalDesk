@@ -154,8 +154,11 @@ class OpalCastPeerClient(
         private const val USB_TETHER_SOCKET_RECV_BUF_BYTES = 1024 * 1024
         private const val SOCKET_SEND_BUF_BYTES = 256 * 1024
         private const val REALTIME_MEDIA_TRAFFIC_CLASS = 0xB8
-        internal const val AUDIO_PREFILL_FRAMES = 2
+        internal const val AUDIO_PREFILL_FRAMES = 1
         internal const val AUDIO_IDLE_PAUSE_MS = 260L
+        internal const val AUDIO_QUEUE_CAPACITY = 6
+        internal const val AUDIO_BACKLOG_TRIM_THRESHOLD = 4
+        internal const val AUDIO_BACKLOG_KEEP_FRAMES = 2
 
         const val TRANSPORT_HINT_WIFI_TLS = "wifi_tls"
         const val TRANSPORT_HINT_USB_TETHER = "usb_tether"
@@ -168,19 +171,19 @@ class OpalCastPeerClient(
             if (isUsbTether) TRANSPORT_HINT_USB_TETHER else TRANSPORT_HINT_WIFI_TLS
 
         /**
-         * Computes an underrun-resistant [AudioTrack] ring buffer (~160 ms of PCM16 audio, at least
-         * 4x platform minBufferSize) so Wi-Fi jitter bursts never overflow or starve audio playback.
+         * Computes a low-latency [AudioTrack] ring buffer (~64 ms of PCM16 audio, honoring platform
+         * minBufferSize without 4x inflation) so audio stays tightly synchronized with low-latency video.
          */
         internal fun computeAudioTrackBufferBytes(
             minBufBytes: Int,
             sampleRate: Int,
             channels: Int,
         ): Int {
-            val safeMin = minBufBytes.coerceAtLeast(4096)
+            val safeMin = ((minBufBytes.coerceAtLeast(4096) + 4095) / 4096) * 4096
             val bytesPerSecond = sampleRate.coerceIn(16_000, 96_000) * channels.coerceIn(1, 2) * 2
-            val target160Ms = (bytesPerSecond * 160L / 1000L).toInt()
-            val frameAligned = ((target160Ms + 4095) / 4096) * 4096
-            return maxOf(safeMin * 4, frameAligned, 32_768)
+            val target64Ms = (bytesPerSecond * 64L / 1000L).toInt()
+            val frameAligned = ((target64Ms + 4095) / 4096) * 4096
+            return maxOf(safeMin, frameAligned, 12_288)
         }
 
         /**
@@ -270,7 +273,7 @@ class OpalCastPeerClient(
     private val closed = AtomicBoolean(false)
     private val authCompleted = AtomicBoolean(false)
     private val outQueue = LinkedBlockingQueue<OpalPeerUplinkFrame>(256)
-    private val audioQueue = LinkedBlockingQueue<Pair<ByteArray, Long>>(16)
+    private val audioQueue = LinkedBlockingQueue<Pair<ByteArray, Long>>(AUDIO_QUEUE_CAPACITY)
     private val textSeq = AtomicLong(1L)
     private val lastIdrRequestMs = AtomicLong(0L)
     private val sideNavTouchFilter = CompositorGeometry.SideNavigationTouchFilter()
@@ -892,6 +895,12 @@ class OpalCastPeerClient(
 
     private fun enqueueAudioFrame(payload: ByteArray, tsUs: Long) {
         if (payload.isEmpty()) return
+        // Proactively trim stale audio backlog after Wi-Fi jitter bursts so audio catches up to live video.
+        if (audioQueue.size >= AUDIO_BACKLOG_TRIM_THRESHOLD) {
+            while (audioQueue.size > AUDIO_BACKLOG_KEEP_FRAMES) {
+                if (audioQueue.poll() == null) break
+            }
+        }
         if (!audioQueue.offer(payload to tsUs)) {
             audioQueue.poll()
             audioQueue.offer(payload to tsUs)
@@ -1208,23 +1217,33 @@ class OpalCastPeerClient(
                 val minBuf = AudioTrack.getMinBufferSize(sampleRate, chMask, AudioFormat.ENCODING_PCM_16BIT)
                     .coerceAtLeast(4096)
                 val trackBufBytes = computeAudioTrackBufferBytes(minBuf, sampleRate, channels)
-                val track = AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build(),
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(chMask)
-                            .build(),
-                    )
-                    .setBufferSizeInBytes(trackBufBytes)
-                    .setTransferMode(AudioTrack.MODE_STREAM)
+                val attrs = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                     .build()
+                val af = AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(chMask)
+                    .build()
+                val track = try {
+                    val builder = AudioTrack.Builder()
+                        .setAudioAttributes(attrs)
+                        .setAudioFormat(af)
+                        .setBufferSizeInBytes(trackBufBytes)
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                    }
+                    builder.build()
+                } catch (_: Throwable) {
+                    AudioTrack.Builder()
+                        .setAudioAttributes(attrs)
+                        .setAudioFormat(af)
+                        .setBufferSizeInBytes(trackBufBytes)
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                        .build()
+                }
                 audioCodec = codec
                 audioTrack = track
                 audioTrackPlaying = false

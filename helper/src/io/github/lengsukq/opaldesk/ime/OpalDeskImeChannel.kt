@@ -506,6 +506,14 @@ object OpalDeskImeChannel {
                 reply.putBoolean("ok", true)
             }
             "state" -> {
+                if (!isPluginSessionConnected) {
+                    val b = extras?.getBinder("binder")
+                    if (IpcTrustVerifier.isValidPluginImeBinder(b)) {
+                        attachPluginBinder(b!!, extras)
+                    } else {
+                        reply.putBoolean("needAttach", true)
+                    }
+                }
                 if (extras != null) {
                     applyPluginStateBundle(extras)
                 }
@@ -529,6 +537,17 @@ object OpalDeskImeChannel {
                 val imeDispId = extras?.getInt("imeDisplayId", -1) ?: -1
                 val inputType = extras?.getInt("inputType", 0) ?: 0
                 val pkg = extras?.getString("pkg").orEmpty()
+                val curEd = _editorStateFlow.value
+                if (!curEd.inputActive || !curEd.acceptingText) {
+                    _editorStateFlow.value = curEd.copy(
+                        serviceBound = true,
+                        inputActive = true,
+                        packageName = pkg.ifEmpty { curEd.packageName },
+                        inputType = if (inputType != 0) inputType else curEd.inputType,
+                        acceptingText = true,
+                        imeDisplayId = if (imeDispId >= 0) imeDispId else curEd.imeDisplayId,
+                    )
+                }
                 val imeState = BridgeClient.imeStateFlow.value
                 val remoteStatus = BridgeClient.remoteStatusFlow.value
                 val extSession = ExternalTrackpadBridge.sessionFlow.value
@@ -719,6 +738,9 @@ object OpalDeskImeChannel {
             sendPluginSpecialActionOneway(BridgeProtocol.PluginImeTx.SPECIAL_DISMISS_COMPOSING)
         }
         _softKeyboardVisibleFlow.value = false
+        // Notify Android IMMS via requestHideSelf(0) in the plugin service so IMMS marks the IME
+        // window hidden and dispatches onShowInputRequested() again on the user's next tap.
+        sendPluginSpecialActionOneway(BridgeProtocol.PluginImeTx.SPECIAL_HIDE_SELF)
     }
 
     fun toggleSoftKeyboard() {

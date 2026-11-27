@@ -168,17 +168,25 @@
                 <option value="60">60 Hz (流畅省电)</option>
                 <option value="90">90 Hz (流畅高刷)</option>
                 <option value="120">120 Hz (高刷丝滑)</option>
+                <option value="144">144 Hz (电竞高刷)</option>
+                <option value="165">165 Hz (极速高刷)</option>
               </select>
             </label>
             <label class="field">
               <span>清晰度 / 码率</span>
               <select id="castBitrateSelect">
+                <option value="auto">自动档 (实时性能自适应)</option>
                 <option value="8000">8 Mbps (均衡)</option>
                 <option value="14000" selected>14 Mbps (高清推荐)</option>
                 <option value="22000">22 Mbps (超清 2K)</option>
                 <option value="32000">32 Mbps (极清高刷)</option>
                 <option value="45000">45 Mbps (有线原画)</option>
+                <option value="custom">自定义 (4–100 Mbps)</option>
               </select>
+              <div id="castCustomBitrateWrap" class="custom-bitrate-row" hidden>
+                <input id="castCustomBitrateInput" type="number" min="4" max="100" step="1" value="50" placeholder="50" />
+                <span class="custom-bitrate-unit mono">Mbps (4–100)</span>
+              </div>
             </label>
           </div>
 
@@ -492,16 +500,24 @@
             <option value="60">60 Hz</option>
             <option value="90">90 Hz</option>
             <option value="120">120 Hz</option>
+            <option value="144">144 Hz</option>
+            <option value="165">165 Hz</option>
           </select>
         </label>
         <label><span>码率</span>
           <select id="liveBitrateSelect">
+            <option value="auto">自动档 (实时自适应)</option>
             <option value="8000">8 Mbps</option>
             <option value="14000">14 Mbps</option>
             <option value="22000">22 Mbps</option>
             <option value="32000">32 Mbps</option>
             <option value="45000">45 Mbps (USB)</option>
+            <option value="custom">自定义 (4–100 Mbps)</option>
           </select>
+          <div id="liveCustomBitrateWrap" class="custom-bitrate-row" hidden>
+            <input id="liveCustomBitrateInput" type="number" min="4" max="100" step="1" value="50" placeholder="50" />
+            <span class="custom-bitrate-unit mono">Mbps</span>
+          </div>
         </label>
       </div>
       <div class="pop-row">

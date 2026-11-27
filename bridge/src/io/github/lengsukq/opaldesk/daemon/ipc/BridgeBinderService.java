@@ -549,10 +549,16 @@ public final class BridgeBinderService extends Binder {
             case BridgeProtocol.TX_SET_REMOTE_MEDIA_CONFIG: {
                 boolean micEnabled = data.readInt() != 0;
                 boolean cameraEnabled = data.readInt() != 0;
+                boolean prevMic = config.isRemoteMicEnabled();
+                boolean prevCamera = config.isRemoteCameraEnabled();
                 boolean accepted = config.setRemoteMediaConfig(micEnabled, cameraEnabled);
                 boolean effectiveCamera = config.isRemoteCameraEnabled();
                 if (remoteBridge != null) {
-                    remoteBridge.applyRemoteMediaPolicy(micEnabled, effectiveCamera);
+                    remoteBridge.applyRemoteMediaPolicy(
+                            micEnabled,
+                            effectiveCamera,
+                            micEnabled && !prevMic,
+                            effectiveCamera && !prevCamera);
                 }
                 if (reply != null) reply.writeInt(accepted ? 1 : 0);
                 return true;

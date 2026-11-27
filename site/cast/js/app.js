@@ -9,12 +9,21 @@ import { OpalAudioPlayer } from './audio_player.js';
 import { OpalInputController } from './input_mapper.js';
 import { DEFAULT_CAMERA_FPS, DEFAULT_CAMERA_HEIGHT, DEFAULT_CAMERA_WIDTH, OpalCameraCapturer } from './camera_capturer.js';
 import {
+  clampCustomBitrateMbps,
+  computeAdaptiveAutoBitrateStep,
+  DEFAULT_CUSTOM_BITRATE_MBPS,
   evaluateCertificateTrust,
   formatShortFingerprint,
   isTauriDesktop,
+  MAX_CUSTOM_BITRATE_MBPS,
+  MIN_CUSTOM_BITRATE_MBPS,
   normalizeCastPrefs,
   OpalDesktopBridge,
+  PRESET_BITRATE_KBPS,
   sanitizeCustomAdbPath,
+  SUPPORTED_DPI_OPTIONS,
+  SUPPORTED_FPS_OPTIONS,
+  SUPPORTED_RESIZE_MODES,
 } from './desktop_bridge.js';
 import { OpalDiagnosticsController } from './diagnostics_controller.js';
 import { DEFAULT_MIC_CHANNELS, DEFAULT_MIC_SAMPLE_RATE, OpalMicCapturer } from './mic_capturer.js';
@@ -102,11 +111,16 @@ const STORAGE_THEME = 'opaldesk-showcase-theme-v1';
 const STORAGE_CODEC = 'opaldesk-web-codec-pref-v1';
 const STORAGE_FPS = 'opaldesk-web-fps-pref-v1';
 const STORAGE_BITRATE = 'opaldesk-web-bitrate-pref-v1';
+const STORAGE_BITRATE_MODE = 'opaldesk-web-bitrate-mode-v1';
+const STORAGE_CUSTOM_BITRATE_MBPS = 'opaldesk-web-custom-bitrate-mbps-v1';
+const STORAGE_RESIZE_MODE = 'opaldesk-web-resize-mode-v1';
+const STORAGE_LIVE_DPI = 'opaldesk-web-live-dpi-v1';
 const STORAGE_AUDIO = 'opaldesk-web-audio-pref-v1';
 const STORAGE_HIDE_CURSOR = 'opaldesk-web-hide-cursor-v1';
 const STORAGE_USB_TETHER_BETA = 'opaldesk-usb-tether-beta-v1';
 const STORAGE_CUSTOM_ADB_PATH = 'opaldesk-custom-adb-path-v1';
 const FILE_CHUNK_SIZE = 64 * 1024;
+const REVEAL_HANDLE_HOVER_DELAY_MS = 180;
 
 function loadCodecPref() {
   try {
@@ -126,14 +140,39 @@ function saveCodecPref(codec) {
   }
 }
 
+function loadCustomBitrateMbps() {
+  try {
+    const raw = localStorage.getItem(STORAGE_CUSTOM_BITRATE_MBPS);
+    if (!raw) return DEFAULT_CUSTOM_BITRATE_MBPS;
+    return clampCustomBitrateMbps(raw).mbps;
+  } catch {
+    return DEFAULT_CUSTOM_BITRATE_MBPS;
+  }
+}
+
+function saveCustomBitrateMbps(mbps) {
+  try {
+    const res = clampCustomBitrateMbps(mbps);
+    localStorage.setItem(STORAGE_CUSTOM_BITRATE_MBPS, String(res.mbps));
+  } catch {
+    // Ignore storage restriction
+  }
+}
+
 function loadLocalCastPrefs() {
   try {
     const rawAudio = localStorage.getItem(STORAGE_AUDIO);
     const rawHideCursor = localStorage.getItem(STORAGE_HIDE_CURSOR);
+    const rawMode = localStorage.getItem(STORAGE_BITRATE_MODE) || '';
+    const rawResizeMode = localStorage.getItem(STORAGE_RESIZE_MODE) || '';
+    const rawLiveDpi = Number(localStorage.getItem(STORAGE_LIVE_DPI) || 0);
     return normalizeCastPrefs({
       preferredCodec: loadCodecPref(),
       targetFps: Number(localStorage.getItem(STORAGE_FPS) || 0),
       bitrateKbps: Number(localStorage.getItem(STORAGE_BITRATE) || 0),
+      bitrateMode: rawMode,
+      resizeMode: rawResizeMode,
+      liveDpi: rawLiveDpi,
       audioEnabled: rawAudio === null ? null : rawAudio === '1',
       hideLocalCursor: rawHideCursor === null ? null : rawHideCursor === '1',
     });
@@ -147,11 +186,24 @@ function saveLocalCastPrefs(patch = {}) {
     if (patch.preferredCodec === 'hevc' || patch.preferredCodec === 'h264') {
       localStorage.setItem(STORAGE_CODEC, patch.preferredCodec);
     }
-    if (typeof patch.targetFps === 'number' && [60, 90, 120].includes(patch.targetFps)) {
+    if (typeof patch.targetFps === 'number' && SUPPORTED_FPS_OPTIONS.includes(patch.targetFps)) {
       localStorage.setItem(STORAGE_FPS, String(patch.targetFps));
     }
-    if (typeof patch.bitrateKbps === 'number' && patch.bitrateKbps >= 2500 && patch.bitrateKbps <= 50000) {
-      localStorage.setItem(STORAGE_BITRATE, String(Math.round(patch.bitrateKbps)));
+    if (patch.bitrateMode === 'auto' || patch.bitrateMode === 'preset' || patch.bitrateMode === 'custom') {
+      localStorage.setItem(STORAGE_BITRATE_MODE, patch.bitrateMode);
+    }
+    if (typeof patch.bitrateKbps === 'number') {
+      if (patch.bitrateKbps === 0) {
+        localStorage.setItem(STORAGE_BITRATE, '0');
+      } else if (patch.bitrateKbps >= 2500 && patch.bitrateKbps <= MAX_CUSTOM_BITRATE_MBPS * 1000) {
+        localStorage.setItem(STORAGE_BITRATE, String(Math.round(patch.bitrateKbps)));
+      }
+    }
+    if (typeof patch.resizeMode === 'string' && SUPPORTED_RESIZE_MODES.includes(patch.resizeMode)) {
+      localStorage.setItem(STORAGE_RESIZE_MODE, patch.resizeMode);
+    }
+    if (typeof patch.liveDpi === 'number' && SUPPORTED_DPI_OPTIONS.includes(patch.liveDpi)) {
+      localStorage.setItem(STORAGE_LIVE_DPI, String(patch.liveDpi));
     }
     if (typeof patch.audioEnabled === 'boolean') {
       localStorage.setItem(STORAGE_AUDIO, patch.audioEnabled ? '1' : '0');
@@ -291,7 +343,12 @@ class OpalCastWebApp {
     this.pingSentMap = new Map();
     this.pingTimer = null;
     this.toolbarFadeTimer = null;
+    this.revealHoverTimer = null;
     this.resizeDebounceTimer = null;
+    this.bitrateMode = 'preset';
+    this.customBitrateMbps = loadCustomBitrateMbps();
+    this.autoAdaptiveBitrateKbps = 0;
+    this.autoHealthyStreak = 0;
     this.textSeq = 1;
     this.transferSeq = 1;
     this.currentApps = [];
@@ -629,9 +686,20 @@ class OpalCastWebApp {
       preferredCodec: native.preferredCodec || local.preferredCodec || '',
       targetFps: native.targetFps || local.targetFps || 0,
       bitrateKbps: native.bitrateKbps || local.bitrateKbps || 0,
+      bitrateMode: local.bitrateMode || native.bitrateMode || '',
+      resizeMode: local.resizeMode || native.resizeMode || 'auto',
+      liveDpi: local.liveDpi || native.liveDpi || 0,
       audioEnabled: native.audioEnabled !== null ? native.audioEnabled : local.audioEnabled,
       hideLocalCursor: native.hideLocalCursor !== null ? native.hideLocalCursor : Boolean(local.hideLocalCursor),
     };
+  }
+
+  syncResizePresetUi() {
+    const pop = $('qualityPopover');
+    if (!pop) return;
+    pop.querySelectorAll('[data-preset]').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.preset === this.resizeMode);
+    });
   }
 
   restoreSavedCastPrefs() {
@@ -640,10 +708,32 @@ class OpalCastWebApp {
     if (fpsEl && saved.targetFps && fpsEl.querySelector(`option[value="${saved.targetFps}"]`)) {
       fpsEl.value = String(saved.targetFps);
     }
+    this.customBitrateMbps = loadCustomBitrateMbps();
     const brEl = $('castBitrateSelect');
-    if (brEl && saved.bitrateKbps && brEl.querySelector(`option[value="${saved.bitrateKbps}"]`)) {
-      brEl.value = String(saved.bitrateKbps);
+    if (brEl) {
+      if (saved.bitrateMode === 'auto') {
+        this.bitrateMode = 'auto';
+        brEl.value = 'auto';
+      } else if (saved.bitrateMode === 'custom' || (saved.bitrateKbps > 0 && !PRESET_BITRATE_KBPS.includes(saved.bitrateKbps))) {
+        this.bitrateMode = 'custom';
+        brEl.value = 'custom';
+        if (saved.bitrateKbps > 0) {
+          this.customBitrateMbps = clampCustomBitrateMbps(saved.bitrateKbps / 1000).mbps;
+        }
+      } else if (saved.bitrateKbps && brEl.querySelector(`option[value="${saved.bitrateKbps}"]`)) {
+        this.bitrateMode = 'preset';
+        brEl.value = String(saved.bitrateKbps);
+      } else {
+        this.bitrateMode = 'preset';
+      }
     }
+    this.resizeMode = SUPPORTED_RESIZE_MODES.includes(saved.resizeMode) ? saved.resizeMode : 'auto';
+    this.syncResizePresetUi();
+    const dpiEl = $('liveDpiSelect');
+    if (dpiEl && dpiEl.querySelector(`option[value="${saved.liveDpi}"]`)) {
+      dpiEl.value = String(saved.liveDpi);
+    }
+    this.syncBitrateInputsUi('both');
     const audioEl = $('castAudioCheck');
     if (audioEl && typeof saved.audioEnabled === 'boolean') {
       audioEl.checked = saved.audioEnabled;
@@ -654,6 +744,51 @@ class OpalCastWebApp {
     }
     this.hideLocalCursor = Boolean(saved.hideLocalCursor);
     this.syncLocalCursorUi?.();
+  }
+
+  syncBitrateInputsUi(scope = 'both') {
+    const castSel = $('castBitrateSelect');
+    const castWrap = $('castCustomBitrateWrap');
+    const castInput = $('castCustomBitrateInput');
+    const liveSel = $('liveBitrateSelect');
+    const liveWrap = $('liveCustomBitrateWrap');
+    const liveInput = $('liveCustomBitrateInput');
+    if ((scope === 'both' || scope === 'cast') && castSel) {
+      const isCustom = castSel.value === 'custom';
+      if (castWrap) castWrap.hidden = !isCustom;
+      if (castInput && document.activeElement !== castInput) {
+        castInput.value = String(this.customBitrateMbps);
+      }
+    }
+    if ((scope === 'both' || scope === 'live') && liveSel) {
+      const isCustom = liveSel.value === 'custom';
+      if (liveWrap) liveWrap.hidden = !isCustom;
+      if (liveInput && document.activeElement !== liveInput) {
+        liveInput.value = String(this.customBitrateMbps);
+      }
+    }
+  }
+
+  resolveSelectedBitrateConfig(selectId, inputId, { notifyOnClamp = false } = {}) {
+    const sel = $(selectId);
+    const val = sel ? sel.value : '14000';
+    if (val === 'auto') {
+      return { mode: 'auto', bitrateKbps: 0, mbps: 0 };
+    }
+    if (val === 'custom') {
+      const inputEl = $(inputId);
+      const raw = inputEl ? inputEl.value : this.customBitrateMbps;
+      const res = clampCustomBitrateMbps(raw);
+      this.customBitrateMbps = res.mbps;
+      if (inputEl) inputEl.value = String(res.mbps);
+      saveCustomBitrateMbps(res.mbps);
+      if (notifyOnClamp && res.clamped) {
+        this.showToast(`自定义码率支持 ${MIN_CUSTOM_BITRATE_MBPS}–${MAX_CUSTOM_BITRATE_MBPS} Mbps，已自动调整为 ${res.mbps} Mbps`);
+      }
+      return { mode: 'custom', bitrateKbps: res.kbps, mbps: res.mbps };
+    }
+    const presetKbps = Number(val) || 14000;
+    return { mode: 'preset', bitrateKbps: presetKbps, mbps: Math.round(presetKbps / 1000) };
   }
 
   persistCastPrefs(patch) {
@@ -772,9 +907,24 @@ class OpalCastWebApp {
       const fps = Number(e.target.value) || 60;
       this.persistCastPrefs({ targetFps: fps });
     });
-    $('castBitrateSelect')?.addEventListener('change', (e) => {
-      const bitrateKbps = Number(e.target.value) || 14000;
-      this.persistCastPrefs({ bitrateKbps });
+    $('castBitrateSelect')?.addEventListener('change', () => {
+      this.syncBitrateInputsUi('cast');
+      const cfg = this.resolveSelectedBitrateConfig('castBitrateSelect', 'castCustomBitrateInput', { notifyOnClamp: true });
+      this.bitrateMode = cfg.mode;
+      this.persistCastPrefs({ bitrateMode: cfg.mode, bitrateKbps: cfg.bitrateKbps });
+    });
+    $('castCustomBitrateInput')?.addEventListener('change', () => {
+      const cfg = this.resolveSelectedBitrateConfig('castBitrateSelect', 'castCustomBitrateInput', { notifyOnClamp: true });
+      this.bitrateMode = cfg.mode;
+      this.syncBitrateInputsUi('both');
+      this.persistCastPrefs({ bitrateMode: cfg.mode, bitrateKbps: cfg.bitrateKbps });
+    });
+    $('liveBitrateSelect')?.addEventListener('change', () => {
+      this.syncBitrateInputsUi('live');
+    });
+    $('liveCustomBitrateInput')?.addEventListener('change', () => {
+      this.resolveSelectedBitrateConfig('liveBitrateSelect', 'liveCustomBitrateInput', { notifyOnClamp: true });
+      this.syncBitrateInputsUi('both');
     });
     $('castAudioCheck')?.addEventListener('change', (e) => {
       this.persistCastPrefs({ audioEnabled: Boolean(e.target.checked) });
@@ -984,7 +1134,8 @@ class OpalCastWebApp {
     $('qualityPopover').querySelectorAll('[data-preset]').forEach((btn) => {
       btn.addEventListener('click', () => {
         this.resizeMode = btn.dataset.preset;
-        $('qualityPopover').querySelectorAll('[data-preset]').forEach((b) => b.classList.toggle('active', b === btn));
+        this.syncResizePresetUi();
+        this.persistCastPrefs({ resizeMode: this.resizeMode });
       });
     });
     $('applyQualityBtn').addEventListener('click', () => {
@@ -1025,13 +1176,22 @@ class OpalCastWebApp {
       $('toastIsland').hidden = true;
     });
 
-    // Stage toolbar auto-hide + reveal via top grab handle or top-edge hover
-    $('stageRevealHandle').addEventListener('pointerenter', () => this.bumpToolbarVisibility());
-    $('stageRevealHandle').addEventListener('click', () => this.bumpToolbarVisibility());
-    $('stageToolbar').addEventListener('pointerleave', () => this.bumpToolbarVisibility());
-    $('stageView').addEventListener('pointermove', (e) => {
-      if (e.clientY <= 18) this.bumpToolbarVisibility();
+    // Stage toolbar auto-hide + reveal strictly via centered top grab handle (with 180ms hover-intent
+    // debounce so sweeping past top-right Android status buttons never blocks clicks behind it)
+    $('stageRevealHandle').addEventListener('pointerenter', () => {
+      clearTimeout(this.revealHoverTimer);
+      this.revealHoverTimer = setTimeout(() => this.bumpToolbarVisibility(), REVEAL_HANDLE_HOVER_DELAY_MS);
     });
+    $('stageRevealHandle').addEventListener('pointerleave', () => {
+      clearTimeout(this.revealHoverTimer);
+      this.revealHoverTimer = null;
+    });
+    $('stageRevealHandle').addEventListener('click', () => {
+      clearTimeout(this.revealHoverTimer);
+      this.revealHoverTimer = null;
+      this.bumpToolbarVisibility();
+    });
+    $('stageToolbar').addEventListener('pointerleave', () => this.bumpToolbarVisibility());
 
     // Drag-drop visual cue
     let dragDepth = 0;
@@ -1896,6 +2056,10 @@ class OpalCastWebApp {
     if (isStandalone) {
       width = 1080;
       height = 2280;
+    } else if (this.resizeMode && this.resizeMode !== 'auto') {
+      const [pw, ph] = this.resizeMode.split('x').map(Number);
+      width = pw || 1920;
+      height = ph || 1080;
     } else {
       const maxW = isWired ? 3840 : 2560;
       const maxH = isWired ? 2160 : 1600;
@@ -1903,13 +2067,19 @@ class OpalCastWebApp {
       width = fitted.width;
       height = fitted.height;
     }
-    const dpi = isStandalone ? 380 : Math.max(160, Math.min(320, Math.round(160 * dpr)));
+    const savedDpi = Number($('liveDpiSelect')?.value) || 0;
+    const dpi = isStandalone
+      ? 380
+      : (savedDpi > 0 ? savedDpi : Math.max(160, Math.min(320, Math.round(160 * dpr))));
     const fps = Number($('castFpsSelect').value) || 60;
-    const bitrateKbps = Number($('castBitrateSelect').value) || 14000;
-    return { width, height, dpi, fps, bitrateKbps };
+    const brCfg = this.resolveSelectedBitrateConfig('castBitrateSelect', 'castCustomBitrateInput');
+    this.bitrateMode = brCfg.mode;
+    this.autoAdaptiveBitrateKbps = 0;
+    this.autoHealthyStreak = 0;
+    return { width, height, dpi, fps, bitrateKbps: brCfg.bitrateKbps };
   }
 
-  applyLiveResizeConfig() {
+  applyLiveResizeConfig({ bitrateOverrideKbps = null, silent = false } = {}) {
     if (!this.authenticated) return;
     let w;
     let h;
@@ -1932,15 +2102,37 @@ class OpalCastWebApp {
       h = ph || 1080;
     }
     const fps = Number($('liveFpsSelect').value) || Number($('castFpsSelect').value) || 60;
-    const bitrateKbps = Number($('liveBitrateSelect').value) || Number($('castBitrateSelect').value) || 14000;
     const dpi = Number($('liveDpiSelect')?.value) || 0;
-    if ($('castFpsSelect')?.querySelector(`option[value="${fps}"]`)) {
-      $('castFpsSelect').value = String(fps);
+    let bitrateKbps;
+    if (typeof bitrateOverrideKbps === 'number' && bitrateOverrideKbps > 0) {
+      bitrateKbps = bitrateOverrideKbps;
+    } else {
+      const brCfg = this.resolveSelectedBitrateConfig('liveBitrateSelect', 'liveCustomBitrateInput', {
+        notifyOnClamp: !silent,
+      });
+      this.bitrateMode = brCfg.mode;
+      bitrateKbps = brCfg.bitrateKbps;
+      if (brCfg.mode === 'auto') {
+        this.autoAdaptiveBitrateKbps = 0;
+        this.autoHealthyStreak = 0;
+      }
+      if ($('castFpsSelect')?.querySelector(`option[value="${fps}"]`)) {
+        $('castFpsSelect').value = String(fps);
+      }
+      if ($('castBitrateSelect')) {
+        $('castBitrateSelect').value = brCfg.mode === 'auto'
+          ? 'auto'
+          : (brCfg.mode === 'custom' ? 'custom' : String(bitrateKbps));
+      }
+      this.syncBitrateInputsUi('both');
+      this.persistCastPrefs({
+        targetFps: fps,
+        bitrateMode: brCfg.mode,
+        bitrateKbps,
+        resizeMode: this.resizeMode,
+        liveDpi: dpi,
+      });
     }
-    if ($('castBitrateSelect')?.querySelector(`option[value="${bitrateKbps}"]`)) {
-      $('castBitrateSelect').value = String(bitrateKbps);
-    }
-    this.persistCastPrefs({ targetFps: fps, bitrateKbps });
     this.sendOpalFrame(TYPE_RESIZE_CONFIG, 0, encodeResizeConfig({ width: w, height: h, dpi, fps, bitrateKbps }));
   }
 
@@ -2031,6 +2223,7 @@ class OpalCastWebApp {
     this.standalone.syncPinButtonUi();
     $('liveFpsSelect').value = $('castFpsSelect').value;
     $('liveBitrateSelect').value = $('castBitrateSelect').value;
+    this.syncBitrateInputsUi('live');
     $('connectCastBtn').disabled = false;
     $('connectCastBtn').textContent = this.desktop.enabled ? '开始投屏' : '开始 Web 投屏';
   }
@@ -2053,6 +2246,8 @@ class OpalCastWebApp {
     this.remoteFullscreenTitle = '';
     this.injectStatus = 0;
     this.inputBlockedWarned = false;
+    this.autoAdaptiveBitrateKbps = 0;
+    this.autoHealthyStreak = 0;
     this.syncBlackoutUi();
     this.syncRemoteFullscreenUi();
     this.teardownCastSocket();
@@ -2078,6 +2273,8 @@ class OpalCastWebApp {
     clearInterval(this.pingTimer);
     this.pingTimer = null;
     clearTimeout(this.toolbarFadeTimer);
+    clearTimeout(this.revealHoverTimer);
+    this.revealHoverTimer = null;
     clearTimeout(this.resizeDebounceTimer);
     this.pingSentMap.clear();
     this.connected = false;
@@ -2103,7 +2300,33 @@ class OpalCastWebApp {
         this.pingSentMap.delete(firstKey);
       }
       this.sendOpalFrame(TYPE_PING, 0, encodePingPong(id));
+      this.evaluateAutoAdaptiveBitrate();
     }, 3000);
+  }
+
+  evaluateAutoAdaptiveBitrate() {
+    if (!this.authenticated || this.bitrateMode !== 'auto') return;
+    const targetFps = Number($('liveFpsSelect')?.value) || Number($('castFpsSelect')?.value) || 60;
+    const step = computeAdaptiveAutoBitrateStep({
+      currentKbps: this.autoAdaptiveBitrateKbps,
+      targetFps,
+      actualFps: this.remoteFps,
+      rttMs: this.lastRttMs,
+      isWired: this.transportMode === 'usb',
+      width: this.remoteWidth,
+      height: this.remoteHeight,
+      preferHevc: this.remoteCodecId === VIDEO_CODEC_HEVC,
+      healthyStreak: this.autoHealthyStreak,
+    });
+    this.autoHealthyStreak = step.healthyStreak;
+    if (this.autoAdaptiveBitrateKbps <= 0) {
+      this.autoAdaptiveBitrateKbps = step.nextKbps;
+    }
+    if (step.changed) {
+      this.autoAdaptiveBitrateKbps = step.nextKbps;
+      this.applyLiveResizeConfig({ bitrateOverrideKbps: step.nextKbps, silent: true });
+      this.updateTelemetry();
+    }
   }
 
   updateTelemetry() {
@@ -2111,6 +2334,9 @@ class OpalCastWebApp {
     if (this.remoteFps > 0) parts.push(`${this.remoteFps}fps`);
     if (this.lastRttMs > 0) parts.push(`${this.lastRttMs}ms`);
     parts.push(this.remoteCodecId === VIDEO_CODEC_HEVC ? 'HEVC' : 'H.264');
+    if (this.bitrateMode === 'auto') {
+      parts.push(this.autoAdaptiveBitrateKbps > 0 ? `自动 ${Math.round(this.autoAdaptiveBitrateKbps / 1000)}M` : '自动码率');
+    }
     if (this.injectStatus === 2) parts.push('UHID');
     else if (this.injectStatus === -1) parts.push('触控受限');
     $('stageTelemetry').textContent = parts.join(' · ');

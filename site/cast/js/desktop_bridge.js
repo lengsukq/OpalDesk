@@ -209,16 +209,98 @@ export function sanitizeCustomAdbPath(raw) {
   return cleaned.replace(/^["']+|["']+$/g, '').trim();
 }
 
+export const MIN_CUSTOM_BITRATE_MBPS = 4;
+export const MAX_CUSTOM_BITRATE_MBPS = 100;
+export const DEFAULT_CUSTOM_BITRATE_MBPS = 50;
+export const PRESET_BITRATE_KBPS = [8000, 14000, 22000, 32000, 45000];
+export const SUPPORTED_FPS_OPTIONS = [60, 90, 120, 144, 165];
+export const SUPPORTED_RESIZE_MODES = ['auto', '1920x1080', '2560x1440', '1280x800'];
+export const SUPPORTED_DPI_OPTIONS = [0, 160, 200, 240, 280, 320, 360, 420];
+
+export function clampCustomBitrateMbps(raw) {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return {
+      mbps: DEFAULT_CUSTOM_BITRATE_MBPS,
+      kbps: DEFAULT_CUSTOM_BITRATE_MBPS * 1000,
+      clamped: true,
+    };
+  }
+  const rounded = Math.round(parsed);
+  const clampedMbps = Math.max(MIN_CUSTOM_BITRATE_MBPS, Math.min(MAX_CUSTOM_BITRATE_MBPS, rounded));
+  return {
+    mbps: clampedMbps,
+    kbps: clampedMbps * 1000,
+    clamped: clampedMbps !== rounded,
+  };
+}
+
+export function computeAdaptiveAutoBitrateStep({
+  currentKbps = 0,
+  targetFps = 60,
+  actualFps = 60,
+  rttMs = 0,
+  isWired = false,
+  width = 1920,
+  height = 1080,
+  preferHevc = false,
+  healthyStreak = 0,
+} = {}) {
+  const minKbps = 4000;
+  const maxKbps = isWired ? 60000 : 36000;
+  const pixels = Math.max(640, width) * Math.max(480, height);
+  let baseKbps = 14000;
+  if (pixels >= 5_500_000) baseKbps = targetFps >= 85 ? 28000 : 22000;
+  else if (pixels >= 2_800_000) baseKbps = targetFps >= 85 ? 22000 : 16000;
+  else if (targetFps >= 85) baseKbps = 16000;
+  if (preferHevc) baseKbps = Math.max(minKbps, Math.round(baseKbps * 0.78));
+
+  const cur = currentKbps >= minKbps ? currentKbps : Math.min(maxKbps, baseKbps);
+  const safeTargetFps = Math.max(30, Number(targetFps) || 60);
+  const hasFps = Number(actualFps) > 0;
+  const fpsRatio = hasFps ? (Number(actualFps) / safeTargetFps) : 1;
+  const safeRtt = Math.max(0, Number(rttMs) || 0);
+
+  // Heavy congestion / frame drop -> immediate smooth step down (-20%)
+  if (safeRtt >= 65 || (hasFps && fpsRatio < 0.78)) {
+    const nextKbps = Math.max(minKbps, Math.round((cur * 0.80) / 500) * 500);
+    return { nextKbps, changed: Math.abs(nextKbps - cur) >= 1000, healthyStreak: 0, reason: 'down' };
+  }
+  // Moderate pressure -> hold steady without oscillation
+  if (safeRtt >= 38 || (hasFps && fpsRatio < 0.88)) {
+    return { nextKbps: cur, changed: false, healthyStreak: 0, reason: 'hold' };
+  }
+  // Healthy link + smooth frame rate -> ramp up gently after 2 consecutive healthy windows
+  const nextStreak = healthyStreak + 1;
+  if (nextStreak >= 2 && cur < maxKbps && (safeRtt === 0 || safeRtt <= 22) && fpsRatio >= 0.94) {
+    const step = Math.max(2000, Math.round((cur * 0.15) / 500) * 500);
+    const nextKbps = Math.min(maxKbps, cur + step);
+    return {
+      nextKbps,
+      changed: Math.abs(nextKbps - cur) >= 1000,
+      healthyStreak: 0,
+      reason: 'up',
+    };
+  }
+  return { nextKbps: cur, changed: false, healthyStreak: nextStreak, reason: 'steady' };
+}
+
 export function normalizeCastPrefs(raw = {}) {
   const codec = raw?.preferredCodec === 'hevc' || raw?.preferredCodec === 'h264'
     ? raw.preferredCodec
     : '';
   const fpsNum = Number(raw?.targetFps || 0);
-  const targetFps = [60, 90, 120].includes(fpsNum) ? fpsNum : 0;
+  const targetFps = SUPPORTED_FPS_OPTIONS.includes(fpsNum) ? fpsNum : 0;
   const brNum = Number(raw?.bitrateKbps || 0);
-  const bitrateKbps = Number.isFinite(brNum) && brNum >= 2500 && brNum <= 50000
+  const bitrateKbps = Number.isFinite(brNum) && brNum >= 2500 && brNum <= MAX_CUSTOM_BITRATE_MBPS * 1000
     ? Math.round(brNum)
     : 0;
+  const bitrateMode = raw?.bitrateMode === 'auto' || raw?.bitrateMode === 'custom' || raw?.bitrateMode === 'preset'
+    ? raw.bitrateMode
+    : (bitrateKbps > 0 && !PRESET_BITRATE_KBPS.includes(bitrateKbps) ? 'custom' : '');
+  const resizeMode = SUPPORTED_RESIZE_MODES.includes(raw?.resizeMode) ? raw.resizeMode : '';
+  const dpiNum = Number(raw?.liveDpi);
+  const liveDpi = Number.isFinite(dpiNum) && SUPPORTED_DPI_OPTIONS.includes(dpiNum) ? dpiNum : 0;
   const audioEnabled = typeof raw?.audioEnabled === 'boolean' ? raw.audioEnabled : null;
   const hideLocalCursor = typeof raw?.hideLocalCursor === 'boolean' ? raw.hideLocalCursor : null;
   const customAdbPath = sanitizeCustomAdbPath(raw?.customAdbPath);
@@ -226,6 +308,9 @@ export function normalizeCastPrefs(raw = {}) {
     preferredCodec: codec,
     targetFps,
     bitrateKbps,
+    bitrateMode,
+    resizeMode,
+    liveDpi,
     audioEnabled,
     hideLocalCursor,
     customAdbPath,

@@ -580,9 +580,9 @@ html, body {
   left: 50%;
   transform: translateX(-50%);
   z-index: 28;
-  width: 96px;
-  height: 18px;
-  padding: 5px 0 0;
+  width: 56px;
+  height: 10px;
+  padding: 3px 0 0;
   border: none;
   background: transparent;
   display: flex;
@@ -591,16 +591,33 @@ html, body {
   cursor: pointer;
 }
 .stage-reveal-handle span {
-  width: 42px;
-  height: 4px;
+  width: 34px;
+  height: 3px;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.58);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
   transition: width 0.18s ease, background 0.18s ease;
 }
 .stage-reveal-handle:hover span {
-  width: 56px;
+  width: 46px;
   background: rgba(255, 255, 255, 0.9);
+}
+
+.custom-bitrate-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.custom-bitrate-row input {
+  flex: 1;
+  min-width: 0;
+}
+.custom-bitrate-unit {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .stage-toolbar {
