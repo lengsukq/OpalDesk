@@ -86,6 +86,7 @@ class ExternalMonitorPresentation(
         ?: (targetDisplay.mode?.refreshRate ?: 60f).toInt()).coerceAtLeast(24)
 
     private val ownLifecycle = PresentationLifecycleOwner()
+    private var rootContainer: HardwareMouseDetectingFrameLayout? = null
     private var composeView: ComposeView? = null
     private var imeVisible by mutableStateOf(false)
     private var localOverlayNeedsFocus by mutableStateOf(false)
@@ -164,6 +165,10 @@ class ExternalMonitorPresentation(
                         localTextFieldFocused = localTextFieldFocused,
                         hostSoftImeVisible = imeVisible,
                     )
+                    val showVirtualCursor = pointerDispatcher.showVirtualCursorState.value
+                    LaunchedEffect(showVirtualCursor) {
+                        rootContainer?.syncSystemPointerIcon()
+                    }
                     LaunchedEffect(avoidFocusSteal) {
                         setPresentationNotFocusable(avoidFocusSteal)
                     }
@@ -280,17 +285,21 @@ class ExternalMonitorPresentation(
         }
         composeView = view
 
-        val rootContainer = HardwareMouseDetectingFrameLayout(context) {
-            pointerDispatcher.hideCursor()
-        }.apply {
+        val container = HardwareMouseDetectingFrameLayout(
+            ctx = context,
+            shouldSuppressSystemPointerIcon = { pointerDispatcher.showVirtualCursorState.value },
+            onHardwareMouseSeen = { pointerDispatcher.hideCursor() },
+        ).apply {
             setBackgroundColor(AndroidColor.BLACK)
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
             )
             addView(view)
+            syncSystemPointerIcon()
         }
-        setContentView(rootContainer)
+        rootContainer = container
+        setContentView(container)
 
         window?.let { win ->
             WindowCompat.getInsetsController(win, win.decorView).apply {
@@ -311,6 +320,8 @@ class ExternalMonitorPresentation(
     }
 
     override fun dismiss() {
+        rootContainer = null
+        composeView = null
         ownLifecycle.onDestroy()
         super.dismiss()
     }

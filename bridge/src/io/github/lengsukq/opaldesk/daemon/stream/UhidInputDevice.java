@@ -21,12 +21,25 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
- * Pure-Java Linux /dev/uhid virtual HID touchscreen, relative mouse, and keyboard driver.
+ * Pure-Java Linux /dev/uhid cursorless virtual HID touchscreen and keyboard driver.
  * Bypasses OEM INJECT_EVENTS restrictions (such as HyperOS SecurityException) by creating genuine
  * kernel HID devices via UHID_CREATE2 / UHID_INPUT2 / UHID_DESTROY and binding all physical ports
  * to the target VirtualDisplay via InputManager.addUniqueIdAssociationByPort.
+ *
+ * <p>Intentionally NEVER registers an {@code InputDeviceClass::CURSOR} HID mouse on managed
+ * {@code VirtualDisplay}s: the outer compositor host already owns the sole visible cursor (either
+ * the hardware USB/Bluetooth mouse cursor, OpalDesk's virtual trackpad cursor, or the remote PC
+ * cursor). Creating a kernel HID mouse inside an embedded {@code OpalWin-*} or cast display would
+ * cause Android's {@code PointerChoreographer} to paint a second, drifted system mouse cursor into
+ * the framebuffer. Instead, primary clicks/drags and mouse-wheel scroll execute pixel-accurately
+ * through the 10-contact absolute HID Digitizer Touch Screen ({@code touchFd}), while right-click
+ * / side-back and text/shortcut keys route through {@code kbdFd}.
  *
  * Delegates all binary struct / HID descriptor / key mapping encoding to {@link UhidProtocol}.
  */
@@ -34,6 +47,11 @@ public final class UhidInputDevice implements Closeable {
     public static final String UHID_DEVICE_PATH = "/dev/uhid";
     private static final int HID_KEY_V = 0x19;
     private static final int EIO_ERRNO = 5;
+    private static final int SCROLL_INTERPOLATION_STEPS = 3;
+    private static final long SCROLL_STEP_SLEEP_MS = 4L;
+    private static final long SCROLL_IDLE_LIFT_MS = 95L;
+    private static final float SCROLL_REANCHOR_DISTANCE_PX = 48f;
+    private static final float SCROLL_VIEWPORT_MARGIN_PX = 20f;
 
     // Cached reflection bindings for port-to-display association across InputManager / IInputManager
     private static final Object ASSOC_CACHE_LOCK = new Object();
@@ -50,28 +68,35 @@ public final class UhidInputDevice implements Closeable {
 
     private final Object ioLock = new Object();
     private final Object touchWriteLock = new Object();
+    private final Object scrollLock = new Object();
     private final int displayId;
     private final String vdUniqueId;
     private final boolean keyboardOnly;
     private final String touchPhys;
-    private final String ptrPhys;
     private final String kbdPhys;
     private final InputManager inputManager;
     private final Object iInputManager;
 
     private FileDescriptor touchFd;
-    private FileDescriptor ptrFd;
     private FileDescriptor kbdFd;
     private Thread touchEventThread;
+    private ScheduledExecutorService scrollExecutor;
+    private ScheduledFuture<?> pendingScrollLift;
+    private boolean scrollActive = false;
+    private int scrollGeneration = 0;
+    private float scrollOriginX = -1f;
+    private float scrollOriginY = -1f;
+    private float scrollCurX = -1f;
+    private float scrollCurY = -1f;
+    private int scrollDispW = 2;
+    private int scrollDispH = 2;
+    private volatile boolean userTouchActive = false;
     private volatile boolean closed = false;
     private boolean portAssociated = false;
     private volatile String lastAssocError = "";
 
     private byte[] lastTouchReport = null;
     private boolean activeMouseToTouch = false;
-    private float lastMousePxX = -1f;
-    private float lastMousePxY = -1f;
-    private int lastButtons = 0;
     private int activeModifiers = 0;
     private final LinkedHashSet<Integer> pressedHidKeys = new LinkedHashSet<>();
 
@@ -85,14 +110,13 @@ public final class UhidInputDevice implements Closeable {
         this.vdUniqueId = vdUniqueId;
         this.keyboardOnly = keyboardOnly;
         this.touchPhys = UhidProtocol.touchPhysForDisplay(displayId);
-        this.ptrPhys = UhidProtocol.pointerPhysForDisplay(displayId);
         this.kbdPhys = UhidProtocol.keyboardPhysForDisplay(displayId);
         this.inputManager = inputManager;
         this.iInputManager = iInputManager;
     }
 
     /**
-     * Opens /dev/uhid for virtual multi-touch screen, relative mouse, and keyboard, registers them
+     * Opens /dev/uhid for a cursorless virtual multi-touch screen and keyboard, registers them
      * via UHID_CREATE2, and binds all physical port names to {@code vdUniqueId}.
      * On any failure, all opened FDs and associations are rolled back cleanly with zero leaks.
      */
@@ -138,16 +162,14 @@ public final class UhidInputDevice implements Closeable {
         synchronized (ioLock) {
             boolean needAssoc = UhidProtocol.isDisplayAssociationRequired(displayId, vdUniqueId);
             boolean touchBound = false;
-            boolean ptrBound = false;
             boolean kbdBound = false;
             if (needAssoc) {
                 // Pre-register before UHID_CREATE2 so EventHub binds the display during initial HID probe.
                 if (!keyboardOnly) {
                     touchBound = bindPortAssociation(touchPhys, vdUniqueId);
-                    ptrBound = bindPortAssociation(ptrPhys, vdUniqueId);
                 }
                 kbdBound = bindPortAssociation(kbdPhys, vdUniqueId);
-                portAssociated = touchBound || ptrBound || kbdBound;
+                portAssociated = touchBound || kbdBound;
             }
 
             if (!keyboardOnly) {
@@ -164,19 +186,6 @@ public final class UhidInputDevice implements Closeable {
                         0,
                         UhidProtocol.getTouchReportDescriptor());
                 writeTouchEvent(createTouch);
-
-                ptrFd = openUhidFd();
-                byte[] createPtr = UhidProtocol.buildCreate2Event(
-                        "OpalDesk Virtual Pointer " + displayId,
-                        ptrPhys,
-                        "opaldesk-ptr-" + displayId,
-                        UhidProtocol.BUS_VIRTUAL,
-                        UhidProtocol.VENDOR_ID,
-                        UhidProtocol.PRODUCT_ID_POINTER,
-                        UhidProtocol.DEVICE_VERSION,
-                        0,
-                        UhidProtocol.getPointerReportDescriptor());
-                writeAll(ptrFd, createPtr);
             }
 
             kbdFd = openUhidFd();
@@ -196,10 +205,9 @@ public final class UhidInputDevice implements Closeable {
                 // Re-apply after UHID_CREATE2 for ROMs whose InputReader only attaches associations to live ports.
                 if (!keyboardOnly) {
                     touchBound |= bindPortAssociation(touchPhys, vdUniqueId);
-                    ptrBound |= bindPortAssociation(ptrPhys, vdUniqueId);
                 }
                 kbdBound |= bindPortAssociation(kbdPhys, vdUniqueId);
-                portAssociated = touchBound || ptrBound || kbdBound;
+                portAssociated = touchBound || kbdBound;
                 boolean requiredOk = keyboardOnly ? kbdBound : touchBound;
                 if (!requiredOk) {
                     String err = lastAssocError;
@@ -209,7 +217,7 @@ public final class UhidInputDevice implements Closeable {
             }
             System.out.println((keyboardOnly ? "OPALDESK_UHID_KBD_CREATED displayId=" : "OPALDESK_UHID_CREATED displayId=")
                     + displayId
-                    + (keyboardOnly ? "" : (" touchPhys=" + touchPhys + " ptrPhys=" + ptrPhys))
+                    + (keyboardOnly ? "" : (" touchPhys=" + touchPhys))
                     + " kbdPhys=" + kbdPhys
                     + " vdUniqueId=" + (vdUniqueId != null ? vdUniqueId : ""));
         }
@@ -321,7 +329,7 @@ public final class UhidInputDevice implements Closeable {
     public boolean isOpen() {
         return keyboardOnly
                 ? (!closed && kbdFd != null)
-                : (!closed && touchFd != null && ptrFd != null && kbdFd != null);
+                : (!closed && touchFd != null && kbdFd != null);
     }
 
     public boolean isKeyboardOnly() {
@@ -346,12 +354,23 @@ public final class UhidInputDevice implements Closeable {
         int count = me.getPointerCount();
         if (count <= 0) return false;
 
+        if (MouseRoutingPolicy.isPassiveHoverAction(action)) {
+            // Passive hover never spawns or drives a kernel mouse cursor on VirtualDisplays.
+            return true;
+        }
+
+        if (action == MotionEvent.ACTION_SCROLL) {
+            return enqueueTouchScroll(
+                    me.getX(0),
+                    me.getY(0),
+                    me.getAxisValue(MotionEvent.AXIS_HSCROLL),
+                    me.getAxisValue(MotionEvent.AXIS_VSCROLL),
+                    safeW,
+                    safeH);
+        }
+
         boolean isMouse = (me.getSource() & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE
                 || me.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE;
-        boolean isHoverOrScroll = action == MotionEvent.ACTION_SCROLL
-                || action == MotionEvent.ACTION_HOVER_MOVE
-                || action == MotionEvent.ACTION_HOVER_ENTER
-                || action == MotionEvent.ACTION_HOVER_EXIT;
         boolean isTouchAction = action == MotionEvent.ACTION_DOWN
                 || action == MotionEvent.ACTION_MOVE
                 || action == MotionEvent.ACTION_POINTER_DOWN
@@ -363,7 +382,7 @@ public final class UhidInputDevice implements Closeable {
         if (!isMouse && isTouchAction) {
             routeToTouch = true;
             activeMouseToTouch = false;
-        } else if (isMouse && !isHoverOrScroll && isTouchAction) {
+        } else if (isMouse && isTouchAction) {
             routeToTouch = MouseRoutingPolicy.shouldMapPrimaryMouseClickToTouch(
                     action, true, me.getButtonState(), activeMouseToTouch);
             if (routeToTouch) {
@@ -376,9 +395,11 @@ public final class UhidInputDevice implements Closeable {
         }
 
         if (routeToTouch) {
+            cancelActiveTouchScroll(true);
+            boolean allUp = (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL);
+            userTouchActive = !allUp;
             int n = Math.min(UhidProtocol.MAX_TOUCH_CONTACTS, count);
             int upIdx = (action == MotionEvent.ACTION_POINTER_UP) ? me.getActionIndex() : -1;
-            boolean allUp = (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL);
             int[] contactIds = new int[n];
             boolean[] tipDowns = new boolean[n];
             int[] absXs = new int[n];
@@ -389,41 +410,227 @@ public final class UhidInputDevice implements Closeable {
                 absXs[i] = UhidProtocol.toAbsoluteAxis(me.getX(i), safeW);
                 absYs[i] = UhidProtocol.toAbsoluteAxis(me.getY(i), safeH);
             }
-            synchronized (ioLock) {
-                lastMousePxX = me.getX(0);
-                lastMousePxY = me.getY(0);
-            }
             return sendTouch(n, contactIds, tipDowns, absXs, absYs, action != MotionEvent.ACTION_MOVE);
         }
 
-        int relX = 0;
-        int relY = 0;
-        synchronized (ioLock) {
-            if (action == MotionEvent.ACTION_HOVER_EXIT) {
-                lastMousePxX = -1f;
-                lastMousePxY = -1f;
-            } else {
-                float px = me.getX(0);
-                float py = me.getY(0);
-                if (lastMousePxX >= 0f && lastMousePxY >= 0f) {
-                    relX = Math.round(px - lastMousePxX);
-                    relY = Math.round(py - lastMousePxY);
+        // Secondary / back mouse button in cursorless UHID mode maps cleanly to KEYCODE_BACK
+        // without opening a cursor-spawning HID mouse device.
+        int buttons = me.getButtonState();
+        if (action == MotionEvent.ACTION_DOWN
+                && (buttons & (MotionEvent.BUTTON_SECONDARY | MotionEvent.BUTTON_BACK)) != 0) {
+            boolean down = sendKey(true, KeyEvent.KEYCODE_BACK, 0);
+            boolean up = sendKey(false, KeyEvent.KEYCODE_BACK, 0);
+            return down || up;
+        }
+        return true;
+    }
+
+    private boolean enqueueTouchScroll(
+            float anchorX,
+            float anchorY,
+            float hScroll,
+            float vScroll,
+            int safeW,
+            int safeH) {
+        if (closed || keyboardOnly || touchFd == null) return false;
+        if (userTouchActive) return true;
+        int[] delta = UhidProtocol.computeUhidTouchScrollDeltaPx(hScroll, vScroll, safeW, safeH);
+        final int dx = delta[0];
+        final int dy = delta[1];
+        if (dx == 0 && dy == 0) return true;
+
+        final float clampedX = clampScrollCoord(anchorX, safeW);
+        final float clampedY = clampScrollCoord(anchorY, safeH);
+        final ScheduledExecutorService exec;
+        final int expectedGen;
+        synchronized (scrollLock) {
+            if (closed) return false;
+            exec = ensureScrollExecutorLocked();
+            expectedGen = scrollGeneration;
+        }
+        try {
+            exec.execute(() -> performTouchScrollStep(clampedX, clampedY, dx, dy, safeW, safeH, expectedGen));
+            return true;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private ScheduledExecutorService ensureScrollExecutorLocked() {
+        if (scrollExecutor == null || scrollExecutor.isShutdown()) {
+            scrollExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "OpalUhidScroll-" + displayId);
+                t.setDaemon(true);
+                return t;
+            });
+        }
+        return scrollExecutor;
+    }
+
+    private void performTouchScrollStep(
+            float anchorX,
+            float anchorY,
+            int dx,
+            int dy,
+            int safeW,
+            int safeH,
+            int expectedGen) {
+        float startX;
+        float startY;
+        float endX;
+        float endY;
+        boolean needLiftBeforeAnchor = false;
+        boolean needTouchDown = false;
+        float prevLiftX = 0f;
+        float prevLiftY = 0f;
+        int prevLiftW = safeW;
+        int prevLiftH = safeH;
+
+        synchronized (scrollLock) {
+            if (closed || userTouchActive || expectedGen != scrollGeneration) return;
+            if (pendingScrollLift != null) {
+                pendingScrollLift.cancel(false);
+                pendingScrollLift = null;
+            }
+            boolean sameViewport = (scrollDispW == safeW && scrollDispH == safeH);
+            boolean cursorMoved = !scrollActive
+                    || Math.hypot(anchorX - scrollOriginX, anchorY - scrollOriginY) > SCROLL_REANCHOR_DISTANCE_PX;
+            float proposedEndX = scrollCurX + dx;
+            float proposedEndY = scrollCurY + dy;
+            float minX = Math.min(SCROLL_VIEWPORT_MARGIN_PX, safeW * 0.15f);
+            float maxX = Math.max(minX + 1f, safeW - 1f - minX);
+            float minY = Math.min(SCROLL_VIEWPORT_MARGIN_PX, safeH * 0.15f);
+            float maxY = Math.max(minY + 1f, safeH - 1f - minY);
+            boolean hitsEdge = scrollActive
+                    && ((dx < 0 && proposedEndX < minX) || (dx > 0 && proposedEndX > maxX)
+                            || (dy < 0 && proposedEndY < minY) || (dy > 0 && proposedEndY > maxY));
+
+            if (!scrollActive || !sameViewport || cursorMoved || hitsEdge) {
+                if (scrollActive) {
+                    needLiftBeforeAnchor = true;
+                    prevLiftX = scrollCurX;
+                    prevLiftY = scrollCurY;
+                    prevLiftW = scrollDispW;
+                    prevLiftH = scrollDispH;
                 }
-                lastMousePxX = px;
-                lastMousePxY = py;
+                scrollOriginX = anchorX;
+                scrollOriginY = anchorY;
+                scrollCurX = anchorX;
+                scrollCurY = anchorY;
+                scrollDispW = safeW;
+                scrollDispH = safeH;
+                scrollActive = true;
+                needTouchDown = true;
+            }
+            startX = scrollCurX;
+            startY = scrollCurY;
+            endX = Math.max(minX, Math.min(maxX, startX + dx));
+            endY = Math.max(minY, Math.min(maxY, startY + dy));
+            scrollCurX = endX;
+            scrollCurY = endY;
+        }
+
+        if (needLiftBeforeAnchor) {
+            emitSingleScrollContact(prevLiftX, prevLiftY, prevLiftW, prevLiftH, false);
+            SystemClock.sleep(SCROLL_STEP_SLEEP_MS);
+        }
+        if (closed || userTouchActive || isScrollGenerationStale(expectedGen)) return;
+
+        if (needTouchDown) {
+            if (!emitSingleScrollContact(startX, startY, safeW, safeH, true)) {
+                cancelActiveTouchScroll(false);
+                return;
             }
         }
-        int buttons = (action == MotionEvent.ACTION_UP
-                || action == MotionEvent.ACTION_CANCEL
-                || action == MotionEvent.ACTION_HOVER_EXIT
-                || action == MotionEvent.ACTION_SCROLL)
-                ? 0 : (me.getButtonState() & 0x1F);
-        if (action == MotionEvent.ACTION_SCROLL) {
-            byte vWheel = UhidProtocol.clampWheelDelta(me.getAxisValue(MotionEvent.AXIS_VSCROLL));
-            byte hWheel = UhidProtocol.clampWheelDelta(me.getAxisValue(MotionEvent.AXIS_HSCROLL));
-            return sendPointer(relX, relY, 0, vWheel, hWheel, true);
+        for (int step = 1; step <= SCROLL_INTERPOLATION_STEPS; step++) {
+            if (closed || userTouchActive || isScrollGenerationStale(expectedGen)) return;
+            SystemClock.sleep(SCROLL_STEP_SLEEP_MS);
+            if (closed || userTouchActive || isScrollGenerationStale(expectedGen)) return;
+            float t = (float) step / (float) SCROLL_INTERPOLATION_STEPS;
+            float ix = startX + (endX - startX) * t;
+            float iy = startY + (endY - startY) * t;
+            if (!emitSingleScrollContact(ix, iy, safeW, safeH, true)) {
+                cancelActiveTouchScroll(false);
+                return;
+            }
         }
-        return sendPointer(relX, relY, buttons, 0, 0, false);
+
+        synchronized (scrollLock) {
+            if (closed || userTouchActive || expectedGen != scrollGeneration || !scrollActive) return;
+            if (scrollExecutor != null && !scrollExecutor.isShutdown()) {
+                final int liftGen = expectedGen;
+                pendingScrollLift = scrollExecutor.schedule(
+                        () -> liftTouchScrollIfCurrent(liftGen),
+                        SCROLL_IDLE_LIFT_MS,
+                        TimeUnit.MILLISECONDS);
+            }
+        }
+    }
+
+    private void liftTouchScrollIfCurrent(int expectedGen) {
+        float liftX;
+        float liftY;
+        int liftW;
+        int liftH;
+        synchronized (scrollLock) {
+            if (closed || expectedGen != scrollGeneration || !scrollActive) return;
+            pendingScrollLift = null;
+            scrollActive = false;
+            liftX = scrollCurX;
+            liftY = scrollCurY;
+            liftW = scrollDispW;
+            liftH = scrollDispH;
+        }
+        emitSingleScrollContact(liftX, liftY, liftW, liftH, false);
+    }
+
+    private void cancelActiveTouchScroll(boolean liftContactIfActive) {
+        boolean wasActive;
+        float liftX;
+        float liftY;
+        int liftW;
+        int liftH;
+        synchronized (scrollLock) {
+            scrollGeneration++;
+            if (pendingScrollLift != null) {
+                pendingScrollLift.cancel(false);
+                pendingScrollLift = null;
+            }
+            wasActive = scrollActive;
+            scrollActive = false;
+            liftX = scrollCurX;
+            liftY = scrollCurY;
+            liftW = scrollDispW;
+            liftH = scrollDispH;
+        }
+        if (liftContactIfActive && wasActive && !closed) {
+            emitSingleScrollContact(liftX, liftY, liftW, liftH, false);
+        }
+    }
+
+    private boolean isScrollGenerationStale(int expectedGen) {
+        synchronized (scrollLock) {
+            return expectedGen != scrollGeneration;
+        }
+    }
+
+    private boolean emitSingleScrollContact(float px, float py, int dispW, int dispH, boolean tipDown) {
+        int absX = UhidProtocol.toAbsoluteAxis(px, Math.max(2, dispW));
+        int absY = UhidProtocol.toAbsoluteAxis(py, Math.max(2, dispH));
+        return sendTouch(
+                1,
+                new int[]{UhidProtocol.SCROLL_TOUCH_CONTACT_ID},
+                new boolean[]{tipDown},
+                new int[]{absX},
+                new int[]{absY},
+                true);
+    }
+
+    private static float clampScrollCoord(float coord, int dim) {
+        if (!Float.isFinite(coord)) return dim * 0.5f;
+        float margin = Math.min(SCROLL_VIEWPORT_MARGIN_PX, dim * 0.15f);
+        float maxCoord = Math.max(margin + 1f, dim - 1f - margin);
+        return Math.max(margin, Math.min(maxCoord, coord));
     }
 
     public boolean sendTouch(
@@ -445,26 +652,6 @@ public final class UhidInputDevice implements Closeable {
                 return true;
             } catch (Throwable t) {
                 System.err.println("OPALDESK_UHID_TOUCH_WRITE_ERR: " + t.getMessage());
-                return false;
-            }
-        }
-    }
-
-    public boolean sendPointer(int relX, int relY, int buttonsMask, int vWheel, int hWheel, boolean force) {
-        synchronized (ioLock) {
-            if (closed || ptrFd == null) return false;
-            int mask = buttonsMask & 0x1F;
-            if (!force && vWheel == 0 && hWheel == 0
-                    && relX == 0 && relY == 0 && mask == lastButtons) {
-                return true;
-            }
-            byte[] report = UhidProtocol.buildPointerReport(mask, relX, relY, vWheel, hWheel);
-            try {
-                writeAll(ptrFd, UhidProtocol.buildInput2Event(report));
-                lastButtons = mask;
-                return true;
-            } catch (Throwable t) {
-                System.err.println("OPALDESK_UHID_PTR_WRITE_ERR: " + t.getMessage());
                 return false;
             }
         }
@@ -556,14 +743,24 @@ public final class UhidInputDevice implements Closeable {
     @Override
     public void close() {
         Thread evtThread;
+        ScheduledExecutorService scrollExecToStop;
         synchronized (ioLock) {
             if (closed) return;
             closed = true;
             evtThread = touchEventThread;
             touchEventThread = null;
             activeMouseToTouch = false;
-            lastMousePxX = -1f;
-            lastMousePxY = -1f;
+            userTouchActive = false;
+            synchronized (scrollLock) {
+                scrollGeneration++;
+                if (pendingScrollLift != null) {
+                    pendingScrollLift.cancel(false);
+                    pendingScrollLift = null;
+                }
+                scrollActive = false;
+                scrollExecToStop = scrollExecutor;
+                scrollExecutor = null;
+            }
 
             synchronized (touchWriteLock) {
                 FileDescriptor tfd = touchFd;
@@ -588,18 +785,6 @@ public final class UhidInputDevice implements Closeable {
                     destroyAndCloseFd(tfd);
                 }
             }
-            if (ptrFd != null) {
-                try {
-                    if (lastButtons != 0) {
-                        writeAll(ptrFd, UhidProtocol.buildInput2Event(
-                                UhidProtocol.buildPointerReport(0, 0, 0, 0, 0)));
-                    }
-                } catch (Exception e) {
-                    System.err.println("OPALDESK_UHID_PTR_RELEASE_WARN: " + e.getMessage());
-                }
-                destroyAndCloseFd(ptrFd);
-                ptrFd = null;
-            }
             if (kbdFd != null) {
                 try {
                     if (activeModifiers != 0 || !pressedHidKeys.isEmpty()) {
@@ -611,7 +796,6 @@ public final class UhidInputDevice implements Closeable {
                 destroyAndCloseFd(kbdFd);
                 kbdFd = null;
             }
-            lastButtons = 0;
             activeModifiers = 0;
             pressedHidKeys.clear();
 
@@ -619,10 +803,12 @@ public final class UhidInputDevice implements Closeable {
                 portAssociated = false;
                 if (!keyboardOnly) {
                     unbindPortAssociation(touchPhys);
-                    unbindPortAssociation(ptrPhys);
                 }
                 unbindPortAssociation(kbdPhys);
             }
+        }
+        if (scrollExecToStop != null) {
+            scrollExecToStop.shutdownNow();
         }
         if (evtThread != null && evtThread != Thread.currentThread()) {
             evtThread.interrupt();

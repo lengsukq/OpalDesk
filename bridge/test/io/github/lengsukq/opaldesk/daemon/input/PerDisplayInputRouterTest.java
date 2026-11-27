@@ -167,4 +167,43 @@ public class PerDisplayInputRouterTest {
         assertNull(SystemInputInjectorResolver.resolve(
                 EmptyIInputManager.class, EmptyIInputManager.class, FakeEvent.class));
     }
+
+    @Test
+    public void passiveHoverFailureDoesNotLatchUhidAndShortCircuitsWhenUhidActive() {
+        DaemonConfig cfg = configWithMode(BridgeProtocol.INPUT_BACKEND_AUTO);
+        AtomicInteger systemCalls = new AtomicInteger(0);
+        AtomicInteger uhidCalls = new AtomicInteger(0);
+
+        InputFallbackDispatcher dispatcher = new InputFallbackDispatcher(cfg, new InputFallbackDispatcher.BackendAdapter() {
+            @Override public boolean isSystemInjectorAvailable() { return true; }
+            @Override public boolean injectViaSystem(Object ev, int displayId) {
+                systemCalls.incrementAndGet();
+                return false;
+            }
+            @Override public boolean injectViaUhid(Object ev, int displayId, String vdUniqueId, int dispW, int dispH) {
+                uhidCalls.incrementAndGet();
+                return true;
+            }
+        });
+
+        assertFalse(dispatcher.isUsingUhid());
+        // Passive hover failing on a booting VirtualDisplay must NOT latch UHID or mark BLOCKED
+        assertFalse(dispatcher.dispatch(new FakeEvent(), 21, "virtual:opal:21", 1080, 1920, false));
+        assertEquals(1, systemCalls.get());
+        assertEquals(0, uhidCalls.get());
+        assertFalse(dispatcher.isUsingUhid());
+        assertEquals(BridgeProtocol.INJECT_STATUS_SYSTEM, dispatcher.getLastInjectStatus());
+
+        // Real interactive event (allowAutoUhidFallback = true) falls back and latches UHID
+        assertTrue(dispatcher.dispatch(new FakeEvent(), 21, "virtual:opal:21", 1080, 1920, true));
+        assertEquals(2, systemCalls.get());
+        assertEquals(1, uhidCalls.get());
+        assertTrue(dispatcher.isUsingUhid());
+        assertEquals(BridgeProtocol.INJECT_STATUS_UHID, dispatcher.getLastInjectStatus());
+
+        // Subsequent passive hover under active UHID short-circuits cleanly without invoking UHID
+        assertTrue(dispatcher.dispatch(new FakeEvent(), 22, "virtual:opal:22", 1080, 1920, false));
+        assertEquals(2, systemCalls.get());
+        assertEquals(1, uhidCalls.get());
+    }
 }

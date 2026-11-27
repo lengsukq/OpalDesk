@@ -487,4 +487,31 @@ public class ExternalMouseRouterTest {
         assertFalse(MouseRoutingPolicy.shouldBridgeHostImeWhenSystemInputShown(
                 false, true, true, true, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL));
     }
+
+    @Test
+    public void passiveHoverClassificationAndDisplay0MousePinningPreventGhostCursors() {
+        assertTrue(MouseRoutingPolicy.isPassiveHoverAction(MouseRoutingPolicy.ACTION_HOVER_ENTER));
+        assertTrue(MouseRoutingPolicy.isPassiveHoverAction(MouseRoutingPolicy.ACTION_HOVER_MOVE));
+        assertTrue(MouseRoutingPolicy.isPassiveHoverAction(MouseRoutingPolicy.ACTION_HOVER_EXIT));
+        assertFalse(MouseRoutingPolicy.isPassiveHoverAction(MouseRoutingPolicy.ACTION_SCROLL));
+        assertFalse(MouseRoutingPolicy.isPassiveHoverAction(MouseRoutingPolicy.ACTION_DOWN));
+        assertFalse(MouseRoutingPolicy.isPassiveHoverAction(MouseRoutingPolicy.ACTION_MOVE));
+        assertFalse(MouseRoutingPolicy.isPassiveHoverAction(MouseRoutingPolicy.ACTION_UP));
+
+        // Pin physical USB/Bluetooth mice to Display 0 during Local Desktop, PC Cast, and External LOCAL mode
+        assertTrue(MouseRoutingPolicy.shouldPinPhysicalMiceToDisplay0(
+                true, false, false, BridgeProtocol.MOUSE_TARGET_EXTERNAL));
+        assertTrue(MouseRoutingPolicy.shouldPinPhysicalMiceToDisplay0(
+                false, true, false, BridgeProtocol.MOUSE_TARGET_EXTERNAL));
+        assertTrue(MouseRoutingPolicy.shouldPinPhysicalMiceToDisplay0(
+                false, false, true, BridgeProtocol.MOUSE_TARGET_LOCAL));
+
+        // Do NOT pin Display 0 when routing to an external monitor or when no OpalDesk desktop session is active
+        assertFalse(MouseRoutingPolicy.shouldPinPhysicalMiceToDisplay0(
+                false, false, true, BridgeProtocol.MOUSE_TARGET_EXTERNAL));
+        assertFalse(MouseRoutingPolicy.shouldPinPhysicalMiceToDisplay0(
+                false, false, false, BridgeProtocol.MOUSE_TARGET_LOCAL));
+        assertFalse(MouseRoutingPolicy.shouldPinPhysicalMiceToDisplay0(
+                false, false, false, BridgeProtocol.MOUSE_TARGET_EXTERNAL));
+    }
 }

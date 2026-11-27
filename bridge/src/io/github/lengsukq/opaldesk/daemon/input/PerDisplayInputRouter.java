@@ -158,6 +158,10 @@ public final class PerDisplayInputRouter {
             }
             return true;
         }
+        boolean isPassiveHover = MouseRoutingPolicy.isPassiveHoverAction(masked);
+        if (isPassiveHover && dispatcher.isUsingUhid()) {
+            return true;
+        }
 
         boolean isMouse = (source & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE
                 || (toolTypes.length > 0 && toolTypes[0] == MotionEvent.TOOL_TYPE_MOUSE);
@@ -276,29 +280,27 @@ public final class PerDisplayInputRouter {
                 ? effEventTime
                 : (downTime > 0L ? downTime : effEventTime);
 
-        if (isScroll || (isMouse && !mapMouseClickToTouch && masked == MotionEvent.ACTION_DOWN)) {
+        if (isScroll) {
+            props[0].toolType = MotionEvent.TOOL_TYPE_MOUSE;
+            coords[0].pressure = 0.0f;
+        }
+        if (!dispatcher.isUsingUhid()
+                && (isScroll || (isMouse && !mapMouseClickToTouch && masked == MotionEvent.ACTION_DOWN))) {
             MotionEvent.PointerProperties hoverProp = new MotionEvent.PointerProperties();
             hoverProp.id = props[0].id;
             hoverProp.toolType = MotionEvent.TOOL_TYPE_MOUSE;
-            if (isScroll) {
-                props[0].toolType = MotionEvent.TOOL_TYPE_MOUSE;
-                coords[0].pressure = 0.0f;
-            }
             MotionEvent.PointerCoords hoverCoord = new MotionEvent.PointerCoords();
             hoverCoord.x = coords[0].x;
             hoverCoord.y = coords[0].y;
             hoverCoord.pressure = 0.0f;
             hoverCoord.size = 1.0f;
-            // Prime hover target at (x, y) with 0 buttons BEFORE mouse ACTION_DOWN or ACTION_SCROLL so
-            // InputDispatcher / ViewGroup hover state & /dev/uhid cursor position never jump mid-press
-            // from an old coordinate (eliminating USB mouse double-click-to-click inside apps!).
             MotionEvent hoverPrime = MotionEvent.obtain(
                     effEventTime, effEventTime, MotionEvent.ACTION_HOVER_MOVE,
                     1, new MotionEvent.PointerProperties[]{hoverProp},
                     new MotionEvent.PointerCoords[]{hoverCoord},
                     0, 0, 1.0f, 1.0f, 0, 0, InputDevice.SOURCE_MOUSE, 0);
             try {
-                dispatchToDisplay(hoverPrime, ws.displayId, ws.vdUniqueId, ws.contentWidth, ws.contentHeight);
+                dispatchToDisplay(hoverPrime, ws.displayId, ws.vdUniqueId, ws.contentWidth, ws.contentHeight, false);
             } finally {
                 hoverPrime.recycle();
             }
@@ -323,7 +325,8 @@ public final class PerDisplayInputRouter {
             AndroidServices.setActionButton(ev, actionButton);
         }
         try {
-            boolean ok = dispatchToDisplay(ev, ws.displayId, ws.vdUniqueId, ws.contentWidth, ws.contentHeight);
+            boolean ok = dispatchToDisplay(
+                    ev, ws.displayId, ws.vdUniqueId, ws.contentWidth, ws.contentHeight, !isPassiveHover);
             if (postDispatchFocusMode == 1) {
                 services.focusDisplayTaskOnly(ws.displayId);
             } else if (postDispatchFocusMode == 2) {
@@ -423,10 +426,23 @@ public final class PerDisplayInputRouter {
         return down || up;
     }
 
+    /** Returns {@code true} when input routing is currently using Linux {@code /dev/uhid}. */
+    public boolean isUsingUhid() {
+        return dispatcher.isUsingUhid();
+    }
+
     /** Direct display-targeted motion injection for remote OpalCast sessions (supports Display 0 for Mirror mode). */
     public boolean injectRawEventToDisplay(InputEvent ev, int displayId, String vdUniqueId, int dispW, int dispH) {
         if (ev == null || displayId < 0) return false;
-        return dispatchToDisplay(ev, displayId, vdUniqueId, dispW, dispH);
+        boolean isPassiveHover = false;
+        if (ev instanceof MotionEvent) {
+            int masked = ((MotionEvent) ev).getActionMasked();
+            isPassiveHover = MouseRoutingPolicy.isPassiveHoverAction(masked);
+            if (isPassiveHover && dispatcher.isUsingUhid()) {
+                return true;
+            }
+        }
+        return dispatchToDisplay(ev, displayId, vdUniqueId, dispW, dispH, !isPassiveHover);
     }
 
     /** Direct display-targeted key injection for remote OpalCast sessions (supports Display 0 for Mirror mode). */
@@ -488,7 +504,17 @@ public final class PerDisplayInputRouter {
     }
 
     private boolean dispatchToDisplay(InputEvent ev, int displayId, String vdUniqueId, int dispW, int dispH) {
-        return dispatcher.dispatch(ev, displayId, vdUniqueId, dispW, dispH);
+        return dispatcher.dispatch(ev, displayId, vdUniqueId, dispW, dispH, true);
+    }
+
+    private boolean dispatchToDisplay(
+            InputEvent ev,
+            int displayId,
+            String vdUniqueId,
+            int dispW,
+            int dispH,
+            boolean allowAutoUhidFallback) {
+        return dispatcher.dispatch(ev, displayId, vdUniqueId, dispW, dispH, allowAutoUhidFallback);
     }
 
     private boolean injectViaUhid(InputEvent ev, int displayId, String vdUniqueId, int dispW, int dispH) {

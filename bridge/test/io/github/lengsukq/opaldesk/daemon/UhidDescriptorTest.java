@@ -248,6 +248,46 @@ public class UhidDescriptorTest {
         assertEquals("NullPointerException", UhidProtocol.unwrapThrowableMessage(new NullPointerException()));
     }
 
+    @Test
+    public void testCursorlessTouchScrollDeltaMath() {
+        assertTrue(UhidProtocol.SCROLL_TOUCH_CONTACT_ID >= UhidProtocol.MAX_TOUCH_CONTACTS
+                && UhidProtocol.SCROLL_TOUCH_CONTACT_ID <= 255);
+
+        int[] zero = UhidProtocol.computeUhidTouchScrollDeltaPx(0f, 0f, 1080, 1920);
+        assertEquals(0, zero[0]);
+        assertEquals(0, zero[1]);
+
+        int[] nan = UhidProtocol.computeUhidTouchScrollDeltaPx(Float.NaN, Float.POSITIVE_INFINITY, 1080, 1920);
+        assertEquals(0, nan[0]);
+        assertEquals(0, nan[1]);
+
+        // vScroll > 0 (wheel up) drags finger DOWN (+dy); vScroll < 0 (wheel down) drags finger UP (-dy)
+        int[] up1080 = UhidProtocol.computeUhidTouchScrollDeltaPx(0f, 1.0f, 1080, 1920);
+        assertEquals(0, up1080[0]);
+        assertTrue("Expected positive dy for wheel up, got " + up1080[1], up1080[1] >= 100 && up1080[1] <= 140);
+
+        int[] down480 = UhidProtocol.computeUhidTouchScrollDeltaPx(0f, -1.0f, 480, 800);
+        assertEquals(0, down480[0]);
+        assertTrue("Expected proportional negative dy on smaller window, got " + down480[1],
+                down480[1] <= -48 && down480[1] >= -70);
+
+        // hScroll > 0 (scroll right) drags finger LEFT (-dx); hScroll < 0 drags finger RIGHT (+dx)
+        int[] rightScroll = UhidProtocol.computeUhidTouchScrollDeltaPx(1.0f, 0f, 1200, 800);
+        assertTrue("Expected negative dx for scroll right, got " + rightScroll[0], rightScroll[0] < 0);
+        assertEquals(0, rightScroll[1]);
+
+        int[] leftScroll = UhidProtocol.computeUhidTouchScrollDeltaPx(-1.0f, 0f, 1200, 800);
+        assertEquals(-rightScroll[0], leftScroll[0]);
+
+        // Huge burst is safely clamped inside viewport travel budget; tiny non-zero delta keeps >= 4px step
+        int[] burst = UhidProtocol.computeUhidTouchScrollDeltaPx(50f, -50f, 1080, 1920);
+        assertTrue(Math.abs(burst[0]) <= 480);
+        assertTrue(Math.abs(burst[1]) <= 480);
+
+        int[] micro = UhidProtocol.computeUhidTouchScrollDeltaPx(0f, 0.01f, 1080, 1920);
+        assertEquals(4, micro[1]);
+    }
+
     private static void assertBalancedCollections(byte[] desc) {
         int depth = 0;
         int i = 0;

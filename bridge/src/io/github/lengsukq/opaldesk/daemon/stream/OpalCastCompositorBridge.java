@@ -526,7 +526,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         props[0].id = 0;
         props[0].toolType = MotionEvent.TOOL_TYPE_MOUSE;
 
-        if (isScroll) {
+        if (isScroll && !inputRouter.isUsingUhid()) {
             MotionEvent.PointerCoords hoverCoord = new MotionEvent.PointerCoords();
             hoverCoord.x = cx;
             hoverCoord.y = cy;

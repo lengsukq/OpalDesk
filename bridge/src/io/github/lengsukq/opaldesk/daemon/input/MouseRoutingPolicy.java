@@ -58,6 +58,18 @@ public final class MouseRoutingPolicy {
     }
 
     /**
+     * Returns {@code true} for passive pointer hover actions ({@code HOVER_ENTER/MOVE/EXIT})
+     * that must neither spawn a cursorless UHID device nor permanently latch global AUTO-&gt;UHID
+     * fallback when a newly launched {@code VirtualDisplay} transiently rejects hover before its
+     * first window finishes registering.
+     */
+    public static boolean isPassiveHoverAction(int actionMasked) {
+        return actionMasked == ACTION_HOVER_MOVE
+                || actionMasked == ACTION_HOVER_ENTER
+                || actionMasked == ACTION_HOVER_EXIT;
+    }
+
+    /**
      * Normalizes mouse {@code buttonState} so composite USB / 2.4GHz OTG HID receivers that emit
      * {@code ACTION_DOWN} or {@code ACTION_MOVE} with {@code buttonState == 0} still report
      * {@link #BUTTON_PRIMARY}.
@@ -445,6 +457,26 @@ public final class MouseRoutingPolicy {
             return false;
         }
         return (displayUniqueId != null && !displayUniqueId.isEmpty()) || displayPhysicalPort >= 0;
+    }
+
+    /**
+     * Returns {@code true} when connected physical USB/Bluetooth mice must be explicitly pinned to
+     * {@code Display 0} rather than left unassociated ({@code ADISPLAY_ID_NONE}).
+     *
+     * <p>Leaving physical mice unassociated while OpalDesk focuses {@code OpalWin-*} VirtualDisplays
+     * allows Android 14–17 {@code PointerChoreographer} to teleport the hardware cursor onto
+     * {@code mTopFocusedDisplayId} (inside the app window's framebuffer), causing a duplicate cursor
+     * during local DeX, PC Cast, and external-monitor {@code LOCAL} mouse mode.
+     */
+    public static boolean shouldPinPhysicalMiceToDisplay0(
+            boolean localDesktopPinned,
+            boolean remoteDesktopActive,
+            boolean hasObservedExternalDisplay,
+            int mouseTargetMode) {
+        if (localDesktopPinned || remoteDesktopActive) {
+            return true;
+        }
+        return hasObservedExternalDisplay && mouseTargetMode == 0 /* BridgeProtocol.MOUSE_TARGET_LOCAL */;
     }
 
     /**

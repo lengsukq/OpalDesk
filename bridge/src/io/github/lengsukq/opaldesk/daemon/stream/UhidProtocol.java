@@ -78,6 +78,8 @@ public final class UhidProtocol {
     public static final int MAX_TOUCH_CONTACTS = 10;
     public static final int TOUCH_CONTACT_BYTES = 6;
     public static final int TOUCH_REPORT_SIZE = 1 + (MAX_TOUCH_CONTACTS * TOUCH_CONTACT_BYTES) + 1;
+    /** Reserved HID contact identifier for cursorless touch-emulated wheel scrolling. */
+    public static final int SCROLL_TOUCH_CONTACT_ID = 250;
     public static final int ABS_MAX = 32767;
     public static final int REL_MAX = 32767;
 
@@ -624,6 +626,39 @@ public final class UhidProtocol {
             mods |= MOD_LEFT_GUI;
         }
         return mods;
+    }
+
+    /**
+     * Converts Android {@code MotionEvent.AXIS_HSCROLL} / {@code AXIS_VSCROLL} deltas into
+     * proportional pixel-space finger drag deltas {@code [dxPx, dyPx]} for cursorless UHID
+     * touch-scroll synthesis.
+     *
+     * <p>Sign convention matches Android's scroll axes:
+     * <ul>
+     *   <li>{@code vScroll > 0} (wheel up / 2-finger down) -&gt; {@code dyPx > 0} (drag finger down)</li>
+     *   <li>{@code hScroll > 0} (scroll right) -&gt; {@code dxPx < 0} (drag finger left)</li>
+     * </ul>
+     */
+    public static int[] computeUhidTouchScrollDeltaPx(float hScroll, float vScroll, int displayW, int displayH) {
+        float hs = Float.isFinite(hScroll) ? hScroll : 0f;
+        float vs = Float.isFinite(vScroll) ? vScroll : 0f;
+        if (Math.abs(hs) < 0.001f && Math.abs(vs) < 0.001f) {
+            return new int[]{0, 0};
+        }
+        int minDim = Math.max(200, Math.min(Math.max(2, displayW), Math.max(2, displayH)));
+        float pxPerUnit = Math.max(48f, Math.min(180f, minDim * 0.11f));
+        float maxTravel = Math.max(80f, Math.min(480f, minDim * 0.42f));
+        int dx = scaleScrollAxis(-hs, pxPerUnit, maxTravel);
+        int dy = scaleScrollAxis(vs, pxPerUnit, maxTravel);
+        return new int[]{dx, dy};
+    }
+
+    private static int scaleScrollAxis(float signedUnits, float pxPerUnit, float maxTravel) {
+        if (Math.abs(signedUnits) < 0.001f) return 0;
+        float raw = signedUnits * pxPerUnit;
+        float mag = Math.max(4f, Math.min(maxTravel, Math.abs(raw)));
+        int px = Math.round(mag);
+        return (raw >= 0f) ? px : -px;
     }
 
     /**

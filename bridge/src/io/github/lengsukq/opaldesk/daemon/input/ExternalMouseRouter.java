@@ -275,8 +275,9 @@ public final class ExternalMouseRouter {
 
     public void shutdown() {
         localDesktopPinned = false;
+        remoteDesktopActive = false;
         unbindAllInternal(true, true);
-        if (services != null) {
+        if (services != null && !remoteDesktopActive) {
             services.restoreDefaultDisplayTopFocus();
         }
         if (!listenersRegistered || services == null) return;
@@ -404,7 +405,7 @@ public final class ExternalMouseRouter {
         if (prevPhysicalExt != hasPhysicalExternalDisplay()) {
             notifyExternalImeContextChanged();
         }
-        if (services != null) {
+        if (services != null && !remoteDesktopActive) {
             services.restoreDefaultDisplayTopFocus();
         }
     }
@@ -560,11 +561,16 @@ public final class ExternalMouseRouter {
                     activeExternalDisplayId,
                     activeDisplayUniqueId,
                     activeDisplayPort);
+            boolean pinDisplay0 = !routeExternal && MouseRoutingPolicy.shouldPinPhysicalMiceToDisplay0(
+                    localDesktopPinned,
+                    remoteDesktopActive,
+                    observedExternalDisplayId > 0,
+                    config.getMouseTargetMode());
             if (routeExternal) {
                 outerDisplayId = activeExternalDisplayId;
                 outerUniqueId = activeDisplayUniqueId;
                 outerPort = activeDisplayPort;
-            } else if (localDesktopPinned) {
+            } else if (pinDisplay0) {
                 String d0Uid = services.getDisplayUniqueId(android.view.Display.DEFAULT_DISPLAY);
                 int d0Port = services.getDisplayPhysicalPort(android.view.Display.DEFAULT_DISPLAY);
                 if ((d0Uid != null && !d0Uid.isEmpty()) || d0Port >= 0) {

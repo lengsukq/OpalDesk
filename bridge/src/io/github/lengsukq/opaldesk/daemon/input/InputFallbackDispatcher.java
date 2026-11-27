@@ -48,6 +48,13 @@ public final class InputFallbackDispatcher {
         return lastInjectStatus;
     }
 
+    /** Returns {@code true} when input injection is currently routed through Linux {@code /dev/uhid}. */
+    public boolean isUsingUhid() {
+        int backend = config.getInputBackendMode();
+        return backend == BridgeProtocol.INPUT_BACKEND_UHID
+                || (backend == BridgeProtocol.INPUT_BACKEND_AUTO && uhidAutoActivated);
+    }
+
     public int onInputBackendConfigChanged(int mode, Runnable releaseDisplaysAction) {
         if (mode != BridgeProtocol.INPUT_BACKEND_UHID) {
             uhidAutoActivated = false;
@@ -63,10 +70,25 @@ public final class InputFallbackDispatcher {
     }
 
     public boolean dispatch(Object ev, int displayId, String vdUniqueId, int dispW, int dispH) {
+        return dispatch(ev, displayId, vdUniqueId, dispW, dispH, true);
+    }
+
+    public boolean dispatch(
+            Object ev,
+            int displayId,
+            String vdUniqueId,
+            int dispW,
+            int dispH,
+            boolean allowAutoUhidFallback) {
         int backend = config.getInputBackendMode();
         boolean uhidTried = false;
         if (backend == BridgeProtocol.INPUT_BACKEND_UHID
                 || (backend == BridgeProtocol.INPUT_BACKEND_AUTO && uhidAutoActivated)) {
+            if (!allowAutoUhidFallback) {
+                // Passive hover events are cursorless no-ops under UHID and must never
+                // eagerly open a new /dev/uhid device before real touch/key interaction.
+                return true;
+            }
             uhidTried = true;
             if (adapter.injectViaUhid(ev, displayId, vdUniqueId, dispW, dispH)) {
                 updateInjectStatus(BridgeProtocol.INJECT_STATUS_UHID);
@@ -93,6 +115,13 @@ public final class InputFallbackDispatcher {
             }
         } else {
             systemFailureReason = "system InputManager injector unavailable";
+        }
+
+        if (!allowAutoUhidFallback) {
+            // Do not latch permanent UHID fallback or report INJECT_STATUS_BLOCKED on benign
+            // passive hover drops (e.g. hovering a freshly created VirtualDisplay while its
+            // Activity is still registering its first InputWindowHandle).
+            return false;
         }
 
         // AUTO fallback to Linux /dev/uhid whenever system injection is rejected (SecurityException,

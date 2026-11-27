@@ -118,6 +118,7 @@ class ExternalDesktopActivity : ComponentActivity() {
     }
     private var displayManager: DisplayManager? = null
     private var presentation: ExternalMonitorPresentation? = null
+    private var directRootContainer: HardwareMouseDetectingFrameLayout? = null
     private var directComposeView: ComposeView? = null
     private var directPointerDispatcher: ExternalPointerDispatcher? = null
     private var directTrackpadSink: DirectExternalTrackpadSink? = null
@@ -598,6 +599,12 @@ class ExternalDesktopActivity : ComponentActivity() {
                     } else {
                         null
                     }
+                    val suppressSystemCursor = curExtSession.isRemoteCastDisplay ||
+                        directCursor != null ||
+                        remoteCursor != null
+                    LaunchedEffect(suppressSystemCursor) {
+                        directRootContainer?.syncSystemPointerIcon()
+                    }
                     CompositionLocalProvider(LocalDensity provides effDensity) {
                         Box(modifier = Modifier.fillMaxSize()) {
                             NativeImeBridgeHost(
@@ -654,22 +661,29 @@ class ExternalDesktopActivity : ComponentActivity() {
         }
         directComposeView = view
 
-        val rootContainer = HardwareMouseDetectingFrameLayout(this) {
-            dispatcher.hideCursor()
-            if (BridgeClient.remoteTrackpadCursorFlow.value != null) {
-                BridgeClient.updateRemoteTrackpadCursor(null)
-            }
-        }.apply {
-            if (session.isRemoteCastDisplay) {
-                pointerIcon = android.view.PointerIcon.getSystemIcon(this@ExternalDesktopActivity, android.view.PointerIcon.TYPE_NULL)
-            }
+        val rootContainer = HardwareMouseDetectingFrameLayout(
+            ctx = this,
+            shouldSuppressSystemPointerIcon = {
+                ExternalTrackpadBridge.sessionFlow.value.isRemoteCastDisplay ||
+                    dispatcher.showVirtualCursorState.value ||
+                    BridgeClient.remoteTrackpadCursorFlow.value != null
+            },
+            onHardwareMouseSeen = {
+                dispatcher.hideCursor()
+                if (BridgeClient.remoteTrackpadCursorFlow.value != null) {
+                    BridgeClient.updateRemoteTrackpadCursor(null)
+                }
+            },
+        ).apply {
             setBackgroundColor(AndroidColor.BLACK)
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
             )
             addView(view)
+            syncSystemPointerIcon()
         }
+        directRootContainer = rootContainer
         setContentView(rootContainer)
     }
 
@@ -819,6 +833,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         directTrackpadSink = null
         directPointerDispatcher?.hideCursor()
         directPointerDispatcher = null
+        directRootContainer = null
         directComposeView = null
 
         displayManager?.unregisterDisplayListener(displayListener)

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.PointerIcon
 import android.view.View
 import android.widget.FrameLayout
 import androidx.compose.runtime.mutableStateOf
@@ -150,24 +151,57 @@ class ExternalPointerDispatcher(
 
 /**
  * Container detecting native hardware Bluetooth/USB mouse events (`deviceId > 0`) on an external
- * display so the synthetic trackpad cursor hides immediately with zero double-cursor artifacts.
+ * display so the synthetic trackpad cursor hides immediately with zero double-cursor artifacts,
+ * and suppressing Android's outer system pointer icon whenever OpalDesk's virtual trackpad cursor
+ * or a remote PC cursor owns pointer rendering.
  */
 class HardwareMouseDetectingFrameLayout(
     ctx: Context,
+    private val shouldSuppressSystemPointerIcon: () -> Boolean = { false },
     private val onHardwareMouseSeen: () -> Unit,
 ) : FrameLayout(ctx) {
+    private val nullPointerIcon: PointerIcon by lazy {
+        PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
+    }
+
+    fun syncSystemPointerIcon() {
+        val targetIcon = if (shouldSuppressSystemPointerIcon()) nullPointerIcon else null
+        if (pointerIcon != targetIcon) {
+            pointerIcon = targetIcon
+        }
+    }
+
+    override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon? {
+        if (shouldSuppressSystemPointerIcon()) {
+            return nullPointerIcon
+        }
+        return super.onResolvePointerIcon(event, pointerIndex)
+    }
+
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
-        if (ev.deviceId > 0 && (ev.source and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE) {
+        if (isHardwareMouseEvent(ev)) {
             onHardwareMouseSeen()
+            syncSystemPointerIcon()
         }
         return super.dispatchGenericMotionEvent(ev)
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        if (ev.deviceId > 0 && (ev.source and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE) {
+        if (isHardwareMouseEvent(ev)) {
             onHardwareMouseSeen()
+            syncSystemPointerIcon()
         }
         return super.dispatchTouchEvent(ev)
+    }
+
+    companion object {
+        fun isHardwareMouseEvent(ev: MotionEvent): Boolean {
+            if (ev.deviceId <= 0) return false
+            val src = ev.source
+            return (src and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE ||
+                (src and InputDevice.SOURCE_MOUSE_RELATIVE) == InputDevice.SOURCE_MOUSE_RELATIVE ||
+                (ev.pointerCount > 0 && ev.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE)
+        }
     }
 }
 
