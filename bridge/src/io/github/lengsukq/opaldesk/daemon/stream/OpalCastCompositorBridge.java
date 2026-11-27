@@ -810,13 +810,16 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         if (!s.standalone && !s.isMirror() && !localHostTextFieldFocused && !isWorkstationShortcut(msg.androidKeyCode, msg.metaState)) {
             WindowSession focused = compositor.getFocusedLiveWindow();
             if (focused != null) {
-                inputRouter.injectWindowKey(focused, action, msg.androidKeyCode, msg.metaState);
+                // Route remote physical/Bluetooth keyboard keys with a positive deviceId so
+                // PerDisplayInputRouter injects them via the display-bound /dev/uhid kernel HID
+                // keyboard (required by third-party Chinese IMEs like Doubao/Sogou/Gboard/WeChat).
+                inputRouter.injectWindowKey(focused, action, msg.androidKeyCode, msg.metaState, 1, 0, msg.repeatCount);
                 return;
             }
         }
         inputRouter.injectRawKeyToDisplay(
                 targetDisplayId, s.inputTargetUniqueId(), s.inputTargetWidth(), s.inputTargetHeight(),
-                action, msg.androidKeyCode, msg.metaState);
+                action, msg.androidKeyCode, msg.metaState, true);
     }
 
     private static boolean isWorkstationShortcut(int keyCode, int metaState) {

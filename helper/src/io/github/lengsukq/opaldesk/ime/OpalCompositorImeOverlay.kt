@@ -23,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -30,6 +31,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,8 +84,21 @@ fun OpalCompositorImeOverlay(
     val floatingKbdMode by OpalDeskImeChannel.floatingKeyboardModeFlow.collectAsState()
     val tapAnchor by OpalDeskImeChannel.lastTapAnchorFlow.collectAsState()
 
-    val win = focusedWindow?.takeIf { !it.isMinimized && it.isLive } ?: return
+    val win = focusedWindow?.takeIf { !it.isMinimized && it.isLive }
+    val isCompositorSelfEditor = editorState.packageName == "io.github.lengsukq.opaldesk"
     if (!pluginState.pluginConnected) return
+
+    var lastLangMode by remember { mutableStateOf<ImeLanguageMode?>(null) }
+    var showLangToast by remember { mutableStateOf(false) }
+    LaunchedEffect(pluginState.languageMode) {
+        val prev = lastLangMode
+        lastLangMode = pluginState.languageMode
+        if (prev != null && prev != pluginState.languageMode) {
+            showLangToast = true
+            delay(1_100L)
+            showLangToast = false
+        }
+    }
 
     val density = LocalDensity.current
     val headerPx = with(density) { CompositorGeometry.HEADER_HEIGHT_DP.dp.toPx() }.roundToInt()
@@ -92,21 +107,38 @@ fun OpalCompositorImeOverlay(
 
     val showSoftKeyboard = softKbdVisible && editorState.inputActive && editorState.acceptingText
     val showFloatingCandidateBar = pluginState.isComposing && (!showSoftKeyboard || floatingKbdMode)
+    val showLangBadge = showLangToast && !showFloatingCandidateBar && !showSoftKeyboard
 
-    if (!showFloatingCandidateBar && !showSoftKeyboard) return
+    if (!showFloatingCandidateBar && !showSoftKeyboard && !showLangBadge) return
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (showFloatingCandidateBar) {
-            val caret = remember(win, cursorAnchor, tapAnchor, headerPx) {
-                OpalDeskImeChannelCore.mapDisplayAnchorToCanvas(
-                    window = win,
-                    cursorAnchor = cursorAnchor,
-                    tapAnchor = tapAnchor,
-                    headerHeightPx = headerPx,
-                )
+        if (showFloatingCandidateBar || showLangBadge) {
+            val caret = remember(win, isCompositorSelfEditor, cursorAnchor, tapAnchor, headerPx, canvasW, canvasH) {
+                if (win != null && !isCompositorSelfEditor) {
+                    OpalDeskImeChannelCore.mapDisplayAnchorToCanvas(
+                        window = win,
+                        cursorAnchor = cursorAnchor,
+                        tapAnchor = tapAnchor,
+                        headerHeightPx = headerPx,
+                    )
+                } else if (cursorAnchor.valid) {
+                    CanvasCaretAnchor(
+                        valid = true,
+                        x = cursorAnchor.insertionMarkerHorizontal.coerceIn(0f, canvasW.toFloat()),
+                        topY = cursorAnchor.insertionMarkerTop.coerceIn(0f, canvasH.toFloat()),
+                        bottomY = cursorAnchor.insertionMarkerBottom.coerceIn(0f, canvasH.toFloat()),
+                    )
+                } else {
+                    CanvasCaretAnchor(
+                        valid = true,
+                        x = (canvasW * 0.35f).coerceAtLeast(edgeMarginPx.toFloat()),
+                        topY = canvasH * 0.58f,
+                        bottomY = canvasH * 0.62f,
+                    )
+                }
             }
-            var barWidthPx by remember { mutableIntStateOf(with(density) { 420.dp.toPx() }.roundToInt()) }
-            var barHeightPx by remember { mutableIntStateOf(with(density) { 64.dp.toPx() }.roundToInt()) }
+            var barWidthPx by remember { mutableIntStateOf(with(density) { (if (showFloatingCandidateBar) 420.dp else 72.dp).toPx() }.roundToInt()) }
+            var barHeightPx by remember { mutableIntStateOf(with(density) { (if (showFloatingCandidateBar) 64.dp else 32.dp).toPx() }.roundToInt()) }
             val gapPx = with(density) { 8.dp.toPx() }
 
             val maxX = (canvasW - barWidthPx - edgeMarginPx).coerceAtLeast(edgeMarginPx)
@@ -120,15 +152,42 @@ fun OpalCompositorImeOverlay(
                 aboveY.coerceIn(topSafePx, maxBottomY)
             }
 
-            OpalYuyanFloatingCandidateBar(
-                state = pluginState,
-                modifier = Modifier
-                    .offset { IntOffset(clampedX, clampedY) }
-                    .onSizeChanged { sz ->
-                        if (sz.width > 0) barWidthPx = sz.width
-                        if (sz.height > 0) barHeightPx = sz.height
-                    },
-            )
+            if (showFloatingCandidateBar) {
+                OpalYuyanFloatingCandidateBar(
+                    state = pluginState,
+                    modifier = Modifier
+                        .offset { IntOffset(clampedX, clampedY) }
+                        .onSizeChanged { sz ->
+                            if (sz.width > 0) barWidthPx = sz.width
+                            if (sz.height > 0) barHeightPx = sz.height
+                        },
+                )
+            } else {
+                val isCn = pluginState.languageMode == ImeLanguageMode.CHINESE
+                Box(
+                    modifier = Modifier
+                        .offset { IntOffset(clampedX, clampedY) }
+                        .onSizeChanged { sz ->
+                            if (sz.width > 0) barWidthPx = sz.width
+                            if (sz.height > 0) barHeightPx = sz.height
+                        }
+                        .liquidGlassSurface(
+                            shape = RoundedCornerShape(10.dp),
+                            fill = OpalPalette.SolidPopoverFill,
+                            rim = OpalPalette.LiquidGlassRim,
+                            elevation = 16.dp,
+                        )
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                    OpalText(
+                        text = if (isCn) "中 · 语燕" else "EN",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isCn) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
+                        maxLines = 1,
+                    )
+                }
+            }
         }
 
         if (showSoftKeyboard) {

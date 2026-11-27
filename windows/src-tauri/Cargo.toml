@@ -1,6 +1,6 @@
 [package]
 name = "opaldesk-windows"
-version = "1.0.20"
+version = "1.0.21"
 description = "OpalDesk Windows Companion Client (Tauri v2 + Edge WebView2)"
 authors = ["Lengsu"]
 license = "MIT"

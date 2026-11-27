@@ -212,6 +212,29 @@ class OpalDeskImeChannelTest {
                 targetPkg = "com.tencent.mm",
             ),
         )
+        // Even if IMMS transiently reports imeDisplayId=0 during onStartInput(), never yield
+        // when targetPkg is already the focused or open live DeX window or host screen is off.
+        assertFalse(
+            OpalDeskImeChannelCore.shouldYieldToDisplay0OriginalIme(
+                imeDisplayId = 0,
+                localDesktopPinned = false,
+                acceptingText = true,
+                focusedLiveWindowPkg = "com.tencent.mm",
+                focusedLiveWindowImePolicyLocal = true,
+                targetPkg = "com.tencent.mm",
+            ),
+        )
+        assertFalse(
+            OpalDeskImeChannelCore.shouldYieldToDisplay0OriginalIme(
+                imeDisplayId = 0,
+                localDesktopPinned = false,
+                acceptingText = true,
+                focusedLiveWindowPkg = "com.android.chrome",
+                focusedLiveWindowImePolicyLocal = true,
+                targetPkg = "com.tencent.mm",
+                hostScreenOff = true,
+            ),
+        )
 
         assertTrue(
             OpalDeskImeChannelCore.shouldAutoShowCompositorSoftKeyboard(

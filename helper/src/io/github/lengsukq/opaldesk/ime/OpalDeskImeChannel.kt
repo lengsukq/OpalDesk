@@ -150,14 +150,20 @@ class OpalDeskImeChannelCore {
             focusedLiveWindowPkg: String?,
             focusedLiveWindowImePolicyLocal: Boolean,
             targetPkg: String,
+            hostScreenOff: Boolean = false,
+            openLiveWindowPkgs: Set<String> = emptySet(),
         ): Boolean {
             if (!acceptingText) return false
             if (localDesktopPinned) return false
+            if (hostScreenOff) return false
             if (imeDisplayId > 0) return false
-            if (!focusedLiveWindowImePolicyLocal &&
-                !focusedLiveWindowPkg.isNullOrEmpty() &&
-                focusedLiveWindowPkg == targetPkg
-            ) {
+            // During InputMethodService.onStartInput(), IMMS has not always moved the IME window
+            // to the OpalWin-* VirtualDisplay yet, so imeDisplayId can momentarily report 0.
+            // Never yield away from Yuyan/OpalDesk IME when targetPkg is already a live DeX window.
+            if (!focusedLiveWindowPkg.isNullOrEmpty() && focusedLiveWindowPkg == targetPkg) {
+                return false
+            }
+            if (targetPkg.isNotEmpty() && openLiveWindowPkgs.contains(targetPkg)) {
                 return false
             }
             return true
@@ -585,6 +591,7 @@ object OpalDeskImeChannel {
                 val scene = BridgeClient.sceneFlow.value
                 val imeState = BridgeClient.imeStateFlow.value
                 val focusedLivePkg = scene.focusedWindow?.takeIf { it.isLive && !it.isMinimized }?.pkg
+                val openLivePkgs = scene.windows.filter { it.isLive && !it.isMinimized }.map { it.pkg }.toSet()
                 val policyIsLocal = imeState.effectiveWindowImePolicy == BridgeProtocol.DisplayImePolicy.LOCAL
                 val shouldYield = OpalDeskImeChannelCore.shouldYieldToDisplay0OriginalIme(
                     imeDisplayId = imeDispId,
@@ -593,6 +600,8 @@ object OpalDeskImeChannel {
                     focusedLiveWindowPkg = focusedLivePkg,
                     focusedLiveWindowImePolicyLocal = policyIsLocal,
                     targetPkg = pkg,
+                    hostScreenOff = BridgeClient.statusFlow.value.hostScreenOff,
+                    openLiveWindowPkgs = openLivePkgs,
                 )
                 var origIme = ""
                 if (shouldYield) {

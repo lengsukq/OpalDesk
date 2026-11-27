@@ -460,6 +460,19 @@ public final class PerDisplayInputRouter {
     /** Direct display-targeted key injection for remote OpalCast sessions (supports Display 0 for Mirror mode). */
     public boolean injectRawKeyToDisplay(
             int displayId, String vdUniqueId, int dispW, int dispH, int action, int keyCode, int metaState) {
+        return injectRawKeyToDisplay(displayId, vdUniqueId, dispW, dispH, action, keyCode, metaState, false);
+    }
+
+    /** Direct display-targeted key injection with optional /dev/uhid physical keyboard routing. */
+    public boolean injectRawKeyToDisplay(
+            int displayId,
+            String vdUniqueId,
+            int dispW,
+            int dispH,
+            int action,
+            int keyCode,
+            int metaState,
+            boolean preferPhysicalUhid) {
         if (displayId < 0) return false;
         if (displayId > 0 && action == KeyEvent.ACTION_DOWN) {
             notifyDexInteraction(displayId, false);
@@ -469,6 +482,13 @@ public final class PerDisplayInputRouter {
         KeyEvent ev = new KeyEvent(
                 now, now, action, keyCode, 0, metaState,
                 KeyCharacterMap.VIRTUAL_KEYBOARD, 0, KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_KEYBOARD);
+        boolean hasUid = displayId > 0 && vdUniqueId != null && !vdUniqueId.isEmpty();
+        int backendMode = (config != null) ? config.getInputBackendMode() : 0;
+        if (preferPhysicalUhid && MouseRoutingPolicy.shouldPreferUhidForPhysicalKey(backendMode, true, hasUid)) {
+            if (injectKeyViaUhid(ev, displayId, vdUniqueId)) {
+                return true;
+            }
+        }
         return dispatchToDisplay(ev, displayId, vdUniqueId, dispW, dispH);
     }
 

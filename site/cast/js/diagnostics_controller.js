@@ -212,7 +212,7 @@ export class OpalDiagnosticsController {
 
     if ($('diagDeviceMeta')) {
       if (this.desktop.enabled) {
-        $('diagDeviceMeta').textContent = `OpalDesk v${this.feedbackState.appVersion || '1.0.20'} · ${this.feedbackState.deviceSummary || 'Desktop'}`;
+        $('diagDeviceMeta').textContent = `OpalDesk v${this.feedbackState.appVersion || '1.0.21'} · ${this.feedbackState.deviceSummary || 'Desktop'}`;
       } else {
         $('diagDeviceMeta').textContent = `OpalDesk Web 模式 · 本地内存诊断日志（在线反馈上报需使用 Windows / macOS 桌面客户端）`;
       }
