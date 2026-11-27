@@ -71,6 +71,7 @@ public struct PopoutConnectionContext: Sendable, Equatable {
     public let bitrateKbps: Int
     public let mapCommandToCtrl: Bool
     public let audioEnabled: Bool
+    public let enableEdgeNavigationGestures: Bool
 
     public init(
         endpoint: OpalCastEndpoint,
@@ -81,7 +82,8 @@ public struct PopoutConnectionContext: Sendable, Equatable {
         targetFPS: Int,
         bitrateKbps: Int,
         mapCommandToCtrl: Bool,
-        audioEnabled: Bool = true
+        audioEnabled: Bool = true,
+        enableEdgeNavigationGestures: Bool = true
     ) {
         self.endpoint = endpoint
         self.transportHint = transportHint
@@ -92,6 +94,34 @@ public struct PopoutConnectionContext: Sendable, Equatable {
         self.bitrateKbps = bitrateKbps
         self.mapCommandToCtrl = mapCommandToCtrl
         self.audioEnabled = audioEnabled
+        self.enableEdgeNavigationGestures = enableEdgeNavigationGestures
+    }
+}
+
+/// Presentation context for `ApkInstallerSheet` supporting both local macOS packages (upload + install)
+/// and packages already residing on Android storage (direct install via `0x34`).
+public struct ApkInstallerContext: Identifiable, Sendable, Equatable {
+    public enum PresentationTarget: Sendable, Equatable {
+        case main
+        case fileBrowser
+    }
+
+    public let id = UUID()
+    public let packageURL: URL
+    public let preloadedInfo: AndroidPackageInfo?
+    public let remoteFilePath: String?
+    public let targetWindow: PresentationTarget
+
+    public init(
+        packageURL: URL,
+        preloadedInfo: AndroidPackageInfo? = nil,
+        remoteFilePath: String? = nil,
+        targetWindow: PresentationTarget = .main
+    ) {
+        self.packageURL = packageURL
+        self.preloadedInfo = preloadedInfo
+        self.remoteFilePath = remoteFilePath
+        self.targetWindow = targetWindow
     }
 }
 

@@ -25,6 +25,11 @@ public final class PreferencesStore {
         static let dockAutoHide = "opaldesk.pref.dockAutoHide"
         static let usbTetherDiscoveryEnabled = "opaldesk.pref.usbTetherDiscoveryEnabled"
         static let hideLocalCursor = "opaldesk.pref.hideLocalCursor"
+        static let companionAutoConnectEnabled = "opaldesk.pref.companionAutoConnectEnabled"
+        static let notificationsSyncEnabled = "opaldesk.pref.notificationsSyncEnabled"
+        static let autoCopyOtpEnabled = "opaldesk.pref.autoCopyOtpEnabled"
+        static let mediaRemoteControlEnabled = "opaldesk.pref.mediaRemoteControlEnabled"
+        static let enableEdgeNavigationGestures = "opaldesk.pref.enableEdgeNavigationGestures"
     }
 
     private let defaults: UserDefaults
@@ -103,6 +108,31 @@ public final class PreferencesStore {
         didSet { defaults.set(hideLocalCursor, forKey: Key.hideLocalCursor) }
     }
 
+    /// Automatically maintains a lightweight background `.companion` link to trusted LAN devices.
+    public var companionAutoConnectEnabled: Bool {
+        didSet { defaults.set(companionAutoConnectEnabled, forKey: Key.companionAutoConnectEnabled) }
+    }
+
+    /// Mirrors Android status bar notifications into macOS Notification Center and the Menu Bar.
+    public var notificationsSyncEnabled: Bool {
+        didSet { defaults.set(notificationsSyncEnabled, forKey: Key.notificationsSyncEnabled) }
+    }
+
+    /// Automatically copies detected SMS/app OTP verification codes to the macOS clipboard.
+    public var autoCopyOtpEnabled: Bool {
+        didSet { defaults.set(autoCopyOtpEnabled, forKey: Key.autoCopyOtpEnabled) }
+    }
+
+    /// Mirrors active Android media playback to `MPNowPlayingInfoCenter` and forwards media keys.
+    public var mediaRemoteControlEnabled: Bool {
+        didSet { defaults.set(mediaRemoteControlEnabled, forKey: Key.mediaRemoteControlEnabled) }
+    }
+
+    /// Enables two-finger trackpad edge swipe navigation (Predictive Back, Home, Notification shade) and rotation.
+    public var enableEdgeNavigationGestures: Bool {
+        didSet { defaults.set(enableEdgeNavigationGestures, forKey: Key.enableEdgeNavigationGestures) }
+    }
+
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -151,5 +181,10 @@ public final class PreferencesStore {
         self.dockAutoHide = defaults.object(forKey: Key.dockAutoHide) as? Bool ?? false
         self.usbTetherDiscoveryEnabled = defaults.object(forKey: Key.usbTetherDiscoveryEnabled) as? Bool ?? false
         self.hideLocalCursor = defaults.object(forKey: Key.hideLocalCursor) as? Bool ?? false
+        self.companionAutoConnectEnabled = defaults.object(forKey: Key.companionAutoConnectEnabled) as? Bool ?? true
+        self.notificationsSyncEnabled = defaults.object(forKey: Key.notificationsSyncEnabled) as? Bool ?? true
+        self.autoCopyOtpEnabled = defaults.object(forKey: Key.autoCopyOtpEnabled) as? Bool ?? false
+        self.mediaRemoteControlEnabled = defaults.object(forKey: Key.mediaRemoteControlEnabled) as? Bool ?? true
+        self.enableEdgeNavigationGestures = defaults.object(forKey: Key.enableEdgeNavigationGestures) as? Bool ?? true
     }
 }

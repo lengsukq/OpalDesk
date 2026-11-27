@@ -99,6 +99,17 @@ public struct RemoteAppPickerSheet: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Button {
+                onDismiss()
+                model.openShortcutManager()
+            } label: {
+                Label("管理快捷方式", systemImage: "sparkles.rectangle.stack")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("管理已创建的 Spotlight / 桌面快捷方式")
+
             Button("关闭", action: onDismiss)
                 .keyboardShortcut(.cancelAction)
         }
@@ -262,6 +273,19 @@ public struct RemoteAppPickerSheet: View {
             }
 
             Spacer()
+
+            Button {
+                model.createSpotlightShortcut(
+                    for: app,
+                    deviceKey: context.deviceKey,
+                    deviceName: context.deviceName
+                )
+            } label: {
+                Image(systemName: "plus.app")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("创建 Spotlight 快捷方式（~/Applications/OpalDesk Apps/）")
 
             if context.allowLaunchInDesktop && model.isAuthenticated {
                 Button("大屏打开") {

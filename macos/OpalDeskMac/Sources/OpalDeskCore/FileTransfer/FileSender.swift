@@ -79,9 +79,12 @@ public final class FileSender: Sendable {
 
     /// Starts streaming a local file URL through `sendFrame` (which may suspend for backpressure),
     /// emitting progress snapshots via `onProgress`.
+    /// Pass `remoteFileNameOverride` to target a browsed remote path (e.g. `"/sdcard/Documents/a.pdf"`)
+    /// or Android's APK staging directory (`"@apk_stage/app.apk"`).
     @discardableResult
     public func sendFile(
         at url: URL,
+        remoteFileNameOverride: String? = nil,
         sendFrame: @escaping @Sendable (OpalCastFrame) async -> Void,
         onProgress: @escaping @Sendable (FileTransferProgress) -> Void
     ) throws -> UInt32 {
@@ -93,9 +96,11 @@ public final class FileSender: Sendable {
             throw FileSenderError.unreadableFile(url.lastPathComponent)
         }
 
-        let fileName = url.lastPathComponent
-        guard fileName.utf8.count <= OpalCastProtocol.maxFileNameUTF8Bytes else {
-            throw FileSenderError.fileNameTooLong(fileName)
+        let displayName = url.lastPathComponent
+        let trimmedOverride = remoteFileNameOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wireFileName = (trimmedOverride?.isEmpty == false) ? trimmedOverride! : displayName
+        guard wireFileName.utf8.count <= OpalCastProtocol.maxFileNameUTF8Bytes else {
+            throw FileSenderError.fileNameTooLong(wireFileName)
         }
         let totalSize = Int64(resourceValues.fileSize ?? 0)
 
@@ -105,7 +110,7 @@ public final class FileSender: Sendable {
             if s.nextTransferId == 0 { s.nextTransferId = 1 }
             s.activeTransfers[id] = FileTransferProgress(
                 transferId: id,
-                fileName: fileName,
+                fileName: displayName,
                 totalBytes: totalSize,
                 sentBytes: 0,
                 status: .sending
@@ -119,7 +124,7 @@ public final class FileSender: Sendable {
             await self.streamFile(
                 transferId: transferId,
                 url: url,
-                fileName: fileName,
+                fileName: wireFileName,
                 totalSize: totalSize,
                 chunkSize: chunkSize,
                 sendFrame: sendFrame,

@@ -209,16 +209,45 @@ extension AppModel {
 
     // MARK: - File Transfers
 
-    public func sendFiles(_ urls: [URL]) {
-        guard isAuthenticated else { return }
+    /// Smart drop handler: a single `.apk`/`.apks`/`.apkm`/`.xapk` launches `ApkInstallerSheet`;
+    /// multiple files or non-APK files stream directly to Android over any active channel.
+    public func handleDroppedFiles(_ urls: [URL]) {
+        let validFiles = FileBrowserPresentation.filterUploadableLocalFiles(urls)
+        guard !validFiles.isEmpty else { return }
+        if validFiles.count == 1,
+           let single = validFiles.first,
+           FileBrowserPresentation.isAndroidPackageFile(single)
+        {
+            presentApkInstaller(forLocalURL: single, targetWindow: .main)
+            return
+        }
+        sendFiles(validFiles)
+    }
+
+    public func sendFiles(_ urls: [URL], remoteDirectory: String? = nil) {
+        guard isAnyChannelConnected else {
+            let msg = "未连接到 Android 设备，无法发送文件"
+            bannerError = msg
+            showToast(msg)
+            return
+        }
         for url in urls {
+            let overrideName: String?
+            if let remoteDirectory, !remoteDirectory.isEmpty {
+                overrideName = FileBrowserPresentation.joining(base: remoteDirectory, name: url.lastPathComponent)
+            } else {
+                overrideName = nil
+            }
             do {
-                let activeSession = session
                 try fileSender.sendFile(
                     at: url,
-                    sendFrame: { frame in await activeSession.sendPaced(frame) },
+                    remoteFileNameOverride: overrideName,
+                    sendFrame: { [weak self] frame in
+                        guard let self else { return }
+                        _ = await self.sendPacedFileFrameOnActiveChannel(frame)
+                    },
                     onProgress: { [weak self] progress in
-                        Task { @MainActor [weak self] in self?.upsertTransferProgress(progress) }
+                        Task { @MainActor [weak self] in self?.handleFileSenderProgress(progress) }
                     }
                 )
             } catch {
@@ -231,9 +260,11 @@ extension AppModel {
     public func cancelFileTransfer(_ transferId: UInt32) {
         fileSender.cancel(
             transferId: transferId,
-            sendFrame: { [weak self] frame in self?.session.send(frame) },
+            sendFrame: { [weak self] frame in
+                _ = self?.sendControlFrameOnActiveChannel(frame)
+            },
             onProgress: { [weak self] progress in
-                Task { @MainActor [weak self] in self?.upsertTransferProgress(progress) }
+                Task { @MainActor [weak self] in self?.handleFileSenderProgress(progress) }
             }
         )
     }

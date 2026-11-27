@@ -391,4 +391,49 @@ struct AudioAndFileTests {
         #expect(finalBox.withLock { $0?.status } == .failed(reason: "storage full"))
         #expect(sender.trackedTransferCount == 0)
     }
+
+    @Test("FileSender remoteFileNameOverride targets browsed directory or @apk_stage while keeping UI basename")
+    func fileSenderRemoteFileNameOverride() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opaldesk-override-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let apkURL = tempDir.appendingPathComponent("demo.xapk")
+        try Data([0x50, 0x4B, 0x03, 0x04]).write(to: apkURL)
+
+        let framesBox = OSAllocatedUnfairLock<[OpalCastFrame]>(initialState: [])
+        let progressBox = OSAllocatedUnfairLock<FileTransferProgress?>(initialState: nil)
+        let sender = FileSender(chunkSize: 4096)
+
+        let tid = try sender.sendFile(
+            at: apkURL,
+            remoteFileNameOverride: "@apk_stage/demo.xapk",
+            sendFrame: { frame in framesBox.withLock { $0.append(frame) } },
+            onProgress: { progress in progressBox.withLock { $0 = progress } }
+        )
+
+        for _ in 0..<200 {
+            if progressBox.withLock({ $0?.status }) == .awaitingAck { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let frames = framesBox.withLock { $0 }
+        #expect(frames.count == 3) // START + DATA + END
+        let startChunk = try FileTransferChunkPayload.decode(from: frames[0].payload)
+        #expect(startChunk.transferId == tid)
+        #expect(startChunk.fileName == "@apk_stage/demo.xapk")
+        #expect(progressBox.withLock { $0?.fileName } == "demo.xapk")
+
+        // Oversized remoteFileNameOverride throws fileNameTooLong
+        let oversized = "/" + String(repeating: "a", count: OpalCastProtocol.maxFileNameUTF8Bytes + 1)
+        #expect(throws: FileSenderError.fileNameTooLong(oversized)) {
+            _ = try sender.sendFile(
+                at: apkURL,
+                remoteFileNameOverride: oversized,
+                sendFrame: { _ in },
+                onProgress: { _ in }
+            )
+        }
+    }
 }

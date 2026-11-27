@@ -592,6 +592,46 @@ struct CompanionProtocolTests {
         #expect(receivedApps.withLock { $0.first?.first?.pkg } == "com.tencent.mm")
     }
 
+    @Test("CompanionConnectionManager externalFrameRouter prioritizes primary channel and preserves subcomponents when main is active")
+    func companionExternalFrameRouterDualChannelPreservation() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opaldesk-dual-router-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let trustStore = TrustStore(storageURL: tempDir.appendingPathComponent("trust.json"))
+        let transport = MockCompanionTransport()
+        let mediaBackend = MockNowPlayingBackend()
+        let mediaBridge = MediaRemoteBridge(backend: mediaBackend)
+        let manager = CompanionConnectionManager(
+            trustStore: trustStore,
+            transport: transport,
+            notificationBridge: NotificationBridgeManager(notificationCenter: NoopLocalNotificationCenter()),
+            mediaBridge: mediaBridge
+        )
+
+        let routedFrames = OSAllocatedUnfairLock<[OpalCastFrame]>(initialState: [])
+        manager.setExternalFrameRouter { frame in
+            routedFrames.withLock { $0.append(frame) }
+            return true
+        }
+
+        // Even while companion transport is idle, control actions route through external primary channel.
+        #expect(manager.sendNotificationAction(.clearAll()) == true)
+        #expect(manager.sendMediaAction(.next()) == true)
+        let captured = routedFrames.withLock { $0 }
+        #expect(captured.count == 2)
+        #expect(captured[0].type == .notificationAction)
+        #expect(captured[1].type == .mediaAction)
+
+        // When main desktop session is active, companion disconnect must NOT clear active NowPlaying state.
+        let activeMedia = MediaStatePayload(active: true, title: "Active Song", playing: true)
+        mediaBridge.applyRemoteMediaState(activeMedia)
+        manager.setMainSessionActive(true)
+        manager.disconnect()
+        #expect(mediaBridge.currentState == activeMedia)
+    }
+
     private func makeAuthResultBytes(
         ok: Bool,
         authToken: String,

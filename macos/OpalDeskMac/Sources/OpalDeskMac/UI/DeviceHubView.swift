@@ -14,6 +14,7 @@ private enum HubTab: String, CaseIterable, Identifiable {
 /// and the in-app diagnostic logs & feature feedback console.
 public struct DeviceHubView: View {
     @Bindable public var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     @State private var activeTab: HubTab = .devices
     @State private var manualHost: String = ""
@@ -38,6 +39,9 @@ public struct DeviceHubView: View {
                     }
 
                     if activeTab == .devices {
+                        if shouldShowCompanionCard {
+                            companionOnlineCardSection
+                        }
                         standaloneHistorySection
                         adbDevicesSection
                         if model.preferences.usbTetherDiscoveryEnabled {
@@ -55,9 +59,15 @@ public struct DeviceHubView: View {
             }
 
             if let toast = model.toastNotice {
-                ToastPillView(message: toast)
-                    .padding(.bottom, 18)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                ToastPillView(
+                    message: toast,
+                    actionTitle: model.toastActionTitle,
+                    onAction: model.toastActionURL.map { url in
+                        { model.revealInFinder(url) }
+                    }
+                )
+                .padding(.bottom, 18)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(.easeOut(duration: 0.2), value: model.toastNotice)
@@ -156,6 +166,31 @@ public struct DeviceHubView: View {
                         .help("选择连接后默认进入电脑多窗口桌面或融合边栏镜像")
                     }
 
+                    Button {
+                        openWindow(id: WindowID.fileBrowser)
+                        NSApp.activate(ignoringOtherApps: true)
+                    } label: {
+                        Image(systemName: "folder").font(.system(size: 14))
+                    }
+                    .buttonStyle(.bordered)
+                    .help("手机文件与存储管理 (⌘⇧F)")
+
+                    Button {
+                        model.presentApkFileChooser(targetWindow: .main)
+                    } label: {
+                        Image(systemName: "shippingbox").font(.system(size: 14))
+                    }
+                    .buttonStyle(.bordered)
+                    .help("安装 Android 安装包 (.apk/.xapk)")
+
+                    Button {
+                        model.openShortcutManager()
+                    } label: {
+                        Image(systemName: "sparkles.rectangle.stack").font(.system(size: 14))
+                    }
+                    .buttonStyle(.bordered)
+                    .help("管理 Spotlight 与桌面应用快捷方式")
+
                     SettingsLink {
                         Image(systemName: "gearshape").font(.system(size: 14))
                     }
@@ -172,6 +207,191 @@ public struct DeviceHubView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(maxWidth: 320)
+        }
+    }
+
+    // MARK: - Background Companion Live Card (Handoff, Media Remote & Quick Tools)
+
+    private var shouldShowCompanionCard: Bool {
+        model.companionState.isActiveOrAttempting
+            || !model.hostTopApp.isEmpty
+            || (model.mediaState?.active == true)
+    }
+
+    private var companionOnlineCardSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(model.companionState.isConnected ? Color.green : Color.orange)
+                    .frame(width: 9, height: 9)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(companionTitleText)
+                            .font(.headline)
+                        StatusBadgeView(
+                            text: model.companionState.isConnected ? "后台伴侣在线" : "连接中",
+                            color: model.companionState.isConnected ? .green : .orange
+                        )
+                        if !model.remoteNotifications.isEmpty {
+                            StatusBadgeView(text: "\(model.remoteNotifications.count) 条手机通知", color: .blue)
+                        }
+                    }
+                    Text("免开大屏即可收发手机通知、同步剪贴板、控制媒体、互传文件与无线安装 APK")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                HStack(spacing: 6) {
+                    Button {
+                        openWindow(id: WindowID.fileBrowser)
+                        NSApp.activate(ignoringOtherApps: true)
+                    } label: {
+                        Label("文件与存储", systemImage: "folder")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!model.isAnyChannelConnected)
+
+                    Button {
+                        model.presentApkFileChooser(targetWindow: .main)
+                    } label: {
+                        Label("安装 APK", systemImage: "shippingbox")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!model.isAnyChannelConnected)
+
+                    if model.companionState.isActiveOrAttempting {
+                        Button {
+                            model.disconnectCompanion()
+                        } label: {
+                            Image(systemName: "bolt.slash")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("断开后台伴侣连接")
+                    }
+                }
+            }
+
+            if !model.hostTopApp.isEmpty {
+                HStack(spacing: 10) {
+                    Image(systemName: "iphone.and.arrow.forward")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("正在手机上使用：\(model.hostTopApp.displayLabel)")
+                            .font(.subheadline.weight(.semibold))
+                        Text(model.hostTopApp.packageName)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("在 Mac 小窗继续") {
+                        model.handoffHostTopApp()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            if let media = model.mediaState, media.active {
+                HStack(spacing: 12) {
+                    if let data = media.artworkData, let img = NSImage(data: data) {
+                        Image(nsImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 40, height: 40)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    } else {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.14))
+                            Image(systemName: "music.note")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .frame(width: 40, height: 40)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(media.title.isEmpty ? media.appLabel : media.title)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Text([media.artist, media.appLabel].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    HStack(spacing: 6) {
+                        Button { model.sendMediaAction(.previous()) } label: {
+                            Image(systemName: "backward.fill")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("上一首")
+
+                        Button { model.sendMediaAction(.toggle()) } label: {
+                            Image(systemName: media.playing ? "pause.fill" : "play.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .help(media.playing ? "暂停" : "播放")
+
+                        Button { model.sendMediaAction(.next()) } label: {
+                            Image(systemName: "forward.fill")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("下一首")
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            if let otpItem = model.remoteNotifications.first(where: { !$0.otpCode.isEmpty }) {
+                HStack(spacing: 10) {
+                    Image(systemName: "key.fill")
+                        .foregroundStyle(.green)
+                    Text("「\(otpItem.displayAppLabel)」验证码：\(otpItem.otpCode)")
+                        .font(.callout.weight(.medium).monospaced())
+                    Spacer()
+                    Button("一键复制") {
+                        model.copyNotificationOtp(otpItem)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+        .padding(16)
+        .opalDeskCardContainer()
+    }
+
+    private var companionTitleText: String {
+        switch model.companionState {
+        case .connected(let name): return name
+        case .connecting(let name): return "正在静默连接 \(name)…"
+        case .authenticating(let name): return "正在验证 \(name)…"
+        case .reconnecting(let name, let attempt): return "正在重连 \(name)（第 \(attempt) 次）…"
+        default: return model.activeChannelDeviceName
         }
     }
 

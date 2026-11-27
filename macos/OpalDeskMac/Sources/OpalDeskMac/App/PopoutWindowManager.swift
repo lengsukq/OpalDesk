@@ -131,6 +131,12 @@ public final class PopoutWindowManager {
         }
     }
 
+    public func updateEdgeNavigationGestures(_ enabled: Bool) {
+        for controller in controllers {
+            controller.enableEdgeNavigationGestures = enabled
+        }
+    }
+
     public func focusWindow(id: UUID) {
         guard let host = hosts[id] else { return }
         if host.window.isMiniaturized {

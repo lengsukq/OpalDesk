@@ -20,7 +20,8 @@ extension AppModel {
                 isUserInitiatedDisconnect = false
                 isConnectingFlow = false
                 isAuthenticated = false
-                clipboardSync.stop()
+                notifyMainSessionAuthChanged(false)
+                stopMainRecordingIfNeededOnDisconnect()
                 micCapturer.stop()
                 isMicEnabled = false
                 cameraCapturer.stop()
@@ -41,6 +42,8 @@ extension AppModel {
                 isUserInitiatedDisconnect = false
                 isConnectingFlow = false
                 isAuthenticated = false
+                notifyMainSessionAuthChanged(false)
+                stopMainRecordingIfNeededOnDisconnect()
                 micCapturer.stop()
                 isMicEnabled = false
                 cameraCapturer.stop()
@@ -56,6 +59,7 @@ extension AppModel {
                 }
             case .reconnecting(let attempt):
                 isAuthenticated = false
+                notifyMainSessionAuthChanged(false)
                 micCapturer.stop()
                 isMicEnabled = false
                 cameraCapturer.stop()
@@ -116,17 +120,20 @@ extension AppModel {
                 displayMode = mode
             }
             if !state.deviceName.isEmpty { activeConnection?.deviceName = state.deviceName }
+            handleDeviceStateHostTopApp(state)
 
         case .clipboardPush:
             if (frame.flags & OpalCastProtocol.flagClipboardImagePng) != 0 {
                 if let img = StreamSessionBridge.decodePayload("image CLIPBOARD_PUSH", logger: OpalDeskLog.clipboard, {
                     try ClipboardImagePushPayload.decode(from: frame.payload)
                 }) {
+                    companionManager.recordExternalClipboardDigest(ClipboardSyncManager.imageDigest(img.pngData))
                     clipboardSync.applyRemoteClipboardImage(seq: img.seq, pngData: img.pngData)
                 }
             } else if let clip = StreamSessionBridge.decodePayload("text CLIPBOARD_PUSH", logger: OpalDeskLog.clipboard, {
                 try ClipboardPushPayload.decode(from: frame.payload)
             }) {
+                companionManager.recordExternalClipboardDigest(ClipboardSyncManager.textDigest(clip.text))
                 clipboardSync.applyRemoteClipboard(seq: clip.seq, text: clip.text)
             }
 
@@ -142,9 +149,7 @@ extension AppModel {
             guard let ack = StreamSessionBridge.decodePayload("FILE_TRANSFER_ACK", logger: OpalDeskLog.file, {
                 try FileTransferAckPayload.decode(from: frame.payload)
             }) else { return }
-            fileSender.handleAck(ack) { [weak self] progress in
-                Task { @MainActor [weak self] in self?.upsertTransferProgress(progress) }
-            }
+            handleInboundFileTransferAck(ack)
 
         case .wifiUpgradeReady:
             if let ready = StreamSessionBridge.decodePayload("WIFI_UPGRADE_READY", logger: OpalDeskLog.app, {
@@ -188,6 +193,41 @@ extension AppModel {
                 if !st.message.isEmpty {
                     showToast(st.message)
                 }
+            }
+
+        case .notificationEvent:
+            if let event = StreamSessionBridge.decodePayload("NOTIFICATION_EVENT", logger: OpalDeskLog.app, {
+                try NotificationEventPayload.decode(from: frame.payload)
+            }) {
+                notificationBridge.handleEvent(event)
+            }
+
+        case .mediaState:
+            if let media = StreamSessionBridge.decodePayload("MEDIA_STATE", logger: OpalDeskLog.app, {
+                try MediaStatePayload.decode(from: frame.payload)
+            }) {
+                mediaBridge.applyRemoteMediaState(media)
+            }
+
+        case .fileOpResponse:
+            if let response = StreamSessionBridge.decodePayload("FILE_OP_RESPONSE", logger: OpalDeskLog.file, {
+                try FileOpResponsePayload.decode(from: frame.payload)
+            }) {
+                fileBrowserClient.handleFileOpResponse(response)
+            }
+
+        case .filePullChunk:
+            if let chunk = StreamSessionBridge.decodePayload("FILE_PULL_CHUNK", logger: OpalDeskLog.file, {
+                try FilePullChunkPayload.decode(from: frame.payload)
+            }) {
+                fileBrowserClient.handleFilePullChunk(chunk)
+            }
+
+        case .apkInstallStatus:
+            if let status = StreamSessionBridge.decodePayload("APK_INSTALL_STATUS", logger: OpalDeskLog.file, {
+                try ApkInstallStatusPayload.decode(from: frame.payload)
+            }) {
+                fileBrowserClient.handleApkInstallStatus(status)
             }
 
         default:
@@ -241,7 +281,7 @@ extension AppModel {
     }
 
     private func applyPostAuthBootstrap() {
-        startClipboardSyncIfEnabled()
+        notifyMainSessionAuthChanged(true)
         syncInitialDesktopPreferences()
         syncCanvasSizeAfterAuth()
     }
@@ -319,25 +359,6 @@ extension AppModel {
         }
     }
 
-    private func startClipboardSyncIfEnabled() {
-        clipboardSync.isEnabled = preferences.clipboardSyncEnabled
-        clipboardSync.start(
-            onLocalChange: { [weak self] seq, text in
-                guard let self, self.isAuthenticated else { return }
-                self.session.send(.inputText(InputTextPayload(mode: .setClipboardOnly, seq: seq, text: text)))
-            },
-            onLocalImageChange: { [weak self] seq, pngData in
-                guard let self, self.isAuthenticated else { return }
-                let payload = InputImagePayload(mode: .setClipboardImageOnly, seq: seq, pngData: pngData)
-                do {
-                    self.session.send(try OpalCastFrame.inputImage(payload))
-                } catch {
-                    OpalDeskLog.clipboard.error("Failed to encode clipboard image frame: \(error.localizedDescription, privacy: .public)")
-                }
-            }
-        )
-    }
-
     func teardownCurrentSession(sendRemoteDisconnect: Bool, clearBannerError: Bool = true) async {
         resizeDebounceTask?.cancel()
         if clearBannerError { bannerError = nil }
@@ -347,7 +368,7 @@ extension AppModel {
             _ = await sleepCancellable(nanoseconds: Tuning.remoteDisconnectFlushNs)
         }
 
-        clipboardSync.stop()
+        stopMainRecordingIfNeededOnDisconnect()
         micCapturer.stop()
         isMicEnabled = false
         cameraCapturer.stop()
@@ -385,6 +406,7 @@ extension AppModel {
         deviceState = DeviceStatePayload()
         lastRequestedConfig = nil
         activeTransfers.removeAll()
+        notifyMainSessionAuthChanged(false)
     }
 
     static func uniqueForwards(_ forwards: [AdbForwardHandle]) -> [AdbForwardHandle] {

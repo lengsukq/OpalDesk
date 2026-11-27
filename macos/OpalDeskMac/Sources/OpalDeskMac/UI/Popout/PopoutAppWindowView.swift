@@ -39,7 +39,8 @@ public struct PopoutAppWindowView: View {
                 config: DisplayCanvasConfig(
                     videoWidth: controller.currentVideoWidth,
                     videoHeight: controller.currentVideoHeight,
-                    mapCommandToCtrl: controller.mapCommandToCtrl
+                    mapCommandToCtrl: controller.mapCommandToCtrl,
+                    enableEdgeNavigationGestures: controller.enableEdgeNavigationGestures
                 ),
                 callbacks: controller.streamBridge.makeCanvasCallbacks(
                     isAuthenticated: { controller.isAuthenticated },
@@ -62,12 +63,36 @@ public struct PopoutAppWindowView: View {
 
             VStack(spacing: 4) {
                 if !shouldShowToolbar {
-                    Capsule()
-                        .fill(controller.isPinnedOnTop ? Color.orange.opacity(0.65) : Color.white.opacity(0.35))
-                        .frame(width: 38, height: 4)
-                        .padding(.top, 5)
-                        .transition(.opacity)
-                        .allowsHitTesting(false)
+                    HStack {
+                        if controller.isRecording {
+                            Button {
+                                controller.stopRecording()
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Circle().fill(Color.red).frame(width: 7, height: 7)
+                                    Text(controller.formattedRecordingDuration)
+                                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(.white)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .floatingCapsuleChrome(strokeColor: Color.red.opacity(0.6), lineWidth: 0.9, shadowRadius: 6, shadowY: 2, shadowOpacity: 0.3)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.leading, 8)
+                            .padding(.top, 6)
+                            .help("点击停止录屏")
+                        }
+                        Spacer()
+                    }
+                    .overlay(alignment: .top) {
+                        Capsule()
+                            .fill(controller.isPinnedOnTop ? Color.orange.opacity(0.65) : Color.white.opacity(0.35))
+                            .frame(width: 38, height: 4)
+                            .padding(.top, 5)
+                            .allowsHitTesting(false)
+                    }
+                    .transition(.opacity)
                 } else {
                     hoverControlBar
                         .padding(.top, 10)
@@ -76,10 +101,23 @@ public struct PopoutAppWindowView: View {
                         .onHover { toolbar.handleToolbarHover($0) }
                 }
                 Spacer()
+
+                if let toast = controller.toastNotice {
+                    ToastPillView(
+                        message: toast,
+                        actionTitle: controller.toastRevealURL != nil ? "在 Finder 显示" : nil,
+                        onAction: controller.toastRevealURL.map { url in
+                            { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                        }
+                    )
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
         }
         .preferredColorScheme(.dark)
         .animation(.easeOut(duration: 0.16), value: shouldShowToolbar)
+        .animation(.easeOut(duration: 0.2), value: controller.toastNotice)
         .onChange(of: isOpacityPopoverShown) { _, shown in toolbar.setLockedOpen(shown) }
         .onAppear { toolbar.onAppear() }
         .onDisappear { toolbar.onDisappear() }
@@ -131,6 +169,34 @@ public struct PopoutAppWindowView: View {
                 highlighted: !controller.isAudioMuted,
                 help: controller.isAudioMuted ? "已静音 · 点击恢复音频回传" : "静音此小窗音频回传"
             ) { controller.toggleAudioMute() }
+
+            iconButton(
+                "camera",
+                help: "一键截图到桌面并复制剪贴板"
+            ) { controller.captureScreenshot() }
+
+            Button {
+                controller.toggleRecording()
+            } label: {
+                if controller.isRecording {
+                    HStack(spacing: 3) {
+                        Circle().fill(Color.red).frame(width: 6, height: 6)
+                        Text(controller.formattedRecordingDuration)
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    }
+                    .padding(.horizontal, 6)
+                    .frame(height: 22)
+                    .background(Color.red.opacity(0.24), in: Capsule())
+                    .foregroundStyle(Color.red)
+                } else {
+                    Image(systemName: "record.circle")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 24, height: 22)
+                        .foregroundStyle(Color.primary)
+                }
+            }
+            .buttonStyle(.plain)
+            .help(controller.isRecording ? "停止录屏并保存 MP4" : "录制小窗 MP4 视频")
 
             iconButton("textformat.size", help: "重载 App DPI（修复字体过大或缩放异常）") { controller.reloadAppDPI() }
             iconButton("chevron.backward", help: "Android 返回") { controller.sendAndroidBack() }
