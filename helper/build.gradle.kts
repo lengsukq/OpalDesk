@@ -109,16 +109,20 @@ android {
     val signingPass = (rootProject.extra["opalDeskSigningPassword"] as? String).orEmpty()
     val signingAlias = (rootProject.extra["opalDeskSigningAlias"] as? String).orEmpty().ifBlank { "opaldesk" }
 
+    val isHelperReleaseTaskRequested = gradle.startParameter.taskNames.any { task ->
+        val clean = task.trim()
+        clean.contains("Release", ignoreCase = true) &&
+            (clean.startsWith(":helper:", ignoreCase = true) || !clean.startsWith(":"))
+    }
     val requireReleaseKey = (System.getenv("OPALDESK_REQUIRE_RELEASE_KEY") == "1")
         || (project.findProperty("requireReleaseKey")?.toString()?.equals("true", ignoreCase = true) == true)
-        || (System.getenv("GITHUB_REF")?.startsWith("refs/tags/v") == true)
+        || (isHelperReleaseTaskRequested && System.getenv("GITHUB_REF")?.startsWith("refs/tags/v") == true)
     val allowUnsignedRelease = !requireReleaseKey && (
         (System.getenv("OPALDESK_ALLOW_UNSIGNED_RELEASE") == "1")
             || (project.findProperty("allowUnsignedRelease")?.toString()?.equals("true", ignoreCase = true) == true)
         )
-    val isReleaseTaskRequested = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
 
-    if ((requireReleaseKey || (isReleaseTaskRequested && !allowUnsignedRelease)) && activeKs == null) {
+    if ((requireReleaseKey || (isHelperReleaseTaskRequested && !allowUnsignedRelease)) && activeKs == null) {
         throw GradleException(
             "Release build requires OPALDESK_KEYSTORE (or local opaldesk.p12). " +
                 "Run ./scripts/init-signing.sh to generate a local signing certificate, or for keyless CI verification " +
