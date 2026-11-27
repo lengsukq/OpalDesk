@@ -51,6 +51,7 @@ class BridgeProvider : ContentProvider() {
             BridgeProtocol.PROVIDER_METHOD_REMOTE_STATE_CHANGED -> handleRemoteStateChanged()
             BridgeProtocol.PROVIDER_METHOD_NOTIFICATION_ACTION -> handleNotificationAction(extras)
             BridgeProtocol.PROVIDER_METHOD_MEDIA_ACTION -> handleMediaAction(extras)
+            BridgeProtocol.PROVIDER_METHOD_CALL_ACTION -> handleCallAction(extras)
             else -> Bundle()
         }
     }
@@ -138,19 +139,30 @@ class BridgeProvider : ContentProvider() {
     }
 
     private fun handleNotificationAction(extras: Bundle?): Bundle {
+        var handled = false
         if (!BridgeService.sUserStopping && extras != null) {
-            val op = extras.getString(BridgeProtocol.EXTRA_NOTIF_ACTION_OP).orEmpty()
+            val op = extras.getString(BridgeProtocol.EXTRA_NOTIF_ACTION_OP).orEmpty().trim()
             val key = extras.getString(BridgeProtocol.EXTRA_NOTIF_ACTION_KEY).orEmpty()
             val replyText = extras.getString(BridgeProtocol.EXTRA_NOTIF_ACTION_REPLY_TEXT).orEmpty()
-            if (op.isNotEmpty()) {
-                io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.handleRemoteAction(
+            val actionIndex = extras.getInt(BridgeProtocol.EXTRA_NOTIF_ACTION_INDEX, -1)
+            if (op.equals("invoke_action", ignoreCase = true)) {
+                handled = io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.invokeAction(
+                    key = key,
+                    actionIndex = actionIndex,
+                )
+            } else if (op.isNotEmpty()) {
+                handled = io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.handleRemoteAction(
                     op = op,
                     key = key,
                     replyText = replyText,
+                    actionIndex = actionIndex,
                 )
             }
         }
-        return Bundle().apply { putBoolean("ok", true) }
+        return Bundle().apply {
+            putBoolean("ok", true)
+            putBoolean("handled", handled)
+        }
     }
 
     private fun handleMediaAction(extras: Bundle?): Bundle {
@@ -165,6 +177,27 @@ class BridgeProvider : ContentProvider() {
             }
         }
         return Bundle().apply { putBoolean("ok", true) }
+    }
+
+    private fun handleCallAction(extras: Bundle?): Bundle {
+        var handled = false
+        if (!BridgeService.sUserStopping && extras != null) {
+            val op = extras.getString(BridgeProtocol.EXTRA_CALL_ACTION_OP).orEmpty().trim()
+            val number = extras.getString(BridgeProtocol.EXTRA_CALL_ACTION_NUMBER).orEmpty()
+            val smsText = extras.getString(BridgeProtocol.EXTRA_CALL_ACTION_SMS_TEXT).orEmpty()
+            if (op.isNotEmpty()) {
+                handled = io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge.handleRemoteAction(
+                    ctx = context,
+                    op = op,
+                    number = number,
+                    smsText = smsText,
+                )
+            }
+        }
+        return Bundle().apply {
+            putBoolean("ok", true)
+            putBoolean("handled", handled)
+        }
     }
 
     override fun query(u: Uri, p: Array<out String>?, s: String?, sa: Array<out String>?, so: String?): Cursor? = null

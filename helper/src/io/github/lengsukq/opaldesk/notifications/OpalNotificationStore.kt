@@ -13,6 +13,17 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+data class NotificationActionButton(
+    val index: Int,
+    val label: String,
+)
+
+data class RawNotificationAction(
+    val label: String,
+    val hasActionIntent: Boolean,
+    val hasRemoteInputs: Boolean,
+)
+
 data class DesktopNotificationItem(
     val key: String,
     val packageName: String,
@@ -25,10 +36,35 @@ data class DesktopNotificationItem(
     val canReply: Boolean = false,
     val replyLabel: String = "",
     val otpCode: String = "",
+    val actions: List<NotificationActionButton> = emptyList(),
 ) {
     fun formattedTime(): String {
         if (postTimeMs <= 0L) return ""
         return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(postTimeMs))
+    }
+}
+
+/**
+ * Pure JVM-testable selection policy for generic clickable non-reply notification actions
+ * (caps at 3 buttons and excludes inline-reply / blank-label / non-clickable items).
+ */
+object OpalNotificationActionPolicy {
+    const val MAX_ACTIONS = 3
+
+    fun selectClickableNonReplyIndices(
+        rawActions: List<RawNotificationAction>,
+    ): List<Pair<Int, NotificationActionButton>> {
+        if (rawActions.isEmpty()) return emptyList()
+        val selected = ArrayList<Pair<Int, NotificationActionButton>>(MAX_ACTIONS)
+        for (srcIdx in rawActions.indices) {
+            if (selected.size >= MAX_ACTIONS) break
+            val action = rawActions[srcIdx]
+            val cleanLabel = action.label.trim()
+            if (!action.hasActionIntent || action.hasRemoteInputs || cleanLabel.isEmpty()) continue
+            val buttonIdx = selected.size
+            selected.add(srcIdx to NotificationActionButton(index = buttonIdx, label = cleanLabel))
+        }
+        return selected
     }
 }
 
@@ -103,7 +139,15 @@ object OpalNotificationJsonCodec {
             appendJsonString(sb, item.replyLabel)
             sb.append(",\"otpCode\":")
             appendJsonString(sb, item.otpCode)
-            sb.append('}')
+            sb.append(",\"actions\":[")
+            item.actions.forEachIndexed { actionIdx, button ->
+                if (actionIdx > 0) sb.append(',')
+                sb.append("{\"index\":").append(button.index.coerceAtLeast(0))
+                sb.append(",\"label\":")
+                appendJsonString(sb, button.label)
+                sb.append('}')
+            }
+            sb.append("]}")
         }
         sb.append("]}")
         return sb.toString()
@@ -235,6 +279,14 @@ object OpalNotificationStore {
         return activeService?.replyToNotificationSafely(key, replyText) == true
     }
 
+    fun invokeAction(key: String, actionIndex: Int): Boolean {
+        if (key.isBlank() || actionIndex < 0) return false
+        return activeService?.invokeNotificationActionSafely(key, actionIndex) == true
+    }
+
+    fun toBridgeJson(items: List<DesktopNotificationItem> = _notificationsFlow.value): String =
+        OpalNotificationJsonCodec.encodeSnapshot(items)
+
     fun requestSync() {
         val svc = activeService
         if (svc != null) {
@@ -245,22 +297,36 @@ object OpalNotificationStore {
     }
 
     fun pushSnapshotToDaemon() {
-        val snapshot = _notificationsFlow.value
-        syncJsonToDaemonSafe(OpalNotificationJsonCodec.encodeSnapshot(snapshot))
+        syncJsonToDaemonSafe(toBridgeJson(_notificationsFlow.value))
     }
 
     /**
      * Dispatches a remote notification command originating from the daemon
-     * (`BridgeProvider.call("notificationAction")`, backed by OPD1 v1.2 `0x31`).
+     * (`BridgeProvider.call("notificationAction")`, backed by OPD1 v1.2/v1.3 `0x31`).
      */
-    fun handleRemoteAction(op: String, key: String, replyText: String) {
-        when (op.trim().lowercase(Locale.ROOT)) {
-            "sync" -> requestSync()
-            "dismiss" -> if (key.isNotEmpty()) cancelNotification(key)
-            "clear_all" -> clearAllNotifications()
+    fun handleRemoteAction(op: String, key: String, replyText: String, actionIndex: Int = -1): Boolean {
+        return when (op.trim().lowercase(Locale.ROOT)) {
+            "sync" -> {
+                requestSync()
+                true
+            }
+            "dismiss" -> if (key.isNotEmpty()) {
+                cancelNotification(key)
+                true
+            } else {
+                false
+            }
+            "clear_all" -> {
+                clearAllNotifications()
+                true
+            }
             "reply" -> if (key.isNotEmpty() && replyText.isNotBlank()) {
                 replyToNotification(key, replyText)
+            } else {
+                false
             }
+            "invoke_action" -> invokeAction(key, actionIndex)
+            else -> false
         }
     }
 

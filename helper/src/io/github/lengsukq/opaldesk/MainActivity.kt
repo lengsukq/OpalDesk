@@ -265,6 +265,8 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         BridgeClient.requestBinder(this)
         io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.refreshAccessState(this)
+        io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge.syncEnabledState(this)
+        io.github.lengsukq.opaldesk.cast.BleNearbyService.syncEnabledState(this)
         localNetworkPermGranted = OpalPeerDiscovery.hasLocalNetworkPermission(this)
         if (localNetworkPermGranted) {
             OpalPeerDiscovery.startBrowsing(this, BridgeClient.remoteStatusFlow.value.lanIp)
@@ -487,6 +489,8 @@ private fun OpalConsoleScreen(
     val autoBridgeImeOnCast by AppPrefs.autoBridgeImeOnCastFlow.collectAsState()
     val audioRouteMode by AppPrefs.audioRouteModeFlow.collectAsState()
     val usbTetherEnabled by AppPrefs.usbTetherCastEnabledFlow.collectAsState()
+    val callControlEnabled by AppPrefs.callControlSyncEnabledFlow.collectAsState()
+    val bleNearbyEnabled by AppPrefs.bleNearbyEnabledFlow.collectAsState()
     val spotlightRecents by AppPrefs.spotlightRecentsFlow.collectAsState()
     val notifAccessGranted by io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.accessGrantedFlow.collectAsState()
     val profileState by ProfileConfigStore.stateFlow.collectAsState()
@@ -862,6 +866,8 @@ private fun OpalConsoleScreen(
                 },
                 shortcutsSummary = if (!globalShortcutsEnabled || activeShortcuts == 0) "已关闭" else "已启 $activeShortcuts 项",
                 notifAccessGranted = notifAccessGranted,
+                callControlEnabled = callControlEnabled,
+                bleNearbyEnabled = bleNearbyEnabled,
                 slotSummary = "槽位 ${profileState.activeSlotId + 1} · ${activeSlot.name.take(6)}",
                 audioSummary = if (audioRouteMode == BridgeProtocol.AudioRoute.SPLIT_BY_APP) "独立分流" else "整机传 DeX",
                 usbTetherEnabled = usbTetherEnabled,

@@ -23,6 +23,8 @@ data class ConsoleSpotlightState(
     val imeSummary: String = "智能自动",
     val shortcutsSummary: String = "已启 12 项",
     val notifAccessGranted: Boolean = false,
+    val callControlEnabled: Boolean = false,
+    val bleNearbyEnabled: Boolean = false,
     val slotSummary: String = "槽位 1",
     val audioSummary: String = "独立分流",
     val usbTetherEnabled: Boolean = false,
@@ -386,11 +388,17 @@ object ConsoleSearchCatalog {
         SpotlightItem(
             id = "section_${ConsoleSectionKeys.NOTIFICATIONS_COMPANION}",
             category = SpotlightCategory.CONSOLE_SECTION,
-            title = "DeX 与跨端通知同步",
-            subtitle = if (liveState.notifAccessGranted) "已授权 · 手机消息、验证码、来电与蓝牙近场互联开关" else "开启通知使用权，同步手机消息、验证码与跨端伴侣功能",
-            badge = if (liveState.notifAccessGranted) "已开启" else "待授权",
-            keywords = listOf("notification", "sms", "otp", "code", "call", "phone", "ble", "bluetooth", "nearby", "hotspot", "通知", "消息", "验证码", "来电", "电话", "接听", "挂断", "蓝牙", "热点", "近场", "伴侣", "同步"),
-            pinyinInitials = "dexykdtztb,tz,yzm,ld,dh,ly,rd",
+            title = "跨端通知、来电控制与蓝牙热点",
+            subtitle = "通知${if (liveState.notifAccessGranted) "已授权" else "待授权"} · 来电控制${if (liveState.callControlEnabled) "已开启" else "未开启"} · 蓝牙近场${if (liveState.bleNearbyEnabled) "已开启" else "未开启"}",
+            badge = when {
+                liveState.callControlEnabled && liveState.bleNearbyEnabled -> "已开启 · 来电/蓝牙"
+                liveState.callControlEnabled -> "已开启 · 来电"
+                liveState.bleNearbyEnabled -> "已开启 · 蓝牙"
+                liveState.notifAccessGranted -> "已开启"
+                else -> "未开启"
+            },
+            keywords = listOf("notification", "sms", "otp", "code", "call", "phone", "dial", "ble", "bluetooth", "nearby", "hotspot", "通知", "消息", "验证码", "来电", "电话", "接听", "挂断", "拨号", "蓝牙", "热点", "近场", "伴侣", "同步"),
+            pinyinInitials = "dexykdtztb,tz,yzm,ld,dh,bh,ly,rd,jc",
             tabIndex = 2,
             sectionKey = ConsoleSectionKeys.NOTIFICATIONS_COMPANION,
         ),

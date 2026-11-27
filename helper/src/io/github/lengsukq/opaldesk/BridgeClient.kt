@@ -222,6 +222,8 @@ object BridgeClient {
             syncDaemonLogsThrottledLocked(minIntervalMs = 0L, maxLines = 400)
             io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.pushSnapshotToDaemon()
             io.github.lengsukq.opaldesk.notifications.OpalMediaSessionMonitor.pushCurrentStateToDaemon()
+            io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge.pushCurrentStateToDaemon()
+            io.github.lengsukq.opaldesk.cast.BleNearbyService.syncEnabledState(appContext)
             io.github.lengsukq.opaldesk.service.BaseOpalTileService.requestAllTilesUpdate(appContext)
         }
         binderReadyListeners.forEach { mainHandler.post(it) }
@@ -439,6 +441,7 @@ object BridgeClient {
         }?.also { st ->
             _remoteStatusFlow.value = st
             maybeAutoApplyCustomResolutionToRemote(st)
+            io.github.lengsukq.opaldesk.cast.BleNearbyService.onRemoteStatusUpdated(st)
         } ?: _remoteStatusFlow.value
     }
 
@@ -1477,6 +1480,41 @@ object BridgeClient {
                 writeArgs = { d -> d.writeString(json) },
             ) { it.readInt() }
         }
+    }
+
+    fun syncCallStateAsync(callStateJson: String) {
+        if (callStateJson.isBlank()) return
+        companionSyncExec.execute {
+            val svc = getService() ?: return@execute
+            transact(
+                svc,
+                BridgeProtocol.Tx.SYNC_CALL_STATE,
+                oneway = false,
+                writeArgs = { d -> d.writeString(callStateJson) },
+            ) { it.readInt() }
+        }
+    }
+
+    /**
+     * Synchronously forwards an authenticated BLE GATT Instant Hotspot trigger request
+     * (`TX_TRIGGER_HOTSPOT = 53`) to the shell daemon and returns its UTF-8 JSON result.
+     */
+    fun triggerHotspotSync(clientId: String, nonceHex: String, hmacHex: String): String {
+        val svc = getService()
+            ?: return """{"status":"error","ssid":"","gatewayIp":"","port":0,"message":"OpalDesk 多窗引擎未连接"}"""
+        return transact(
+            svc,
+            BridgeProtocol.Tx.TRIGGER_HOTSPOT,
+            oneway = false,
+            writeArgs = { d ->
+                d.writeString(clientId)
+                d.writeString(nonceHex)
+                d.writeString(hmacHex)
+            },
+        ) { r ->
+            r.readString().orEmpty()
+        }?.takeIf { it.isNotBlank() }
+            ?: """{"status":"error","ssid":"","gatewayIp":"","port":0,"message":"热点触发 IPC 通信失败"}"""
     }
 
     fun notifyBridgeImeEventAsync(

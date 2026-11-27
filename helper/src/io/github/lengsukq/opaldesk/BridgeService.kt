@@ -287,6 +287,8 @@ class BridgeService : Service() {
             runCatching { PeerFloatingAppService.stop(appCtx) }
             runCatching { OpalPeerDiscovery.stopAdvertise() }
             runCatching { OpalPeerDiscovery.stopBrowsing() }
+            runCatching { io.github.lengsukq.opaldesk.cast.BleNearbyService.stop() }
+            runCatching { io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge.stop(appCtx) }
             runCatching { AdbBootstrap.stopDiscovery() }
             runCatching { AdbBootstrap.cancelPairingNotification(appCtx) }
             runCatching { updatePairingNotification(appCtx, null) }
@@ -440,6 +442,9 @@ class BridgeService : Service() {
             imePackageReceiverRegistered = true
         }
         senderWifiLowLatencyLock = WifiLowLatencyLock(this, "OpalDesk:WifiCastTx")
+        AppPrefs.hydrateFlows(this)
+        io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge.syncEnabledState(this)
+        io.github.lengsukq.opaldesk.cast.BleNearbyService.syncEnabledState(this)
         serviceScope.launch {
             BridgeClient.remoteStatusFlow.collect { remote ->
                 val needLowLatency = remote.connected && BridgeProtocol.RemoteSink.isWireless(remote.sinkType)
@@ -448,6 +453,7 @@ class BridgeService : Service() {
                 } else {
                     senderWifiLowLatencyLock?.release()
                 }
+                io.github.lengsukq.opaldesk.cast.BleNearbyService.onRemoteStatusUpdated(remote)
             }
         }
         scanExternalDisplays(autoLaunchNew = true)
@@ -459,6 +465,8 @@ class BridgeService : Service() {
             stopSelf(startId)
             return START_NOT_STICKY
         }
+        io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge.syncEnabledState(this)
+        io.github.lengsukq.opaldesk.cast.BleNearbyService.syncEnabledState(this)
         scanExternalDisplays(autoLaunchNew = false)
         return START_STICKY
     }
@@ -474,6 +482,8 @@ class BridgeService : Service() {
     override fun onDestroy() {
         if (activeInstance === this) activeInstance = null
         serviceScope.cancel()
+        runCatching { io.github.lengsukq.opaldesk.cast.BleNearbyService.stop() }
+        runCatching { io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge.stop(this) }
         senderWifiLowLatencyLock?.release()
         senderWifiLowLatencyLock = null
         if (screenWakeReceiverRegistered) {

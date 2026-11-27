@@ -1,6 +1,8 @@
 package io.github.lengsukq.opaldesk.ui
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,7 +17,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -23,7 +27,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.BridgeClient
+import io.github.lengsukq.opaldesk.cast.BleNearbyService
 import io.github.lengsukq.opaldesk.cast.UsbTetherPeerDetector
+import io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.prefs.ProfileConfigStore
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
@@ -57,14 +63,52 @@ fun ConsoleEngineSettingsTab(
     val remoteCameraEnabled by AppPrefs.remoteCameraEnabledFlow.collectAsState()
     val audioRouteMode by AppPrefs.audioRouteModeFlow.collectAsState()
     val usbTetherEnabled by AppPrefs.usbTetherCastEnabledFlow.collectAsState()
+    val callControlEnabled by AppPrefs.callControlSyncEnabledFlow.collectAsState()
+    val bleNearbyEnabled by AppPrefs.bleNearbyEnabledFlow.collectAsState()
+    val bleRuntime by BleNearbyService.stateFlow.collectAsState()
     val notifAccessGranted by io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.accessGrantedFlow.collectAsState()
     val profileState by ProfileConfigStore.stateFlow.collectAsState()
     val currentVersion = remember(ctx) { AppUpdateManager.getCurrentVersionName(ctx) }
+    var permRefreshTick by remember { mutableIntStateOf(0) }
+
+    val callPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { _ ->
+        permRefreshTick++
+        OpalCallControlBridge.syncEnabledState(ctx)
+        val hasPhone = OpalCallControlBridge.hasReadPhoneStatePermission(ctx)
+        val hasAnswer = OpalCallControlBridge.hasAnswerPhoneCallsPermission(ctx)
+        val msg = when {
+            hasPhone && hasAnswer -> "已开启 Mac 来电控制与快捷拨号"
+            hasPhone -> "已开启来电状态同步（未授接听/挂断权限时将由通知或按键回退）"
+            else -> "已开启来电控制（未授电话权限，将使用通知兜底与拨号盘回退）"
+        }
+        Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+    }
+
+    val blePermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { _ ->
+        permRefreshTick++
+        val granted = BleNearbyService.hasRequiredPermissions(ctx)
+        if (granted) {
+            AppPrefs.setBleNearbyEnabled(ctx, true)
+            BleNearbyService.start(ctx)
+            Toast.makeText(ctx, "已开启蓝牙近场发现与一键热点", Toast.LENGTH_SHORT).show()
+        } else {
+            AppPrefs.setBleNearbyEnabled(ctx, false)
+            BleNearbyService.stop()
+            Toast.makeText(ctx, "未授予蓝牙广播与连接权限，无法开启近场发现", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     LaunchedEffect(Unit) {
         AppPrefs.hydrateFlows(ctx)
         ProfileConfigStore.hydrate(ctx)
         io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.refreshAccessState(ctx)
+        OpalCallControlBridge.syncEnabledState(ctx)
+        BleNearbyService.refreshState(ctx)
+        permRefreshTick++
     }
 
     val inputBlocked = status.connected && status.injectStatus == BridgeProtocol.InputBackend.STATUS_BLOCKED
@@ -162,9 +206,157 @@ fun ConsoleEngineSettingsTab(
             }
 
             // === WAVE 2 COMPANION HOOK: Call Control & BLE Nearby Discovery Toggles ===
-            // Reserve space directly inside NOTIFICATIONS_COMPANION so Wave 2 can append
-            // incoming call handoff / remote mute-hangup and BLE Nearby auto-connect switches
-            // cleanly without conflicting with surrounding tab layout.
+            Spacer(Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(0.7.dp)
+                    .background(OpalPalette.DividerColor),
+            )
+            Spacer(Modifier.height(8.dp))
+
+            val callPhoneGranted = remember(permRefreshTick, callControlEnabled) {
+                OpalCallControlBridge.hasReadPhoneStatePermission(ctx)
+            }
+            val callAnswerGranted = remember(permRefreshTick, callControlEnabled) {
+                OpalCallControlBridge.hasAnswerPhoneCallsPermission(ctx)
+            }
+            val callBadge = when {
+                !callControlEnabled -> "未开启" to OpalPalette.TextMuted
+                callPhoneGranted && callAnswerGranted -> "已授权" to OpalPalette.AccentEmerald
+                callPhoneGranted || notifAccessGranted -> "部分授权" to OpalPalette.AccentAmber
+                else -> "待授权" to OpalPalette.AccentAmber
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                OpalText(
+                    text = "来电桥接权限状态",
+                    fontSize = 11.5.sp,
+                    color = OpalPalette.TextSecondary,
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    OpalStatusBadge(label = callBadge.first, color = callBadge.second)
+                    if (callControlEnabled && (!callPhoneGranted || !callAnswerGranted)) {
+                        OpalButton(
+                            label = "补全权限",
+                            compact = true,
+                            filled = false,
+                            accent = OpalPalette.AccentAmber,
+                            onClick = {
+                                val missing = OpalCallControlBridge.requiredRuntimePermissions()
+                                    .filterNot { OpalCallControlBridge.hasPermission(ctx, it) }
+                                if (missing.isNotEmpty()) {
+                                    callPermLauncher.launch(missing.toTypedArray())
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+            OpalSwitchRow(
+                title = "Mac 来电控制浮窗与快捷拨号",
+                subtitle = "开启后按需申请电话与通讯录权限，支持 Mac 实时来电浮窗、接听/拒接、静音免提与快捷拨号",
+                checked = callControlEnabled,
+                onCheckedChange = { enabled ->
+                    if (enabled) {
+                        AppPrefs.setCallControlSyncEnabled(ctx, true)
+                        val missing = OpalCallControlBridge.requiredRuntimePermissions()
+                            .filterNot { OpalCallControlBridge.hasPermission(ctx, it) }
+                        if (missing.isNotEmpty()) {
+                            callPermLauncher.launch(missing.toTypedArray())
+                        } else {
+                            OpalCallControlBridge.syncEnabledState(ctx)
+                            permRefreshTick++
+                            Toast.makeText(ctx, "已开启 Mac 来电控制与快捷拨号", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        AppPrefs.setCallControlSyncEnabled(ctx, false)
+                        OpalCallControlBridge.stop(ctx)
+                        permRefreshTick++
+                    }
+                },
+            )
+
+            Spacer(Modifier.height(6.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(0.7.dp)
+                    .background(OpalPalette.DividerColor),
+            )
+            Spacer(Modifier.height(8.dp))
+
+            val bleSupported = remember(permRefreshTick, bleRuntime.supported) {
+                BleNearbyService.isBleSupported(ctx)
+            }
+            val blePermGranted = remember(permRefreshTick, bleRuntime.hasPermissions) {
+                BleNearbyService.hasRequiredPermissions(ctx)
+            }
+            val bleBtOn = remember(permRefreshTick, bleRuntime.bluetoothEnabled) {
+                BleNearbyService.isBluetoothEnabled(ctx)
+            }
+            val bleBadge = when {
+                !bleSupported -> "不支持 BLE" to OpalPalette.TextMuted
+                !bleNearbyEnabled -> "未开启" to OpalPalette.TextMuted
+                !blePermGranted -> "待授权蓝牙" to OpalPalette.AccentAmber
+                !bleBtOn -> "蓝牙未开启" to OpalPalette.AccentAmber
+                bleRuntime.advertising -> "广播中" to OpalPalette.AccentEmerald
+                else -> "已开启" to OpalPalette.AccentCyan
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                OpalText(
+                    text = "蓝牙近场与热点状态",
+                    fontSize = 11.5.sp,
+                    color = OpalPalette.TextSecondary,
+                )
+                OpalStatusBadge(label = bleBadge.first, color = bleBadge.second)
+            }
+            OpalSwitchRow(
+                title = "蓝牙近场发现与一键热点",
+                subtitle = if (!bleSupported) {
+                    "当前设备不支持低功耗蓝牙外设广播"
+                } else {
+                    "低功耗 BLE 广播设备指纹供附近已信任 Mac 自动发现，并支持 HMAC 鉴权远程触发个人热点"
+                },
+                checked = bleNearbyEnabled,
+                onCheckedChange = { enabled ->
+                    if (enabled) {
+                        if (!bleSupported) {
+                            Toast.makeText(ctx, "当前设备不支持低功耗蓝牙广播", Toast.LENGTH_SHORT).show()
+                            return@OpalSwitchRow
+                        }
+                        val needed = BleNearbyService.requiredRuntimePermissions()
+                            .filterNot { OpalCallControlBridge.hasPermission(ctx, it) }
+                        if (needed.isNotEmpty()) {
+                            blePermLauncher.launch(needed.toTypedArray())
+                        } else {
+                            AppPrefs.setBleNearbyEnabled(ctx, true)
+                            BleNearbyService.start(ctx)
+                            permRefreshTick++
+                            val hint = if (BleNearbyService.isBluetoothEnabled(ctx)) {
+                                "已开启蓝牙近场发现与一键热点"
+                            } else {
+                                "已开启，打开系统蓝牙后将自动开始近场广播"
+                            }
+                            Toast.makeText(ctx, hint, Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        AppPrefs.setBleNearbyEnabled(ctx, false)
+                        BleNearbyService.stop()
+                        permRefreshTick++
+                    }
+                },
+            )
         }
 
         // 2. High-Frequency Card: Startup Behavior & App List
