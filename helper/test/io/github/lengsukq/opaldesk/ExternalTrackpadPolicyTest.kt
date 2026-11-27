@@ -495,6 +495,23 @@ class ExternalTrackpadPolicyTest {
                 daemonConnected = true,
             ),
         )
+
+        // Presentation-capable secondary display (e.g. FLAG_PRESENTATION + trusted + vendor high bit)
+        // must fall back directly to Display 0 Presentation host after shell launch is denied, and
+        // never loop back to shell launch if Presentation later fails.
+        val smartDisplayFlags = ExternalDisplayPolicy.FLAG_PRESENTATION or 0x80 or 0x8000
+        assertTrue(ExternalDisplayPolicy.isPublicPresentationDisplay(smartDisplayFlags))
+        assertTrue(ExternalDisplayPolicy.shouldFallbackToDisplay0AfterShellFailure(isPresentationCapable = true))
+        assertFalse(ExternalDisplayPolicy.shouldFallbackToDisplay0AfterShellFailure(isPresentationCapable = false))
+        assertEquals(
+            ExternalDisplayPolicy.Display0ExternalAction.USE_PRESENTATION,
+            ExternalDisplayPolicy.resolveDisplay0ExternalAction(
+                hasTargetDisplay = true,
+                isPublicPresentation = true,
+                shellLaunchAlreadyTried = true,
+                daemonConnected = true,
+            ),
+        )
     }
 
     @Test

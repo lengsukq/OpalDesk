@@ -208,6 +208,16 @@ object ExternalDisplayPolicy {
         return transport == ExternalDisplayTransport.WIRELESS_TV
     }
 
+    /**
+     * When the privileged shell daemon is denied direct Activity launch onto [displayId] (for
+     * example, OEM smart-glasses or mirroring-only secondary displays rejecting `launchDisplayId`),
+     * Presentation-capable displays should fall back directly to Display 0 so
+     * [io.github.lengsukq.opaldesk.ExternalDesktopActivity] immediately opens
+     * [ExternalMonitorPresentation] instead of retrying an unprivileged cross-display launch.
+     */
+    fun shouldFallbackToDisplay0AfterShellFailure(isPresentationCapable: Boolean): Boolean =
+        isPresentationCapable
+
     data class DisplayModeCandidate(
         val modeId: Int,
         val width: Int,

@@ -27,6 +27,8 @@ public final class TaskLaunchPolicy {
 
     /** Minimum standalone horizontal left offset (px) when parent task width is unavailable. */
     private static final int MIN_STANDALONE_LEFT_INSET_PX = 200;
+    private static final int MAX_AM_START_SUMMARY_CHARS = 240;
+    private static final int MAX_AM_START_SUMMARY_LINES = 3;
 
     private TaskLaunchPolicy() {}
 
@@ -152,6 +154,76 @@ public final class TaskLaunchPolicy {
             }
         }
         return args.toArray(new String[0]);
+    }
+
+    /**
+     * Evaluates the exit code, timeout flag, and combined stdout/stderr of {@code am start}.
+     *
+     * <p>Android's {@code am} / {@code cmd activity} prints {@code Exception occurred while
+     * executing 'start': java.lang.SecurityException: Permission Denial: ...} (without the word
+     * {@code Error}) and exits non-zero when a ROM rejects {@code --display <id>} launches from
+     * {@code uid=2000}. Checking both process status and structured error/exception lines prevents
+     * false-positive success reports that block Presentation fallback on the client.
+     */
+    public static boolean isAmStartResultSuccessful(int exitCode, boolean timedOut, String output) {
+        if (timedOut || exitCode != 0) {
+            return false;
+        }
+        if (output == null || output.isEmpty()) {
+            return true;
+        }
+        String[] lines = output.split("\\r?\\n");
+        for (String rawLine : lines) {
+            String line = rawLine.trim();
+            if (line.isEmpty()) continue;
+            if (isAmStartFailureLine(line)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Collapses multi-line {@code am start} diagnostics into a compact log summary. */
+    public static String summarizeAmStartOutput(String output) {
+        if (output == null) return "";
+        StringBuilder sb = new StringBuilder();
+        int kept = 0;
+        for (String rawLine : output.split("\\r?\\n")) {
+            String line = rawLine.trim();
+            if (line.isEmpty()) continue;
+            if (kept > 0) sb.append(" | ");
+            sb.append(line);
+            kept++;
+            if (kept >= MAX_AM_START_SUMMARY_LINES || sb.length() >= MAX_AM_START_SUMMARY_CHARS) {
+                break;
+            }
+        }
+        if (sb.length() > MAX_AM_START_SUMMARY_CHARS) {
+            return sb.substring(0, MAX_AM_START_SUMMARY_CHARS - 1).trim() + "…";
+        }
+        return sb.toString();
+    }
+
+    private static boolean isAmStartFailureLine(String line) {
+        if (line.startsWith("Error:") || line.startsWith("Error type ") || "Error".equals(line)) {
+            return true;
+        }
+        if (line.startsWith("Exception occurred")) {
+            return true;
+        }
+        if (line.startsWith("Status: error") || line.startsWith("Status: failed")) {
+            return true;
+        }
+        if (line.contains("Permission Denial") || line.contains("permission denied")) {
+            return true;
+        }
+        return line.contains("SecurityException")
+                || line.contains("ActivityNotFoundException")
+                || line.contains("IllegalArgumentException")
+                || line.contains("IllegalStateException")
+                || line.contains("NullPointerException")
+                || line.contains("AndroidException")
+                || line.contains("RemoteException");
     }
 
     private static String inspectAppCompatState(Object target, int taskWidth) {

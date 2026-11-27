@@ -243,4 +243,46 @@ public class TaskLaunchPolicyTest {
                         "--es", "label", "HDMI"),
                 Arrays.asList(cmd));
     }
+
+    @Test
+    public void amStartResultClassificationRejectsSecurityExceptionsNonZeroExitAndTimeout() {
+        // Normal successful am start output
+        assertTrue(TaskLaunchPolicy.isAmStartResultSuccessful(
+                0,
+                false,
+                "Starting: Intent { flg=0x34030000 cmp=com.example/.HostActivity }\n"));
+
+        // Harmless singleTop delivery warning is still a successful launch
+        assertTrue(TaskLaunchPolicy.isAmStartResultSuccessful(
+                0,
+                false,
+                "Starting: Intent { cmp=com.example/.HostActivity }\n"
+                        + "Warning: Activity not started, intent has been delivered to currently running top-most instance.\n"));
+
+        // Regression: Permission Denial / SecurityException on restricted external displays (no "Error" token)
+        String secExcOutput = "Starting: Intent { cmp=com.example/.HostActivity }\n"
+                + "Exception occurred while executing 'start':\n"
+                + "java.lang.SecurityException: Permission Denial: starting Intent { cmp=com.example/.HostActivity } "
+                + "from null (pid=1234, uid=2000) with launchDisplayId=7\n"
+                + "\tat android.os.Parcel.createExceptionOrNull(Parcel.java:3200)\n";
+        assertFalse(TaskLaunchPolicy.isAmStartResultSuccessful(255, false, secExcOutput));
+        // Even if an OEM wrapper returns exit code 0 alongside SecurityException output
+        assertFalse(TaskLaunchPolicy.isAmStartResultSuccessful(0, false, secExcOutput));
+
+        // Standard Error: output with exit 0 or non-zero
+        assertFalse(TaskLaunchPolicy.isAmStartResultSuccessful(
+                0,
+                false,
+                "Error type 3\nError: Activity class {com.example/.Missing} does not exist.\n"));
+
+        // Non-zero exit code with empty output and timeout must both fail
+        assertFalse(TaskLaunchPolicy.isAmStartResultSuccessful(1, false, ""));
+        assertFalse(TaskLaunchPolicy.isAmStartResultSuccessful(0, true, "Starting: Intent {}"));
+
+        // Summary collapses multiline stack traces while keeping the exception line
+        String summary = TaskLaunchPolicy.summarizeAmStartOutput(secExcOutput);
+        assertTrue(summary.contains("Exception occurred while executing 'start':"));
+        assertTrue(summary.contains("SecurityException"));
+        assertFalse(summary.contains("\n"));
+    }
 }

@@ -62,6 +62,7 @@ import io.github.lengsukq.opaldesk.external.WirelessDisplayHelper
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
+import io.github.lengsukq.opaldesk.service.DisplayLaunchHelper
 import io.github.lengsukq.opaldesk.ui.NativeImeBridgeHost
 import io.github.lengsukq.opaldesk.ui.NativeImeHostController
 import io.github.lengsukq.opaldesk.ui.OpalImeFocusTracker
@@ -403,12 +404,32 @@ class ExternalDesktopActivity : ComponentActivity() {
             TAG,
             "Escalating external desktop to shell-daemon Direct Extended launch on displayId=$targetId ($reason)",
         )
+        val appCtx = applicationContext
         runningInPresentationMode = false
         targetDisplayId = Display.DEFAULT_DISPLAY
         ExternalTrackpadBridge.clearSessionIfOwner(this)
         finishAndRemoveTask()
         Handler(Looper.getMainLooper()).postDelayed({
-            BridgeClient.launchExternalDesktopOnDisplayAsync(targetId, isWireless)
+            BridgeClient.launchExternalDesktopOnDisplayAsync(targetId, isWireless) { ok ->
+                if (!ok) {
+                    OpalLogStore.w(
+                        TAG,
+                        "Escalated shell direct launch failed for displayId=$targetId -> reopening Display 0 fallback",
+                    )
+                    val fallbackIntent = Intent(appCtx, ExternalDesktopActivity::class.java).apply {
+                        addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                        )
+                        putExtra(EXTRA_TARGET_DISPLAY_ID, targetId)
+                        putExtra(EXTRA_PREFER_PRESENTATION, false)
+                        putExtra(EXTRA_IS_WIRELESS_DISPLAY, isWireless)
+                        putExtra(EXTRA_SHELL_LAUNCHED, true)
+                    }
+                    DisplayLaunchHelper.launchOnDisplay0(appCtx, fallbackIntent)
+                }
+            }
         }, SHELL_RELAUNCH_DELAY_MS)
     }
 

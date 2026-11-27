@@ -589,7 +589,11 @@ public final class AndroidServices {
             Object rc = startActivityMethod.invoke(
                     iActivityTaskManager, null, SHELL_PACKAGE, null, intent,
                     null, null, null, 0, 0, null, options);
-            return !(rc instanceof Integer) || (Integer) rc >= 0;
+            if (rc instanceof Integer && (Integer) rc < 0) {
+                System.err.println("OPALDESK_START_ACTIVITY_RC intent=" + intent + " rc=" + rc);
+                return false;
+            }
+            return true;
         } catch (ReflectiveOperationException | RuntimeException e) {
             System.err.println("OPALDESK_START_ACTIVITY_ERR intent=" + intent + ": " + unwrapMessage(e));
             return false;
@@ -634,9 +638,12 @@ public final class AndroidServices {
                 BridgeProtocol.WINDOWING_MODE_FULLSCREEN,
                 flags,
                 extraMap);
-        String out = ShellCommand.runOutput(cmd);
-        if (out != null && out.contains("Error")) {
-            System.err.println("OPALDESK_AM_START_FALLBACK_ERR displayId=" + displayId + ": " + out.trim());
+        ShellCommand.Result res = ShellCommand.runWithTimeout(cmd, ShellCommand.DEFAULT_TIMEOUT_MS);
+        if (!TaskLaunchPolicy.isAmStartResultSuccessful(res.exitCode, res.timedOut, res.output)) {
+            System.err.println("OPALDESK_AM_START_FALLBACK_ERR displayId=" + displayId
+                    + " exit=" + res.exitCode
+                    + " timedOut=" + res.timedOut
+                    + ": " + TaskLaunchPolicy.summarizeAmStartOutput(res.output));
             return false;
         }
         System.out.println("OPALDESK_AM_START_FALLBACK_OK displayId=" + displayId + " comp=" + cn.flattenToShortString());

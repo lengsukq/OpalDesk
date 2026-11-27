@@ -183,13 +183,27 @@ class BridgeService : Service() {
                 DisplayLaunchHelper.launchOnDisplay0(ctx, intent)
                 return
             }
-            // Prefer shell-daemon launch (uid=2000) for Direct Extended displays so Android 14–16
+            // Prefer shell-daemon launch (uid=2000) for Direct Extended displays so Android 14–17
             // BAL & unprivileged cross-display restrictions never silently bounce the Activity to Display 0.
             if (BridgeClient.statusFlow.value.connected) {
                 val appCtx = ctx.applicationContext
                 BridgeClient.launchExternalDesktopOnDisplayAsync(displayId, isWireless) { ok ->
                     if (!ok) {
-                        DisplayLaunchHelper.launchOnDisplay(appCtx, intent, displayId)
+                        intent.putExtra(ExternalDesktopActivity.EXTRA_SHELL_LAUNCHED, true)
+                        val fallbackToDisplay0 =
+                            ExternalDisplayPolicy.shouldFallbackToDisplay0AfterShellFailure(isPresentationCapable)
+                        OpalLogStore.w(
+                            "OpalExtDesktop",
+                            "Shell direct launch failed for displayId=$displayId " +
+                                "(presCapable=$isPresentationCapable) -> falling back to " +
+                                if (fallbackToDisplay0) "Display 0 Presentation host" else "client display launch",
+                        )
+                        if (fallbackToDisplay0) {
+                            intent.putExtra(ExternalDesktopActivity.EXTRA_PREFER_PRESENTATION, true)
+                            DisplayLaunchHelper.launchOnDisplay0(appCtx, intent)
+                        } else {
+                            DisplayLaunchHelper.launchOnDisplay(appCtx, intent, displayId)
+                        }
                     }
                 }
             } else {
