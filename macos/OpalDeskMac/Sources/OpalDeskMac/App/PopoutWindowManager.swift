@@ -53,11 +53,13 @@ public final class PopoutWindowManager {
         deviceName: String,
         taskId: Int = -1,
         initialPinnedOnTop: Bool = false,
+        initialPreference: PopoutAppPreference? = nil,
         canReturnToDesktop: Bool = false,
         forceReloadExisting: Bool = false,
         context: PopoutConnectionContext,
         trustStore: TrustStore,
         onPinChanged: @escaping (Bool) -> Void,
+        onPreferenceChanged: ((PopoutAppPreferenceChange) -> Void)? = nil,
         onAuthTokenIssued: @escaping (_ deviceName: String, _ fingerprint: String, _ authToken: String) -> Void,
         onFilesDropped: @escaping ([URL]) -> Void
     ) -> PopoutOpenResult {
@@ -77,6 +79,7 @@ public final class PopoutWindowManager {
             return .limitReached(maxCount: Self.maxConcurrentWindows)
         }
 
+        let initialSize = resolvedInitialWindowSize(for: initialPreference)
         let controller = PopoutAppController(
             appPackage: normalizedPkg,
             appActivity: appActivity,
@@ -85,12 +88,19 @@ public final class PopoutWindowManager {
             deviceName: deviceName,
             taskId: taskId,
             initialPinnedOnTop: initialPinnedOnTop,
+            initialWindowSize: initialSize,
+            initialPreference: initialPreference,
             canReturnToDesktop: canReturnToDesktop,
             connectionContext: context,
             trustStore: trustStore
         )
 
-        let window = makePopoutWindow(for: controller, cascadeIndex: controllers.count, onFilesDropped: onFilesDropped)
+        let window = makePopoutWindow(
+            for: controller,
+            initialSize: initialSize,
+            cascadeIndex: controllers.count,
+            onFilesDropped: onFilesDropped
+        )
         controller.hostWindow = window
         controller.applyWindowPinLevel()
 
@@ -103,6 +113,7 @@ public final class PopoutWindowManager {
             self?.closeWindow(id: id, sendDisconnect: false)
         }
         controller.onPinStateChanged = onPinChanged
+        controller.onPreferenceChanged = onPreferenceChanged
         controller.onAuthTokenIssued = onAuthTokenIssued
 
         hosts[controller.id] = host
@@ -184,12 +195,35 @@ public final class PopoutWindowManager {
         onControllersChanged?()
     }
 
+    private func resolvedInitialWindowSize(for preference: PopoutAppPreference?) -> CGSize {
+        let base: CGSize
+        if let preset = PopoutAspectPreset.fromPreferenceKey(preference?.preferredPreset) {
+            base = preset.windowSize
+        } else if let custom = preference?.customWindowSize {
+            base = custom
+        } else {
+            base = PopoutAspectPreset.phone.windowSize
+        }
+
+        let minW = Layout.minWindowSize.width
+        let minH = Layout.minWindowSize.height
+        guard let visible = NSScreen.main?.visibleFrame else {
+            return CGSize(width: max(base.width, minW), height: max(base.height, minH))
+        }
+        let maxW = max(minW, visible.width - Layout.screenEdgeInset * 2)
+        let maxH = max(minH, visible.height - Layout.screenEdgeInset * 2)
+        return CGSize(
+            width: min(max(base.width.rounded(), minW), maxW),
+            height: min(max(base.height.rounded(), minH), maxH)
+        )
+    }
+
     private func makePopoutWindow(
         for controller: PopoutAppController,
+        initialSize: CGSize,
         cascadeIndex: Int,
         onFilesDropped: @escaping ([URL]) -> Void
     ) -> NSWindow {
-        let initialSize = PopoutAspectPreset.phone.windowSize
         let origin = initialOrigin(for: initialSize, cascadeIndex: cascadeIndex)
         let rect = NSRect(origin: origin, size: initialSize)
 

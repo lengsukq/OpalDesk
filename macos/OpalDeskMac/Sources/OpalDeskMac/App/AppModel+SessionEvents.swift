@@ -231,6 +231,13 @@ extension AppModel {
                 fileBrowserClient.handleApkInstallStatus(status)
             }
 
+        case .callState:
+            if let state = StreamSessionBridge.decodePayload("CALL_STATE", logger: OpalDeskLog.app, {
+                try CallStatePayload.decode(from: frame.payload)
+            }) {
+                callBridge.handleCallState(state)
+            }
+
         default:
             break
         }

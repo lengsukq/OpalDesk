@@ -33,7 +33,17 @@ extension RemoteFileBrowserWindowView {
                     }
 
                     storageSummaryCard(report)
-                    categoryBreakdownGrid(report)
+                    storageSubTabBar(report)
+
+                    switch activeStorageSubTab {
+                    case .categories:
+                        categoryBreakdownGrid(report)
+                    case .folders:
+                        folderBreakdownCard(report)
+                    case .apps:
+                        appStorageLeaderboardCard(report)
+                    }
+
                     largeFilesLeaderboardCard
                 }
                 .padding(.vertical, 2)
@@ -175,6 +185,280 @@ extension RemoteFileBrowserWindowView {
                 .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
             }
         }
+    }
+
+    private func storageSubTabBar(_ report: RemoteStorageReport) -> some View {
+        HStack(spacing: OpalSpacing.md) {
+            Picker("存储维度", selection: $activeStorageSubTab) {
+                ForEach(RemoteStorageSubTab.allCases) { tab in
+                    Text(storageSubTabTitle(tab, report: report)).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 440)
+
+            Spacer()
+
+            Text(storageSubTabHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func storageSubTabTitle(_ tab: RemoteStorageSubTab, report: RemoteStorageReport) -> String {
+        switch tab {
+        case .categories:
+            return tab.rawValue
+        case .folders:
+            return report.folders.isEmpty ? tab.rawValue : "\(tab.rawValue) (\(report.folders.count))"
+        case .apps:
+            return report.apps.isEmpty ? tab.rawValue : "\(tab.rawValue) (\(report.apps.count))"
+        }
+    }
+
+    private var storageSubTabHint: String {
+        switch activeStorageSubTab {
+        case .categories: return "按媒体与文档类型统计手机内部存储分布"
+        case .folders: return "点击任意文件夹可直接跳转至文件浏览定位"
+        case .apps: return "按应用安装包、用户数据与缓存体积排序"
+        }
+    }
+
+    private func filteredFolders(in report: RemoteStorageReport) -> [FolderStorageEntry] {
+        let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sorted = report.folders.sorted { $0.bytes > $1.bytes }
+        guard !trimmed.isEmpty else { return sorted }
+        return sorted.filter {
+            $0.name.localizedCaseInsensitiveContains(trimmed)
+                || $0.path.localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+
+    private func filteredApps(in report: RemoteStorageReport) -> [AppStorageEntry] {
+        let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sorted = report.apps.sorted { $0.totalBytes > $1.totalBytes }
+        guard !trimmed.isEmpty else { return sorted }
+        return sorted.filter {
+            $0.displayLabel.localizedCaseInsensitiveContains(trimmed)
+                || $0.pkg.localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+
+    private func folderBreakdownCard(_ report: RemoteStorageReport) -> some View {
+        let folders = filteredFolders(in: report)
+        let maxBytes = max(folders.first?.bytes ?? 1, 1)
+
+        return VStack(alignment: .leading, spacing: OpalSpacing.md) {
+            OpalSectionHeader(
+                title: "文件夹空间占用",
+                systemImage: "folder.fill",
+                badgeText: "\(folders.count) 个目录",
+                badgeColor: .blue
+            )
+
+            if folders.isEmpty {
+                OpalEmptyStateRow(
+                    icon: "folder.badge.questionmark",
+                    title: searchQuery.isEmpty ? "暂无文件夹占用统计" : "没有匹配的文件夹",
+                    subtitle: searchQuery.isEmpty
+                        ? "请点击右上角刷新按钮重新扫描手机目录空间占用。"
+                        : "请尝试调整顶部筛选关键字。"
+                )
+            } else {
+                VStack(spacing: OpalSpacing.xs) {
+                    ForEach(folders) { folder in
+                        folderUsageRow(folder, maxBytes: maxBytes, totalUsedBytes: max(report.usedBytes, 1))
+                    }
+                }
+            }
+        }
+        .padding(OpalSpacing.lg)
+        .opalGlassSurface(.panel, cornerRadius: OpalRadius.panel)
+    }
+
+    private func folderUsageRow(
+        _ folder: FolderStorageEntry,
+        maxBytes: Int64,
+        totalUsedBytes: Int64
+    ) -> some View {
+        let barFraction = min(max(Double(folder.bytes) / Double(maxBytes), 0.02), 1.0)
+        let shareText = FileBrowserPresentation.formatPercentage(Double(folder.bytes) / Double(totalUsedBytes))
+
+        return Button {
+            activeTab = .files
+            actions.onNavigateToPath(folder.path)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: OpalSpacing.sm) {
+                    OpalIconBadge(systemName: "folder.fill", tint: .blue, size: 30, iconSize: 14, cornerRadius: 9)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(folder.name.isEmpty ? folder.path : folder.name)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text(folder.path)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Spacer(minLength: OpalSpacing.sm)
+
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(FileBrowserPresentation.formatByteCount(folder.bytes))
+                            .font(.callout.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.primary)
+                        Text("\(folder.fileCount) 个文件 · \(shareText)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.08))
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.accentColor, Color.blue.opacity(0.75)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: max(proxy.size.width * barFraction, 6))
+                    }
+                }
+                .frame(height: 6)
+            }
+            .padding(.horizontal, OpalSpacing.md)
+            .padding(.vertical, 9)
+            .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
+            .opalInteractiveHover(cornerRadius: OpalRadius.tile)
+        }
+        .buttonStyle(.plain)
+        .help("点击打开目录 \(folder.path)")
+    }
+
+    private func appStorageLeaderboardCard(_ report: RemoteStorageReport) -> some View {
+        let apps = filteredApps(in: report)
+        let maxTotal = max(apps.first?.totalBytes ?? 1, 1)
+
+        return VStack(alignment: .leading, spacing: OpalSpacing.md) {
+            OpalSectionHeader(
+                title: "应用空间排行",
+                systemImage: "square.stack.3d.up.fill",
+                badgeText: "\(apps.count) 个应用",
+                badgeColor: .purple
+            )
+
+            if apps.isEmpty {
+                OpalEmptyStateRow(
+                    icon: "app.dashed",
+                    tint: .orange,
+                    title: searchQuery.isEmpty ? "当前设备未返回应用空间统计" : "没有匹配的应用",
+                    subtitle: searchQuery.isEmpty
+                        ? "部分 Android ROM 限制或裁剪了 dumpsys diskstats 输出，因此仅展示目录与文件分类统计。"
+                        : "请尝试搜索其他应用名称或包名。"
+                )
+            } else {
+                VStack(spacing: OpalSpacing.xs) {
+                    ForEach(Array(apps.enumerated()), id: \.element.id) { index, app in
+                        appStorageRow(app, rank: index + 1, maxTotalBytes: maxTotal)
+                    }
+                }
+            }
+        }
+        .padding(OpalSpacing.lg)
+        .opalGlassSurface(.panel, cornerRadius: OpalRadius.panel)
+    }
+
+    private func appStorageRow(_ app: AppStorageEntry, rank: Int, maxTotalBytes: Int64) -> some View {
+        let totalDouble = Double(max(app.totalBytes, 1))
+        let overallFraction = min(max(Double(app.totalBytes) / Double(maxTotalBytes), 0.03), 1.0)
+        let apkRatio = Double(app.apkBytes) / totalDouble
+        let dataRatio = Double(app.dataBytes) / totalDouble
+        let cacheRatio = Double(app.cacheBytes) / totalDouble
+
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: OpalSpacing.sm) {
+                Text("#\(rank)")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, alignment: .leading)
+
+                OpalAppMonogram(label: app.displayLabel, packageKey: app.pkg, size: 32, cornerRadius: 9)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(app.displayLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Text(app.pkg)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: OpalSpacing.sm)
+
+                HStack(spacing: 5) {
+                    StatusBadgeView(
+                        text: "应用 \(FileBrowserPresentation.formatByteCount(app.apkBytes))",
+                        color: .blue,
+                        horizontalPadding: 6,
+                        verticalPadding: 2
+                    )
+                    StatusBadgeView(
+                        text: "数据 \(FileBrowserPresentation.formatByteCount(app.dataBytes))",
+                        color: .purple,
+                        horizontalPadding: 6,
+                        verticalPadding: 2
+                    )
+                    StatusBadgeView(
+                        text: "缓存 \(FileBrowserPresentation.formatByteCount(app.cacheBytes))",
+                        color: .orange,
+                        horizontalPadding: 6,
+                        verticalPadding: 2
+                    )
+                }
+
+                Text(FileBrowserPresentation.formatByteCount(app.totalBytes))
+                    .font(.callout.weight(.bold).monospacedDigit())
+                    .frame(minWidth: 74, alignment: .trailing)
+            }
+
+            GeometryReader { proxy in
+                let barWidth = max(proxy.size.width * overallFraction, 8)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.08))
+                    HStack(spacing: 1) {
+                        if app.apkBytes > 0 {
+                            Rectangle().fill(Color.blue).frame(width: max(barWidth * apkRatio, 2))
+                        }
+                        if app.dataBytes > 0 {
+                            Rectangle().fill(Color.purple).frame(width: max(barWidth * dataRatio, 2))
+                        }
+                        if app.cacheBytes > 0 {
+                            Rectangle().fill(Color.orange).frame(width: max(barWidth * cacheRatio, 2))
+                        }
+                    }
+                    .frame(width: barWidth, alignment: .leading)
+                    .clipShape(Capsule())
+                }
+            }
+            .frame(height: 6)
+        }
+        .padding(.horizontal, OpalSpacing.md)
+        .padding(.vertical, 9)
+        .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile)
     }
 
     private var largeFilesLeaderboardCard: some View {

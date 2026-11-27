@@ -11,6 +11,7 @@ extension DeviceHubView {
         model.companionState.isActiveOrAttempting
             || !model.hostTopApp.isEmpty
             || (model.mediaState?.active == true)
+            || model.callState.isActive
     }
 
     var companionOnlineCardSection: some View {
@@ -44,6 +45,23 @@ extension DeviceHubView {
                 Spacer(minLength: OpalSpacing.sm)
 
                 HStack(spacing: OpalSpacing.xs) {
+                    if model.isAnyChannelConnected {
+                        Button {
+                            isQuickDialPopoverShown.toggle()
+                        } label: {
+                            Label("快捷拨号", systemImage: "phone.badge.waveform.fill")
+                                .font(.caption.weight(.medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .popover(isPresented: $isQuickDialPopoverShown, arrowEdge: .bottom) {
+                            OpalQuickDialPopoverView(deviceName: model.activeChannelDeviceName) { number in
+                                isQuickDialPopoverShown = false
+                                model.dialPhoneNumber(number)
+                            }
+                        }
+                    }
+
                     Button {
                         openFileBrowserWindow()
                     } label: {
@@ -75,6 +93,12 @@ extension DeviceHubView {
                             model.disconnectCompanion()
                         }
                     }
+                }
+            }
+
+            if model.callState.isActive {
+                OpalCallBannerCard(callState: model.callState, isCompact: false) { action in
+                    model.sendCallAction(action)
                 }
             }
 
@@ -441,6 +465,138 @@ extension DeviceHubView {
             }
             .clipShape(RoundedRectangle(cornerRadius: OpalRadius.panel, style: .continuous))
             .opalGlassSurface(.panel)
+        }
+    }
+
+    // MARK: - 5b. BLE Nearby Trusted Devices & 1-Click Hotspot
+
+    var shouldShowBleNearbySection: Bool {
+        !model.discovery.bleNearbyDevices.isEmpty || model.bleHotspotBanner != nil
+    }
+
+    var bleNearbySection: some View {
+        let bleDevices = model.discovery.bleNearbyDevices
+
+        return VStack(alignment: .leading, spacing: OpalSpacing.md) {
+            OpalSectionHeader(
+                title: "蓝牙近场设备",
+                systemImage: "dot.radiowaves.left.and.right",
+                badgeText: "BLE 近场",
+                badgeColor: .blue
+            ) {
+                Text("未在同一 Wi-Fi 时可一键拉起热点")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let banner = model.bleHotspotBanner {
+                OpalNoticeBanner(
+                    tone: noticeTone(for: banner.kind),
+                    title: banner.title,
+                    message: banner.message,
+                    isSelectable: true,
+                    onDismiss: banner.kind == .loading ? nil : { model.dismissBleHotspotBanner() }
+                )
+            }
+
+            if !bleDevices.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(bleDevices.enumerated()), id: \.element.id) { index, device in
+                        bleNearbyDeviceRow(device)
+                        if index < bleDevices.count - 1 {
+                            Divider().padding(.leading, 64)
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: OpalRadius.panel, style: .continuous))
+                .opalGlassSurface(.panel)
+            }
+        }
+    }
+
+    private func bleNearbyDeviceRow(_ device: DiscoveredBleDevice) -> some View {
+        let isTriggering = model.triggeringBleDeviceId == device.id
+        let statusText = device.isHotspotActive
+            ? "热点已开启"
+            : (device.isLanShareActive ? "无线服务待连接" : "蓝牙附近")
+        let statusColor: Color = device.isHotspotActive ? .green : .blue
+
+        return HStack(spacing: OpalSpacing.md) {
+            OpalIconBadge(
+                systemName: "iphone.radiowaves.left.and.right",
+                tint: .blue,
+                size: 38,
+                iconSize: 17,
+                cornerRadius: 11
+            )
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: OpalSpacing.sm) {
+                    Text(device.trustedDevice.deviceName)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+
+                    StatusBadgeView(text: statusText, color: statusColor)
+
+                    if let battery = device.batteryPercent {
+                        StatusBadgeView(
+                            text: "电量 \(battery)%",
+                            color: battery <= 20 ? .orange : .green
+                        )
+                    }
+                }
+
+                Text(bleDeviceSubtitle(for: device))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: OpalSpacing.sm)
+
+            Button {
+                model.triggerBleHotspot(for: device)
+            } label: {
+                if isTriggering {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("唤醒热点中…")
+                    }
+                } else {
+                    Label(
+                        device.isHotspotActive ? "获取热点信息" : "一键开启手机热点",
+                        systemImage: "personalhotspot"
+                    )
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.triggeringBleDeviceId != nil)
+        }
+        .padding(.horizontal, OpalSpacing.lg)
+        .padding(.vertical, 13)
+    }
+
+    private func bleDeviceSubtitle(for device: DiscoveredBleDevice) -> String {
+        var parts: [String] = []
+        if !device.trustedDevice.model.isEmpty {
+            parts.append(device.trustedDevice.model)
+        }
+        parts.append("信号 \(device.rssi) dBm")
+        if !device.supportsHotspotTrigger && !device.isHotspotActive {
+            parts.append("尝试蓝牙唤起热点（若 ROM 限制需手机确认）")
+        } else {
+            parts.append("已信任设备 · 安全挑战鉴权")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func noticeTone(for kind: BleHotspotBannerState.Kind) -> OpalNoticeTone {
+        switch kind {
+        case .loading: return .loading
+        case .info: return .info
+        case .success: return .success
+        case .warning: return .warning
+        case .error: return .error
         }
     }
 

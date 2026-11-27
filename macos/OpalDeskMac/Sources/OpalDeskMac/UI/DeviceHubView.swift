@@ -27,6 +27,7 @@ public struct DeviceHubView: View {
     @State var manualHost: String = ""
     @State var manualPortText: String = String(OpalCastProtocol.defaultWifiPort)
     @State var showManualConnect: Bool = false
+    @State var isQuickDialPopoverShown: Bool = false
 
     public init(model: AppModel) {
         self.model = model
@@ -60,6 +61,9 @@ public struct DeviceHubView: View {
                             usbTetherSection
                         }
                         wirelessLANSection
+                        if shouldShowBleNearbySection {
+                            bleNearbySection
+                        }
                         manualConnectSection
                     } else {
                         DiagnosticsLogView(model: model)

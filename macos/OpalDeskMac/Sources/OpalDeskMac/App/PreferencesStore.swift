@@ -30,6 +30,8 @@ public final class PreferencesStore {
         static let autoCopyOtpEnabled = "opaldesk.pref.autoCopyOtpEnabled"
         static let mediaRemoteControlEnabled = "opaldesk.pref.mediaRemoteControlEnabled"
         static let enableEdgeNavigationGestures = "opaldesk.pref.enableEdgeNavigationGestures"
+        static let callControlEnabled = "opaldesk.pref.callControlEnabled"
+        static let bleNearbyDiscoveryEnabled = "opaldesk.pref.bleNearbyDiscoveryEnabled"
     }
 
     private let defaults: UserDefaults
@@ -133,6 +135,16 @@ public final class PreferencesStore {
         didSet { defaults.set(enableEdgeNavigationGestures, forKey: Key.enableEdgeNavigationGestures) }
     }
 
+    /// Displays the floating macOS Call Control HUD and enables quick answering/dialing for Android phone calls.
+    public var callControlEnabled: Bool {
+        didSet { defaults.set(callControlEnabled, forKey: Key.callControlEnabled) }
+    }
+
+    /// Passively scans nearby trusted Android phones via BLE and enables 1-click authenticated hotspot triggering.
+    public var bleNearbyDiscoveryEnabled: Bool {
+        didSet { defaults.set(bleNearbyDiscoveryEnabled, forKey: Key.bleNearbyDiscoveryEnabled) }
+    }
+
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -186,5 +198,7 @@ public final class PreferencesStore {
         self.autoCopyOtpEnabled = defaults.object(forKey: Key.autoCopyOtpEnabled) as? Bool ?? false
         self.mediaRemoteControlEnabled = defaults.object(forKey: Key.mediaRemoteControlEnabled) as? Bool ?? true
         self.enableEdgeNavigationGestures = defaults.object(forKey: Key.enableEdgeNavigationGestures) as? Bool ?? true
+        self.callControlEnabled = defaults.object(forKey: Key.callControlEnabled) as? Bool ?? true
+        self.bleNearbyDiscoveryEnabled = defaults.object(forKey: Key.bleNearbyDiscoveryEnabled) as? Bool ?? true
     }
 }

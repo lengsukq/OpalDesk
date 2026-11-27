@@ -187,6 +187,8 @@ ${ICON_KEY_XML}
     <true/>
     <key>NSLocalNetworkUsageDescription</key>
     <string>OpalDesk 需要访问局域网以通过 Bonjour 自动发现并低延迟连接同网络下的 Android 桌面服务。</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>OpalDesk 需要使用蓝牙近场发现已信任的 Android 手机，并在无同局域网时一键拉起手机热点。</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>OpalDesk 需要访问麦克风以将 Mac 的语音实时回传至投屏中的 Android 设备。</string>
     <key>NSCameraUsageDescription</key>

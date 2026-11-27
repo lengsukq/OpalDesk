@@ -224,6 +224,24 @@ extension RemoteFileBrowserWindowView {
                 .font(.caption.weight(.semibold))
             Spacer()
             let downloadable = selectedItems.filter { !$0.isDirectory }
+            if downloadable.count == 1, let single = downloadable.first {
+                Button {
+                    actions.onQuickLookItem(single)
+                } label: {
+                    if quickLookLoadingPath == single.path {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            Text("准备预览…").font(.caption.weight(.medium))
+                        }
+                    } else {
+                        Label("快速查看 (空格)", systemImage: "eye")
+                            .font(.caption.weight(.medium))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(quickLookLoadingPath == single.path)
+            }
             if !downloadable.isEmpty {
                 Button {
                     actions.onDownloadItems(downloadable)
@@ -338,7 +356,7 @@ extension RemoteFileBrowserWindowView {
             Text("操作")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 112, alignment: .trailing)
+                .frame(width: 138, alignment: .trailing)
         }
         .padding(.horizontal, OpalSpacing.lg)
         .padding(.vertical, 7)
@@ -370,31 +388,44 @@ extension RemoteFileBrowserWindowView {
 
     private func fileListRow(_ item: RemoteFileItem) -> some View {
         let isSelected = selectedFilePaths.contains(item.path)
+        let isPreviewLoading = quickLookLoadingPath == item.path
 
         return HStack(spacing: OpalSpacing.md) {
-            fileIconView(for: item, size: 30)
+            HStack(spacing: OpalSpacing.md) {
+                fileIconView(for: item, size: 30)
 
-            HStack(spacing: OpalSpacing.xs) {
-                Text(item.name)
-                    .font(.system(size: 13, weight: item.isDirectory ? .medium : .regular))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                HStack(spacing: OpalSpacing.xs) {
+                    Text(item.name)
+                        .font(.system(size: 13, weight: item.isDirectory ? .medium : .regular))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
 
-                if item.isAndroidPackage {
-                    StatusBadgeView(text: "安装包", color: .green, horizontalPadding: 6, verticalPadding: 1.5)
+                    if item.isAndroidPackage {
+                        StatusBadgeView(text: "安装包", color: .green, horizontalPadding: 6, verticalPadding: 1.5)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(item.formattedSize)
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 92, alignment: .trailing)
+
+                Text(item.formattedModifiedDate)
+                    .font(.system(size: 11.5).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 146, alignment: .trailing)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Text(item.formattedSize)
-                .font(.system(size: 12).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 92, alignment: .trailing)
-
-            Text(item.formattedModifiedDate)
-                .font(.system(size: 11.5).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 146, alignment: .trailing)
+            .contentShape(Rectangle())
+            .overlay {
+                RemoteFileDragOutOverlay(
+                    item: item,
+                    isDragEnabled: isConnected && !item.isDirectory,
+                    pullFile: actions.onPullFileForDrag,
+                    onSelect: { modifiers in toggleSelection(for: item, modifiers: modifiers) },
+                    onActivate: { activateItem(item) }
+                )
+            }
 
             HStack(spacing: OpalSpacing.xs) {
                 if item.isAndroidPackage {
@@ -411,6 +442,20 @@ extension RemoteFileBrowserWindowView {
                 }
 
                 if !item.isDirectory {
+                    if isPreviewLoading {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .frame(width: 24, height: 24)
+                    } else {
+                        OpalGlassIconButton(
+                            systemName: "eye",
+                            tint: .secondary,
+                            size: 24,
+                            iconSize: 12.5,
+                            helpText: "快速查看 (空格)"
+                        ) { actions.onQuickLookItem(item) }
+                    }
+
                     OpalGlassIconButton(
                         systemName: "arrow.down.circle",
                         tint: .secondary,
@@ -431,7 +476,7 @@ extension RemoteFileBrowserWindowView {
                 .frame(width: 24)
                 .accessibilityLabel("更多操作：\(item.name)")
             }
-            .frame(width: 112, alignment: .trailing)
+            .frame(width: 138, alignment: .trailing)
         }
         .padding(.horizontal, OpalSpacing.sm)
         .padding(.vertical, 6)
@@ -441,8 +486,6 @@ extension RemoteFileBrowserWindowView {
         )
         .opalInteractiveHover(cornerRadius: OpalRadius.control)
         .contentShape(RoundedRectangle(cornerRadius: OpalRadius.control, style: .continuous))
-        .onTapGesture(count: 2) { activateItem(item) }
-        .onTapGesture { toggleSelection(for: item) }
         .contextMenu { itemContextMenu(for: item) }
     }
 
@@ -471,6 +514,8 @@ extension RemoteFileBrowserWindowView {
 
                 if item.isAndroidPackage {
                     StatusBadgeView(text: "APK", color: .green, horizontalPadding: 5, verticalPadding: 1.5)
+                } else if quickLookLoadingPath == item.path {
+                    ProgressView().controlSize(.mini)
                 }
             }
 
@@ -490,8 +535,15 @@ extension RemoteFileBrowserWindowView {
         .opalGlassSurface(.inset, cornerRadius: OpalRadius.tile, tint: isSelected ? .accentColor : nil)
         .opalInteractiveHover(cornerRadius: OpalRadius.tile, tint: isSelected ? .accentColor : nil)
         .contentShape(RoundedRectangle(cornerRadius: OpalRadius.tile, style: .continuous))
-        .onTapGesture(count: 2) { activateItem(item) }
-        .onTapGesture { toggleSelection(for: item) }
+        .overlay {
+            RemoteFileDragOutOverlay(
+                item: item,
+                isDragEnabled: isConnected && !item.isDirectory,
+                pullFile: actions.onPullFileForDrag,
+                onSelect: { modifiers in toggleSelection(for: item, modifiers: modifiers) },
+                onActivate: { activateItem(item) }
+            )
+        }
         .contextMenu { itemContextMenu(for: item) }
     }
 
@@ -500,6 +552,7 @@ extension RemoteFileBrowserWindowView {
         if item.isDirectory {
             Button("打开文件夹", systemImage: "folder") { actions.onNavigateToPath(item.path) }
         } else {
+            Button("快速查看 (空格)", systemImage: "eye") { actions.onQuickLookItem(item) }
             if item.isAndroidPackage {
                 Button("安装到手机…", systemImage: "shippingbox") { actions.onInstallApk(item) }
             }
@@ -538,8 +591,8 @@ extension RemoteFileBrowserWindowView {
         }
     }
 
-    private func toggleSelection(for item: RemoteFileItem) {
-        if NSEvent.modifierFlags.contains(.command) {
+    private func toggleSelection(for item: RemoteFileItem, modifiers: NSEvent.ModifierFlags = NSEvent.modifierFlags) {
+        if modifiers.contains(.command) {
             if selectedFilePaths.contains(item.path) {
                 selectedFilePaths.remove(item.path)
             } else {

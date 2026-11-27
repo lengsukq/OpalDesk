@@ -298,6 +298,42 @@ public struct PopoutAppWindowView: View {
                     }
                 }
             }
+
+            Divider()
+
+            Menu("自定义 DPI") {
+                Button {
+                    controller.setCustomDpi(nil)
+                } label: {
+                    HStack {
+                        Text("自动")
+                        if controller.customDpi == nil { Image(systemName: "checkmark") }
+                    }
+                }
+
+                Divider()
+
+                ForEach(PopoutAppController.customDpiOptions, id: \.self) { dpi in
+                    Button {
+                        controller.setCustomDpi(dpi)
+                    } label: {
+                        HStack {
+                            Text("\(dpi) DPI")
+                            if controller.customDpi == dpi { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            }
+
+            Button {
+                controller.setCompatibilityResolution(!controller.isCompatibilityResolution)
+            } label: {
+                HStack {
+                    Text("兼容分辨率模式（修复拉伸/错位）")
+                    if controller.isCompatibilityResolution { Image(systemName: "checkmark") }
+                }
+            }
+
             Divider()
             Button("重载悬浮小窗", systemImage: "arrow.clockwise") { controller.retryStart() }
             Button("刷新关键帧 (IDR)", systemImage: "arrow.triangle.2.circlepath") { controller.requestIDR() }
@@ -307,6 +343,11 @@ public struct PopoutAppWindowView: View {
                     .font(.system(size: 10, weight: .semibold))
                 Text(controller.activePreset?.title ?? "自由")
                     .font(.system(size: 10, weight: .medium))
+                if controller.isCompatibilityResolution || controller.customDpi != nil {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 4.5, height: 4.5)
+                }
             }
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
@@ -314,7 +355,7 @@ public struct PopoutAppWindowView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("快选手机 / 折叠 / 平板比例")
+        .help("快选手机 / 折叠 / 平板比例、自定义 DPI 与兼容分辨率模式")
     }
 
     private var opacityPopoverContent: some View {
