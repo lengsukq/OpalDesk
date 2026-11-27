@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// A single OpalCast v1.1 wire frame with fixed 18-byte header and variable payload.
 public struct OpalCastFrame: Sendable, Equatable {
@@ -127,14 +128,16 @@ public struct OpalCastStreamDecoder: Sendable {
     private var storage: [UInt8]
     private var readIndex: Int = 0
     private var writeIndex: Int = 0
+    public let skipUnknownFrameTypes: Bool
 
     public var bufferedByteCount: Int {
         writeIndex - readIndex
     }
 
-    public init(initialCapacity: Int = 256 * 1024) {
+    public init(initialCapacity: Int = 256 * 1024, skipUnknownFrameTypes: Bool = false) {
         self.storage = []
         self.storage.reserveCapacity(max(initialCapacity, OpalCastProtocol.headerSize))
+        self.skipUnknownFrameTypes = skipUnknownFrameTypes
     }
 
     public mutating func reset() {
@@ -173,76 +176,91 @@ public struct OpalCastStreamDecoder: Sendable {
     }
 
     /// Decodes a single complete frame if available; returns nil when waiting for more bytes.
+    /// When `skipUnknownFrameTypes` is enabled, unrecognized future OPD1 frame types are skipped
+    /// cleanly by `payloadLen` once complete so forward-compatible protocol extensions never disconnect sessions.
     public mutating func decodeNextFrame() throws -> OpalCastFrame? {
-        guard bufferedByteCount >= OpalCastProtocol.headerSize else {
-            return nil
+        while bufferedByteCount >= OpalCastProtocol.headerSize {
+            let base = readIndex
+            let magic = OpalCastProtocol.magicBytes
+            if storage[base] != magic[0]
+                || storage[base + 1] != magic[1]
+                || storage[base + 2] != magic[2]
+                || storage[base + 3] != magic[3]
+            {
+                let bad = Array(storage[base..<(base + 4)])
+                reset()
+                throw OpalCastCodecError.invalidMagic(bad)
+            }
+
+            let rawType = storage[base + 4]
+            let flags = storage[base + 5]
+            let payloadLen =
+                (UInt32(storage[base + 6]) << 24)
+                | (UInt32(storage[base + 7]) << 16)
+                | (UInt32(storage[base + 8]) << 8)
+                | UInt32(storage[base + 9])
+
+            if payloadLen > OpalCastProtocol.maxPayloadLength {
+                reset()
+                throw OpalCastCodecError.payloadTooLarge(payloadLen)
+            }
+
+            let parsedType = OpalCastFrameType(rawValue: rawType)
+            if parsedType == nil && !skipUnknownFrameTypes {
+                reset()
+                throw OpalCastCodecError.unknownFrameType(rawType)
+            }
+
+            let totalFrameLen = OpalCastProtocol.headerSize + Int(payloadLen)
+            guard bufferedByteCount >= totalFrameLen else {
+                return nil
+            }
+
+            let payloadStart = base + OpalCastProtocol.headerSize
+            let payloadEnd = payloadStart + Int(payloadLen)
+
+            guard let frameType = parsedType else {
+                OpalDeskLog.session.debug(
+                    "Skipping unknown OPD1 frame type 0x\(String(rawType, radix: 16), privacy: .public) (\(payloadLen) bytes)"
+                )
+                readIndex = payloadEnd
+                if readIndex == writeIndex {
+                    readIndex = 0
+                    writeIndex = 0
+                }
+                continue
+            }
+
+            let tsHigh =
+                (UInt64(storage[base + 10]) << 24)
+                | (UInt64(storage[base + 11]) << 16)
+                | (UInt64(storage[base + 12]) << 8)
+                | UInt64(storage[base + 13])
+            let tsLow =
+                (UInt64(storage[base + 14]) << 24)
+                | (UInt64(storage[base + 15]) << 16)
+                | (UInt64(storage[base + 16]) << 8)
+                | UInt64(storage[base + 17])
+            let timestampUs = Int64(bitPattern: (tsHigh << 32) | tsLow)
+
+            let payload = payloadLen == 0
+                ? Data()
+                : Data(storage[payloadStart..<payloadEnd])
+
+            readIndex = payloadEnd
+            if readIndex == writeIndex {
+                readIndex = 0
+                writeIndex = 0
+            }
+
+            return OpalCastFrame(
+                type: frameType,
+                flags: flags,
+                timestampUs: timestampUs,
+                payload: payload
+            )
         }
-
-        let base = readIndex
-        let magic = OpalCastProtocol.magicBytes
-        if storage[base] != magic[0]
-            || storage[base + 1] != magic[1]
-            || storage[base + 2] != magic[2]
-            || storage[base + 3] != magic[3]
-        {
-            let bad = Array(storage[base..<(base + 4)])
-            reset()
-            throw OpalCastCodecError.invalidMagic(bad)
-        }
-
-        let rawType = storage[base + 4]
-        guard let frameType = OpalCastFrameType(rawValue: rawType) else {
-            reset()
-            throw OpalCastCodecError.unknownFrameType(rawType)
-        }
-
-        let flags = storage[base + 5]
-        let payloadLen =
-            (UInt32(storage[base + 6]) << 24)
-            | (UInt32(storage[base + 7]) << 16)
-            | (UInt32(storage[base + 8]) << 8)
-            | UInt32(storage[base + 9])
-
-        if payloadLen > OpalCastProtocol.maxPayloadLength {
-            reset()
-            throw OpalCastCodecError.payloadTooLarge(payloadLen)
-        }
-
-        let totalFrameLen = OpalCastProtocol.headerSize + Int(payloadLen)
-        guard bufferedByteCount >= totalFrameLen else {
-            return nil
-        }
-
-        let tsHigh =
-            (UInt64(storage[base + 10]) << 24)
-            | (UInt64(storage[base + 11]) << 16)
-            | (UInt64(storage[base + 12]) << 8)
-            | UInt64(storage[base + 13])
-        let tsLow =
-            (UInt64(storage[base + 14]) << 24)
-            | (UInt64(storage[base + 15]) << 16)
-            | (UInt64(storage[base + 16]) << 8)
-            | UInt64(storage[base + 17])
-        let timestampUs = Int64(bitPattern: (tsHigh << 32) | tsLow)
-
-        let payloadStart = base + OpalCastProtocol.headerSize
-        let payloadEnd = payloadStart + Int(payloadLen)
-        let payload = payloadLen == 0
-            ? Data()
-            : Data(storage[payloadStart..<payloadEnd])
-
-        readIndex = payloadEnd
-        if readIndex == writeIndex {
-            readIndex = 0
-            writeIndex = 0
-        }
-
-        return OpalCastFrame(
-            type: frameType,
-            flags: flags,
-            timestampUs: timestampUs,
-            payload: payload
-        )
+        return nil
     }
 
     private mutating func compactIfNeeded(incomingCount: Int) {
