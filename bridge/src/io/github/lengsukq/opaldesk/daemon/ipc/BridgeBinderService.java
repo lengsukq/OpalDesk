@@ -460,6 +460,11 @@ public final class BridgeBinderService extends Binder {
                             ? hostDisplayId
                             : android.view.Display.DEFAULT_DISPLAY;
                     services.focusDisplay(targetDisplay);
+                } else if (!focused && services != null && mouseRouter != null && mouseRouter.isHostMouseDisplayAnchored()) {
+                    WindowSession focusedWin = compositor.getFocusedLiveWindow();
+                    if (focusedWin != null && focusedWin.displayId > 0) {
+                        services.focusDisplay(focusedWin.displayId);
+                    }
                 }
                 if (reply != null) reply.writeInt(1);
                 return true;
@@ -610,13 +615,15 @@ public final class BridgeBinderService extends Binder {
             case BridgeProtocol.TX_GET_SYSTEM_IME_STATE: {
                 DexImeManager mgr = this.imeManager;
                 boolean physKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
+                boolean physExt = mouseRouter != null && mouseRouter.hasPhysicalExternalDisplay();
                 boolean remoteDesktop = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
                 int effPolicy = io.github.lengsukq.opaldesk.daemon.input.MouseRoutingPolicy.resolveWindowDisplayImePolicy(
                         physKbd,
                         remoteDesktop,
                         true,
                         config.getDexImeDisplayMode(),
-                        config.isMuteHostImeOnCast());
+                        config.isMuteHostImeOnCast(),
+                        physExt);
                 String json = (mgr != null) ? mgr.toStateJson(effPolicy, physKbd) : "{}";
                 if (reply != null) reply.writeString(json);
                 return true;

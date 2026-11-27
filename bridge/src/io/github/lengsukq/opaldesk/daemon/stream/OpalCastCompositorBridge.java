@@ -1660,17 +1660,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     }
 
     private void launchRemoteDesktopHost(int displayId) {
-        Intent intent = new Intent();
-        intent.setComponent(new ComponentName(
-                BridgeBuildConfig.HELPER_PACKAGE,
-                BridgeBuildConfig.HELPER_PACKAGE + ".ExternalDesktopActivity"));
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        intent.putExtra("targetDisplayId", displayId);
-        Bundle opts = TaskApiAdapter.makeFullscreenLaunchOptions(displayId).toBundle();
-        boolean ok = services.startActivityAsShell(intent, opts);
-        if (ok) {
-            services.focusDisplay(displayId);
-        }
+        boolean ok = services.launchExternalDesktopHost(displayId, false, false);
         System.out.println("OPALDESK_REMOTE_HOST_LAUNCH displayId=" + displayId + " ok=" + ok);
     }
 

@@ -1305,18 +1305,44 @@ object BridgeClient {
         focused: Boolean,
         hostDisplayId: Int = android.view.Display.DEFAULT_DISPLAY,
     ) {
+        sendLocalImeFocus(focused = focused, hostDisplayId = hostDisplayId, oneway = true, onAck = null)
+    }
+
+    /**
+     * Synchronously notifies the daemon of local IME focus on [hostDisplayId] (waiting for
+     * `focusDisplay` Binder completion off the main thread) before invoking [onAck] on main.
+     */
+    fun setLocalTextFieldFocusedAndAwaitAck(
+        focused: Boolean,
+        hostDisplayId: Int = android.view.Display.DEFAULT_DISPLAY,
+        onAck: () -> Unit,
+    ) {
+        sendLocalImeFocus(focused = focused, hostDisplayId = hostDisplayId, oneway = false, onAck = onAck)
+    }
+
+    private fun sendLocalImeFocus(
+        focused: Boolean,
+        hostDisplayId: Int,
+        oneway: Boolean,
+        onAck: (() -> Unit)?,
+    ) {
         inputExec.execute {
-            val svc = getService() ?: return@execute
-            transact(
-                svc,
-                BridgeProtocol.Tx.SET_LOCAL_IME_FOCUS,
-                oneway = true,
-                writeArgs = { d ->
-                    d.writeInt(if (focused) 1 else 0)
-                    d.writeInt(hostDisplayId.coerceAtLeast(0))
-                },
-                readReply = { Unit },
-            )
+            val svc = getService()
+            if (svc != null) {
+                transact(
+                    svc,
+                    BridgeProtocol.Tx.SET_LOCAL_IME_FOCUS,
+                    oneway = oneway,
+                    writeArgs = { d ->
+                        d.writeInt(if (focused) 1 else 0)
+                        d.writeInt(hostDisplayId.coerceAtLeast(0))
+                    },
+                    readReply = { r -> if (!oneway && r.dataAvail() >= 4) r.readInt() else 1 },
+                )
+            }
+            if (onAck != null) {
+                mainHandler.post(onAck)
+            }
         }
     }
 

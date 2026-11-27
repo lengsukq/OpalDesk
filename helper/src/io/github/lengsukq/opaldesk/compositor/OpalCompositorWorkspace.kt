@@ -152,6 +152,7 @@ fun OpalCompositorWorkspace(
     virtualCursorPx: Offset? = null,
     imeActive: Boolean = false,
     onToggleSoftKeyboard: (() -> Unit)? = null,
+    onLocalOverlayNeedsFocusChanged: (Boolean) -> Unit = {},
     onPickCustomWallpaper: () -> Unit = {},
     onOpenConsole: () -> Unit,
     onExitDesktop: () -> Unit,
@@ -243,6 +244,21 @@ fun OpalCompositorWorkspace(
 
     LaunchedEffect(scene.windows) {
         io.github.lengsukq.opaldesk.protocol.OpalWindowPinStore.prune(scene.windows.map { it.windowId }.toSet())
+    }
+
+    val localOverlayNeedsFocus = showAppDrawer ||
+        showControlCenter ||
+        showDpiPopover ||
+        showResolutionModal ||
+        showImePopover ||
+        showShortcutsPopover ||
+        showFeatureGuide ||
+        showNotificationCenter ||
+        showExitSlotModal ||
+        editingAppDpiTarget != null ||
+        pendingPairing != null
+    LaunchedEffect(localOverlayNeedsFocus) {
+        onLocalOverlayNeedsFocusChanged(localOverlayNeedsFocus)
     }
 
     fun dismissAllPopovers() {
@@ -723,6 +739,8 @@ fun OpalCompositorWorkspace(
                 // (suppressed on remote cast displays where the outer receiver already owns the single top-center pill).
                 FullscreenExitOverlay(
                     windowTitle = fullscreenWin.title,
+                    imeActive = imeActive,
+                    onToggleSoftKeyboard = onToggleSoftKeyboard,
                     onExitFullscreen = {
                         dismissAllPopovers()
                         BridgeClient.sendWindowActionAsync(

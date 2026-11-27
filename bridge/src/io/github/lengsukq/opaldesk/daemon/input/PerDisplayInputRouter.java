@@ -201,6 +201,9 @@ public final class PerDisplayInputRouter {
 
         boolean triggerTapUpCheck = false;
         long tapDownTs = 0L;
+        // 0 = none, 1 = focusDisplayTaskOnly, 2 = focusDisplay (executed AFTER ACTION_UP dispatch
+        // so WMGlobalLock / wm_set_resumed_activity never churn mid-click before InputDispatcher sees UP).
+        int postDispatchFocusMode = 0;
         if (masked == MotionEvent.ACTION_DOWN) {
             ws.lastActiveAtMs = System.currentTimeMillis();
             lastDownWinId = ws.windowId;
@@ -221,24 +224,25 @@ public final class PerDisplayInputRouter {
             }
         } else if (masked == MotionEvent.ACTION_UP) {
             ws.lastActiveAtMs = System.currentTimeMillis();
-            if (ws.windowId == lastDownWinId && !tapMovedTooFar) {
+            boolean isTap = (ws.windowId == lastDownWinId && !tapMovedTooFar);
+            boolean mouseAnchored = isMouse
+                    && physicalKeyboardConnected
+                    && hostMouseAnchoredProvider != null
+                    && hostMouseAnchoredProvider.getAsBoolean();
+            if (isTap) {
                 triggerTapUpCheck = !localImeActive;
                 tapDownTs = lastDownUptimeMs;
-                if (!localImeActive) {
-                    boolean mouseAnchored = isMouse
-                            && physicalKeyboardConnected
-                            && hostMouseAnchoredProvider != null
-                            && hostMouseAnchoredProvider.getAsBoolean();
-                    if (isMouse && !mouseAnchored) {
-                        // Keep unanchored hardware mouse pointer on Display 0 / External Monitor while
-                        // TapUpListener still probes IMMS to raise NativeImeBridgeHost if an EditText focused.
-                        services.focusDisplayTaskOnly(ws.displayId);
-                    } else {
-                        // Touch taps, or clicks from a display-anchored mouse while a physical keyboard
-                        // is routed to this window: move top focus cleanly ONCE so the window's local
-                        // CJK IME binds without stealing an anchored hardware cursor.
-                        services.focusDisplay(ws.displayId);
-                    }
+            }
+            if (!localImeActive && (isTap || mouseAnchored)) {
+                if (isMouse && !mouseAnchored) {
+                    // Keep unanchored hardware mouse pointer on Display 0 / External Monitor while
+                    // TapUpListener still probes IMMS to raise NativeImeBridgeHost if an EditText focused.
+                    postDispatchFocusMode = 1;
+                } else {
+                    // Touch taps, or clicks/drags from a display-anchored mouse while a physical keyboard
+                    // is routed to this window: move top focus cleanly after ACTION_UP so the window's
+                    // local CJK IME stays bound without stealing an anchored hardware cursor.
+                    postDispatchFocusMode = 2;
                 }
             }
             lastDownWinId = -1;
@@ -320,6 +324,11 @@ public final class PerDisplayInputRouter {
         }
         try {
             boolean ok = dispatchToDisplay(ev, ws.displayId, ws.vdUniqueId, ws.contentWidth, ws.contentHeight);
+            if (postDispatchFocusMode == 1) {
+                services.focusDisplayTaskOnly(ws.displayId);
+            } else if (postDispatchFocusMode == 2) {
+                services.focusDisplay(ws.displayId);
+            }
             if (ok && triggerTapUpCheck) {
                 TapUpListener listener = tapUpListener;
                 if (listener != null) {

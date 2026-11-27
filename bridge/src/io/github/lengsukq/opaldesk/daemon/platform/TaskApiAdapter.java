@@ -92,14 +92,40 @@ public final class TaskApiAdapter {
         return alive;
     }
 
+    public static final class TaskCandidate {
+        public final int taskId;
+        public final int displayId;
+        public final String cleanLaunchReason;
+
+        public TaskCandidate(int taskId, int displayId, String cleanLaunchReason) {
+            this.taskId = taskId;
+            this.displayId = displayId;
+            this.cleanLaunchReason = cleanLaunchReason;
+        }
+
+        public boolean needsCleanLaunch() {
+            return cleanLaunchReason != null && !cleanLaunchReason.isEmpty();
+        }
+    }
+
     public int findRunningOrRecentTaskForPackage(String pkg) {
-        if (pkg == null || pkg.isEmpty()) return -1;
+        TaskCandidate candidate = findTaskCandidateForPackage(pkg);
+        return candidate != null ? candidate.taskId : -1;
+    }
+
+    public TaskCandidate findTaskCandidateForPackage(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return null;
         List<?> running = getTasks();
         if (running != null) {
             for (Object t : running) {
                 if (pkg.equals(extractTaskPkg(t))) {
                     int tid = extractTaskId(t);
-                    if (tid > 0) return tid;
+                    if (tid > 0) {
+                        return new TaskCandidate(
+                                tid,
+                                readIntField(t, "displayId", 0),
+                                TaskLaunchPolicy.describeCleanLaunchReason(t));
+                    }
                 }
             }
         }
@@ -108,11 +134,32 @@ public final class TaskApiAdapter {
             for (Object t : recents) {
                 if (pkg.equals(extractTaskPkg(t))) {
                     int tid = extractTaskId(t);
-                    if (tid > 0) return tid;
+                    if (tid > 0) {
+                        return new TaskCandidate(
+                                tid,
+                                readIntField(t, "displayId", 0),
+                                TaskLaunchPolicy.describeCleanLaunchReason(t));
+                    }
                 }
             }
         }
-        return -1;
+        return null;
+    }
+
+    public TaskCandidate inspectTaskById(int taskId) {
+        if (taskId <= 0) return null;
+        List<?> running = getTasks();
+        if (running == null) return null;
+        for (Object t : running) {
+            if (t == null) continue;
+            if (extractTaskId(t) == taskId) {
+                return new TaskCandidate(
+                        taskId,
+                        readIntField(t, "displayId", -1),
+                        TaskLaunchPolicy.describeCleanLaunchReason(t));
+            }
+        }
+        return null;
     }
 
     public int findTopTaskIdOnDisplay(int displayId, String expectedPkg) {
@@ -221,6 +268,62 @@ public final class TaskApiAdapter {
             }
         } catch (ReflectiveOperationException | RuntimeException e) {
             System.err.println("OPALDESK_START_RECENTS_WARN tid=" + taskId + ": " + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Removes any running or recent task belonging to {@code pkg}/{@code cls} whose current
+     * {@code displayId} differs from {@code targetDisplayId}, preventing cross-display
+     * {@code singleInstance} task migration ({@code MoveToDisplayItem}) crashes on OEM ROMs.
+     */
+    public boolean removeStaleComponentTasksNotOnDisplay(String pkg, String cls, int targetDisplayId) {
+        if (atm == null || pkg == null || pkg.isEmpty() || cls == null || cls.isEmpty()) {
+            return false;
+        }
+        Set<Integer> toRemove = new LinkedHashSet<>();
+        collectMatchingComponentTasksNotOnDisplay(getTasks(), pkg, cls, targetDisplayId, toRemove);
+        collectMatchingComponentTasksNotOnDisplay(getRecentTasks(), pkg, cls, targetDisplayId, toRemove);
+        boolean removedAny = false;
+        for (int tid : toRemove) {
+            if (removeTask(tid)) {
+                removedAny = true;
+            }
+        }
+        return removedAny;
+    }
+
+    private static void collectMatchingComponentTasksNotOnDisplay(
+            List<?> tasks, String pkg, String cls, int targetDisplayId, Set<Integer> out) {
+        if (tasks == null) return;
+        for (Object t : tasks) {
+            if (t == null) continue;
+            if (!matchesTaskComponent(t, pkg, cls)) continue;
+            int tid = extractTaskId(t);
+            if (tid <= 0) continue;
+            int disp = readIntField(t, "displayId", -1);
+            if (disp != targetDisplayId) {
+                out.add(tid);
+            }
+        }
+    }
+
+    private static boolean matchesTaskComponent(Object taskInfo, String pkg, String cls) {
+        for (String field : new String[]{"realActivity", "baseActivity", "topActivity"}) {
+            Object comp = readObjField(taskInfo, field);
+            if (comp instanceof ComponentName) {
+                ComponentName cn = (ComponentName) comp;
+                if (pkg.equals(cn.getPackageName()) && cls.equals(cn.getClassName())) {
+                    return true;
+                }
+            }
+        }
+        Object bi = readObjField(taskInfo, "baseIntent");
+        if (bi instanceof Intent) {
+            ComponentName cn = ((Intent) bi).getComponent();
+            if (cn != null && pkg.equals(cn.getPackageName()) && cls.equals(cn.getClassName())) {
+                return true;
+            }
         }
         return false;
     }

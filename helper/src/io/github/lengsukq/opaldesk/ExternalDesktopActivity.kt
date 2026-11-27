@@ -152,7 +152,7 @@ class ExternalDesktopActivity : ComponentActivity() {
             if (targetDisplayId > Display.DEFAULT_DISPLAY && displayId == targetDisplayId) {
                 OpalLogStore.i(TAG, "External display removed: displayId=$displayId, closing workstation")
                 dismissPresentation()
-                finish()
+                finishAndRemoveTask()
             }
         }
     }
@@ -305,7 +305,7 @@ class ExternalDesktopActivity : ComponentActivity() {
                 displayLabelOverride = displayLabel,
                 onPickCustomWallpaper = { wallpaperPicker.launch("image/*") },
                 onOpenConsole = ::openConsoleOnPrimaryDisplay,
-                onExitDesktop = { finish() },
+                onExitDesktop = { finishAndRemoveTask() },
             )
             try {
                 pres.show()
@@ -402,7 +402,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         runningInPresentationMode = false
         targetDisplayId = Display.DEFAULT_DISPLAY
         ExternalTrackpadBridge.clearSessionIfOwner(this)
-        finish()
+        finishAndRemoveTask()
         Handler(Looper.getMainLooper()).postDelayed({
             BridgeClient.launchExternalDesktopOnDisplayAsync(targetId, isWireless)
         }, SHELL_RELAUNCH_DELAY_MS)
@@ -462,10 +462,10 @@ class ExternalDesktopActivity : ComponentActivity() {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                             },
                         )
-                        finish()
+                        finishAndRemoveTask()
                     },
                     onOpenConsole = ::openConsoleOnPrimaryDisplay,
-                    onExitExternal = { finish() },
+                    onExitExternal = { finishAndRemoveTask() },
                 )
             }
         }
@@ -568,10 +568,13 @@ class ExternalDesktopActivity : ComponentActivity() {
                         if (req.seq <= lastHandledImeSeq) return@LaunchedEffect
                         lastHandledImeSeq = req.seq
                         if (req.show) {
+                            val activeHere = !isFinishing && !isDestroyed && !runningInPresentationMode &&
+                                lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
                             val focused = BridgeClient.sceneFlow.value.focusedWindow
-                            if (focused != null && !focused.isMinimized
-                                && (req.windowId <= 0 || req.windowId == focused.windowId)
-                                && !OpalImeFocusTracker.localComposeTextFieldFocused
+                            if (activeHere &&
+                                focused != null && !focused.isMinimized &&
+                                (req.windowId <= 0 || req.windowId == focused.windowId) &&
+                                !OpalImeFocusTracker.localComposeTextFieldFocused
                             ) {
                                 imeController.showKeyboard(req.inputType)
                             }
@@ -625,7 +628,7 @@ class ExternalDesktopActivity : ComponentActivity() {
                                 virtualCursorPx = directCursor ?: remoteCursor,
                                 onPickCustomWallpaper = { wallpaperPicker.launch("image/*") },
                                 onOpenConsole = ::openConsoleOnPrimaryDisplay,
-                                onExitDesktop = { finish() },
+                                onExitDesktop = { finishAndRemoveTask() },
                             )
                             if (directComposingText.isNotEmpty()) {
                                 Box(

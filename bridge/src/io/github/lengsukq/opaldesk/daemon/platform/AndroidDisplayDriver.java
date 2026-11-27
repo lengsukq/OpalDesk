@@ -300,15 +300,39 @@ public final class AndroidDisplayDriver
         // When launching an explicit non-launcher sub-activity (e.g. Wi-Fi / Bluetooth settings),
         // avoid pulling an unrelated background task for the same package (which often has a
         // different taskAffinity, e.g. com.android.settings.root) onto this VirtualDisplay.
+        TaskApiAdapter.TaskCandidate candidate = (existingTaskId > 0 || resolvedLaunch.isExplicitSubActivity)
+                ? null
+                : taskApi.findTaskCandidateForPackage(pkg);
         int candidateTid = (existingTaskId > 0)
                 ? existingTaskId
-                : (resolvedLaunch.isExplicitSubActivity ? -1 : taskApi.findRunningOrRecentTaskForPackage(pkg));
-        if (candidateTid > 0 && candidateTid != existingOnTarget) {
+                : (candidate != null ? candidate.taskId : -1);
+        int candidateDisplayId = (candidate != null) ? candidate.displayId : -1;
+        String preCleanReason = (candidate != null) ? candidate.cleanLaunchReason : null;
+        boolean cleanedBeforeLaunch = false;
+        if (TaskLaunchPolicy.shouldCleanLaunchBeforeReparent(
+                existingTaskId,
+                resolvedLaunch.isExplicitSubActivity,
+                candidateTid,
+                existingOnTarget,
+                candidateDisplayId,
+                preCleanReason)) {
+            // Tasks running in ActivityEmbedding or letterbox/size-compat mode on Display 0 can
+            // retain Display-0 input-region / letterbox detector state if reparented directly onto
+            // a VirtualDisplay, causing single taps outside the stale Display-0 strip to be
+            // rewritten to ACTION_CANCEL. Remove the stale Display-0 task and cold-launch cleanly.
+            System.out.println("OPALDESK_LAUNCH_CLEAN_EMBEDDED_TASK pkg=" + pkg
+                    + " oldTid=" + candidateTid + " srcDisplay=" + candidateDisplayId
+                    + " dstDisplay=" + displayId + " reason=" + preCleanReason);
+            taskApi.removeTask(candidateTid);
+            SystemClock.sleep(80L);
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            cleanedBeforeLaunch = true;
+        } else if (candidateTid > 0 && candidateTid != existingOnTarget) {
             taskApi.moveRootTaskToDisplay(candidateTid, displayId);
         }
 
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        if (!startActivityWithAmFallback(launchIntent, launchOpts, displayId, false)) {
+        if (!startActivityWithAmFallback(launchIntent, launchOpts, displayId, cleanedBeforeLaunch)) {
             System.err.println("OPALDESK_LAUNCH_START_FAIL pkg=" + pkg + " displayId=" + displayId);
             return existingOnTarget;
         }
@@ -317,7 +341,7 @@ public final class AndroidDisplayDriver
         int topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg);
         // On ColorOS / OEM ROMs where a background Display-0 task refuses to reparent via moveRootTaskToDisplay,
         // remove the stale Display-0 task and cold-launch directly into the target VirtualDisplay.
-        if (topTid <= 0 && candidateTid > 0 && candidateTid != existingOnTarget) {
+        if (topTid <= 0 && candidateTid > 0 && candidateTid != existingOnTarget && !cleanedBeforeLaunch) {
             taskApi.removeTask(candidateTid);
             SystemClock.sleep(80L);
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
@@ -325,6 +349,21 @@ public final class AndroidDisplayDriver
             services.focusDisplay(displayId);
             SystemClock.sleep(80L);
             topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg);
+        } else if (topTid > 0 && !cleanedBeforeLaunch && existingTaskId <= 0 && candidateTid > 0 && candidateDisplayId <= 0) {
+            TaskApiAdapter.TaskCandidate landed = taskApi.inspectTaskById(topTid);
+            String landedReason = (landed != null) ? landed.cleanLaunchReason : null;
+            if (TaskLaunchPolicy.shouldCleanLaunchAfterRecycle(
+                    cleanedBeforeLaunch, existingTaskId, candidateTid, candidateDisplayId, topTid, landedReason)) {
+                System.out.println("OPALDESK_LAUNCH_CLEAN_RECYCLED_TASK pkg=" + pkg
+                        + " oldTid=" + topTid + " dstDisplay=" + displayId + " reason=" + landedReason);
+                taskApi.removeTask(topTid);
+                SystemClock.sleep(80L);
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                startActivityWithAmFallback(launchIntent, launchOpts, displayId, true);
+                services.focusDisplay(displayId);
+                SystemClock.sleep(80L);
+                topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg);
+            }
         }
         int resolvedTid = (topTid > 0) ? topTid
                 : (existingOnTarget > 0 ? existingOnTarget : taskApi.findRunningOrRecentTaskForPackage(pkg));
@@ -392,27 +431,7 @@ public final class AndroidDisplayDriver
      */
     private boolean startActivityWithAmFallback(
             Intent launchIntent, Bundle launchOpts, int displayId, boolean clearTask) {
-        if (services.startActivityAsShell(launchIntent, launchOpts)) {
-            return true;
-        }
-        ComponentName cn = launchIntent.getComponent();
-        if (cn == null) {
-            return false;
-        }
-        int flags = Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION
-                | (clearTask ? Intent.FLAG_ACTIVITY_CLEAR_TASK : 0);
-        String out = ShellCommand.runOutput(
-                "am", "start",
-                "--display", String.valueOf(displayId),
-                "--windowingMode", String.valueOf(BridgeProtocol.WINDOWING_MODE_FULLSCREEN),
-                "-f", "0x" + Integer.toHexString(flags),
-                "-n", cn.flattenToShortString());
-        if (out != null && out.contains("Error")) {
-            System.err.println("OPALDESK_AM_START_FALLBACK_ERR displayId=" + displayId + ": " + out.trim());
-            return false;
-        }
-        System.out.println("OPALDESK_AM_START_FALLBACK_OK displayId=" + displayId + " comp=" + cn.flattenToShortString());
-        return true;
+        return services.startActivityAsShellWithAmFallback(launchIntent, launchOpts, displayId, clearTask);
     }
 
     @Override

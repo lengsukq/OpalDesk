@@ -36,6 +36,9 @@ import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.compositor.applyWindowTilingLayout
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Tracks whether an in-process Compose text field (such as App Drawer search or Trackpad IME bar)
@@ -43,6 +46,9 @@ import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
  * to accidental Compose button focus traversal, yet still type cleanly into OpalDesk search boxes.
  */
 object OpalImeFocusTracker {
+    private val _localComposeTextFieldFocusedFlow = MutableStateFlow(false)
+    val localComposeTextFieldFocusedFlow: StateFlow<Boolean> = _localComposeTextFieldFocusedFlow.asStateFlow()
+
     @Volatile
     var localComposeTextFieldFocused: Boolean = false
         private set
@@ -53,6 +59,7 @@ object OpalImeFocusTracker {
     ) {
         if (localComposeTextFieldFocused == focused) return
         localComposeTextFieldFocused = focused
+        _localComposeTextFieldFocusedFlow.value = focused
         BridgeClient.setLocalTextFieldFocusedOneway(focused, hostDisplayId)
     }
 }
@@ -162,6 +169,28 @@ object WorkstationKeyDispatcher {
         hostSoftImeVisible: Boolean,
         isPhysicalKeyEvent: Boolean,
     ): Boolean = !localComposeTextFieldFocused && !hostSoftImeVisible && isPhysicalKeyEvent
+
+    /**
+     * Pure JVM-testable policy deciding whether an external monitor [android.app.Presentation]
+     * window should set `FLAG_NOT_FOCUSABLE` while a physical keyboard is routed to a live
+     * `OpalWin-*` VirtualDisplay, so hardware mouse clicks inside the app or on CJK IME
+     * candidate bars never steal top display focus onto the outer Presentation and dismiss the IME.
+     *
+     * Checks `keyboardRoutedDisplayId > 0` (rather than exact equality with
+     * `focusedWindowDisplayId`) so switching focus between two live windows never momentarily
+     * flaps `FLAG_NOT_FOCUSABLE` mid-click while the daemon rebinds keyboard routing (~10ms),
+     * which otherwise triggers a WindowManager transition that cancels active pointer input.
+     */
+    fun shouldAvoidPresentationFocusSteal(
+        focusedWindowDisplayId: Int,
+        keyboardRoutedDisplayId: Int,
+        localOverlayNeedsFocus: Boolean,
+        localTextFieldFocused: Boolean,
+        hostSoftImeVisible: Boolean,
+    ): Boolean {
+        if (localOverlayNeedsFocus || localTextFieldFocused || hostSoftImeVisible) return false
+        return focusedWindowDisplayId > 0 && keyboardRoutedDisplayId > 0
+    }
 
     /**
      * Pure JVM-testable matcher for physical/Bluetooth keyboard IME language-switch keys and chords
@@ -374,6 +403,7 @@ internal class NativeImeBridgeView(
     }
     private var lastImeVisible = false
     private var pendingShowAfterFocus = false
+    private var claimedLocalImeFocus = false
     private var showAttemptGen = 0L
     private var activeInputType = DEFAULT_INPUT_TYPE
 
@@ -389,7 +419,10 @@ internal class NativeImeBridgeView(
                     onComposingChanged("")
                     if (!pendingShowAfterFocus) {
                         clearFocus()
-                        BridgeClient.setLocalTextFieldFocusedOneway(false)
+                        if (claimedLocalImeFocus) {
+                            claimedLocalImeFocus = false
+                            BridgeClient.setLocalTextFieldFocusedOneway(false, resolveHostDisplayId())
+                        }
                     }
                 }
             }
@@ -462,19 +495,26 @@ internal class NativeImeBridgeView(
     fun showIme(inputType: Int = 0) {
         activeInputType = if (inputType != 0) inputType else DEFAULT_INPUT_TYPE
         val gen = ++showAttemptGen
-        // Keep THIS view's hosting display top-focused (external monitor or Display 0) so IMMS
-        // accepts showSoftInput on the correct screen instead of pulling focus back to Display 0.
+        // Focus THIS view's hosting display in system_server (via synchronous Binder ack) BEFORE
+        // calling showSoftInput() so Android 14-17 IMMS never rejects or misroutes the IME onto a
+        // previously focused OpalWin-* VirtualDisplay or Display 0.
         val hostDispId = resolveHostDisplayId()
-        BridgeClient.setLocalTextFieldFocusedOneway(true, hostDispId)
+        claimedLocalImeFocus = true
         pendingShowAfterFocus = true
-        triggerShowNow()
+        requestFocus()
+        BridgeClient.setLocalTextFieldFocusedAndAwaitAck(true, hostDispId) {
+            if (!isAttachedToWindow || showAttemptGen != gen) return@setLocalTextFieldFocusedAndAwaitAck
+            if (!lastImeVisible) {
+                triggerShowNow()
+            }
+        }
         postDelayed({
             if (!isAttachedToWindow || showAttemptGen != gen) return@postDelayed
             pendingShowAfterFocus = false
             if (!lastImeVisible) {
                 triggerShowNow()
             }
-        }, 120L)
+        }, 140L)
         postDelayed({
             if (!isAttachedToWindow || showAttemptGen != gen) return@postDelayed
             pendingShowAfterFocus = false
@@ -482,11 +522,14 @@ internal class NativeImeBridgeView(
                 // Soft IME stayed hidden (e.g. a physical keyboard suppresses soft input): release
                 // focus and daemon localImeActive lock so window keyboard input never gets stranded.
                 clearFocus()
-                if (!OpalImeFocusTracker.localComposeTextFieldFocused) {
-                    BridgeClient.setLocalTextFieldFocusedOneway(false, resolveHostDisplayId())
+                if (claimedLocalImeFocus) {
+                    claimedLocalImeFocus = false
+                    if (!OpalImeFocusTracker.localComposeTextFieldFocused) {
+                        BridgeClient.setLocalTextFieldFocusedOneway(false, resolveHostDisplayId())
+                    }
                 }
             }
-        }, 450L)
+        }, 650L)
     }
 
     @Suppress("DEPRECATION")
@@ -504,6 +547,7 @@ internal class NativeImeBridgeView(
         showAttemptGen++
         pendingShowAfterFocus = false
         onComposingChanged("")
+        claimedLocalImeFocus = false
         BridgeClient.setLocalTextFieldFocusedOneway(false, resolveHostDisplayId())
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.hideSoftInputFromWindow(windowToken, 0)

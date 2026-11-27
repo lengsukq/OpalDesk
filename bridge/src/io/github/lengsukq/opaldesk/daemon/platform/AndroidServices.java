@@ -597,6 +597,101 @@ public final class AndroidServices {
     }
 
     /**
+     * Launches an Activity via {@code IActivityTaskManager.startActivity} and falls back to
+     * {@code am start --display <id> --windowingMode 1} if an OEM ROM (e.g. Samsung OneUI) fails
+     * Binder {@code startActivity} with a null caller context.
+     */
+    public boolean startActivityAsShellWithAmFallback(
+            Intent intent, Bundle options, int displayId, boolean clearTask) {
+        if (startActivityAsShell(intent, options)) {
+            return true;
+        }
+        if (intent == null || displayId <= 0) {
+            return false;
+        }
+        ComponentName cn = intent.getComponent();
+        if (cn == null) {
+            return false;
+        }
+        int flags = intent.getFlags() | Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION;
+        if (clearTask) {
+            flags |= Intent.FLAG_ACTIVITY_CLEAR_TASK;
+        }
+        java.util.Map<String, Object> extraMap = new java.util.LinkedHashMap<>();
+        Bundle extras = intent.getExtras();
+        if (extras != null) {
+            for (String k : extras.keySet()) {
+                @SuppressWarnings("deprecation")
+                Object v = extras.get(k);
+                if (v instanceof Boolean || v instanceof Integer || v instanceof String) {
+                    extraMap.put(k, v);
+                }
+            }
+        }
+        String[] cmd = TaskLaunchPolicy.buildAmStartArgs(
+                cn.flattenToShortString(),
+                displayId,
+                BridgeProtocol.WINDOWING_MODE_FULLSCREEN,
+                flags,
+                extraMap);
+        String out = ShellCommand.runOutput(cmd);
+        if (out != null && out.contains("Error")) {
+            System.err.println("OPALDESK_AM_START_FALLBACK_ERR displayId=" + displayId + ": " + out.trim());
+            return false;
+        }
+        System.out.println("OPALDESK_AM_START_FALLBACK_OK displayId=" + displayId + " comp=" + cn.flattenToShortString());
+        return true;
+    }
+
+    /**
+     * Launches {@code ExternalDesktopActivity} directly onto a physical, wireless, or OpalCast
+     * external display via {@code com.android.shell} ({@code uid=2000}), clearing stale tasks on
+     * other displays first so OEM {@code MoveToDisplayItem} transitions never crash.
+     */
+    public boolean launchExternalDesktopHost(int displayId, boolean includeExternalExtras, boolean isWireless) {
+        if (displayId <= Display.DEFAULT_DISPLAY || displayManager == null) return false;
+        Display disp = null;
+        try {
+            disp = displayManager.getDisplay(displayId);
+        } catch (RuntimeException ignored) {
+        }
+        if (disp == null || !disp.isValid()) {
+            System.err.println("OPALDESK_EXT_DESKTOP_LAUNCH_SKIP displayId=" + displayId + " invalid_or_missing");
+            return false;
+        }
+        String cls = BridgeBuildConfig.HELPER_PACKAGE + ".ExternalDesktopActivity";
+        boolean removedStale = new TaskApiAdapter(iActivityTaskManager)
+                .removeStaleComponentTasksNotOnDisplay(BridgeBuildConfig.HELPER_PACKAGE, cls, displayId);
+        if (removedStale) {
+            android.os.SystemClock.sleep(60L);
+        }
+        Intent intent = new Intent();
+        intent.setComponent(new ComponentName(BridgeBuildConfig.HELPER_PACKAGE, cls));
+        int flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                | Intent.FLAG_ACTIVITY_NO_ANIMATION;
+        if (includeExternalExtras) {
+            flags |= Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT;
+        }
+        if (removedStale) {
+            flags |= Intent.FLAG_ACTIVITY_CLEAR_TASK;
+        }
+        intent.addFlags(flags);
+        intent.putExtra("targetDisplayId", displayId);
+        if (includeExternalExtras) {
+            intent.putExtra("preferPresentation", false);
+            intent.putExtra("isWirelessDisplay", isWireless);
+            intent.putExtra("shellLaunched", true);
+        }
+        Bundle opts = TaskApiAdapter.makeFullscreenLaunchOptions(displayId).toBundle();
+        boolean ok = startActivityAsShellWithAmFallback(intent, opts, displayId, removedStale);
+        if (ok) {
+            focusDisplay(displayId);
+        }
+        return ok;
+    }
+
+    /**
      * Launches {@code ExternalDesktopActivity} directly onto a physical or wireless external
      * display via {@code com.android.shell} ({@code uid=2000}), bypassing Android 14–16
      * background-activity-launch (BAL) and unprivileged cross-display launch restrictions.
@@ -616,25 +711,7 @@ public final class AndroidServices {
         String modeDesc = (mode != null)
                 ? (mode.getPhysicalWidth() + "x" + mode.getPhysicalHeight() + "@" + Math.round(mode.getRefreshRate()) + "Hz")
                 : "unknown";
-        Intent intent = new Intent();
-        intent.setComponent(new ComponentName(
-                BridgeBuildConfig.HELPER_PACKAGE,
-                BridgeBuildConfig.HELPER_PACKAGE + ".ExternalDesktopActivity"));
-        intent.addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK
-                        | Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                        | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        intent.putExtra("targetDisplayId", displayId);
-        intent.putExtra("preferPresentation", false);
-        intent.putExtra("isWirelessDisplay", isWireless);
-        intent.putExtra("shellLaunched", true);
-        Bundle opts = TaskApiAdapter.makeFullscreenLaunchOptions(displayId).toBundle();
-        boolean ok = startActivityAsShell(intent, opts);
-        if (ok) {
-            focusDisplay(displayId);
-        }
+        boolean ok = launchExternalDesktopHost(displayId, true, isWireless);
         System.out.println("OPALDESK_EXT_DESKTOP_LAUNCH displayId=" + displayId
                 + " name=" + disp.getName()
                 + " flags=0x" + Integer.toHexString(disp.getFlags())

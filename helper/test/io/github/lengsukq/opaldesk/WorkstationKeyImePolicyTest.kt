@@ -103,6 +103,97 @@ class WorkstationKeyImePolicyTest {
     }
 
     @Test
+    fun `external presentation avoids stealing focus steadily while keyboard is routed to live windows`() {
+        assertTrue(
+            WorkstationKeyDispatcher.shouldAvoidPresentationFocusSteal(
+                focusedWindowDisplayId = 85,
+                keyboardRoutedDisplayId = 85,
+                localOverlayNeedsFocus = false,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = false,
+            ),
+        )
+        // Switching focus between two live windows must keep FLAG_NOT_FOCUSABLE steady rather than
+        // flapping mid-click while keyboard routing updates (~10ms), avoiding WM input cancellation.
+        assertTrue(
+            WorkstationKeyDispatcher.shouldAvoidPresentationFocusSteal(
+                focusedWindowDisplayId = 85,
+                keyboardRoutedDisplayId = 82,
+                localOverlayNeedsFocus = false,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = false,
+            ),
+        )
+        // Must stay focusable when no physical keyboard is routed or no live window is focused
+        assertFalse(
+            WorkstationKeyDispatcher.shouldAvoidPresentationFocusSteal(
+                focusedWindowDisplayId = 85,
+                keyboardRoutedDisplayId = -1,
+                localOverlayNeedsFocus = false,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = false,
+            ),
+        )
+        assertFalse(
+            WorkstationKeyDispatcher.shouldAvoidPresentationFocusSteal(
+                focusedWindowDisplayId = -1,
+                keyboardRoutedDisplayId = 82,
+                localOverlayNeedsFocus = false,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = false,
+            ),
+        )
+        // Must immediately become focusable when App Drawer / Control Center / local search / soft IME opens
+        assertFalse(
+            WorkstationKeyDispatcher.shouldAvoidPresentationFocusSteal(
+                focusedWindowDisplayId = 85,
+                keyboardRoutedDisplayId = 85,
+                localOverlayNeedsFocus = true,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = false,
+            ),
+        )
+        assertFalse(
+            WorkstationKeyDispatcher.shouldAvoidPresentationFocusSteal(
+                focusedWindowDisplayId = 85,
+                keyboardRoutedDisplayId = 85,
+                localOverlayNeedsFocus = false,
+                localTextFieldFocused = true,
+                hostSoftImeVisible = false,
+            ),
+        )
+        assertFalse(
+            WorkstationKeyDispatcher.shouldAvoidPresentationFocusSteal(
+                focusedWindowDisplayId = 85,
+                keyboardRoutedDisplayId = 85,
+                localOverlayNeedsFocus = false,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `compositor scene defaults keyboardRoutedDisplayId to -1 and matches focused live display`() {
+        val defaultScene = io.github.lengsukq.opaldesk.protocol.CompositorScene()
+        assertEquals(-1, defaultScene.keyboardRoutedDisplayId)
+
+        val routedScene = io.github.lengsukq.opaldesk.protocol.CompositorScene(
+            keyboardRoutedDisplayId = 85,
+        )
+        assertEquals(85, routedScene.keyboardRoutedDisplayId)
+        assertTrue(
+            WorkstationKeyDispatcher.shouldAvoidPresentationFocusSteal(
+                focusedWindowDisplayId = 85,
+                keyboardRoutedDisplayId = routedScene.keyboardRoutedDisplayId,
+                localOverlayNeedsFocus = false,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = false,
+            ),
+        )
+    }
+
+    @Test
     fun `resolves all workstation shortcuts when enabled and respects master off switch`() {
         assertEquals(
             GlobalShortcutAction.SwitchNextWindow,

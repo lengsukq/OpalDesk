@@ -130,6 +130,20 @@ public final class OpalDeskDaemon implements Runnable {
                 vdPool,
                 displayDriver,
                 this::pushSceneSnapshotAsync);
+        this.compositor.setKeyboardRoutedDisplayIdSupplier(this.mouseRouter::getKeyboardRoutedDisplayId);
+        this.mouseRouter.setFocusedWindowTargetProvider(() -> {
+            WindowSession focused = this.compositor.getFocusedLiveWindow();
+            if (focused != null && focused.displayId > 0 && focused.vdUniqueId != null && !focused.vdUniqueId.isEmpty()) {
+                return new ExternalMouseRouter.FocusedWindowTarget(focused.displayId, focused.vdUniqueId);
+            }
+            return null;
+        });
+        this.mouseRouter.setKeyboardRoutingListener(routedDisplayId -> bgExec.execute(() -> {
+            helperBridge.pushSceneState(compositor.toSceneJson(), compositor.getStateSeq());
+            if (routedDisplayId > 0 && !inputRouter.isLocalImeActive() && services != null) {
+                services.focusDisplay(routedDisplayId);
+            }
+        }));
         this.compositor.setBackReconcileScheduler(winId -> {
             mainHandler.postDelayed(() -> bgExec.execute(() -> compositor.reconcileWindowAfterBack(winId)), 240L);
             mainHandler.postDelayed(() -> bgExec.execute(() -> compositor.reconcileWindowAfterBack(winId)), 560L);
@@ -152,6 +166,7 @@ public final class OpalDeskDaemon implements Runnable {
             });
         });
         this.mouseRouter.setPhysicalKeyboardListener(connected -> bgExec.execute(this::syncWindowImePolicy));
+        this.mouseRouter.setExternalImeContextListener(() -> bgExec.execute(this::syncWindowImePolicy));
         this.displayDriver.setAllSurfacesDetachedListener(() -> {
             if (services != null && MouseRoutingPolicy.shouldRestoreDefaultDisplayFocusOnLocalExit(
                     mouseRouter.isLocalDesktopPinned(),
@@ -348,16 +363,9 @@ public final class OpalDeskDaemon implements Runnable {
             bgExec.execute(remoteBridge::onCompositorWindowsChanged);
         }
         bgExec.execute(this::syncFocusedWindowKeyboardRouting);
-        if (mouseRouter != null && mouseRouter.hasPhysicalKeyboard()
-                && (remoteBridge == null || !remoteBridge.hasActiveDesktopSession())) {
-            WindowSession focused = compositor.getFocusedLiveWindow();
-            if (focused != null && focused.displayId > 0 && focused.vdUniqueId != null && !focused.vdUniqueId.isEmpty()) {
-                final int dispId = focused.displayId;
-                final String vdUid = focused.vdUniqueId;
-                bgExec.execute(() -> inputRouter.prewarmKeyboardForDisplay(dispId, vdUid));
-            }
-        }
     }
+
+    private volatile int lastFocusedKbdWindowDisplayId = -1;
 
     private void syncFocusedWindowKeyboardRouting() {
         if (mouseRouter == null) return;
@@ -366,7 +374,22 @@ public final class OpalDeskDaemon implements Runnable {
         WindowSession focused = compositor.getFocusedLiveWindow();
         if (focused != null && focused.displayId > 0 && focused.vdUniqueId != null && !focused.vdUniqueId.isEmpty()) {
             mouseRouter.setFocusedWindowTarget(focused.displayId, focused.vdUniqueId);
+            int routedDisplayId = mouseRouter.getKeyboardRoutedDisplayId();
+            if (routedDisplayId == focused.displayId) {
+                if (lastFocusedKbdWindowDisplayId != focused.displayId
+                        && !inputRouter.isLocalImeActive()
+                        && services != null) {
+                    services.focusDisplay(focused.displayId);
+                }
+                lastFocusedKbdWindowDisplayId = focused.displayId;
+            } else {
+                lastFocusedKbdWindowDisplayId = -1;
+                if (mouseRouter.hasPhysicalKeyboard() && !remoteDesktop) {
+                    inputRouter.prewarmKeyboardForDisplay(focused.displayId, focused.vdUniqueId);
+                }
+            }
         } else {
+            lastFocusedKbdWindowDisplayId = -1;
             mouseRouter.setFocusedWindowTarget(-1, null);
         }
     }
@@ -374,14 +397,20 @@ public final class OpalDeskDaemon implements Runnable {
     private void syncWindowImePolicy() {
         if (config.shuttingDown) return;
         boolean hasPhysKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
+        boolean hasPhysicalExt = mouseRouter != null && mouseRouter.hasPhysicalExternalDisplay();
         boolean remoteDesktop = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
         int desiredPolicy = MouseRoutingPolicy.resolveWindowDisplayImePolicy(
                 hasPhysKbd,
                 remoteDesktop,
                 true,
                 config.getDexImeDisplayMode(),
-                config.isMuteHostImeOnCast());
+                config.isMuteHostImeOnCast(),
+                hasPhysicalExt);
         displayDriver.updateWindowImePolicy(desiredPolicy);
+        inputRouter.setPhysicalKeyboardConnected(hasPhysKbd);
+        if (!hasPhysKbd) {
+            inputRouter.releasePhysicalKeyboardUhidDevices();
+        }
         if (mouseRouter != null) {
             mouseRouter.setRemoteDesktopActive(remoteDesktop);
             syncFocusedWindowKeyboardRouting();
@@ -390,23 +419,19 @@ public final class OpalDeskDaemon implements Runnable {
         if (remoteBridge != null) {
             remoteBridge.syncRemoteDisplayImePolicies();
         }
-        inputRouter.setPhysicalKeyboardConnected(hasPhysKbd);
-        if (!hasPhysKbd) {
-            inputRouter.releasePhysicalKeyboardUhidDevices();
-        } else if (!remoteDesktop) {
-            WindowSession focused = compositor.getFocusedLiveWindow();
-            if (focused != null && focused.displayId > 0 && focused.vdUniqueId != null && !focused.vdUniqueId.isEmpty()) {
-                inputRouter.prewarmKeyboardForDisplay(focused.displayId, focused.vdUniqueId);
-            }
-        }
     }
 
     private void scheduleImeFallbackProbe(int windowId, int displayId, long tapDownUptimeMs) {
         boolean hasPhysKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
+        boolean hasPhysicalExt = mouseRouter != null && mouseRouter.hasPhysicalExternalDisplay();
         boolean remoteDesktop = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
         if (config.shuttingDown || windowId <= 0 || displayId <= 0
                 || !MouseRoutingPolicy.shouldRunFallbackImeProbe(
-                        inputRouter.isLocalImeActive(), hasPhysKbd, remoteDesktop, config.getDexImeDisplayMode())) {
+                        inputRouter.isLocalImeActive(),
+                        hasPhysKbd,
+                        remoteDesktop,
+                        config.getDexImeDisplayMode(),
+                        hasPhysicalExt)) {
             return;
         }
         final long gen = imeProbeGen.incrementAndGet();
@@ -423,10 +448,17 @@ public final class OpalDeskDaemon implements Runnable {
 
     private void runImeFallbackProbe(long gen, int windowId, int displayId, long tapDownUptimeMs) {
         boolean hasPhysKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
+        boolean hasExtTouch = mouseRouter != null && mouseRouter.hasExternalTouchscreen();
+        boolean hasPhysicalExt = mouseRouter != null && mouseRouter.hasPhysicalExternalDisplay();
         boolean remoteDesktopActive = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
+        int dexMode = config.getDexImeDisplayMode();
         if (config.shuttingDown || imeProbeGen.get() != gen
                 || !MouseRoutingPolicy.shouldRunFallbackImeProbe(
-                        inputRouter.isLocalImeActive(), hasPhysKbd, remoteDesktopActive, config.getDexImeDisplayMode())) {
+                        inputRouter.isLocalImeActive(),
+                        hasPhysKbd,
+                        remoteDesktopActive,
+                        dexMode,
+                        hasPhysicalExt)) {
             return;
         }
         WindowSession ws = compositor.getWindowSnapshot(windowId);
@@ -455,8 +487,11 @@ public final class OpalDeskDaemon implements Runnable {
             return;
         }
 
-        if (snap.inputShown) {
-            // Native cross-display fallback IME opened cleanly on Display 0 (e.g. Android 16 local DeX) — do not interfere.
+        boolean bridgeOverShown = MouseRoutingPolicy.shouldBridgeHostImeWhenSystemInputShown(
+                false, hasPhysicalExt, hasPhysKbd, hasExtTouch, dexMode);
+        if (snap.inputShown && !bridgeOverShown) {
+            // Native cross-display fallback IME opened cleanly on Display 0 (e.g. local DeX or
+            // non-touch external monitor in AUTO/FALLBACK_HOST mode) — do not interfere.
             if (snap.latestShowSeq > lastHandledImmsShowSeq.get()) {
                 lastHandledImmsShowSeq.set(snap.latestShowSeq);
             }
@@ -464,8 +499,12 @@ public final class OpalDeskDaemon implements Runnable {
             return;
         }
 
-        if (ImmsDumpInspector.shouldTriggerHostImeBridge(
-                snap, displayId, lastHandledImmsShowSeq.get(), tapDownUptimeMs, nowUptime)) {
+        boolean shouldTrigger = bridgeOverShown
+                ? ImmsDumpInspector.shouldTriggerRemoteCastIme(
+                        snap, displayId, lastHandledImmsShowSeq.get(), tapDownUptimeMs, nowUptime)
+                : ImmsDumpInspector.shouldTriggerHostImeBridge(
+                        snap, displayId, lastHandledImmsShowSeq.get(), tapDownUptimeMs, nowUptime);
+        if (shouldTrigger) {
             lastHandledImmsShowSeq.set(snap.latestShowSeq);
             imeProbeGen.compareAndSet(gen, gen + 1L);
             int rawType = snap.effectiveInputType(displayId);
@@ -474,6 +513,8 @@ public final class OpalDeskDaemon implements Runnable {
                     + " display=" + displayId
                     + " seq=" + snap.latestShowSeq
                     + " reason=" + snap.latestShowReason
+                    + " inputShown=" + snap.inputShown
+                    + " extBridge=" + bridgeOverShown
                     + " rawType=0x" + Integer.toHexString(rawType)
                     + " hostType=0x" + Integer.toHexString(hostType));
             helperBridge.pushImeRequest(windowId, true, hostType);

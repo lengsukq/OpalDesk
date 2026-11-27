@@ -2645,6 +2645,8 @@ private const val FULLSCREEN_COLLAPSE_HOVER_GUARD_MS = 650L
 @Composable
 fun FullscreenExitOverlay(
     windowTitle: String,
+    imeActive: Boolean = false,
+    onToggleSoftKeyboard: (() -> Unit)? = null,
     onExitFullscreen: () -> Unit,
     onToggleOrientation: (() -> Unit)? = null,
     onReturnToDesktop: () -> Unit,
@@ -2798,6 +2800,19 @@ fun FullscreenExitOverlay(
                         onReturnToDesktop()
                     },
                 )
+                if (onToggleSoftKeyboard != null) {
+                    OpalTopPillIconButton(
+                        glyph = ChromeGlyph.KEYBOARD,
+                        contentDescription = "软键盘",
+                        active = imeActive,
+                        activeColor = OpalPalette.AccentBlue,
+                        onClick = {
+                            isPointerHovering = false
+                            expanded = false
+                            onToggleSoftKeyboard()
+                        },
+                    )
+                }
                 OpalTopPillIconButton(
                     glyph = ChromeGlyph.CONTROL_CENTER,
                     contentDescription = "控制中心",

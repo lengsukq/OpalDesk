@@ -34,6 +34,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.lengsukq.opaldesk.compositor.OpalCompositorWorkspace
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
+import io.github.lengsukq.opaldesk.external.ExternalDesktopMode
+import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.ui.NativeImeBridgeHost
@@ -145,10 +147,14 @@ class DesktopActivity : ComponentActivity() {
                     if (req.seq <= lastHandledImeSeq) return@LaunchedEffect
                     lastHandledImeSeq = req.seq
                     if (req.show) {
+                        val activeLocally = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) &&
+                            !BridgeClient.remoteStatusFlow.value.connected &&
+                            ExternalTrackpadBridge.sessionFlow.value.mode == ExternalDesktopMode.NONE
                         val focused = BridgeClient.sceneFlow.value.focusedWindow
-                        if (focused != null && !focused.isMinimized
-                            && (req.windowId <= 0 || req.windowId == focused.windowId)
-                            && !OpalImeFocusTracker.localComposeTextFieldFocused
+                        if (activeLocally &&
+                            focused != null && !focused.isMinimized &&
+                            (req.windowId <= 0 || req.windowId == focused.windowId) &&
+                            !OpalImeFocusTracker.localComposeTextFieldFocused
                         ) {
                             imeController.showKeyboard(req.inputType)
                         }

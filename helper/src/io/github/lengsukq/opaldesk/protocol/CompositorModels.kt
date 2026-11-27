@@ -383,6 +383,7 @@ data class CompositorScene(
     val canvasDpi: Int = 240,
     val activeVdCount: Int = 0,
     val maxVdCount: Int = 6,
+    val keyboardRoutedDisplayId: Int = -1,
     val windows: List<CompositorWindow> = emptyList(),
 ) {
     val visibleWindows: List<CompositorWindow>
@@ -465,6 +466,7 @@ object CompositorSceneParser {
                 canvasDpi = root.optInt("canvasDpi", 240),
                 activeVdCount = root.optInt("activeVdCount", 0),
                 maxVdCount = root.optInt("maxVdCount", 6),
+                keyboardRoutedDisplayId = root.optInt("kbdRoutedDisplayId", -1),
                 windows = list,
             )
         } catch (_: Throwable) {

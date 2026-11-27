@@ -88,6 +88,7 @@ class ExternalMonitorPresentation(
     private val ownLifecycle = PresentationLifecycleOwner()
     private var composeView: ComposeView? = null
     private var imeVisible by mutableStateOf(false)
+    private var localOverlayNeedsFocus by mutableStateOf(false)
     private var composingText by mutableStateOf("")
     private var imeController: NativeImeHostController? = null
     val isImeActive: Boolean get() = imeVisible
@@ -150,8 +151,22 @@ class ExternalMonitorPresentation(
                     val status by BridgeClient.statusFlow.collectAsState()
                     val scene by BridgeClient.sceneFlow.collectAsState()
                     val imeRequest by BridgeClient.imeBridgeRequestFlow.collectAsState()
+                    val localTextFieldFocused by OpalImeFocusTracker.localComposeTextFieldFocusedFlow.collectAsState()
                     val controller = rememberNativeImeHostController()
                     imeController = controller
+                    val focusedLiveDisplayId = scene.focusedWindow
+                        ?.takeIf { !it.isMinimized && it.isLive }
+                        ?.displayId ?: -1
+                    val avoidFocusSteal = WorkstationKeyDispatcher.shouldAvoidPresentationFocusSteal(
+                        focusedWindowDisplayId = focusedLiveDisplayId,
+                        keyboardRoutedDisplayId = scene.keyboardRoutedDisplayId,
+                        localOverlayNeedsFocus = localOverlayNeedsFocus,
+                        localTextFieldFocused = localTextFieldFocused,
+                        hostSoftImeVisible = imeVisible,
+                    )
+                    LaunchedEffect(avoidFocusSteal) {
+                        setPresentationNotFocusable(avoidFocusSteal)
+                    }
                     LaunchedEffect(status.targetFps) {
                         applyPreferredRefreshRate(status.targetFps)
                     }
@@ -176,11 +191,15 @@ class ExternalMonitorPresentation(
                         if (req.seq <= lastHandledImeSeq) return@LaunchedEffect
                         lastHandledImeSeq = req.seq
                         if (req.show) {
+                            val activeHere = isShowing &&
+                                ownLifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
                             val focused = BridgeClient.sceneFlow.value.focusedWindow
-                            if (focused != null && !focused.isMinimized
-                                && (req.windowId <= 0 || req.windowId == focused.windowId)
-                                && !OpalImeFocusTracker.localComposeTextFieldFocused
+                            if (activeHere &&
+                                focused != null && !focused.isMinimized &&
+                                (req.windowId <= 0 || req.windowId == focused.windowId) &&
+                                !OpalImeFocusTracker.localComposeTextFieldFocused
                             ) {
+                                setPresentationNotFocusable(false)
                                 controller.showKeyboard(req.inputType)
                             }
                         } else if (imeVisible) {
@@ -223,7 +242,11 @@ class ExternalMonitorPresentation(
                                 isExternalMonitor = true,
                                 externalMonitorSummary = monitorSummary,
                                 imeActive = imeVisible,
-                                onToggleSoftKeyboard = { controller.toggleKeyboard(imeVisible) },
+                                onToggleSoftKeyboard = {
+                                    if (!imeVisible) setPresentationNotFocusable(false)
+                                    controller.toggleKeyboard(imeVisible)
+                                },
+                                onLocalOverlayNeedsFocusChanged = { localOverlayNeedsFocus = it },
                                 virtualCursorPx = if (pointerDispatcher.showVirtualCursorState.value) {
                                     pointerDispatcher.cursorPosState.value
                                 } else {
@@ -301,8 +324,20 @@ class ExternalMonitorPresentation(
     fun scrollAtCursor(hScroll: Float, vScroll: Float) = pointerDispatcher.scrollAtCursor(hScroll, vScroll)
 
     fun ensureImeHostActive() {
+        setPresentationNotFocusable(false)
         if (!imeVisible) {
             imeController?.showKeyboard()
+        }
+    }
+
+    private fun setPresentationNotFocusable(notFocusable: Boolean) {
+        val win = window ?: return
+        val hasFlag = (win.attributes.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) != 0
+        if (notFocusable == hasFlag) return
+        if (notFocusable) {
+            win.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        } else {
+            win.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
         }
     }
 

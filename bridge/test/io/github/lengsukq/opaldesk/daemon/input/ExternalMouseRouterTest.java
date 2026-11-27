@@ -365,6 +365,63 @@ public class ExternalMouseRouterTest {
     }
 
     @Test
+    public void compositeBluetoothKeyboardsAndAuxiliaryMultiAxisNodesRouteCleanlyForIme() {
+        // Keyboard auxiliary knob / multi-axis HID sub-devices must NEVER be classified as physical mice
+        assertTrue(MouseRoutingPolicy.isAuxiliaryKeyboardMediaSubDevice("T88-BT2 System Multi Axis"));
+        assertTrue(MouseRoutingPolicy.isAuxiliaryKeyboardMediaSubDevice("Keychron Consumer Control"));
+        assertFalse(MouseRoutingPolicy.isPhysicalMouse(
+                "T88-BT2 System Multi Axis", MouseRoutingPolicy.SOURCE_MOUSE, false, true));
+        assertFalse(MouseRoutingPolicy.isDedicatedPhysicalMouse(
+                "T88-BT2 System Multi Axis", MouseRoutingPolicy.SOURCE_MOUSE, 0, false, true));
+
+        // Dedicated mice still qualify as physical mice & dedicated mice
+        assertTrue(MouseRoutingPolicy.isDedicatedPhysicalMouse(
+                "BT5.0 Mouse", MouseRoutingPolicy.SOURCE_MOUSE, 0, false, true));
+        assertTrue(MouseRoutingPolicy.isDedicatedPhysicalMouse(
+                "Logitech MX Master 3S",
+                MouseRoutingPolicy.SOURCE_MOUSE | MouseRoutingPolicy.SOURCE_KEYBOARD,
+                1 /* KEYBOARD_TYPE_NON_ALPHABETIC */,
+                false,
+                true));
+
+        // Composite BT mechanical keyboards like T88-BT2 that expose SOURCE_MOUSE alongside
+        // KEYBOARD_TYPE_ALPHABETIC route directly to the focused OpalWin-* with OR without a separate mouse
+        int compositeSources = MouseRoutingPolicy.SOURCE_KEYBOARD | MouseRoutingPolicy.SOURCE_MOUSE;
+        assertTrue(MouseRoutingPolicy.isPhysicalKeyboardForWindowRouting(
+                "T88-BT2 Keyboard", compositeSources,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, true, true));
+        assertTrue(MouseRoutingPolicy.isPhysicalKeyboardForWindowRouting(
+                "T88-BT2 Keyboard", compositeSources,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC, false, true, false));
+
+        // Genuine keyboard+touchpad combos stay on outer display when they are the sole pointer,
+        // but route directly to the focused window whenever a separate dedicated mouse is connected
+        assertFalse(MouseRoutingPolicy.isPhysicalKeyboardForWindowRouting(
+                "Logitech K400 Touchpad",
+                compositeSources | MouseRoutingPolicy.SOURCE_TOUCHPAD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC,
+                false,
+                true,
+                false));
+        assertFalse(MouseRoutingPolicy.isPhysicalKeyboardForWindowRouting(
+                "Logitech MX Combo",
+                compositeSources,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC,
+                false,
+                true,
+                false));
+        assertTrue(MouseRoutingPolicy.isPhysicalKeyboardForWindowRouting(
+                "Logitech K400 Touchpad",
+                compositeSources | MouseRoutingPolicy.SOURCE_TOUCHPAD,
+                MouseRoutingPolicy.KEYBOARD_TYPE_ALPHABETIC,
+                false,
+                true,
+                true));
+        assertFalse(MouseRoutingPolicy.isPhysicalKeyboardForWindowRouting(
+                "BT5.0 Mouse", MouseRoutingPolicy.SOURCE_MOUSE, 0, false, true, true));
+    }
+
+    @Test
     public void remoteVirtualCastDisplaysIsolateHostPhysicalPeripherals() {
         assertTrue(MouseRoutingPolicy.isVirtualCastDisplayUniqueId("virtual:com.android.shell,2000,OpalDesk-Remote,68"));
         assertFalse(MouseRoutingPolicy.isVirtualCastDisplayUniqueId("local:4630947134992368259"));
@@ -378,5 +435,56 @@ public class ExternalMouseRouterTest {
         // LOCAL mode never routes to external displays
         assertFalse(MouseRoutingPolicy.shouldRoutePhysicalPeripheralsToDisplay(
                 BridgeProtocol.MOUSE_TARGET_LOCAL, 5, "local:4630947134992368259", 1));
+    }
+
+    @Test
+    public void portableTouchscreenExternalMonitorRoutesSoftImeToExternalDisplayHost() {
+        // External USB/HDMI portable touchscreen classification rejects built-in & virtual screens
+        assertTrue(MouseRoutingPolicy.isExternalTouchscreen(
+                "WingCool Touch", MouseRoutingPolicy.SOURCE_TOUCHSCREEN, false, true));
+        assertFalse(MouseRoutingPolicy.isExternalTouchscreen(
+                "fts_ts", MouseRoutingPolicy.SOURCE_TOUCHSCREEN, false, false));
+        assertFalse(MouseRoutingPolicy.isExternalTouchscreen(
+                "OpalDesk Virtual Touch 1", MouseRoutingPolicy.SOURCE_TOUCHSCREEN, false, true));
+        assertFalse(MouseRoutingPolicy.isExternalTouchscreen(
+                "BT5.0 Mouse", MouseRoutingPolicy.SOURCE_MOUSE, false, true));
+
+        // Physical external monitor forces LOCAL in AUTO when an external touchscreen is present
+        assertTrue(MouseRoutingPolicy.shouldForcePhysicalExternalDisplayLocalIme(
+                true, false, true, BridgeProtocol.DEX_IME_DISPLAY_AUTO));
+        assertFalse(MouseRoutingPolicy.shouldForcePhysicalExternalDisplayLocalIme(
+                true, false, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO));
+        assertTrue(MouseRoutingPolicy.shouldForcePhysicalExternalDisplayLocalIme(
+                true, false, false, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL));
+        assertFalse(MouseRoutingPolicy.shouldForcePhysicalExternalDisplayLocalIme(
+                true, false, true, BridgeProtocol.DEX_IME_DISPLAY_FALLBACK_HOST));
+
+        // Without physical keyboard on an external monitor, OpalWin-* keeps FALLBACK_DISPLAY so
+        // soft IME routes onto the physical external monitor's NativeImeBridgeHost instead of
+        // rendering inside an offscreen VirtualDisplay without system decors.
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_FALLBACK_DISPLAY,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(
+                        false, false, true, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL, false, true));
+        assertEquals(BridgeProtocol.DISPLAY_IME_POLICY_LOCAL,
+                MouseRoutingPolicy.resolveWindowDisplayImePolicy(
+                        true, false, true, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL, false, true));
+
+        // Fallback IME probe stays active for touchscreen external monitors even in ALWAYS_LOCAL
+        assertTrue(MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                false, false, false, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL, true));
+        assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                false, true, false, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL, true));
+
+        // Override Display 0 fallback IME onto the external monitor when ALWAYS_LOCAL or extTouch
+        assertTrue(MouseRoutingPolicy.shouldBridgeHostImeWhenSystemInputShown(
+                false, true, false, false, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL));
+        assertTrue(MouseRoutingPolicy.shouldBridgeHostImeWhenSystemInputShown(
+                false, true, false, true, BridgeProtocol.DEX_IME_DISPLAY_AUTO));
+        assertFalse(MouseRoutingPolicy.shouldBridgeHostImeWhenSystemInputShown(
+                false, true, false, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO));
+        assertFalse(MouseRoutingPolicy.shouldBridgeHostImeWhenSystemInputShown(
+                false, true, false, true, BridgeProtocol.DEX_IME_DISPLAY_FALLBACK_HOST));
+        assertFalse(MouseRoutingPolicy.shouldBridgeHostImeWhenSystemInputShown(
+                false, true, true, true, BridgeProtocol.DEX_IME_DISPLAY_ALWAYS_LOCAL));
     }
 }
