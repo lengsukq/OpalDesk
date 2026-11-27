@@ -25,6 +25,8 @@ public struct DeviceStatePayload: Decodable, Sendable, Equatable {
     public var tilingSlots: [String]
     public var tilingRatios: [Int]
     public var fullscreenWindowTitle: String
+    public var hostTopAppPackage: String
+    public var hostTopAppLabel: String
 
     public var layoutMode: OpalCastLayoutMode? {
         OpalCastLayoutMode(rawValue: activeLayoutMode)
@@ -51,7 +53,9 @@ public struct DeviceStatePayload: Decodable, Sendable, Equatable {
         topAppLabel: String = "",
         tilingSlots: [String] = [],
         tilingRatios: [Int] = [],
-        fullscreenWindowTitle: String = ""
+        fullscreenWindowTitle: String = "",
+        hostTopAppPackage: String = "",
+        hostTopAppLabel: String = ""
     ) {
         self.deviceName = deviceName
         self.sinkType = sinkType
@@ -74,6 +78,8 @@ public struct DeviceStatePayload: Decodable, Sendable, Equatable {
         self.tilingSlots = tilingSlots
         self.tilingRatios = tilingRatios
         self.fullscreenWindowTitle = fullscreenWindowTitle
+        self.hostTopAppPackage = hostTopAppPackage
+        self.hostTopAppLabel = hostTopAppLabel
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -81,6 +87,7 @@ public struct DeviceStatePayload: Decodable, Sendable, Equatable {
         case bitrateKbps, batteryPct, blackout, audioEnabled, injectStatus
         case adaptiveSingleEnabled, defaultSingleWidthDp, activeLayoutMode
         case topAppPackage, topAppLabel, tilingSlots, tilingRatios, fullscreenWindowTitle
+        case hostTopAppPackage, hostTopAppLabel
     }
 
     public init(from decoder: Decoder) throws {
@@ -108,7 +115,9 @@ public struct DeviceStatePayload: Decodable, Sendable, Equatable {
             topAppLabel: try c.decodeIfPresent(String.self, forKey: .topAppLabel) ?? "",
             tilingSlots: try c.decodeIfPresent([String].self, forKey: .tilingSlots) ?? [],
             tilingRatios: try c.decodeIfPresent([Int].self, forKey: .tilingRatios) ?? [],
-            fullscreenWindowTitle: try c.decodeIfPresent(String.self, forKey: .fullscreenWindowTitle) ?? ""
+            fullscreenWindowTitle: try c.decodeIfPresent(String.self, forKey: .fullscreenWindowTitle) ?? "",
+            hostTopAppPackage: try c.decodeIfPresent(String.self, forKey: .hostTopAppPackage) ?? "",
+            hostTopAppLabel: try c.decodeIfPresent(String.self, forKey: .hostTopAppLabel) ?? ""
         )
     }
 

@@ -18,6 +18,7 @@ public struct DisplayCanvasConfig: Equatable, Sendable {
     public let isCanvasInteractive: Bool
     public let focusGeneration: Int
     public let hideLocalCursor: Bool
+    public let enableEdgeNavigationGestures: Bool
 
     public init(
         videoWidth: Int,
@@ -25,7 +26,8 @@ public struct DisplayCanvasConfig: Equatable, Sendable {
         mapCommandToCtrl: Bool,
         isCanvasInteractive: Bool = true,
         focusGeneration: Int = 0,
-        hideLocalCursor: Bool = false
+        hideLocalCursor: Bool = false,
+        enableEdgeNavigationGestures: Bool = true
     ) {
         self.videoWidth = videoWidth
         self.videoHeight = videoHeight
@@ -33,6 +35,7 @@ public struct DisplayCanvasConfig: Equatable, Sendable {
         self.isCanvasInteractive = isCanvasInteractive
         self.focusGeneration = focusGeneration
         self.hideLocalCursor = hideLocalCursor
+        self.enableEdgeNavigationGestures = enableEdgeNavigationGestures
     }
 }
 
@@ -52,6 +55,7 @@ public struct DisplayCanvasCallbacks {
     public let onQuickLauncher: (() -> Void)?
     public let onTogglePin: (() -> Void)?
     public let onThreeFingerSwipe: ((ThreeFingerSwipeDirection) -> Void)?
+    public let onEdgeGestureChange: ((TrackpadEdgeZone?) -> Void)?
 
     public init(
         onMouse: @escaping (InputMousePayload) -> Void,
@@ -66,7 +70,8 @@ public struct DisplayCanvasCallbacks {
         onCanvasInteract: (() -> Void)? = nil,
         onQuickLauncher: (() -> Void)? = nil,
         onTogglePin: (() -> Void)? = nil,
-        onThreeFingerSwipe: ((ThreeFingerSwipeDirection) -> Void)? = nil
+        onThreeFingerSwipe: ((ThreeFingerSwipeDirection) -> Void)? = nil,
+        onEdgeGestureChange: ((TrackpadEdgeZone?) -> Void)? = nil
     ) {
         self.onMouse = onMouse
         self.onTouch = onTouch
@@ -81,6 +86,7 @@ public struct DisplayCanvasCallbacks {
         self.onQuickLauncher = onQuickLauncher
         self.onTogglePin = onTogglePin
         self.onThreeFingerSwipe = onThreeFingerSwipe
+        self.onEdgeGestureChange = onEdgeGestureChange
     }
 }
 

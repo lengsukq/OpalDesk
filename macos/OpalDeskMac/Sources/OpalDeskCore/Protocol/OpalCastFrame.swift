@@ -101,6 +101,22 @@ public struct OpalCastFrame: Sendable, Equatable {
     public static func ping(_ pingId: UInt64) -> OpalCastFrame {
         OpalCastFrame(type: .ping, payload: PingPongPayload(pingId: pingId).encode())
     }
+
+    public static func notificationAction(_ payload: NotificationActionPayload) throws -> OpalCastFrame {
+        OpalCastFrame(type: .notificationAction, payload: try payload.encode())
+    }
+
+    public static func mediaAction(_ payload: MediaActionPayload) throws -> OpalCastFrame {
+        OpalCastFrame(type: .mediaAction, payload: try payload.encode())
+    }
+
+    public static func fileOpRequest(_ payload: FileOpRequestPayload) throws -> OpalCastFrame {
+        OpalCastFrame(type: .fileOpRequest, payload: try payload.encode())
+    }
+
+    public static func apkInstallRequest(_ payload: ApkInstallRequestPayload) throws -> OpalCastFrame {
+        OpalCastFrame(type: .apkInstallRequest, payload: try payload.encode())
+    }
 }
 
 /// Streaming ring-buffered decoder for TCP byte streams that handles arbitrary
