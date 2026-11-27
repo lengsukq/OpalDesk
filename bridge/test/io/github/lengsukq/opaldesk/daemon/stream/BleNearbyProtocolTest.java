@@ -26,9 +26,12 @@ public class BleNearbyProtocolTest {
 
     @Test
     public void testConstantsAnd12ByteManufacturerDataEncodeDecode() {
-        assertEquals("7A4F0001-6F70-616C-6465-736B-000000000001", BleNearbyProtocol.SERVICE_UUID);
-        assertEquals("7A4F0002-6F70-616C-6465-736B-000000000001", BleNearbyProtocol.CHAR_CHALLENGE_UUID);
-        assertEquals("7A4F0003-6F70-616C-6465-736B-000000000001", BleNearbyProtocol.CHAR_COMMAND_UUID);
+        assertEquals("7A4F0001-6F70-616C-6465-736B00000001", BleNearbyProtocol.SERVICE_UUID);
+        assertEquals("7A4F0002-6F70-616C-6465-736B00000001", BleNearbyProtocol.CHAR_CHALLENGE_UUID);
+        assertEquals("7A4F0003-6F70-616C-6465-736B00000001", BleNearbyProtocol.CHAR_COMMAND_UUID);
+        assertNotNull(java.util.UUID.fromString(BleNearbyProtocol.SERVICE_UUID));
+        assertNotNull(java.util.UUID.fromString(BleNearbyProtocol.CHAR_CHALLENGE_UUID));
+        assertNotNull(java.util.UUID.fromString(BleNearbyProtocol.CHAR_COMMAND_UUID));
         assertEquals(0x504F, BleNearbyProtocol.MANUFACTURER_ID);
         assertEquals(1, BleNearbyProtocol.PROTOCOL_VERSION);
 

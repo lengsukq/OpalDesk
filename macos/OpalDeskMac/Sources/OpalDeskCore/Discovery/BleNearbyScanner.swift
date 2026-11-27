@@ -92,7 +92,7 @@ public enum BleNearbyError: Error, Sendable, Equatable, LocalizedError {
 // MARK: - BleNearbyScanner
 
 /// Passively scans for nearby paired Android OpalDesk devices advertising BLE service
-/// `7A4F0001-6F70-616C-6465-736B-000000000001`, filters strictly against `TrustStore`,
+/// `7A4F0001-6F70-616C-6465-736B00000001`, filters strictly against `TrustStore`,
 /// expires unseen devices after 20 seconds, and performs authenticated GATT hotspot triggers.
 public final class BleNearbyScanner: Sendable {
     private static let logger = Logger(subsystem: "io.github.lengsukq.opaldesk.mac", category: "ble")

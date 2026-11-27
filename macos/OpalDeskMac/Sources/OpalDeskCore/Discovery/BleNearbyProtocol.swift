@@ -184,9 +184,9 @@ public struct HotspotCommandResponse: Codable, Sendable, Equatable {
 // MARK: - Wire Codec & Crypto (Exact Parity with Android BleNearbyProtocol.java)
 
 public enum BleNearbyProtocol {
-    public static let serviceUUIDString = "7A4F0001-6F70-616C-6465-736B-000000000001"
-    public static let challengeCharacteristicUUIDString = "7A4F0002-6F70-616C-6465-736B-000000000001"
-    public static let commandCharacteristicUUIDString = "7A4F0003-6F70-616C-6465-736B-000000000001"
+    public static let serviceUUIDString = "7A4F0001-6F70-616C-6465-736B00000001"
+    public static let challengeCharacteristicUUIDString = "7A4F0002-6F70-616C-6465-736B00000001"
+    public static let commandCharacteristicUUIDString = "7A4F0003-6F70-616C-6465-736B00000001"
 
     /// 2-byte BLE company identifier `"OP"` (`0x504F`), transmitted little-endian (`[0x4F, 0x50]`).
     public static let manufacturerId: UInt16 = 0x504F

@@ -9,9 +9,12 @@ struct BleNearbyProtocolTests {
 
     @Test("BLE UUID constants and 12-byte / 14-byte manufacturer data layout match Android BleNearbyProtocol.java byte-for-byte")
     func manufacturerDataExactByteLayout() throws {
-        #expect(BleNearbyProtocol.serviceUUIDString == "7A4F0001-6F70-616C-6465-736B-000000000001")
-        #expect(BleNearbyProtocol.challengeCharacteristicUUIDString == "7A4F0002-6F70-616C-6465-736B-000000000001")
-        #expect(BleNearbyProtocol.commandCharacteristicUUIDString == "7A4F0003-6F70-616C-6465-736B-000000000001")
+        #expect(BleNearbyProtocol.serviceUUIDString == "7A4F0001-6F70-616C-6465-736B00000001")
+        #expect(BleNearbyProtocol.challengeCharacteristicUUIDString == "7A4F0002-6F70-616C-6465-736B00000001")
+        #expect(BleNearbyProtocol.commandCharacteristicUUIDString == "7A4F0003-6F70-616C-6465-736B00000001")
+        #expect(UUID(uuidString: BleNearbyProtocol.serviceUUIDString) != nil)
+        #expect(UUID(uuidString: BleNearbyProtocol.challengeCharacteristicUUIDString) != nil)
+        #expect(UUID(uuidString: BleNearbyProtocol.commandCharacteristicUUIDString) != nil)
         #expect(BleNearbyProtocol.manufacturerId == 0x504F)
 
         let payload = BleAdvertisementPayload(

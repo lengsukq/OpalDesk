@@ -19,9 +19,9 @@ import javax.crypto.spec.SecretKeySpec;
  * {@code TrustStoreManager} (so plaintext {@code authToken} never touches disk on Android).
  */
 public final class BleNearbyProtocol {
-    public static final String SERVICE_UUID = "7A4F0001-6F70-616C-6465-736B-000000000001";
-    public static final String CHAR_CHALLENGE_UUID = "7A4F0002-6F70-616C-6465-736B-000000000001";
-    public static final String CHAR_COMMAND_UUID = "7A4F0003-6F70-616C-6465-736B-000000000001";
+    public static final String SERVICE_UUID = "7A4F0001-6F70-616C-6465-736B00000001";
+    public static final String CHAR_CHALLENGE_UUID = "7A4F0002-6F70-616C-6465-736B00000001";
+    public static final String CHAR_COMMAND_UUID = "7A4F0003-6F70-616C-6465-736B00000001";
 
     public static final int MANUFACTURER_ID = 0x504F;
     public static final int PROTOCOL_VERSION = 1;
