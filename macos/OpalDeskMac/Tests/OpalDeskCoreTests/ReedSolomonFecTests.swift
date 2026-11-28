@@ -25,10 +25,16 @@ struct ReedSolomonFecTests {
         let shardSize = 1200
         let codec = try ReedSolomonFec(dataShards: dataCount, parityShards: parityCount)
 
-        let originalData: [Data] = (0..<dataCount).map { shardIdx in
-            Data((0..<shardSize).map { byteIdx in
-                UInt8((shardIdx * 73 + byteIdx * 19 + 41) & 0xFF)
-            })
+        var originalData: [Data] = []
+        originalData.reserveCapacity(dataCount)
+        for shardIdx in 0..<dataCount {
+            var bytes = [UInt8]()
+            bytes.reserveCapacity(shardSize)
+            for byteIdx in 0..<shardSize {
+                let raw = (shardIdx * 73 + byteIdx * 19 + 41) & 0xFF
+                bytes.append(UInt8(raw))
+            }
+            originalData.append(Data(bytes))
         }
         let parityShards = try codec.encodeParity(data: originalData)
         #expect(parityShards.count == parityCount)
