@@ -1,19 +1,18 @@
 package io.github.lengsukq.opaldesk.prefs
 
 import android.content.Context
-import io.github.lengsukq.opaldesk.compositor.DockAppearancePolicy
+import android.content.SharedPreferences
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackQuotaStorage
-import io.github.lengsukq.opaldesk.external.CustomResolutionPolicy
 import io.github.lengsukq.opaldesk.external.CustomResolutionSpec
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import java.util.UUID
 
 /**
  * SharedPreferences store + live reactive flows for OpalDesk preferences:
  * appearance theme (Light Frosted Glass / Follow System / Dark), wallpapers, pinned apps,
  * external monitor UI scaling, stepless trackpad pointer speed, and activation preferences.
+ *
+ * Aggregates [DisplayAndInputPrefs] and [CastAndCompanionPrefs] behind a single
+ * backward-compatible facade.
  */
 object AppPrefs {
     const val THEME_LIGHT = 0
@@ -41,961 +40,392 @@ object AppPrefs {
     const val MAX_SPOTLIGHT_RECENTS = 5
 
     private const val PREFS_NAME = "opaldesk_v2_prefs"
-    private const val KEY_AUTO_ROOT = "auto_root"
-    private const val KEY_AUTO_SHIZUKU = "auto_shizuku"
-    private const val KEY_ROOT_ENHANCE = "root_enhance_optional"
-    private const val KEY_AUTO_ENTER_DEX = "auto_enter_dex_on_launch_v1"
-    private const val KEY_AUTO_EXT_DISPLAY = "auto_project_ext_display"
-    private const val KEY_AUTO_BLACKOUT_ON_CAST = "auto_blackout_on_cast_v1"
-    private const val KEY_AUTO_SHOW_PHONE_TRACKPAD = "auto_show_phone_trackpad_on_external"
-    private const val KEY_EXTERNAL_PROJECTION_MODE = "external_projection_mode_v1"
-    private const val KEY_EXTERNAL_OVERSCAN_PCT = "external_overscan_pct_v1"
-    private const val KEY_PINNED_PKGS = "pinned_dock_pkgs"
-    private const val KEY_DESKTOP_SHORTCUTS = "desktop_shortcut_pkgs"
-    private const val KEY_DOCK_PINNED = "dock_pinned_pkgs_v2"
-    private const val KEY_WALLPAPER_PRESET = "desktop_wallpaper_preset"
-    private const val KEY_CUSTOM_WALLPAPER_PATH = "custom_wallpaper_path"
-    private const val KEY_EXTERNAL_UI_SCALE = "external_ui_scale"
-    private const val KEY_TRACKPAD_SENSITIVITY = "trackpad_sensitivity"
-    private const val KEY_THEME_MODE = "appearance_theme_mode"
-    private const val KEY_MOUSE_TARGET = "physical_mouse_target"
-    private const val KEY_SORT_APPS_BY_USAGE = "sort_apps_by_usage"
-    private const val KEY_APP_LAUNCH_COUNTS = "app_launch_counts_v1"
-    private const val KEY_AUTO_CHECK_UPDATE = "auto_check_app_update"
-    private const val KEY_LAST_UPDATE_CHECK_MS = "last_update_check_ms"
-    private const val KEY_IGNORED_UPDATE_TAG = "ignored_update_tag"
-    private const val KEY_UPDATE_DOWNLOAD_ROUTE = "update_download_route"
-    private const val KEY_INSTALLATION_ID = "anonymous_installation_id_v1"
-    private const val KEY_FEEDBACK_REPORT_DATE = "feedback_report_date_v1"
-    private const val KEY_FEEDBACK_REPORT_COUNT = "feedback_report_count_v1"
-    private const val KEY_FEEDBACK_USERNAME = "feedback_reporter_username_v1"
-    private const val KEY_REMOTE_MIC_ENABLED = "remote_mic_uplink_enabled_v1"
-    private const val KEY_REMOTE_CAMERA_ENABLED = "remote_camera_mapping_enabled_v1"
-    private const val KEY_AUDIO_ROUTE_MODE = "audio_route_mode_v2"
-    private const val KEY_DOCK_VISIBLE = "dock_visible_v1"
-    private const val KEY_DOCK_OPACITY = "dock_opacity_v1"
-    private const val KEY_DOCK_SCALE = "dock_scale_v1"
-    private const val KEY_GLOBAL_SHORTCUTS_ENABLED = "global_shortcuts_enabled_v1"
-    private const val KEY_DISABLED_SHORTCUT_IDS = "disabled_shortcut_ids_v1"
-    private const val KEY_SHOW_DESKTOP_GUIDE_ICON = "show_desktop_guide_icon_v1"
-    private const val KEY_CUSTOM_RES_PRESETS = "custom_resolution_presets_v1"
-    private const val KEY_AUTO_CUSTOM_RES_ENABLED = "auto_custom_resolution_enabled_v1"
-    private const val KEY_EXTERNAL_NATIVE_1TO1_NO_SCALING = "external_native_1to1_no_scaling_v1"
-    private const val KEY_DEFAULT_CUSTOM_RES_W = "default_custom_resolution_w_v1"
-    private const val KEY_DEFAULT_CUSTOM_RES_H = "default_custom_resolution_h_v1"
-    private const val KEY_DEFAULT_CUSTOM_RES_FPS = "default_custom_resolution_fps_v1"
-    private const val KEY_USB_TETHER_CAST_ENABLED = "usb_tether_cast_enabled_v1"
-    private const val KEY_DEX_IME_DISPLAY_MODE = "dex_ime_display_mode_v1"
-    private const val KEY_DEX_LOCKED_IME_ID = "dex_locked_ime_id_v1"
-    private const val KEY_MUTE_HOST_IME_ON_CAST = "mute_host_ime_on_cast_v1"
-    private const val KEY_HARD_KBD_SOFT_IME_MODE = "hard_kbd_soft_ime_mode_v1"
-    private const val KEY_AUTO_BRIDGE_IME_ON_CAST = "auto_bridge_ime_on_cast_v1"
-    private const val KEY_SPOTLIGHT_RECENTS = "spotlight_recent_ids_v1"
-    private const val KEY_CALL_CONTROL_SYNC_ENABLED = "call_control_sync_enabled_v1"
-    private const val KEY_BLE_NEARBY_ENABLED = "ble_nearby_enabled_v1"
-    private const val KEY_LANGUAGE_PREF = "app_language_pref_v1"
-
-    private val DEFAULT_PINNED = listOf(
-        "com.android.chrome",
-        "com.android.vending",
-        "com.android.settings",
-        "com.google.android.youtube",
-        "com.tencent.mm",
-        "tv.danmaku.bili",
-    )
 
     @Volatile
     private var flowsHydrated = false
 
-    private val _themeModeFlow = MutableStateFlow(THEME_LIGHT)
-    val themeModeFlow: StateFlow<Int> = _themeModeFlow.asStateFlow()
+    val themeModeFlow: StateFlow<Int> = DisplayAndInputPrefs.themeModeFlow
+    val wallpaperPresetFlow: StateFlow<Int> = DisplayAndInputPrefs.wallpaperPresetFlow
+    val trackpadSensitivityFlow: StateFlow<Float> = DisplayAndInputPrefs.trackpadSensitivityFlow
+    val externalUiScaleFlow: StateFlow<Float> = DisplayAndInputPrefs.externalUiScaleFlow
+    val mouseTargetFlow: StateFlow<Int> = DisplayAndInputPrefs.mouseTargetFlow
+    val desktopShortcutsFlow: StateFlow<List<String>> = DisplayAndInputPrefs.desktopShortcutsFlow
+    val dockPinnedFlow: StateFlow<List<String>> = DisplayAndInputPrefs.dockPinnedFlow
+    val customWallpaperPathFlow: StateFlow<String> = DisplayAndInputPrefs.customWallpaperPathFlow
+    val sortAppsByUsageFlow: StateFlow<Boolean> = CastAndCompanionPrefs.sortAppsByUsageFlow
+    val appLaunchCountsFlow: StateFlow<Map<String, Int>> = CastAndCompanionPrefs.appLaunchCountsFlow
+    val autoCheckUpdateFlow: StateFlow<Boolean> = CastAndCompanionPrefs.autoCheckUpdateFlow
+    val autoShowPhoneTrackpadFlow: StateFlow<Boolean> = DisplayAndInputPrefs.autoShowPhoneTrackpadFlow
+    val autoBlackoutOnCastFlow: StateFlow<Boolean> = CastAndCompanionPrefs.autoBlackoutOnCastFlow
+    val autoEnterDexFlow: StateFlow<Boolean> = DisplayAndInputPrefs.autoEnterDexFlow
+    val externalProjectionModeFlow: StateFlow<Int> = DisplayAndInputPrefs.externalProjectionModeFlow
+    val externalOverscanPctFlow: StateFlow<Float> = DisplayAndInputPrefs.externalOverscanPctFlow
+    val updateDownloadRouteFlow: StateFlow<Int> = CastAndCompanionPrefs.updateDownloadRouteFlow
+    val remoteMicEnabledFlow: StateFlow<Boolean> = CastAndCompanionPrefs.remoteMicEnabledFlow
+    val remoteCameraEnabledFlow: StateFlow<Boolean> = CastAndCompanionPrefs.remoteCameraEnabledFlow
+    val audioRouteModeFlow: StateFlow<Int> = CastAndCompanionPrefs.audioRouteModeFlow
+    val dockVisibleFlow: StateFlow<Boolean> = DisplayAndInputPrefs.dockVisibleFlow
+    val dockOpacityFlow: StateFlow<Float> = DisplayAndInputPrefs.dockOpacityFlow
+    val dockScaleFlow: StateFlow<Float> = DisplayAndInputPrefs.dockScaleFlow
+    val globalShortcutsEnabledFlow: StateFlow<Boolean> = DisplayAndInputPrefs.globalShortcutsEnabledFlow
+    val disabledShortcutIdsFlow: StateFlow<Set<String>> = DisplayAndInputPrefs.disabledShortcutIdsFlow
+    val showDesktopGuideIconFlow: StateFlow<Boolean> = DisplayAndInputPrefs.showDesktopGuideIconFlow
+    val customResolutionPresetsFlow: StateFlow<List<CustomResolutionSpec>> = DisplayAndInputPrefs.customResolutionPresetsFlow
+    val autoCustomResolutionEnabledFlow: StateFlow<Boolean> = DisplayAndInputPrefs.autoCustomResolutionEnabledFlow
+    val externalNative1To1Flow: StateFlow<Boolean> = DisplayAndInputPrefs.externalNative1To1Flow
+    val defaultCustomResolutionFlow: StateFlow<CustomResolutionSpec> = DisplayAndInputPrefs.defaultCustomResolutionFlow
+    val usbTetherCastEnabledFlow: StateFlow<Boolean> = CastAndCompanionPrefs.usbTetherCastEnabledFlow
+    val dexImeDisplayModeFlow: StateFlow<Int> = DisplayAndInputPrefs.dexImeDisplayModeFlow
+    val dexLockedImeIdFlow: StateFlow<String> = DisplayAndInputPrefs.dexLockedImeIdFlow
+    val muteHostImeOnCastFlow: StateFlow<Boolean> = DisplayAndInputPrefs.muteHostImeOnCastFlow
+    val hardKbdSoftImeModeFlow: StateFlow<Int> = DisplayAndInputPrefs.hardKbdSoftImeModeFlow
+    val autoBridgeImeOnCastFlow: StateFlow<Boolean> = DisplayAndInputPrefs.autoBridgeImeOnCastFlow
+    val spotlightRecentsFlow: StateFlow<List<String>> = DisplayAndInputPrefs.spotlightRecentsFlow
+    val callControlSyncEnabledFlow: StateFlow<Boolean> = CastAndCompanionPrefs.callControlSyncEnabledFlow
+    val bleNearbyEnabledFlow: StateFlow<Boolean> = CastAndCompanionPrefs.bleNearbyEnabledFlow
+    val languagePrefFlow: StateFlow<String> = CastAndCompanionPrefs.languagePrefFlow
 
-    private val _wallpaperPresetFlow = MutableStateFlow(0)
-    val wallpaperPresetFlow: StateFlow<Int> = _wallpaperPresetFlow.asStateFlow()
-
-    private val _trackpadSensitivityFlow = MutableStateFlow(DEFAULT_TRACKPAD_SENSITIVITY)
-    val trackpadSensitivityFlow: StateFlow<Float> = _trackpadSensitivityFlow.asStateFlow()
-
-    private val _externalUiScaleFlow = MutableStateFlow(1.25f)
-    val externalUiScaleFlow: StateFlow<Float> = _externalUiScaleFlow.asStateFlow()
-
-    private val _mouseTargetFlow = MutableStateFlow(MOUSE_TARGET_EXTERNAL)
-    val mouseTargetFlow: StateFlow<Int> = _mouseTargetFlow.asStateFlow()
-
-    private val _desktopShortcutsFlow = MutableStateFlow(DEFAULT_PINNED)
-    val desktopShortcutsFlow: StateFlow<List<String>> = _desktopShortcutsFlow.asStateFlow()
-
-    private val _dockPinnedFlow = MutableStateFlow(DEFAULT_PINNED.take(MAX_DOCK_PINNED))
-    val dockPinnedFlow: StateFlow<List<String>> = _dockPinnedFlow.asStateFlow()
-
-    private val _customWallpaperPathFlow = MutableStateFlow("")
-    val customWallpaperPathFlow: StateFlow<String> = _customWallpaperPathFlow.asStateFlow()
-
-    private val _sortAppsByUsageFlow = MutableStateFlow(true)
-    val sortAppsByUsageFlow: StateFlow<Boolean> = _sortAppsByUsageFlow.asStateFlow()
-
-    private val _appLaunchCountsFlow = MutableStateFlow<Map<String, Int>>(emptyMap())
-    val appLaunchCountsFlow: StateFlow<Map<String, Int>> = _appLaunchCountsFlow.asStateFlow()
-
-    private val _autoCheckUpdateFlow = MutableStateFlow(true)
-    val autoCheckUpdateFlow: StateFlow<Boolean> = _autoCheckUpdateFlow.asStateFlow()
-
-    private val _autoShowPhoneTrackpadFlow = MutableStateFlow(true)
-    val autoShowPhoneTrackpadFlow: StateFlow<Boolean> = _autoShowPhoneTrackpadFlow.asStateFlow()
-
-    private val _autoBlackoutOnCastFlow = MutableStateFlow(false)
-    val autoBlackoutOnCastFlow: StateFlow<Boolean> = _autoBlackoutOnCastFlow.asStateFlow()
-
-    private val _autoEnterDexFlow = MutableStateFlow(false)
-    val autoEnterDexFlow: StateFlow<Boolean> = _autoEnterDexFlow.asStateFlow()
-
-    private val _externalProjectionModeFlow = MutableStateFlow(PROJECTION_MODE_AUTO)
-    val externalProjectionModeFlow: StateFlow<Int> = _externalProjectionModeFlow.asStateFlow()
-
-    private val _externalOverscanPctFlow = MutableStateFlow(DEFAULT_OVERSCAN_PCT)
-    val externalOverscanPctFlow: StateFlow<Float> = _externalOverscanPctFlow.asStateFlow()
-
-    private val _updateDownloadRouteFlow = MutableStateFlow(UPDATE_ROUTE_DIRECT)
-    val updateDownloadRouteFlow: StateFlow<Int> = _updateDownloadRouteFlow.asStateFlow()
-
-    private val _remoteMicEnabledFlow = MutableStateFlow(false)
-    val remoteMicEnabledFlow: StateFlow<Boolean> = _remoteMicEnabledFlow.asStateFlow()
-
-    private val _remoteCameraEnabledFlow = MutableStateFlow(false)
-    val remoteCameraEnabledFlow: StateFlow<Boolean> = _remoteCameraEnabledFlow.asStateFlow()
-
-    private val _audioRouteModeFlow = MutableStateFlow(
-        io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.SPLIT_BY_APP,
-    )
-    val audioRouteModeFlow: StateFlow<Int> = _audioRouteModeFlow.asStateFlow()
-
-    private val _dockVisibleFlow = MutableStateFlow(true)
-    val dockVisibleFlow: StateFlow<Boolean> = _dockVisibleFlow.asStateFlow()
-
-    private val _dockOpacityFlow = MutableStateFlow(DockAppearancePolicy.DEFAULT_OPACITY)
-    val dockOpacityFlow: StateFlow<Float> = _dockOpacityFlow.asStateFlow()
-
-    private val _dockScaleFlow = MutableStateFlow(DockAppearancePolicy.DEFAULT_SCALE)
-    val dockScaleFlow: StateFlow<Float> = _dockScaleFlow.asStateFlow()
-
-    private val _globalShortcutsEnabledFlow = MutableStateFlow(true)
-    val globalShortcutsEnabledFlow: StateFlow<Boolean> = _globalShortcutsEnabledFlow.asStateFlow()
-
-    private val _disabledShortcutIdsFlow = MutableStateFlow<Set<String>>(emptySet())
-    val disabledShortcutIdsFlow: StateFlow<Set<String>> = _disabledShortcutIdsFlow.asStateFlow()
-
-    private val _showDesktopGuideIconFlow = MutableStateFlow(true)
-    val showDesktopGuideIconFlow: StateFlow<Boolean> = _showDesktopGuideIconFlow.asStateFlow()
-
-    private val _customResolutionPresetsFlow = MutableStateFlow<List<CustomResolutionSpec>>(emptyList())
-    val customResolutionPresetsFlow: StateFlow<List<CustomResolutionSpec>> = _customResolutionPresetsFlow.asStateFlow()
-
-    private val _autoCustomResolutionEnabledFlow = MutableStateFlow(false)
-    val autoCustomResolutionEnabledFlow: StateFlow<Boolean> = _autoCustomResolutionEnabledFlow.asStateFlow()
-
-    private val _externalNative1To1Flow = MutableStateFlow(false)
-    val externalNative1To1Flow: StateFlow<Boolean> = _externalNative1To1Flow.asStateFlow()
-
-    private val _defaultCustomResolutionFlow = MutableStateFlow(CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC)
-    val defaultCustomResolutionFlow: StateFlow<CustomResolutionSpec> = _defaultCustomResolutionFlow.asStateFlow()
-
-    private val _usbTetherCastEnabledFlow = MutableStateFlow(false)
-    val usbTetherCastEnabledFlow: StateFlow<Boolean> = _usbTetherCastEnabledFlow.asStateFlow()
-
-    private val _dexImeDisplayModeFlow = MutableStateFlow(
-        io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.AUTO,
-    )
-    val dexImeDisplayModeFlow: StateFlow<Int> = _dexImeDisplayModeFlow.asStateFlow()
-
-    private val _dexLockedImeIdFlow = MutableStateFlow("")
-    val dexLockedImeIdFlow: StateFlow<String> = _dexLockedImeIdFlow.asStateFlow()
-
-    private val _muteHostImeOnCastFlow = MutableStateFlow(false)
-    val muteHostImeOnCastFlow: StateFlow<Boolean> = _muteHostImeOnCastFlow.asStateFlow()
-
-    private val _hardKbdSoftImeModeFlow = MutableStateFlow(
-        io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM,
-    )
-    val hardKbdSoftImeModeFlow: StateFlow<Int> = _hardKbdSoftImeModeFlow.asStateFlow()
-
-    private val _autoBridgeImeOnCastFlow = MutableStateFlow(true)
-    val autoBridgeImeOnCastFlow: StateFlow<Boolean> = _autoBridgeImeOnCastFlow.asStateFlow()
-
-    private val _spotlightRecentsFlow = MutableStateFlow<List<String>>(emptyList())
-    val spotlightRecentsFlow: StateFlow<List<String>> = _spotlightRecentsFlow.asStateFlow()
-
-    private val _callControlSyncEnabledFlow = MutableStateFlow(false)
-    val callControlSyncEnabledFlow: StateFlow<Boolean> = _callControlSyncEnabledFlow.asStateFlow()
-
-    private val _bleNearbyEnabledFlow = MutableStateFlow(false)
-    val bleNearbyEnabledFlow: StateFlow<Boolean> = _bleNearbyEnabledFlow.asStateFlow()
-
-    private val _languagePrefFlow = MutableStateFlow(OpalLocalePolicy.LANG_SYSTEM)
-    val languagePrefFlow: StateFlow<String> = _languagePrefFlow.asStateFlow()
-
-    private fun prefs(ctx: Context?) =
+    internal fun sharedPrefs(ctx: Context?): SharedPreferences? =
         (ctx?.applicationContext ?: ctx)?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun hydrateFlows(ctx: Context?) {
         if (flowsHydrated || ctx == null) return
         flowsHydrated = true
-        val p = prefs(ctx) ?: return
-        _themeModeFlow.value = p.getInt(KEY_THEME_MODE, THEME_LIGHT).coerceIn(THEME_LIGHT, THEME_DARK)
-        _wallpaperPresetFlow.value = p.getInt(KEY_WALLPAPER_PRESET, 0).coerceIn(0, 3)
-        _customWallpaperPathFlow.value = p.getString(KEY_CUSTOM_WALLPAPER_PATH, "").orEmpty()
-        _trackpadSensitivityFlow.value = p.getFloat(KEY_TRACKPAD_SENSITIVITY, DEFAULT_TRACKPAD_SENSITIVITY)
-            .coerceIn(MIN_TRACKPAD_SENSITIVITY, MAX_TRACKPAD_SENSITIVITY)
-        _externalUiScaleFlow.value = p.getFloat(KEY_EXTERNAL_UI_SCALE, 1.25f).coerceIn(0.85f, 2.0f)
-        _mouseTargetFlow.value = p.getInt(KEY_MOUSE_TARGET, MOUSE_TARGET_EXTERNAL)
-            .coerceIn(MOUSE_TARGET_LOCAL, MOUSE_TARGET_EXTERNAL)
-        _desktopShortcutsFlow.value = loadPkgList(p, KEY_DESKTOP_SHORTCUTS, fallbackKey = KEY_PINNED_PKGS)
-        _dockPinnedFlow.value = loadPkgList(p, KEY_DOCK_PINNED, fallbackKey = KEY_PINNED_PKGS).take(MAX_DOCK_PINNED)
-        _sortAppsByUsageFlow.value = p.getBoolean(KEY_SORT_APPS_BY_USAGE, true)
-        _appLaunchCountsFlow.value = parseLaunchCounts(p.getString(KEY_APP_LAUNCH_COUNTS, null))
-        _autoCheckUpdateFlow.value = p.getBoolean(KEY_AUTO_CHECK_UPDATE, true)
-        _autoShowPhoneTrackpadFlow.value = p.getBoolean(KEY_AUTO_SHOW_PHONE_TRACKPAD, true)
-        _autoBlackoutOnCastFlow.value = p.getBoolean(KEY_AUTO_BLACKOUT_ON_CAST, false)
-        _autoEnterDexFlow.value = p.getBoolean(KEY_AUTO_ENTER_DEX, false)
-        _externalProjectionModeFlow.value = p.getInt(KEY_EXTERNAL_PROJECTION_MODE, PROJECTION_MODE_AUTO)
-            .coerceIn(PROJECTION_MODE_AUTO, PROJECTION_MODE_PRESENTATION)
-        _externalOverscanPctFlow.value = p.getFloat(KEY_EXTERNAL_OVERSCAN_PCT, DEFAULT_OVERSCAN_PCT)
-            .coerceIn(MIN_OVERSCAN_PCT, MAX_OVERSCAN_PCT)
-        _updateDownloadRouteFlow.value = p.getInt(KEY_UPDATE_DOWNLOAD_ROUTE, UPDATE_ROUTE_DIRECT)
-            .coerceIn(UPDATE_ROUTE_DIRECT, UPDATE_ROUTE_PROXY_2)
-        _remoteMicEnabledFlow.value = p.getBoolean(KEY_REMOTE_MIC_ENABLED, false)
-        _remoteCameraEnabledFlow.value = p.getBoolean(KEY_REMOTE_CAMERA_ENABLED, false)
-        _audioRouteModeFlow.value = p.getInt(
-            KEY_AUDIO_ROUTE_MODE,
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.SPLIT_BY_APP,
-        ).coerceIn(
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.ALL_TO_DEX,
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.SPLIT_BY_APP,
-        )
-        _dockVisibleFlow.value = p.getBoolean(KEY_DOCK_VISIBLE, true)
-        _dockOpacityFlow.value = DockAppearancePolicy.clampOpacity(
-            p.getFloat(KEY_DOCK_OPACITY, DockAppearancePolicy.DEFAULT_OPACITY),
-        )
-        _dockScaleFlow.value = DockAppearancePolicy.clampScale(
-            p.getFloat(KEY_DOCK_SCALE, DockAppearancePolicy.DEFAULT_SCALE),
-        )
-        _globalShortcutsEnabledFlow.value = p.getBoolean(KEY_GLOBAL_SHORTCUTS_ENABLED, true)
-        _disabledShortcutIdsFlow.value = io.github.lengsukq.opaldesk.ui.WorkstationShortcutCatalog.parseDisabledIds(
-            p.getString(KEY_DISABLED_SHORTCUT_IDS, null),
-        )
-        _showDesktopGuideIconFlow.value = p.getBoolean(KEY_SHOW_DESKTOP_GUIDE_ICON, true)
-        _customResolutionPresetsFlow.value = CustomResolutionPolicy.parsePresets(
-            p.getString(KEY_CUSTOM_RES_PRESETS, null),
-        )
-        _autoCustomResolutionEnabledFlow.value = p.getBoolean(KEY_AUTO_CUSTOM_RES_ENABLED, false)
-        _externalNative1To1Flow.value = p.getBoolean(KEY_EXTERNAL_NATIVE_1TO1_NO_SCALING, false)
-        val savedW = p.getInt(KEY_DEFAULT_CUSTOM_RES_W, CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC.width)
-        val savedH = p.getInt(KEY_DEFAULT_CUSTOM_RES_H, CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC.height)
-        val savedFps = p.getInt(KEY_DEFAULT_CUSTOM_RES_FPS, CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC.fps)
-        _defaultCustomResolutionFlow.value = CustomResolutionPolicy.sanitize(savedW, savedH, savedFps)
-            ?: CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC
-        _usbTetherCastEnabledFlow.value = p.getBoolean(KEY_USB_TETHER_CAST_ENABLED, false)
-        _dexImeDisplayModeFlow.value = p.getInt(
-            KEY_DEX_IME_DISPLAY_MODE,
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.AUTO,
-        ).coerceIn(
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.AUTO,
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.FALLBACK_HOST,
-        )
-        _dexLockedImeIdFlow.value = p.getString(KEY_DEX_LOCKED_IME_ID, "").orEmpty().trim()
-        _muteHostImeOnCastFlow.value = p.getBoolean(KEY_MUTE_HOST_IME_ON_CAST, false)
-        val rawHardKbd = p.getInt(
-            KEY_HARD_KBD_SOFT_IME_MODE,
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM,
-        )
-        _hardKbdSoftImeModeFlow.value = when (rawHardKbd) {
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.HIDE,
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SHOW,
-            -> rawHardKbd
-            else -> io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM
-        }
-        _autoBridgeImeOnCastFlow.value = p.getBoolean(KEY_AUTO_BRIDGE_IME_ON_CAST, true)
-        _spotlightRecentsFlow.value = parseSpotlightRecents(p.getString(KEY_SPOTLIGHT_RECENTS, null))
-        _callControlSyncEnabledFlow.value = p.getBoolean(KEY_CALL_CONTROL_SYNC_ENABLED, false)
-        _bleNearbyEnabledFlow.value = p.getBoolean(KEY_BLE_NEARBY_ENABLED, false)
-        _languagePrefFlow.value = OpalLocalePolicy.normalizeLanguagePref(
-            p.getString(KEY_LANGUAGE_PREF, OpalLocalePolicy.LANG_SYSTEM),
-        )
-    }
-
-    private fun loadPkgList(p: android.content.SharedPreferences, key: String, fallbackKey: String): List<String> {
-        val raw = p.getString(key, null) ?: p.getString(fallbackKey, null)
-        if (raw == null) return DEFAULT_PINNED
-        if (raw.isBlank()) return emptyList()
-        return raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        val p = sharedPrefs(ctx) ?: return
+        DisplayAndInputPrefs.hydrate(p)
+        CastAndCompanionPrefs.hydrate(p)
     }
 
     fun isAutoRootEnabled(ctx: Context?): Boolean =
-        prefs(ctx)?.getBoolean(KEY_AUTO_ROOT, false) ?: false
+        CastAndCompanionPrefs.isAutoRootEnabled(ctx)
 
-    fun setAutoRootEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_ROOT, enabled)?.apply()
-    }
+    fun setAutoRootEnabled(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setAutoRootEnabled(ctx, enabled)
 
     fun isAutoShizukuEnabled(ctx: Context?): Boolean =
-        prefs(ctx)?.getBoolean(KEY_AUTO_SHIZUKU, true) ?: true
+        CastAndCompanionPrefs.isAutoShizukuEnabled(ctx)
 
-    fun setAutoShizukuEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_SHIZUKU, enabled)?.apply()
-    }
+    fun setAutoShizukuEnabled(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setAutoShizukuEnabled(ctx, enabled)
 
     fun isRootEnhanceEnabled(ctx: Context?): Boolean =
-        prefs(ctx)?.getBoolean(KEY_ROOT_ENHANCE, false) ?: false
+        CastAndCompanionPrefs.isRootEnhanceEnabled(ctx)
 
-    fun setRootEnhanceEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_ROOT_ENHANCE, enabled)?.apply()
-    }
+    fun setRootEnhanceEnabled(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setRootEnhanceEnabled(ctx, enabled)
 
     fun isAutoExternalDisplayEnabled(ctx: Context?): Boolean =
-        prefs(ctx)?.getBoolean(KEY_AUTO_EXT_DISPLAY, true) ?: true
+        DisplayAndInputPrefs.isAutoExternalDisplayEnabled(ctx)
 
-    fun setAutoExternalDisplayEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_EXT_DISPLAY, enabled)?.apply()
-    }
+    fun setAutoExternalDisplayEnabled(ctx: Context?, enabled: Boolean) =
+        DisplayAndInputPrefs.setAutoExternalDisplayEnabled(ctx, enabled)
 
-    fun isAutoShowPhoneTrackpadEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _autoShowPhoneTrackpadFlow.value
-    }
+    fun isAutoShowPhoneTrackpadEnabled(ctx: Context?): Boolean =
+        DisplayAndInputPrefs.isAutoShowPhoneTrackpadEnabled(ctx)
 
-    fun setAutoShowPhoneTrackpadEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_SHOW_PHONE_TRACKPAD, enabled)?.apply()
-        _autoShowPhoneTrackpadFlow.value = enabled
-    }
+    fun setAutoShowPhoneTrackpadEnabled(ctx: Context?, enabled: Boolean) =
+        DisplayAndInputPrefs.setAutoShowPhoneTrackpadEnabled(ctx, enabled)
 
-    fun isAutoEnterDexEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _autoEnterDexFlow.value
-    }
+    fun isAutoEnterDexEnabled(ctx: Context?): Boolean =
+        DisplayAndInputPrefs.isAutoEnterDexEnabled(ctx)
 
-    fun setAutoEnterDexEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_ENTER_DEX, enabled)?.apply()
-        _autoEnterDexFlow.value = enabled
-    }
+    fun setAutoEnterDexEnabled(ctx: Context?, enabled: Boolean) =
+        DisplayAndInputPrefs.setAutoEnterDexEnabled(ctx, enabled)
 
-    fun getExternalProjectionMode(ctx: Context?): Int {
-        hydrateFlows(ctx)
-        return (prefs(ctx)?.getInt(KEY_EXTERNAL_PROJECTION_MODE, PROJECTION_MODE_AUTO) ?: PROJECTION_MODE_AUTO)
-            .coerceIn(PROJECTION_MODE_AUTO, PROJECTION_MODE_PRESENTATION)
-    }
+    fun getExternalProjectionMode(ctx: Context?): Int =
+        DisplayAndInputPrefs.getExternalProjectionMode(ctx)
 
-    fun setExternalProjectionMode(ctx: Context?, mode: Int) {
-        val clamped = mode.coerceIn(PROJECTION_MODE_AUTO, PROJECTION_MODE_PRESENTATION)
-        prefs(ctx)?.edit()?.putInt(KEY_EXTERNAL_PROJECTION_MODE, clamped)?.apply()
-        _externalProjectionModeFlow.value = clamped
-    }
+    fun setExternalProjectionMode(ctx: Context?, mode: Int) =
+        DisplayAndInputPrefs.setExternalProjectionMode(ctx, mode)
 
-    fun getExternalOverscanPct(ctx: Context?): Float {
-        hydrateFlows(ctx)
-        return (prefs(ctx)?.getFloat(KEY_EXTERNAL_OVERSCAN_PCT, DEFAULT_OVERSCAN_PCT) ?: DEFAULT_OVERSCAN_PCT)
-            .coerceIn(MIN_OVERSCAN_PCT, MAX_OVERSCAN_PCT)
-    }
+    fun getExternalOverscanPct(ctx: Context?): Float =
+        DisplayAndInputPrefs.getExternalOverscanPct(ctx)
 
-    fun setExternalOverscanPct(ctx: Context?, pct: Float) {
-        val clamped = pct.coerceIn(MIN_OVERSCAN_PCT, MAX_OVERSCAN_PCT)
-        prefs(ctx)?.edit()?.putFloat(KEY_EXTERNAL_OVERSCAN_PCT, clamped)?.apply()
-        _externalOverscanPctFlow.value = clamped
-    }
+    fun setExternalOverscanPct(ctx: Context?, pct: Float) =
+        DisplayAndInputPrefs.setExternalOverscanPct(ctx, pct)
 
-    fun isRemoteMicEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _remoteMicEnabledFlow.value
-    }
+    fun isRemoteMicEnabled(ctx: Context?): Boolean =
+        CastAndCompanionPrefs.isRemoteMicEnabled(ctx)
 
-    fun setRemoteMicEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_REMOTE_MIC_ENABLED, enabled)?.apply()
-        _remoteMicEnabledFlow.value = enabled
-    }
+    fun setRemoteMicEnabled(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setRemoteMicEnabled(ctx, enabled)
 
-    fun isRemoteCameraEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _remoteCameraEnabledFlow.value
-    }
+    fun isRemoteCameraEnabled(ctx: Context?): Boolean =
+        CastAndCompanionPrefs.isRemoteCameraEnabled(ctx)
 
-    fun setRemoteCameraEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_REMOTE_CAMERA_ENABLED, enabled)?.apply()
-        _remoteCameraEnabledFlow.value = enabled
-    }
+    fun setRemoteCameraEnabled(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setRemoteCameraEnabled(ctx, enabled)
 
-    fun getAudioRouteMode(ctx: Context?): Int {
-        hydrateFlows(ctx)
-        return _audioRouteModeFlow.value
-    }
+    fun getAudioRouteMode(ctx: Context?): Int =
+        CastAndCompanionPrefs.getAudioRouteMode(ctx)
 
-    fun setAudioRouteMode(ctx: Context?, mode: Int) {
-        val clamped = mode.coerceIn(
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.ALL_TO_DEX,
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.AudioRoute.SPLIT_BY_APP,
-        )
-        prefs(ctx)?.edit()?.putInt(KEY_AUDIO_ROUTE_MODE, clamped)?.apply()
-        _audioRouteModeFlow.value = clamped
-    }
+    fun setAudioRouteMode(ctx: Context?, mode: Int) =
+        CastAndCompanionPrefs.setAudioRouteMode(ctx, mode)
 
-    fun getDesktopShortcuts(ctx: Context?): List<String> {
-        hydrateFlows(ctx)
-        return _desktopShortcutsFlow.value
-    }
+    fun getDesktopShortcuts(ctx: Context?): List<String> =
+        DisplayAndInputPrefs.getDesktopShortcuts(ctx)
 
     /** Adds or removes [pkg] on the desktop shortcut grid; returns true if now present on desktop. */
-    fun toggleDesktopShortcut(ctx: Context?, pkg: String): Boolean {
-        hydrateFlows(ctx)
-        val current = _desktopShortcutsFlow.value.toMutableList()
-        val added = if (current.contains(pkg)) {
-            current.remove(pkg)
-            false
-        } else {
-            current.add(pkg)
-            true
-        }
-        prefs(ctx)?.edit()?.putString(KEY_DESKTOP_SHORTCUTS, current.joinToString(","))?.apply()
-        _desktopShortcutsFlow.value = current
-        return added
-    }
+    fun toggleDesktopShortcut(ctx: Context?, pkg: String): Boolean =
+        DisplayAndInputPrefs.toggleDesktopShortcut(ctx, pkg)
 
-    fun getDockPinnedPackages(ctx: Context?): List<String> {
-        hydrateFlows(ctx)
-        return _dockPinnedFlow.value
-    }
+    fun getDockPinnedPackages(ctx: Context?): List<String> =
+        DisplayAndInputPrefs.getDockPinnedPackages(ctx)
 
-    fun isDockVisible(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _dockVisibleFlow.value
-    }
+    fun isDockVisible(ctx: Context?): Boolean =
+        DisplayAndInputPrefs.isDockVisible(ctx)
 
-    fun setDockVisible(ctx: Context?, visible: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_DOCK_VISIBLE, visible)?.apply()
-        _dockVisibleFlow.value = visible
-    }
+    fun setDockVisible(ctx: Context?, visible: Boolean) =
+        DisplayAndInputPrefs.setDockVisible(ctx, visible)
 
-    fun getDockOpacity(ctx: Context?): Float {
-        hydrateFlows(ctx)
-        return _dockOpacityFlow.value
-    }
+    fun getDockOpacity(ctx: Context?): Float =
+        DisplayAndInputPrefs.getDockOpacity(ctx)
 
-    fun setDockOpacity(ctx: Context?, opacity: Float) {
-        val clamped = DockAppearancePolicy.clampOpacity(opacity)
-        prefs(ctx)?.edit()?.putFloat(KEY_DOCK_OPACITY, clamped)?.apply()
-        _dockOpacityFlow.value = clamped
-    }
+    fun setDockOpacity(ctx: Context?, opacity: Float) =
+        DisplayAndInputPrefs.setDockOpacity(ctx, opacity)
 
-    fun getDockScale(ctx: Context?): Float {
-        hydrateFlows(ctx)
-        return _dockScaleFlow.value
-    }
+    fun getDockScale(ctx: Context?): Float =
+        DisplayAndInputPrefs.getDockScale(ctx)
 
-    fun setDockScale(ctx: Context?, scale: Float) {
-        val clamped = DockAppearancePolicy.clampScale(scale)
-        prefs(ctx)?.edit()?.putFloat(KEY_DOCK_SCALE, clamped)?.apply()
-        _dockScaleFlow.value = clamped
-    }
+    fun setDockScale(ctx: Context?, scale: Float) =
+        DisplayAndInputPrefs.setDockScale(ctx, scale)
 
-    fun resetDockAppearance(ctx: Context?) {
-        prefs(ctx)?.edit()
-            ?.putBoolean(KEY_DOCK_VISIBLE, true)
-            ?.putFloat(KEY_DOCK_OPACITY, DockAppearancePolicy.DEFAULT_OPACITY)
-            ?.putFloat(KEY_DOCK_SCALE, DockAppearancePolicy.DEFAULT_SCALE)
-            ?.apply()
-        _dockVisibleFlow.value = true
-        _dockOpacityFlow.value = DockAppearancePolicy.DEFAULT_OPACITY
-        _dockScaleFlow.value = DockAppearancePolicy.DEFAULT_SCALE
-    }
+    fun resetDockAppearance(ctx: Context?) =
+        DisplayAndInputPrefs.resetDockAppearance(ctx)
 
     enum class DockPinResult { ADDED, REMOVED, LIMIT_REACHED }
 
     /**
      * Toggles [pkg] in the bottom Dock pinned strip, strictly enforcing [MAX_DOCK_PINNED].
      */
-    fun toggleDockPin(ctx: Context?, pkg: String): DockPinResult {
-        hydrateFlows(ctx)
-        val current = _dockPinnedFlow.value.toMutableList()
-        if (current.contains(pkg)) {
-            current.remove(pkg)
-            prefs(ctx)?.edit()?.putString(KEY_DOCK_PINNED, current.joinToString(","))?.apply()
-            _dockPinnedFlow.value = current
-            return DockPinResult.REMOVED
-        }
-        if (current.size >= MAX_DOCK_PINNED) {
-            return DockPinResult.LIMIT_REACHED
-        }
-        current.add(pkg)
-        prefs(ctx)?.edit()?.putString(KEY_DOCK_PINNED, current.joinToString(","))?.apply()
-        _dockPinnedFlow.value = current
-        return DockPinResult.ADDED
-    }
+    fun toggleDockPin(ctx: Context?, pkg: String): DockPinResult =
+        DisplayAndInputPrefs.toggleDockPin(ctx, pkg)
 
-    fun setCustomWallpaperPath(ctx: Context?, path: String) {
-        val clean = path.trim()
-        prefs(ctx)?.edit()?.putString(KEY_CUSTOM_WALLPAPER_PATH, clean)?.apply()
-        _customWallpaperPathFlow.value = clean
-    }
+    fun setCustomWallpaperPath(ctx: Context?, path: String) =
+        DisplayAndInputPrefs.setCustomWallpaperPath(ctx, path)
 
-    fun isAutoBlackoutOnCast(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _autoBlackoutOnCastFlow.value
-    }
+    fun isAutoBlackoutOnCast(ctx: Context?): Boolean =
+        CastAndCompanionPrefs.isAutoBlackoutOnCast(ctx)
 
-    fun setAutoBlackoutOnCast(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_BLACKOUT_ON_CAST, enabled)?.apply()
-        _autoBlackoutOnCastFlow.value = enabled
-    }
+    fun setAutoBlackoutOnCast(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setAutoBlackoutOnCast(ctx, enabled)
 
-    fun clearCustomWallpaper(ctx: Context?) {
-        setCustomWallpaperPath(ctx, "")
-    }
+    fun clearCustomWallpaper(ctx: Context?) =
+        DisplayAndInputPrefs.clearCustomWallpaper(ctx)
 
-    fun getThemeMode(ctx: Context?): Int {
-        hydrateFlows(ctx)
-        return (prefs(ctx)?.getInt(KEY_THEME_MODE, THEME_LIGHT) ?: THEME_LIGHT).coerceIn(THEME_LIGHT, THEME_DARK)
-    }
+    fun getThemeMode(ctx: Context?): Int =
+        DisplayAndInputPrefs.getThemeMode(ctx)
 
-    fun setThemeMode(ctx: Context?, mode: Int) {
-        val clamped = mode.coerceIn(THEME_LIGHT, THEME_DARK)
-        prefs(ctx)?.edit()?.putInt(KEY_THEME_MODE, clamped)?.apply()
-        _themeModeFlow.value = clamped
-    }
+    fun setThemeMode(ctx: Context?, mode: Int) =
+        DisplayAndInputPrefs.setThemeMode(ctx, mode)
 
-    fun getWallpaperPreset(ctx: Context?): Int {
-        hydrateFlows(ctx)
-        return (prefs(ctx)?.getInt(KEY_WALLPAPER_PRESET, 0) ?: 0).coerceIn(0, 3)
-    }
+    fun getWallpaperPreset(ctx: Context?): Int =
+        DisplayAndInputPrefs.getWallpaperPreset(ctx)
 
-    fun setWallpaperPreset(ctx: Context?, preset: Int) {
-        val clamped = preset.coerceIn(0, 3)
-        prefs(ctx)?.edit()?.putInt(KEY_WALLPAPER_PRESET, clamped)?.apply()
-        _wallpaperPresetFlow.value = clamped
-    }
+    fun setWallpaperPreset(ctx: Context?, preset: Int) =
+        DisplayAndInputPrefs.setWallpaperPreset(ctx, preset)
 
-    fun getExternalUiScale(ctx: Context?): Float {
-        hydrateFlows(ctx)
-        return (prefs(ctx)?.getFloat(KEY_EXTERNAL_UI_SCALE, 1.25f) ?: 1.25f).coerceIn(0.85f, 2.0f)
-    }
+    fun getExternalUiScale(ctx: Context?): Float =
+        DisplayAndInputPrefs.getExternalUiScale(ctx)
 
-    fun setExternalUiScale(ctx: Context?, scale: Float) {
-        val clamped = scale.coerceIn(0.85f, 2.0f)
-        prefs(ctx)?.edit()?.putFloat(KEY_EXTERNAL_UI_SCALE, clamped)?.apply()
-        _externalUiScaleFlow.value = clamped
-    }
+    fun setExternalUiScale(ctx: Context?, scale: Float) =
+        DisplayAndInputPrefs.setExternalUiScale(ctx, scale)
 
-    fun getTrackpadSensitivity(ctx: Context?): Float {
-        hydrateFlows(ctx)
-        return (prefs(ctx)?.getFloat(KEY_TRACKPAD_SENSITIVITY, DEFAULT_TRACKPAD_SENSITIVITY)
-            ?: DEFAULT_TRACKPAD_SENSITIVITY).coerceIn(MIN_TRACKPAD_SENSITIVITY, MAX_TRACKPAD_SENSITIVITY)
-    }
+    fun getTrackpadSensitivity(ctx: Context?): Float =
+        DisplayAndInputPrefs.getTrackpadSensitivity(ctx)
 
-    fun setTrackpadSensitivity(ctx: Context?, sensitivity: Float) {
-        val clamped = sensitivity.coerceIn(MIN_TRACKPAD_SENSITIVITY, MAX_TRACKPAD_SENSITIVITY)
-        prefs(ctx)?.edit()?.putFloat(KEY_TRACKPAD_SENSITIVITY, clamped)?.apply()
-        _trackpadSensitivityFlow.value = clamped
-    }
+    fun setTrackpadSensitivity(ctx: Context?, sensitivity: Float) =
+        DisplayAndInputPrefs.setTrackpadSensitivity(ctx, sensitivity)
 
-    fun getMouseTarget(ctx: Context?): Int {
-        hydrateFlows(ctx)
-        return (prefs(ctx)?.getInt(KEY_MOUSE_TARGET, MOUSE_TARGET_EXTERNAL) ?: MOUSE_TARGET_EXTERNAL)
-            .coerceIn(MOUSE_TARGET_LOCAL, MOUSE_TARGET_EXTERNAL)
-    }
+    fun getMouseTarget(ctx: Context?): Int =
+        DisplayAndInputPrefs.getMouseTarget(ctx)
 
-    fun setMouseTarget(ctx: Context?, mode: Int) {
-        val clamped = mode.coerceIn(MOUSE_TARGET_LOCAL, MOUSE_TARGET_EXTERNAL)
-        prefs(ctx)?.edit()?.putInt(KEY_MOUSE_TARGET, clamped)?.apply()
-        _mouseTargetFlow.value = clamped
-    }
+    fun setMouseTarget(ctx: Context?, mode: Int) =
+        DisplayAndInputPrefs.setMouseTarget(ctx, mode)
 
-    fun getOrCreatePeerClientId(ctx: Context?): String {
-        val p = prefs(ctx) ?: return "opal-android"
-        val existing = p.getString("peer_client_id", null)
-        if (!existing.isNullOrBlank()) return existing
-        val created = "android-${java.util.UUID.randomUUID().toString().take(12)}"
-        p.edit().putString("peer_client_id", created).apply()
-        return created
-    }
+    fun getOrCreatePeerClientId(ctx: Context?): String =
+        CastAndCompanionPrefs.getOrCreatePeerClientId(ctx)
 
     fun getPeerAuthToken(ctx: Context?, host: String): String =
-        prefs(ctx)?.getString("peer_tok_${host.trim()}", "").orEmpty()
+        CastAndCompanionPrefs.getPeerAuthToken(ctx, host)
 
-    fun savePeerAuthToken(ctx: Context?, host: String, token: String) {
-        if (host.isBlank() || token.isBlank()) return
-        prefs(ctx)?.edit()?.putString("peer_tok_${host.trim()}", token)?.apply()
-    }
+    fun savePeerAuthToken(ctx: Context?, host: String, token: String) =
+        CastAndCompanionPrefs.savePeerAuthToken(ctx, host, token)
 
-    fun clearPeerAuthToken(ctx: Context?, host: String) {
-        if (host.isBlank()) return
-        prefs(ctx)?.edit()?.remove("peer_tok_${host.trim()}")?.apply()
-    }
+    fun clearPeerAuthToken(ctx: Context?, host: String) =
+        CastAndCompanionPrefs.clearPeerAuthToken(ctx, host)
 
-    fun isSortAppsByUsageEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _sortAppsByUsageFlow.value
-    }
+    fun isSortAppsByUsageEnabled(ctx: Context?): Boolean =
+        CastAndCompanionPrefs.isSortAppsByUsageEnabled(ctx)
 
-    fun setSortAppsByUsage(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_SORT_APPS_BY_USAGE, enabled)?.apply()
-        _sortAppsByUsageFlow.value = enabled
-    }
+    fun setSortAppsByUsage(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setSortAppsByUsage(ctx, enabled)
 
-    fun getAppLaunchCounts(ctx: Context?): Map<String, Int> {
-        hydrateFlows(ctx)
-        return _appLaunchCountsFlow.value
-    }
+    fun getAppLaunchCounts(ctx: Context?): Map<String, Int> =
+        CastAndCompanionPrefs.getAppLaunchCounts(ctx)
 
-    fun recordAppLaunch(ctx: Context?, pkg: String): Int {
-        val clean = pkg.trim()
-        if (clean.isEmpty()) return 0
-        hydrateFlows(ctx)
-        val next = LinkedHashMap(_appLaunchCountsFlow.value)
-        val updated = (next[clean] ?: 0) + 1
-        next[clean] = updated
-        _appLaunchCountsFlow.value = next
-        prefs(ctx)?.edit()?.putString(KEY_APP_LAUNCH_COUNTS, serializeLaunchCounts(next))?.apply()
-        return updated
-    }
+    fun recordAppLaunch(ctx: Context?, pkg: String): Int =
+        CastAndCompanionPrefs.recordAppLaunch(ctx, pkg)
 
-    fun parseLaunchCounts(raw: String?): Map<String, Int> {
-        if (raw.isNullOrBlank()) return emptyMap()
-        val out = LinkedHashMap<String, Int>()
-        raw.lineSequence().forEach { line ->
-            val eq = line.indexOf('=')
-            if (eq <= 0) return@forEach
-            val k = line.substring(0, eq).trim()
-            val v = line.substring(eq + 1).trim().toIntOrNull() ?: return@forEach
-            if (k.isNotEmpty() && v > 0) out[k] = v
-        }
-        return out
-    }
+    fun parseLaunchCounts(raw: String?): Map<String, Int> =
+        CastAndCompanionPrefs.parseLaunchCounts(raw)
 
     fun serializeLaunchCounts(counts: Map<String, Int>): String =
-        counts.entries
-            .filter { it.key.isNotBlank() && it.value > 0 }
-            .joinToString("\n") { "${it.key.trim()}=${it.value}" }
+        CastAndCompanionPrefs.serializeLaunchCounts(counts)
 
-    fun isAutoCheckUpdateEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _autoCheckUpdateFlow.value
-    }
+    fun isAutoCheckUpdateEnabled(ctx: Context?): Boolean =
+        CastAndCompanionPrefs.isAutoCheckUpdateEnabled(ctx)
 
-    fun setAutoCheckUpdate(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_CHECK_UPDATE, enabled)?.apply()
-        _autoCheckUpdateFlow.value = enabled
-    }
+    fun setAutoCheckUpdate(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setAutoCheckUpdate(ctx, enabled)
 
     fun getLastUpdateCheckMs(ctx: Context?): Long =
-        prefs(ctx)?.getLong(KEY_LAST_UPDATE_CHECK_MS, 0L) ?: 0L
+        CastAndCompanionPrefs.getLastUpdateCheckMs(ctx)
 
-    fun setLastUpdateCheckMs(ctx: Context?, timestampMs: Long) {
-        prefs(ctx)?.edit()?.putLong(KEY_LAST_UPDATE_CHECK_MS, timestampMs)?.apply()
-    }
+    fun setLastUpdateCheckMs(ctx: Context?, timestampMs: Long) =
+        CastAndCompanionPrefs.setLastUpdateCheckMs(ctx, timestampMs)
 
     fun getIgnoredUpdateTag(ctx: Context?): String =
-        prefs(ctx)?.getString(KEY_IGNORED_UPDATE_TAG, "").orEmpty()
+        CastAndCompanionPrefs.getIgnoredUpdateTag(ctx)
 
-    fun setIgnoredUpdateTag(ctx: Context?, tagName: String) {
-        prefs(ctx)?.edit()?.putString(KEY_IGNORED_UPDATE_TAG, tagName.trim())?.apply()
-    }
+    fun setIgnoredUpdateTag(ctx: Context?, tagName: String) =
+        CastAndCompanionPrefs.setIgnoredUpdateTag(ctx, tagName)
 
-    fun getUpdateDownloadRoute(ctx: Context?): Int {
-        hydrateFlows(ctx)
-        return (prefs(ctx)?.getInt(KEY_UPDATE_DOWNLOAD_ROUTE, UPDATE_ROUTE_DIRECT) ?: UPDATE_ROUTE_DIRECT)
-            .coerceIn(UPDATE_ROUTE_DIRECT, UPDATE_ROUTE_PROXY_2)
-    }
+    fun getUpdateDownloadRoute(ctx: Context?): Int =
+        CastAndCompanionPrefs.getUpdateDownloadRoute(ctx)
 
-    fun setUpdateDownloadRoute(ctx: Context?, route: Int) {
-        val clamped = route.coerceIn(UPDATE_ROUTE_DIRECT, UPDATE_ROUTE_PROXY_2)
-        prefs(ctx)?.edit()?.putInt(KEY_UPDATE_DOWNLOAD_ROUTE, clamped)?.apply()
-        _updateDownloadRouteFlow.value = clamped
-    }
+    fun setUpdateDownloadRoute(ctx: Context?, route: Int) =
+        CastAndCompanionPrefs.setUpdateDownloadRoute(ctx, route)
 
-    fun getOrCreateInstallationId(ctx: Context?): String {
-        val p = prefs(ctx) ?: return UUID.randomUUID().toString()
-        val existing = p.getString(KEY_INSTALLATION_ID, null)?.trim().orEmpty()
-        if (existing.isNotEmpty()) return existing
-        val created = UUID.randomUUID().toString()
-        p.edit().putString(KEY_INSTALLATION_ID, created).apply()
-        return created
-    }
+    fun getOrCreateInstallationId(ctx: Context?): String =
+        CastAndCompanionPrefs.getOrCreateInstallationId(ctx)
 
     fun getFeedbackUsername(ctx: Context?): String =
-        prefs(ctx)?.getString(KEY_FEEDBACK_USERNAME, "").orEmpty()
+        CastAndCompanionPrefs.getFeedbackUsername(ctx)
 
-    fun setFeedbackUsername(ctx: Context?, username: String) {
-        prefs(ctx)?.edit()?.putString(KEY_FEEDBACK_USERNAME, username.trim().take(64))?.apply()
-    }
+    fun setFeedbackUsername(ctx: Context?, username: String) =
+        CastAndCompanionPrefs.setFeedbackUsername(ctx, username)
 
-    fun isGlobalShortcutsEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _globalShortcutsEnabledFlow.value
-    }
+    fun isGlobalShortcutsEnabled(ctx: Context?): Boolean =
+        DisplayAndInputPrefs.isGlobalShortcutsEnabled(ctx)
 
-    fun setGlobalShortcutsEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_GLOBAL_SHORTCUTS_ENABLED, enabled)?.apply()
-        _globalShortcutsEnabledFlow.value = enabled
-    }
+    fun setGlobalShortcutsEnabled(ctx: Context?, enabled: Boolean) =
+        DisplayAndInputPrefs.setGlobalShortcutsEnabled(ctx, enabled)
 
-    fun getDisabledShortcutIds(ctx: Context?): Set<String> {
-        hydrateFlows(ctx)
-        return _disabledShortcutIdsFlow.value
-    }
+    fun getDisabledShortcutIds(ctx: Context?): Set<String> =
+        DisplayAndInputPrefs.getDisabledShortcutIds(ctx)
 
     fun setShortcutEnabled(
         ctx: Context?,
         shortcutId: io.github.lengsukq.opaldesk.ui.WorkstationShortcutId,
         enabled: Boolean,
-    ) {
-        hydrateFlows(ctx)
-        val next = _disabledShortcutIdsFlow.value.toMutableSet()
-        if (enabled) {
-            next.remove(shortcutId.prefKey)
-        } else {
-            next.add(shortcutId.prefKey)
-        }
-        val serialized = io.github.lengsukq.opaldesk.ui.WorkstationShortcutCatalog.serializeDisabledIds(next)
-        prefs(ctx)?.edit()?.putString(KEY_DISABLED_SHORTCUT_IDS, serialized)?.apply()
-        _disabledShortcutIdsFlow.value = next
-    }
+    ) = DisplayAndInputPrefs.setShortcutEnabled(ctx, shortcutId, enabled)
 
-    fun resetKeyboardShortcuts(ctx: Context?) {
-        prefs(ctx)?.edit()
-            ?.putBoolean(KEY_GLOBAL_SHORTCUTS_ENABLED, true)
-            ?.remove(KEY_DISABLED_SHORTCUT_IDS)
-            ?.apply()
-        _globalShortcutsEnabledFlow.value = true
-        _disabledShortcutIdsFlow.value = emptySet()
-    }
+    fun resetKeyboardShortcuts(ctx: Context?) =
+        DisplayAndInputPrefs.resetKeyboardShortcuts(ctx)
 
-    fun isDesktopGuideIconVisible(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _showDesktopGuideIconFlow.value
-    }
+    fun isDesktopGuideIconVisible(ctx: Context?): Boolean =
+        DisplayAndInputPrefs.isDesktopGuideIconVisible(ctx)
 
-    fun setDesktopGuideIconVisible(ctx: Context?, visible: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_SHOW_DESKTOP_GUIDE_ICON, visible)?.apply()
-        _showDesktopGuideIconFlow.value = visible
-    }
+    fun setDesktopGuideIconVisible(ctx: Context?, visible: Boolean) =
+        DisplayAndInputPrefs.setDesktopGuideIconVisible(ctx, visible)
 
-    fun getCustomResolutionPresets(ctx: Context?): List<CustomResolutionSpec> {
-        hydrateFlows(ctx)
-        return _customResolutionPresetsFlow.value
-    }
+    fun getCustomResolutionPresets(ctx: Context?): List<CustomResolutionSpec> =
+        DisplayAndInputPrefs.getCustomResolutionPresets(ctx)
 
-    fun addCustomResolutionPreset(ctx: Context?, spec: CustomResolutionSpec) {
-        hydrateFlows(ctx)
-        val updated = CustomResolutionPolicy.upsertPreset(_customResolutionPresetsFlow.value, spec)
-        prefs(ctx)?.edit()
-            ?.putString(KEY_CUSTOM_RES_PRESETS, CustomResolutionPolicy.serializePresets(updated))
-            ?.apply()
-        _customResolutionPresetsFlow.value = updated
-    }
+    fun addCustomResolutionPreset(ctx: Context?, spec: CustomResolutionSpec) =
+        DisplayAndInputPrefs.addCustomResolutionPreset(ctx, spec)
 
-    fun removeCustomResolutionPreset(ctx: Context?, key: String) {
-        hydrateFlows(ctx)
-        val updated = CustomResolutionPolicy.removePreset(_customResolutionPresetsFlow.value, key)
-        prefs(ctx)?.edit()
-            ?.putString(KEY_CUSTOM_RES_PRESETS, CustomResolutionPolicy.serializePresets(updated))
-            ?.apply()
-        _customResolutionPresetsFlow.value = updated
-    }
+    fun removeCustomResolutionPreset(ctx: Context?, key: String) =
+        DisplayAndInputPrefs.removeCustomResolutionPreset(ctx, key)
 
-    fun isAutoCustomResolutionEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _autoCustomResolutionEnabledFlow.value
-    }
+    fun isAutoCustomResolutionEnabled(ctx: Context?): Boolean =
+        DisplayAndInputPrefs.isAutoCustomResolutionEnabled(ctx)
 
-    fun setAutoCustomResolutionEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_CUSTOM_RES_ENABLED, enabled)?.apply()
-        _autoCustomResolutionEnabledFlow.value = enabled
-    }
+    fun setAutoCustomResolutionEnabled(ctx: Context?, enabled: Boolean) =
+        DisplayAndInputPrefs.setAutoCustomResolutionEnabled(ctx, enabled)
 
-    fun isExternalNative1To1Enabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _externalNative1To1Flow.value
-    }
+    fun isExternalNative1To1Enabled(ctx: Context?): Boolean =
+        DisplayAndInputPrefs.isExternalNative1To1Enabled(ctx)
 
-    fun setExternalNative1To1Enabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_EXTERNAL_NATIVE_1TO1_NO_SCALING, enabled)?.apply()
-        _externalNative1To1Flow.value = enabled
-    }
+    fun setExternalNative1To1Enabled(ctx: Context?, enabled: Boolean) =
+        DisplayAndInputPrefs.setExternalNative1To1Enabled(ctx, enabled)
 
-    fun getDefaultCustomResolution(ctx: Context?): CustomResolutionSpec {
-        hydrateFlows(ctx)
-        return _defaultCustomResolutionFlow.value
-    }
+    fun getDefaultCustomResolution(ctx: Context?): CustomResolutionSpec =
+        DisplayAndInputPrefs.getDefaultCustomResolution(ctx)
 
-    fun setDefaultCustomResolution(ctx: Context?, spec: CustomResolutionSpec) {
-        val clean = CustomResolutionPolicy.sanitize(spec.width, spec.height, spec.fps, spec.label) ?: return
-        prefs(ctx)?.edit()
-            ?.putInt(KEY_DEFAULT_CUSTOM_RES_W, clean.width)
-            ?.putInt(KEY_DEFAULT_CUSTOM_RES_H, clean.height)
-            ?.putInt(KEY_DEFAULT_CUSTOM_RES_FPS, clean.fps)
-            ?.apply()
-        _defaultCustomResolutionFlow.value = clean
-    }
+    fun setDefaultCustomResolution(ctx: Context?, spec: CustomResolutionSpec) =
+        DisplayAndInputPrefs.setDefaultCustomResolution(ctx, spec)
 
-    fun isUsbTetherCastEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _usbTetherCastEnabledFlow.value
-    }
+    fun isUsbTetherCastEnabled(ctx: Context?): Boolean =
+        CastAndCompanionPrefs.isUsbTetherCastEnabled(ctx)
 
-    fun setUsbTetherCastEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_USB_TETHER_CAST_ENABLED, enabled)?.apply()
-        _usbTetherCastEnabledFlow.value = enabled
-    }
+    fun setUsbTetherCastEnabled(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setUsbTetherCastEnabled(ctx, enabled)
 
-    fun getDexImeDisplayMode(ctx: Context?): Int {
-        hydrateFlows(ctx)
-        return _dexImeDisplayModeFlow.value
-    }
+    fun getDexImeDisplayMode(ctx: Context?): Int =
+        DisplayAndInputPrefs.getDexImeDisplayMode(ctx)
 
-    fun setDexImeDisplayMode(ctx: Context?, mode: Int) {
-        val clamped = mode.coerceIn(
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.AUTO,
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DexImeDisplayMode.FALLBACK_HOST,
-        )
-        prefs(ctx)?.edit()?.putInt(KEY_DEX_IME_DISPLAY_MODE, clamped)?.apply()
-        _dexImeDisplayModeFlow.value = clamped
-    }
+    fun setDexImeDisplayMode(ctx: Context?, mode: Int) =
+        DisplayAndInputPrefs.setDexImeDisplayMode(ctx, mode)
 
-    fun getDexLockedImeId(ctx: Context?): String {
-        hydrateFlows(ctx)
-        return _dexLockedImeIdFlow.value
-    }
+    fun getDexLockedImeId(ctx: Context?): String =
+        DisplayAndInputPrefs.getDexLockedImeId(ctx)
 
-    fun setDexLockedImeId(ctx: Context?, imeId: String) {
-        val clean = imeId.trim()
-        prefs(ctx)?.edit()?.putString(KEY_DEX_LOCKED_IME_ID, clean)?.apply()
-        _dexLockedImeIdFlow.value = clean
-    }
+    fun setDexLockedImeId(ctx: Context?, imeId: String) =
+        DisplayAndInputPrefs.setDexLockedImeId(ctx, imeId)
 
-    fun isMuteHostImeOnCastEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _muteHostImeOnCastFlow.value
-    }
+    fun isMuteHostImeOnCastEnabled(ctx: Context?): Boolean =
+        DisplayAndInputPrefs.isMuteHostImeOnCastEnabled(ctx)
 
-    fun setMuteHostImeOnCastEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_MUTE_HOST_IME_ON_CAST, enabled)?.apply()
-        _muteHostImeOnCastFlow.value = enabled
-    }
+    fun setMuteHostImeOnCastEnabled(ctx: Context?, enabled: Boolean) =
+        DisplayAndInputPrefs.setMuteHostImeOnCastEnabled(ctx, enabled)
 
-    fun getHardKbdSoftImeMode(ctx: Context?): Int {
-        hydrateFlows(ctx)
-        return _hardKbdSoftImeModeFlow.value
-    }
+    fun getHardKbdSoftImeMode(ctx: Context?): Int =
+        DisplayAndInputPrefs.getHardKbdSoftImeMode(ctx)
 
-    fun setHardKbdSoftImeMode(ctx: Context?, mode: Int) {
-        val clamped = when (mode) {
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.HIDE,
-            io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SHOW,
-            -> mode
-            else -> io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM
-        }
-        prefs(ctx)?.edit()?.putInt(KEY_HARD_KBD_SOFT_IME_MODE, clamped)?.apply()
-        _hardKbdSoftImeModeFlow.value = clamped
-    }
+    fun setHardKbdSoftImeMode(ctx: Context?, mode: Int) =
+        DisplayAndInputPrefs.setHardKbdSoftImeMode(ctx, mode)
 
-    fun isAutoBridgeImeOnCastEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _autoBridgeImeOnCastFlow.value
-    }
+    fun isAutoBridgeImeOnCastEnabled(ctx: Context?): Boolean =
+        DisplayAndInputPrefs.isAutoBridgeImeOnCastEnabled(ctx)
 
-    fun setAutoBridgeImeOnCastEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_AUTO_BRIDGE_IME_ON_CAST, enabled)?.apply()
-        _autoBridgeImeOnCastFlow.value = enabled
-    }
+    fun setAutoBridgeImeOnCastEnabled(ctx: Context?, enabled: Boolean) =
+        DisplayAndInputPrefs.setAutoBridgeImeOnCastEnabled(ctx, enabled)
 
-    fun isCallControlSyncEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _callControlSyncEnabledFlow.value
-    }
+    fun isCallControlSyncEnabled(ctx: Context?): Boolean =
+        CastAndCompanionPrefs.isCallControlSyncEnabled(ctx)
 
-    fun setCallControlSyncEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_CALL_CONTROL_SYNC_ENABLED, enabled)?.apply()
-        _callControlSyncEnabledFlow.value = enabled
-    }
+    fun setCallControlSyncEnabled(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setCallControlSyncEnabled(ctx, enabled)
 
-    fun isBleNearbyEnabled(ctx: Context?): Boolean {
-        hydrateFlows(ctx)
-        return _bleNearbyEnabledFlow.value
-    }
+    fun isBleNearbyEnabled(ctx: Context?): Boolean =
+        CastAndCompanionPrefs.isBleNearbyEnabled(ctx)
 
-    fun setBleNearbyEnabled(ctx: Context?, enabled: Boolean) {
-        prefs(ctx)?.edit()?.putBoolean(KEY_BLE_NEARBY_ENABLED, enabled)?.apply()
-        _bleNearbyEnabledFlow.value = enabled
-    }
+    fun setBleNearbyEnabled(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setBleNearbyEnabled(ctx, enabled)
 
-    fun getLanguagePref(ctx: Context?): String {
-        val raw = prefs(ctx)?.getString(KEY_LANGUAGE_PREF, OpalLocalePolicy.LANG_SYSTEM)
-        val normalized = OpalLocalePolicy.normalizeLanguagePref(raw)
-        _languagePrefFlow.value = normalized
-        return normalized
-    }
+    fun getLanguagePref(ctx: Context?): String =
+        CastAndCompanionPrefs.getLanguagePref(ctx)
 
-    fun setLanguagePref(ctx: Context?, pref: String) {
-        val normalized = OpalLocalePolicy.normalizeLanguagePref(pref)
-        prefs(ctx)?.edit()?.putString(KEY_LANGUAGE_PREF, normalized)?.apply()
-        _languagePrefFlow.value = normalized
-    }
+    fun setLanguagePref(ctx: Context?, pref: String) =
+        CastAndCompanionPrefs.setLanguagePref(ctx, pref)
 
-    fun getSpotlightRecents(ctx: Context?): List<String> {
-        hydrateFlows(ctx)
-        return _spotlightRecentsFlow.value
-    }
+    fun getSpotlightRecents(ctx: Context?): List<String> =
+        DisplayAndInputPrefs.getSpotlightRecents(ctx)
 
-    fun recordSpotlightRecent(ctx: Context?, itemId: String): List<String> {
-        hydrateFlows(ctx)
-        val updated = updateSpotlightRecents(_spotlightRecentsFlow.value, itemId, MAX_SPOTLIGHT_RECENTS)
-        _spotlightRecentsFlow.value = updated
-        prefs(ctx)?.edit()?.putString(KEY_SPOTLIGHT_RECENTS, updated.joinToString(","))?.apply()
-        return updated
-    }
+    fun recordSpotlightRecent(ctx: Context?, itemId: String): List<String> =
+        DisplayAndInputPrefs.recordSpotlightRecent(ctx, itemId)
 
-    fun parseSpotlightRecents(raw: String?, maxSize: Int = MAX_SPOTLIGHT_RECENTS): List<String> {
-        if (raw.isNullOrBlank()) return emptyList()
-        return raw.split(',')
-            .asSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .distinct()
-            .take(maxSize.coerceAtLeast(1))
-            .toList()
-    }
+    fun parseSpotlightRecents(raw: String?, maxSize: Int = MAX_SPOTLIGHT_RECENTS): List<String> =
+        DisplayAndInputPrefs.parseSpotlightRecents(raw, maxSize)
 
     fun updateSpotlightRecents(
         existing: List<String>,
         itemId: String,
         maxSize: Int = MAX_SPOTLIGHT_RECENTS,
-    ): List<String> {
-        val clean = itemId.trim()
-        if (clean.isEmpty()) return existing.take(maxSize.coerceAtLeast(1))
-        val out = ArrayList<String>(maxSize.coerceAtLeast(1))
-        out.add(clean)
-        for (id in existing) {
-            val t = id.trim()
-            if (t.isNotEmpty() && t != clean && out.size < maxSize) {
-                out.add(t)
-            }
-        }
-        return out
-    }
+    ): List<String> = DisplayAndInputPrefs.updateSpotlightRecents(existing, itemId, maxSize)
 
-    fun createFeedbackQuotaStorage(ctx: Context): FeedbackQuotaStorage {
-        val appCtx = ctx.applicationContext
-        return object : FeedbackQuotaStorage {
-            override fun getOrCreateInstallationId(): String =
-                this@AppPrefs.getOrCreateInstallationId(appCtx)
-
-            override fun getLastReportDate(): String =
-                prefs(appCtx)?.getString(KEY_FEEDBACK_REPORT_DATE, "").orEmpty()
-
-            override fun getDailyReportCount(): Int =
-                prefs(appCtx)?.getInt(KEY_FEEDBACK_REPORT_COUNT, 0) ?: 0
-
-            override fun saveDailyReportState(dateYyyyMmDd: String, count: Int) {
-                prefs(appCtx)?.edit()
-                    ?.putString(KEY_FEEDBACK_REPORT_DATE, dateYyyyMmDd)
-                    ?.putInt(KEY_FEEDBACK_REPORT_COUNT, count)
-                    ?.apply()
-            }
-        }
-    }
+    fun createFeedbackQuotaStorage(ctx: Context): FeedbackQuotaStorage =
+        CastAndCompanionPrefs.createFeedbackQuotaStorage(ctx)
 }

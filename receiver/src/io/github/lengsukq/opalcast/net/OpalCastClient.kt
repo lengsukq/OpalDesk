@@ -18,16 +18,12 @@ import io.github.lengsukq.opalcast.policy.UplinkFrame
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
-import java.io.EOFException
-import java.io.IOException
-import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.concurrent.LinkedBlockingQueue
@@ -103,39 +99,10 @@ class OpalCastClient(
 
     companion object {
         private const val TAG = "OpalCastClient"
-        private const val HEADER_SIZE = 18
-        private const val MAX_PAYLOAD_LEN = 16 * 1024 * 1024
 
         const val SESSION_ROLE_DESKTOP = "desktop"
         const val SESSION_ROLE_STANDALONE_APP = "standalone_app"
         const val SESSION_ROLE_APP_CATALOG = "app_catalog"
-
-        private const val TYPE_VIDEO_CONFIG = 0x01
-        private const val TYPE_VIDEO_FRAME = 0x02
-        private const val TYPE_AUDIO_CONFIG = 0x03
-        private const val TYPE_AUDIO_FRAME = 0x04
-        private const val TYPE_DEVICE_STATE = 0x10
-        private const val TYPE_AUTH_RESULT = 0x12
-        private const val TYPE_APP_LIST = 0x15
-        private const val TYPE_IME_REQUEST = 0x16
-        private const val TYPE_MIC_STATE = 0x17
-        private const val TYPE_CAMERA_STATE = 0x18
-        private const val TYPE_PONG = 0x1F
-
-        private const val TYPE_HELLO = 0x20
-        private const val TYPE_RESIZE_CONFIG = 0x21
-        private const val TYPE_REQUEST_IDR = 0x22
-        private const val TYPE_INPUT_MOUSE = 0x23
-        private const val TYPE_INPUT_TOUCH = 0x24
-        private const val TYPE_INPUT_KEY = 0x25
-        private const val TYPE_INPUT_TEXT = 0x26
-        private const val TYPE_SYSTEM_ACTION = 0x27
-        private const val TYPE_LIST_APPS = 0x2A
-        private const val TYPE_MIC_CONFIG = 0x2C
-        private const val TYPE_MIC_FRAME = 0x2D
-        private const val TYPE_CAMERA_CONFIG = 0x2E
-        private const val TYPE_PING = 0x2F
-        private const val TYPE_CAMERA_FRAME = 0x30
 
         const val DISPLAY_MODE_DEX = 0
         const val DISPLAY_MODE_MIRROR = 1
@@ -204,9 +171,7 @@ class OpalCastClient(
     private val lastIdrRequestMs = AtomicLong(0L)
     private val lastRxActivityMs = AtomicLong(0L)
     private val sideNavTouchFilter = InputGuardPolicy.SideNavigationTouchFilter()
-    private val txHeaderBuf = ByteArray(HEADER_SIZE)
-    private val rxHeaderBuf = ByteArray(HEADER_SIZE)
-    private var rxVideoScratch = ByteArray(64 * 1024)
+    private val wireCodec = OpalCastWireCodec()
 
     @Volatile
     private var socket: SSLSocket? = null
@@ -241,17 +206,17 @@ class OpalCastClient(
     fun stop() {
         if (!closed.compareAndSet(false, true)) return
         running.set(false)
-        try { enqueue(TYPE_SYSTEM_ACTION, 0, encodeSystemAction(SYS_DISCONNECT, 0)) } catch (_: Throwable) {}
+        try { enqueue(OpalCastWireCodec.TYPE_SYSTEM_ACTION, 0, OpalCastWireCodec.encodeSystemAction(SYS_DISCONNECT, 0)) } catch (_: Throwable) {}
         try { socket?.close() } catch (_: Throwable) {}
         mediaDecoder.releaseAll()
     }
 
     fun requestKeyFrame() {
-        enqueue(TYPE_REQUEST_IDR, 0, ByteArray(0))
+        enqueue(OpalCastWireCodec.TYPE_REQUEST_IDR, 0, ByteArray(0))
     }
 
     fun requestAppList() {
-        enqueue(TYPE_LIST_APPS, 0, ByteArray(0))
+        enqueue(OpalCastWireCodec.TYPE_LIST_APPS, 0, ByteArray(0))
     }
 
     fun sendMicConfig(
@@ -265,12 +230,12 @@ class OpalCastClient(
             put("sampleRate", sampleRate)
             put("channels", channels)
         }.toString().toByteArray(StandardCharsets.UTF_8)
-        enqueue(TYPE_MIC_CONFIG, 0, json)
+        enqueue(OpalCastWireCodec.TYPE_MIC_CONFIG, 0, json)
     }
 
     fun sendMicFrame(pcm: ByteArray) {
         if (closed.get() || pcm.isEmpty() || outQueue.remainingCapacity() <= 32) return
-        outQueue.offer(UplinkFrame(TYPE_MIC_FRAME, 0, SystemClock.elapsedRealtimeNanos() / 1000L, pcm))
+        outQueue.offer(UplinkFrame(OpalCastWireCodec.TYPE_MIC_FRAME, 0, SystemClock.elapsedRealtimeNanos() / 1000L, pcm))
     }
 
     fun sendCameraConfig(
@@ -288,12 +253,12 @@ class OpalCastClient(
             put("fps", fps)
             put("facing", facing)
         }.toString().toByteArray(StandardCharsets.UTF_8)
-        enqueue(TYPE_CAMERA_CONFIG, 0, json)
+        enqueue(OpalCastWireCodec.TYPE_CAMERA_CONFIG, 0, json)
     }
 
     fun sendCameraFrame(jpeg: ByteArray) {
         if (closed.get() || jpeg.isEmpty() || outQueue.remainingCapacity() <= 32) return
-        outQueue.offer(UplinkFrame(TYPE_CAMERA_FRAME, 0, SystemClock.elapsedRealtimeNanos() / 1000L, jpeg))
+        outQueue.offer(UplinkFrame(OpalCastWireCodec.TYPE_CAMERA_FRAME, 0, SystemClock.elapsedRealtimeNanos() / 1000L, jpeg))
     }
 
     fun sendResizeConfig(width: Int, height: Int, dpi: Int, fps: Int = reqFps, bitrateKbps: Int = 0) {
@@ -312,38 +277,24 @@ class OpalCastClient(
                 isUsbTether = isUsbTether,
             )
         }
-        val bb = ByteBuffer.allocate(14).order(ByteOrder.BIG_ENDIAN)
-        bb.putShort(alignedW.toShort())
-        bb.putShort(alignedH.toShort())
-        bb.putShort(wireDpi.toShort())
-        bb.putShort((fps.coerceIn(30, 120) * 100).toShort())
-        bb.putInt(resolvedBitrate)
-        bb.put(0xFF.toByte())
-        bb.put(0xFF.toByte())
-        enqueue(TYPE_RESIZE_CONFIG, 0, bb.array())
+        enqueue(
+            OpalCastWireCodec.TYPE_RESIZE_CONFIG,
+            0,
+            OpalCastWireCodec.encodeResizeConfig(alignedW, alignedH, wireDpi, fps, resolvedBitrate),
+        )
     }
 
     fun sendSystemAction(action: Int, arg: Int = 0) {
-        enqueue(TYPE_SYSTEM_ACTION, 0, encodeSystemAction(action, arg))
+        enqueue(OpalCastWireCodec.TYPE_SYSTEM_ACTION, 0, OpalCastWireCodec.encodeSystemAction(action, arg))
     }
 
     fun sendKeyEvent(action: Int, keyCode: Int, metaState: Int, repeat: Int = 0) {
-        val bb = ByteBuffer.allocate(13).order(ByteOrder.BIG_ENDIAN)
-        bb.put((action and 0xFF).toByte())
-        bb.putInt(keyCode)
-        bb.putInt(metaState)
-        bb.putInt(repeat)
-        enqueue(TYPE_INPUT_KEY, 0, bb.array())
+        enqueue(OpalCastWireCodec.TYPE_INPUT_KEY, 0, OpalCastWireCodec.encodeKeyEvent(action, keyCode, metaState, repeat))
     }
 
     fun sendTextEvent(text: String, commitPaste: Boolean = true) {
         if (text.isEmpty()) return
-        val bytes = text.toByteArray(StandardCharsets.UTF_8)
-        val bb = ByteBuffer.allocate(9 + bytes.size).order(ByteOrder.BIG_ENDIAN)
-        bb.put(if (commitPaste) 0.toByte() else 1.toByte())
-        bb.putLong(textSeq.incrementAndGet())
-        bb.put(bytes)
-        enqueue(TYPE_INPUT_TEXT, 0, bb.array())
+        enqueue(OpalCastWireCodec.TYPE_INPUT_TEXT, 0, OpalCastWireCodec.encodeTextEvent(text, textSeq.incrementAndGet(), commitPaste))
     }
 
     fun sendTouchEvent(ev: MotionEvent, viewW: Int, viewH: Int) {
@@ -363,7 +314,7 @@ class OpalCastClient(
             bb.putFloat(ry)
             bb.putFloat(ev.getPressure(i).coerceIn(0f, 1f))
         }
-        enqueue(TYPE_INPUT_TOUCH, 0, bb.array())
+        enqueue(OpalCastWireCodec.TYPE_INPUT_TOUCH, 0, bb.array())
     }
 
     fun handleGenericMouseMotion(ev: MotionEvent?, viewW: Int, viewH: Int): Boolean {
@@ -424,15 +375,11 @@ class OpalCastClient(
         val hScroll = if (masked == MotionEvent.ACTION_SCROLL) ev.getAxisValue(MotionEvent.AXIS_HSCROLL) else 0f
         val vScroll = if (masked == MotionEvent.ACTION_SCROLL) ev.getAxisValue(MotionEvent.AXIS_VSCROLL) else 0f
 
-        val bb = ByteBuffer.allocate(25).order(ByteOrder.BIG_ENDIAN)
-        bb.put((mouseAction and 0xFF).toByte())
-        bb.putFloat(rx)
-        bb.putFloat(ry)
-        bb.putInt(normButtons)
-        bb.putInt(actBtn)
-        bb.putFloat(hScroll)
-        bb.putFloat(vScroll)
-        enqueue(TYPE_INPUT_MOUSE, 0, bb.array())
+        enqueue(
+            OpalCastWireCodec.TYPE_INPUT_MOUSE,
+            0,
+            OpalCastWireCodec.encodeMouseEvent(mouseAction, rx, ry, normButtons, actBtn, hScroll, vScroll),
+        )
     }
 
     fun isMouseMotion(ev: MotionEvent): Boolean =
@@ -467,7 +414,7 @@ class OpalCastClient(
             ssl.soTimeout = 10_000
             ssl.startHandshake()
             val peerCert = ssl.session.peerCertificates.firstOrNull() as? X509Certificate
-            val fp = if (peerCert != null) sha256Hex(peerCert.encoded) else ""
+            val fp = if (peerCert != null) OpalCastWireCodec.sha256Hex(peerCert.encoded) else ""
             ssl.soTimeout = 70_000
             return ssl to fp
         } catch (t: Throwable) {
@@ -518,7 +465,7 @@ class OpalCastClient(
                 if (appActivity.isNotEmpty()) put("appActivity", appActivity)
                 if (appUserId > 0) put("appUserId", appUserId)
             }.toString().toByteArray(StandardCharsets.UTF_8)
-            writeFrame(output, TYPE_HELLO, 0, SystemClock.elapsedRealtimeNanos() / 1000L, helloJson)
+            wireCodec.writeFrame(output, OpalCastWireCodec.TYPE_HELLO, 0, SystemClock.elapsedRealtimeNanos() / 1000L, helloJson)
             output.flush()
 
             if (savedAuthToken.isBlank()) {
@@ -547,7 +494,7 @@ class OpalCastClient(
 
             lastRxActivityMs.set(SystemClock.uptimeMillis())
             while (running.get() && !closed.get()) {
-                val frame = readFrame(input) ?: break
+                val frame = wireCodec.readFrame(input) ?: break
                 lastRxActivityMs.set(SystemClock.uptimeMillis())
                 handleDownlinkFrame(frame, peerFp, ssl)
             }
@@ -587,7 +534,7 @@ class OpalCastClient(
                     UplinkCoalescer.coalesceBatch(rawBatch, coalescedBatch)
                     for (i in 0 until coalescedBatch.size) {
                         val pkt = coalescedBatch[i]
-                        writeFrame(out, pkt.type, pkt.flags, pkt.tsUs, pkt.payload)
+                        wireCodec.writeFrame(out, pkt.type, pkt.flags, pkt.tsUs, pkt.payload)
                     }
                     wroteAny = true
                 }
@@ -597,15 +544,8 @@ class OpalCastClient(
                 if (now - lastPingMs >= pingIntervalMs) {
                     lastPingMs = now
                     val id = pingSeq++
-                    pingPayload[0] = ((id ushr 56) and 0xFF).toByte()
-                    pingPayload[1] = ((id ushr 48) and 0xFF).toByte()
-                    pingPayload[2] = ((id ushr 40) and 0xFF).toByte()
-                    pingPayload[3] = ((id ushr 32) and 0xFF).toByte()
-                    pingPayload[4] = ((id ushr 24) and 0xFF).toByte()
-                    pingPayload[5] = ((id ushr 16) and 0xFF).toByte()
-                    pingPayload[6] = ((id ushr 8) and 0xFF).toByte()
-                    pingPayload[7] = (id and 0xFF).toByte()
-                    writeFrame(out, TYPE_PING, 0, now * 1000L, pingPayload)
+                    OpalCastWireCodec.writePingId(pingPayload, id)
+                    wireCodec.writeFrame(out, OpalCastWireCodec.TYPE_PING, 0, now * 1000L, pingPayload)
                     wroteAny = true
                 }
                 if (wroteAny) out.flush()
@@ -614,9 +554,9 @@ class OpalCastClient(
         }
     }
 
-    private fun handleDownlinkFrame(frame: RxFrame, peerFp: String, ssl: SSLSocket) {
+    private fun handleDownlinkFrame(frame: OpalCastRxFrame, peerFp: String, ssl: SSLSocket) {
         when (frame.type) {
-            TYPE_AUTH_RESULT -> {
+            OpalCastWireCodec.TYPE_AUTH_RESULT -> {
                 authCompleted.set(true)
                 try { ssl.soTimeout = 0 } catch (_: Throwable) {}
                 if (frame.payload.isEmpty()) return
@@ -639,111 +579,18 @@ class OpalCastClient(
                     stop()
                 }
             }
-            TYPE_DEVICE_STATE -> handleDeviceState(frame.payload)
-            TYPE_APP_LIST -> handleAppList(frame.payload)
-            TYPE_IME_REQUEST -> handleImeRequest(frame.payload)
-            TYPE_MIC_STATE -> handleMicState(frame.payload)
-            TYPE_CAMERA_STATE -> handleCameraState(frame.payload)
-            TYPE_VIDEO_CONFIG -> mediaDecoder.handleVideoConfig(frame.payload)
-            TYPE_VIDEO_FRAME -> mediaDecoder.handleVideoFrame(frame.payload, frame.length, frame.flags, frame.timestampUs)
-            TYPE_AUDIO_CONFIG -> mediaDecoder.handleAudioConfig(frame.payload)
-            TYPE_AUDIO_FRAME -> mediaDecoder.enqueueAudioFrame(frame.payload, frame.timestampUs)
-            TYPE_PONG -> Unit
+            OpalCastWireCodec.TYPE_DEVICE_STATE -> OpalCastWireCodec.routeDeviceState(frame.payload, listener)
+            OpalCastWireCodec.TYPE_APP_LIST -> OpalCastWireCodec.routeAppList(frame.payload, listener)
+            OpalCastWireCodec.TYPE_IME_REQUEST -> OpalCastWireCodec.routeImeRequest(frame.payload, listener)
+            OpalCastWireCodec.TYPE_MIC_STATE -> OpalCastWireCodec.routeMicState(frame.payload, listener)
+            OpalCastWireCodec.TYPE_CAMERA_STATE -> OpalCastWireCodec.routeCameraState(frame.payload, listener)
+            OpalCastWireCodec.TYPE_VIDEO_CONFIG -> mediaDecoder.handleVideoConfig(frame.payload)
+            OpalCastWireCodec.TYPE_VIDEO_FRAME -> mediaDecoder.handleVideoFrame(frame.payload, frame.length, frame.flags, frame.timestampUs)
+            OpalCastWireCodec.TYPE_AUDIO_CONFIG -> mediaDecoder.handleAudioConfig(frame.payload)
+            OpalCastWireCodec.TYPE_AUDIO_FRAME -> mediaDecoder.enqueueAudioFrame(frame.payload, frame.timestampUs)
+            OpalCastWireCodec.TYPE_PONG -> Unit
         }
     }
-
-    private fun handleDeviceState(payload: ByteArray) {
-        if (payload.isEmpty()) return
-        try {
-            val obj = JSONObject(String(payload, StandardCharsets.UTF_8))
-            if (obj.has("blackout")) listener.onRemoteBlackoutChanged(obj.optBoolean("blackout", false))
-            if (obj.has("fullscreenWindowTitle")) {
-                listener.onRemoteFullscreenChanged(obj.optString("fullscreenWindowTitle", "").trim())
-            }
-            if (obj.has("displayMode")) {
-                val mode = obj.optInt("displayMode", DISPLAY_MODE_DEX)
-                if (mode == DISPLAY_MODE_DEX || mode == DISPLAY_MODE_MIRROR) {
-                    listener.onDisplayModeChanged(mode)
-                }
-            }
-        } catch (_: Throwable) {
-        }
-    }
-
-    private fun handleAppList(payload: ByteArray) {
-        if (payload.isEmpty()) return
-        try {
-            val root = JSONObject(String(payload, StandardCharsets.UTF_8))
-            val arr = root.optJSONArray("apps")
-            val out = ArrayList<RemoteAppEntry>(arr?.length() ?: 0)
-            if (arr != null) {
-                for (i in 0 until arr.length()) {
-                    val o = arr.optJSONObject(i) ?: continue
-                    val pkg = o.optString("pkg", "").trim()
-                    if (pkg.isEmpty()) continue
-                    val userId = o.optInt("userId", 0).coerceAtLeast(0)
-                    val profileType = ReceiverPolicy.normalizeProfileType(o.optString("profileType", ""), userId)
-                    out.add(
-                        RemoteAppEntry(
-                            pkg = pkg,
-                            cls = o.optString("cls", ""),
-                            label = o.optString("label", pkg).ifBlank { pkg },
-                            openCount = o.optInt("openCount", 0).coerceAtLeast(0),
-                            userId = userId,
-                            profileType = profileType,
-                        ),
-                    )
-                }
-            }
-            listener.onAppListReceived(out)
-        } catch (_: Throwable) {
-        }
-    }
-
-    private fun handleImeRequest(payload: ByteArray) {
-        if (payload.isEmpty()) return
-        try {
-            val obj = JSONObject(String(payload, StandardCharsets.UTF_8))
-            listener.onRemoteImeRequest(obj.optBoolean("show", true), obj.optInt("inputType", 0))
-        } catch (_: Throwable) {
-        }
-    }
-
-    private fun handleMicState(payload: ByteArray) {
-        if (payload.isEmpty()) return
-        try {
-            val obj = JSONObject(String(payload, StandardCharsets.UTF_8))
-            listener.onRemoteMicState(
-                obj.optBoolean("active", false),
-                obj.optBoolean("supported", false),
-                obj.optString("message", ""),
-            )
-        } catch (_: Throwable) {
-        }
-    }
-
-    private fun handleCameraState(payload: ByteArray) {
-        if (payload.isEmpty()) return
-        try {
-            val obj = JSONObject(String(payload, StandardCharsets.UTF_8))
-            listener.onRemoteCameraState(
-                obj.optBoolean("active", false),
-                obj.optBoolean("supported", false),
-                obj.optBoolean("rootRequired", true),
-                obj.optString("message", ""),
-                obj.optString("facing", ""),
-            )
-        } catch (_: Throwable) {
-        }
-    }
-
-    private data class RxFrame(
-        val type: Int,
-        val flags: Int,
-        val timestampUs: Long,
-        val payload: ByteArray,
-        val length: Int = payload.size,
-    )
 
     private fun requestKeyFrameThrottled() {
         val nowMs = SystemClock.uptimeMillis()
@@ -751,99 +598,5 @@ class OpalCastClient(
         if (prev == 0L || nowMs - prev >= IDR_THROTTLE_MS) {
             if (lastIdrRequestMs.compareAndSet(prev, nowMs)) requestKeyFrame()
         }
-    }
-
-    private fun writeFrame(out: OutputStream, type: Int, flags: Int, tsUs: Long, payload: ByteArray) {
-        val hdr = txHeaderBuf
-        hdr[0] = 0x4F
-        hdr[1] = 0x50
-        hdr[2] = 0x44
-        hdr[3] = 0x31
-        hdr[4] = (type and 0xFF).toByte()
-        hdr[5] = (flags and 0xFF).toByte()
-        val len = payload.size
-        hdr[6] = ((len ushr 24) and 0xFF).toByte()
-        hdr[7] = ((len ushr 16) and 0xFF).toByte()
-        hdr[8] = ((len ushr 8) and 0xFF).toByte()
-        hdr[9] = (len and 0xFF).toByte()
-        hdr[10] = ((tsUs ushr 56) and 0xFF).toByte()
-        hdr[11] = ((tsUs ushr 48) and 0xFF).toByte()
-        hdr[12] = ((tsUs ushr 40) and 0xFF).toByte()
-        hdr[13] = ((tsUs ushr 32) and 0xFF).toByte()
-        hdr[14] = ((tsUs ushr 24) and 0xFF).toByte()
-        hdr[15] = ((tsUs ushr 16) and 0xFF).toByte()
-        hdr[16] = ((tsUs ushr 8) and 0xFF).toByte()
-        hdr[17] = (tsUs and 0xFF).toByte()
-        out.write(hdr)
-        if (len > 0) out.write(payload)
-    }
-
-    private fun readFrame(input: InputStream): RxFrame? {
-        val hdr = rxHeaderBuf
-        val first = input.read()
-        if (first < 0) return null
-        hdr[0] = first.toByte()
-        readFully(input, hdr, 1, HEADER_SIZE - 1)
-        if (hdr[0] != 0x4F.toByte() || hdr[1] != 0x50.toByte() ||
-            hdr[2] != 0x44.toByte() || hdr[3] != 0x31.toByte()
-        ) {
-            throw IOException("Invalid OpalCast frame magic")
-        }
-        val type = hdr[4].toInt() and 0xFF
-        val flags = hdr[5].toInt() and 0xFF
-        val len = ((hdr[6].toInt() and 0xFF) shl 24) or
-            ((hdr[7].toInt() and 0xFF) shl 16) or
-            ((hdr[8].toInt() and 0xFF) shl 8) or
-            (hdr[9].toInt() and 0xFF)
-        if (len < 0 || len > MAX_PAYLOAD_LEN) {
-            throw IOException("Invalid OpalCast payload length: $len")
-        }
-        val tsUs = ((hdr[10].toLong() and 0xFF) shl 56) or
-            ((hdr[11].toLong() and 0xFF) shl 48) or
-            ((hdr[12].toLong() and 0xFF) shl 40) or
-            ((hdr[13].toLong() and 0xFF) shl 32) or
-            ((hdr[14].toLong() and 0xFF) shl 24) or
-            ((hdr[15].toLong() and 0xFF) shl 16) or
-            ((hdr[16].toLong() and 0xFF) shl 8) or
-            (hdr[17].toLong() and 0xFF)
-        if (len == 0) return RxFrame(type, flags, tsUs, ByteArray(0), 0)
-        if (type == TYPE_VIDEO_FRAME) {
-            if (rxVideoScratch.size < len) {
-                rxVideoScratch = ByteArray(maxOf(len, rxVideoScratch.size * 2).coerceAtMost(MAX_PAYLOAD_LEN))
-            }
-            readFully(input, rxVideoScratch, 0, len)
-            return RxFrame(type, flags, tsUs, rxVideoScratch, len)
-        }
-        val payload = ByteArray(len)
-        readFully(input, payload, 0, len)
-        return RxFrame(type, flags, tsUs, payload, len)
-    }
-
-    private fun readFully(input: InputStream, dst: ByteArray, off: Int, len: Int) {
-        var pos = off
-        var rem = len
-        while (rem > 0) {
-            val n = input.read(dst, pos, rem)
-            if (n < 0) throw EOFException("Unexpected EOF in OpalCast stream")
-            pos += n
-            rem -= n
-        }
-    }
-
-    private fun encodeSystemAction(action: Int, arg: Int): ByteArray =
-        ByteBuffer.allocate(5).order(ByteOrder.BIG_ENDIAN)
-            .put((action and 0xFF).toByte())
-            .putInt(arg)
-            .array()
-
-    private fun sha256Hex(bytes: ByteArray): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
-        val sb = StringBuilder(digest.size * 2)
-        for (b in digest) {
-            val v = b.toInt() and 0xFF
-            sb.append("0123456789abcdef"[v ushr 4])
-            sb.append("0123456789abcdef"[v and 0x0F])
-        }
-        return sb.toString()
     }
 }

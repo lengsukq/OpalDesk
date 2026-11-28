@@ -221,194 +221,17 @@ fun ConsoleEngineSettingsTab(
         }
 
         // 1. High-Frequency Card: DeX & Cross-Device Notification Sync (+ Wave 2 Companion Hook)
-        MacGlassSectionCard(
-            modifier = Modifier.consoleSearchAnchor(navController, ConsoleSectionKeys.NOTIFICATIONS_COMPANION),
-            contentPadding = PaddingValues(15.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    OpalText(text = stringResource(R.string.settings_notif_title), fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
-                    OpalText(
-                        text = if (notifAccessGranted) {
-                            stringResource(R.string.settings_notif_sub_granted)
-                        } else {
-                            stringResource(R.string.settings_notif_sub_denied)
-                        },
-                        fontSize = 11.5.sp,
-                        color = if (notifAccessGranted) OpalPalette.AccentEmerald else OpalPalette.TextSecondary,
-                    )
-                }
-                Spacer(Modifier.width(10.dp))
-                OpalButton(
-                    label = stringResource(if (notifAccessGranted) R.string.settings_notif_manage else R.string.settings_notif_enable),
-                    compact = true,
-                    filled = !notifAccessGranted,
-                    accent = if (notifAccessGranted) OpalPalette.AccentEmerald else OpalPalette.AccentBlue,
-                    onClick = {
-                        io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.openNotificationAccessSettings(ctx)
-                    },
-                )
-            }
-
-            // === WAVE 2 COMPANION HOOK: Call Control & BLE Nearby Discovery Toggles ===
-            Spacer(Modifier.height(10.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(0.7.dp)
-                    .background(OpalPalette.DividerColor),
-            )
-            Spacer(Modifier.height(8.dp))
-
-            val callPhoneGranted = remember(permRefreshTick, callControlEnabled) {
-                OpalCallControlBridge.hasReadPhoneStatePermission(ctx)
-            }
-            val callAnswerGranted = remember(permRefreshTick, callControlEnabled) {
-                OpalCallControlBridge.hasAnswerPhoneCallsPermission(ctx)
-            }
-            OpalSwitchRow(
-                title = stringResource(R.string.settings_call_title),
-                subtitle = stringResource(R.string.settings_call_sub),
-                checked = callControlEnabled,
-                onCheckedChange = { enabled ->
-                    if (enabled) {
-                        AppPrefs.setCallControlSyncEnabled(ctx, true)
-                        val missing = OpalCallControlBridge.requiredRuntimePermissions()
-                            .filterNot { OpalCallControlBridge.hasPermission(ctx, it) }
-                        if (missing.isNotEmpty()) {
-                            callPermLauncher.launch(missing.toTypedArray())
-                        } else {
-                            OpalCallControlBridge.syncEnabledState(ctx)
-                            permRefreshTick++
-                            Toast.makeText(ctx, ctx.getString(R.string.settings_call_toast_full), Toast.LENGTH_SHORT).show()
-                        }
-                    } else {
-                        AppPrefs.setCallControlSyncEnabled(ctx, false)
-                        OpalCallControlBridge.stop(ctx)
-                        permRefreshTick++
-                    }
-                },
-            )
-            if (callControlEnabled) {
-                val callBadge = when {
-                    callPhoneGranted && callAnswerGranted -> stringResource(R.string.settings_call_badge_ready) to OpalPalette.AccentEmerald
-                    callPhoneGranted || notifAccessGranted -> stringResource(R.string.settings_call_badge_partial) to OpalPalette.AccentAmber
-                    else -> stringResource(R.string.settings_call_badge_pending) to OpalPalette.AccentAmber
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    OpalStatusBadge(label = callBadge.first, color = callBadge.second)
-                    if (!callPhoneGranted || !callAnswerGranted) {
-                        OpalButton(
-                            label = stringResource(R.string.settings_call_grant_btn),
-                            compact = true,
-                            filled = false,
-                            accent = OpalPalette.AccentAmber,
-                            onClick = {
-                                val missing = OpalCallControlBridge.requiredRuntimePermissions()
-                                    .filterNot { OpalCallControlBridge.hasPermission(ctx, it) }
-                                if (missing.isNotEmpty()) {
-                                    callPermLauncher.launch(missing.toTypedArray())
-                                }
-                            },
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(6.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(0.7.dp)
-                    .background(OpalPalette.DividerColor),
-            )
-            Spacer(Modifier.height(8.dp))
-
-            val bleSupported = remember(permRefreshTick, bleRuntime.supported) {
-                BleNearbyService.isBleSupported(ctx)
-            }
-            val blePermGranted = remember(permRefreshTick, bleRuntime.hasPermissions) {
-                BleNearbyService.hasRequiredPermissions(ctx)
-            }
-            val bleBtOn = remember(permRefreshTick, bleRuntime.bluetoothEnabled) {
-                BleNearbyService.isBluetoothEnabled(ctx)
-            }
-            OpalSwitchRow(
-                title = stringResource(R.string.settings_ble_title),
-                subtitle = if (!bleSupported) {
-                    stringResource(R.string.settings_ble_sub_unsupported)
-                } else {
-                    stringResource(R.string.settings_ble_sub)
-                },
-                checked = bleNearbyEnabled,
-                onCheckedChange = { enabled ->
-                    if (enabled) {
-                        if (!bleSupported) {
-                            Toast.makeText(ctx, ctx.getString(R.string.settings_ble_toast_unsupported), Toast.LENGTH_SHORT).show()
-                            return@OpalSwitchRow
-                        }
-                        val needed = BleNearbyService.requiredRuntimePermissions()
-                            .filterNot { OpalCallControlBridge.hasPermission(ctx, it) }
-                        if (needed.isNotEmpty()) {
-                            blePermLauncher.launch(needed.toTypedArray())
-                        } else {
-                            AppPrefs.setBleNearbyEnabled(ctx, true)
-                            BleNearbyService.start(ctx)
-                            permRefreshTick++
-                            val hint = if (BleNearbyService.isBluetoothEnabled(ctx)) {
-                                ctx.getString(R.string.settings_ble_toast_on)
-                            } else {
-                                ctx.getString(R.string.settings_ble_toast_bt_off)
-                            }
-                            Toast.makeText(ctx, hint, Toast.LENGTH_SHORT).show()
-                        }
-                    } else {
-                        AppPrefs.setBleNearbyEnabled(ctx, false)
-                        BleNearbyService.stop()
-                        permRefreshTick++
-                    }
-                },
-            )
-            if (bleNearbyEnabled || !bleSupported) {
-                val bleBadge = when {
-                    !bleSupported -> stringResource(R.string.settings_ble_badge_unsupported) to OpalPalette.TextMuted
-                    !blePermGranted -> stringResource(R.string.settings_ble_badge_perm) to OpalPalette.AccentAmber
-                    !bleBtOn -> stringResource(R.string.settings_ble_badge_bt_off) to OpalPalette.AccentAmber
-                    bleRuntime.advertising -> stringResource(R.string.settings_ble_badge_adv) to OpalPalette.AccentEmerald
-                    else -> stringResource(R.string.settings_ble_badge_ready) to OpalPalette.AccentCyan
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    OpalStatusBadge(label = bleBadge.first, color = bleBadge.second)
-                    if (bleSupported && !blePermGranted) {
-                        OpalButton(
-                            label = stringResource(R.string.settings_ble_grant_btn),
-                            compact = true,
-                            filled = false,
-                            accent = OpalPalette.AccentAmber,
-                            onClick = {
-                                val needed = BleNearbyService.requiredRuntimePermissions()
-                                    .filterNot { OpalCallControlBridge.hasPermission(ctx, it) }
-                                if (needed.isNotEmpty()) {
-                                    blePermLauncher.launch(needed.toTypedArray())
-                                }
-                            },
-                        )
-                    }
-                }
-            }
-        }
+        ConsoleNotificationAndCompanionCard(
+            notifAccessGranted = notifAccessGranted,
+            callControlEnabled = callControlEnabled,
+            bleNearbyEnabled = bleNearbyEnabled,
+            bleRuntime = bleRuntime,
+            permRefreshTick = permRefreshTick,
+            navController = navController,
+            onRequestCallPermissions = { callPermLauncher.launch(it) },
+            onRequestBlePermissions = { blePermLauncher.launch(it) },
+            onBumpPermTick = { permRefreshTick++ },
+        )
 
         // 2. High-Frequency Card: Startup Behavior & App List
         MacGlassSectionCard(
@@ -592,101 +415,15 @@ fun ConsoleEngineSettingsTab(
         }
 
         // 5. Collapsible: Audio Split Routing & Remote Mic / Camera
-        val audioSummary = when {
-            splitAudioOn && (remoteMicEnabled || effectiveCameraEnabled) -> stringResource(R.string.settings_audio_sum_split_media)
-            splitAudioOn -> stringResource(R.string.settings_audio_sum_split)
-            remoteMicEnabled || effectiveCameraEnabled -> stringResource(R.string.settings_audio_sum_all_media)
-            else -> stringResource(R.string.settings_audio_sum_all)
-        }
-        OpalCollapsibleSectionCard(
-            title = stringResource(R.string.settings_audio_title),
-            subtitle = stringResource(R.string.settings_audio_sub),
-            sectionKey = ConsoleSectionKeys.AUDIO_MEDIA,
-            controller = navController,
-            summaryText = audioSummary,
-            summaryAccent = if (splitAudioOn || remoteMicEnabled || effectiveCameraEnabled) {
-                OpalPalette.AccentEmerald
-            } else {
-                OpalPalette.TextMuted
-            },
-            defaultExpanded = false,
-        ) {
-            OpalText(text = stringResource(R.string.settings_audio_mode_label), fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(3.dp))
-            OpalText(
-                text = if (splitAudioOn) {
-                    stringResource(R.string.settings_audio_split_hint)
-                } else {
-                    stringResource(R.string.settings_audio_all_hint)
-                },
-                fontSize = 11.5.sp,
-                color = OpalPalette.TextSecondary,
-                lineHeight = 16.sp,
-            )
-            Spacer(Modifier.height(7.dp))
-            OpalSegmentedRow(
-                options = listOf(stringResource(R.string.settings_audio_opt_all), stringResource(R.string.settings_audio_opt_split)),
-                selectedIndex = audioRouteMode.coerceIn(
-                    BridgeProtocol.AudioRoute.ALL_TO_DEX,
-                    BridgeProtocol.AudioRoute.SPLIT_BY_APP,
-                ),
-                onSelect = { mode ->
-                    BridgeClient.setAudioRouteModeAsync(ctx, mode) {
-                        val msg = if (mode == BridgeProtocol.AudioRoute.SPLIT_BY_APP) {
-                            ctx.getString(R.string.settings_audio_toast_split)
-                        } else {
-                            ctx.getString(R.string.settings_audio_toast_all)
-                        }
-                        Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
-                    }
-                },
-            )
-            Spacer(Modifier.height(8.dp))
-            OpalSwitchRow(
-                title = stringResource(R.string.settings_mic_title),
-                subtitle = stringResource(R.string.settings_mic_sub),
-                checked = remoteMicEnabled,
-                onCheckedChange = { enabled ->
-                    BridgeClient.setRemoteMediaConfigAsync(ctx, enabled, effectiveCameraEnabled) {
-                        Toast.makeText(
-                            ctx,
-                            ctx.getString(if (enabled) R.string.settings_mic_toast_on else R.string.settings_mic_toast_off),
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                },
-            )
-            OpalSwitchRow(
-                title = stringResource(R.string.settings_cam_title),
-                subtitle = if (!canUseRootCamera) {
-                    stringResource(R.string.settings_cam_sub_no_root)
-                } else {
-                    stringResource(R.string.settings_cam_sub_ready)
-                },
-                checked = effectiveCameraEnabled,
-                onCheckedChange = { enabled ->
-                    if (enabled && !canUseRootCamera) {
-                        if (remoteCameraEnabled) {
-                            AppPrefs.setRemoteCameraEnabled(ctx, false)
-                        }
-                        Toast.makeText(
-                            ctx,
-                            ctx.getString(R.string.settings_cam_toast_no_root),
-                            Toast.LENGTH_LONG,
-                        ).show()
-                        return@OpalSwitchRow
-                    }
-                    BridgeClient.setRemoteMediaConfigAsync(ctx, remoteMicEnabled, enabled) { ok ->
-                        val msg = when {
-                            !enabled -> ctx.getString(R.string.settings_cam_toast_off)
-                            ok -> ctx.getString(R.string.settings_cam_toast_on)
-                            else -> ctx.getString(R.string.settings_cam_toast_no_root)
-                        }
-                        Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
-                    }
-                },
-            )
-        }
+        ConsoleAudioMediaCard(
+            audioRouteMode = audioRouteMode,
+            splitAudioOn = splitAudioOn,
+            remoteMicEnabled = remoteMicEnabled,
+            remoteCameraEnabled = remoteCameraEnabled,
+            canUseRootCamera = canUseRootCamera,
+            effectiveCameraEnabled = effectiveCameraEnabled,
+            navController = navController,
+        )
 
         // 6. Collapsible: Experimental USB Tethering Cast (Beta)
         OpalCollapsibleSectionCard(
@@ -718,99 +455,13 @@ fun ConsoleEngineSettingsTab(
         }
 
         // 7. Collapsible: Low-level Engine Input Backend & VirtualDisplay Pool Quota
-        val backendShort = when (status.inputBackendMode) {
-            BridgeProtocol.InputBackend.SYSTEM -> stringResource(R.string.settings_backend_system)
-            BridgeProtocol.InputBackend.UHID -> "UHID"
-            else -> stringResource(R.string.common_auto)
-        }
         val effectiveQuota = status.maxVdCount.takeIf { it > 0 } ?: profileState.workingConfig.maxVdCount
-        OpalCollapsibleSectionCard(
-            title = stringResource(R.string.settings_engine_lowlevel_title),
-            subtitle = stringResource(R.string.settings_engine_lowlevel_sub),
-            sectionKey = ConsoleSectionKeys.ENGINE_LOWLEVEL,
-            controller = navController,
-            summaryText = stringResource(R.string.settings_engine_lowlevel_summary, backendShort, effectiveQuota),
-            summaryAccent = if (inputBlocked) OpalPalette.AccentAmber else OpalPalette.AccentBlue,
-            defaultExpanded = false,
-        ) {
-            OpalText(
-                text = stringResource(R.string.settings_input_hint),
-                fontSize = 11.5.sp,
-                color = OpalPalette.TextSecondary,
-                lineHeight = 16.sp,
-            )
-            Spacer(Modifier.height(10.dp))
-
-            val inputIdx = when (status.inputBackendMode) {
-                BridgeProtocol.InputBackend.SYSTEM -> 1
-                BridgeProtocol.InputBackend.UHID -> 2
-                else -> 0
-            }
-            OpalSegmentedRow(
-                options = listOf(
-                    stringResource(R.string.settings_input_opt_auto),
-                    stringResource(R.string.settings_input_opt_system),
-                    stringResource(R.string.settings_input_opt_uhid),
-                ),
-                selectedIndex = inputIdx,
-                onSelect = { idx ->
-                    val mode = when (idx) {
-                        1 -> BridgeProtocol.InputBackend.SYSTEM
-                        2 -> BridgeProtocol.InputBackend.UHID
-                        else -> BridgeProtocol.InputBackend.AUTO
-                    }
-                    ProfileConfigStore.setWorkingInputBackendMode(mode)
-                    BridgeClient.updateCompositorConfigAsync(inputBackendMode = mode)
-                },
-            )
-
-            Spacer(Modifier.height(14.dp))
-            OpalText(
-                text = stringResource(R.string.settings_quota_label),
-                fontSize = 12.sp,
-                color = OpalPalette.TextSecondary,
-            )
-            Spacer(Modifier.height(7.dp))
-            val poolOptions = listOf(3, 4, 5, 6, 8, 10)
-            val curMaxIdx = poolOptions.indexOf(effectiveQuota).let { if (it >= 0) it else 3 }
-            OpalSegmentedRow(
-                options = poolOptions.map { stringResource(R.string.settings_quota_unit, it) },
-                selectedIndex = curMaxIdx,
-                onSelect = { idx ->
-                    ProfileConfigStore.setWorkingMaxVdCount(poolOptions[idx])
-                    BridgeClient.updateCompositorConfigAsync(maxVdCount = poolOptions[idx])
-                },
-            )
-
-            if (!inputBlocked) {
-                Spacer(Modifier.height(12.dp))
-                TouchInputTroubleshootingTipCard(
-                    ctx = ctx,
-                    inputBlocked = false,
-                )
-            }
-
-            if (status.connected) {
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                    OpalButton(
-                        label = stringResource(R.string.dash_hero_close_all_windows),
-                        filled = false,
-                        compact = true,
-                        accent = OpalPalette.AccentAmber,
-                        onClick = { BridgeClient.closeAllWindowsAsync(removeTasks = true) },
-                        modifier = Modifier.weight(1f),
-                    )
-                    OpalButton(
-                        label = stringResource(R.string.settings_stop_engine),
-                        filled = false,
-                        compact = true,
-                        accent = OpalPalette.AccentDanger,
-                        onClick = onStopEngine,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-        }
+        ConsoleEngineLowLevelCard(
+            status = status,
+            effectiveQuota = effectiveQuota,
+            inputBlocked = inputBlocked,
+            navController = navController,
+            onStopEngine = onStopEngine,
+        )
     }
 }

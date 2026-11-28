@@ -1,0 +1,26 @@
+name: Clean Code Gate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clean-code-gate-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  clean-code-line-limit:
+    name: Enforce 800-Line Source File Limit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check source file line counts (max 800 lines)
+        run: python3 scripts/check-file-lines.py --max-lines 800

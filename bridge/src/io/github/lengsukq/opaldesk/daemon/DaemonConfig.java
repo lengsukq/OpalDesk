@@ -3,7 +3,6 @@ package io.github.lengsukq.opaldesk.daemon;
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil.IntRect;
 import io.github.lengsukq.opaldesk.daemon.compositor.WindowProfile;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
-import io.github.lengsukq.opaldesk.daemon.stream.SimpleJson;
 import io.github.lengsukq.opaldesk.daemon.util.AtomicFiles;
 
 import java.io.BufferedReader;
@@ -14,7 +13,6 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -141,12 +139,8 @@ public final class DaemonConfig {
     private final Object lock = new Object();
     private final Object ioLock = new Object();
     private final File confFile;
-    private final File profileFile;
-    private final File launchCountsFile;
-    private final File appDpisFile;
-    private final File appBoundsFile;
-    private final File imeConfFile;
     private final File imeBackupFile;
+    private final WindowProfileStore profileStore;
     private final Map<String, WindowProfile> appProfiles = new HashMap<>();
     private final Map<String, Integer> appLaunchCounts = new HashMap<>();
     private final Map<String, Integer> appCustomDpis = new LinkedHashMap<>();
@@ -184,12 +178,15 @@ public final class DaemonConfig {
 
     public DaemonConfig(File confFile, File profileFile, File launchCountsFile) {
         this.confFile = (confFile != null) ? confFile : new File(DEFAULT_CONF_PATH);
-        this.profileFile = (profileFile != null) ? profileFile : new File(DEFAULT_PROFILE_CONF_PATH);
-        this.launchCountsFile = (launchCountsFile != null) ? launchCountsFile : new File(DEFAULT_LAUNCH_COUNTS_PATH);
-        this.appDpisFile = deriveSiblingFile(this.confFile, "opaldesk_app_dpis.conf", DEFAULT_APP_DPIS_PATH);
-        this.appBoundsFile = deriveSiblingFile(this.confFile, "opaldesk_app_bounds.conf", DEFAULT_APP_BOUNDS_PATH);
-        this.imeConfFile = deriveSiblingFile(this.confFile, "opaldesk_ime.conf", DEFAULT_IME_CONF_PATH);
+        File resolvedProfileFile = (profileFile != null) ? profileFile : new File(DEFAULT_PROFILE_CONF_PATH);
+        File resolvedCountsFile = (launchCountsFile != null) ? launchCountsFile : new File(DEFAULT_LAUNCH_COUNTS_PATH);
+        File appDpisFile = deriveSiblingFile(this.confFile, "opaldesk_app_dpis.conf", DEFAULT_APP_DPIS_PATH);
+        File appBoundsFile = deriveSiblingFile(this.confFile, "opaldesk_app_bounds.conf", DEFAULT_APP_BOUNDS_PATH);
+        File imeConfFile = deriveSiblingFile(this.confFile, "opaldesk_ime.conf", DEFAULT_IME_CONF_PATH);
         this.imeBackupFile = deriveSiblingFile(this.confFile, "opaldesk_ime_backup.conf", DEFAULT_IME_BACKUP_PATH);
+        this.profileStore = new WindowProfileStore(
+                lock, ioLock, resolvedProfileFile, resolvedCountsFile,
+                appDpisFile, appBoundsFile, imeConfFile);
     }
 
     private static File deriveSiblingFile(File confFile, String fileName, String defaultPath) {
@@ -201,11 +198,20 @@ public final class DaemonConfig {
 
     public void loadAll() {
         loadMainConf();
-        loadAppProfiles();
-        loadAppLaunchCounts();
-        loadAppCustomDpis();
-        loadAppWindowBounds();
-        loadImeConf();
+        profileStore.loadAppProfiles(appProfiles);
+        profileStore.loadAppLaunchCounts(appLaunchCounts);
+        profileStore.loadAppCustomDpis(appCustomDpis);
+        profileStore.loadAppWindowBounds(appWindowBounds);
+        WindowProfileStore.ImeConfSnapshot imeSnap = profileStore.loadImeConf();
+        if (imeSnap != null) {
+            synchronized (lock) {
+                dexImeDisplayMode = imeSnap.displayMode;
+                dexLockedImeId = imeSnap.lockedImeId;
+                muteHostImeOnCast = imeSnap.muteHostOnCast;
+                showImeWithHardKeyboard = imeSnap.showWithHardKbd;
+                autoBridgeImeOnCast = imeSnap.autoBridgeImeOnCast;
+            }
+        }
     }
 
     public File getImeBackupFile() {
@@ -258,14 +264,17 @@ public final class DaemonConfig {
                 || showWithHardKbd == BridgeProtocol.HARD_KBD_SOFT_IME_SHOW)
                 ? showWithHardKbd
                 : BridgeProtocol.HARD_KBD_SOFT_IME_SYSTEM;
+        WindowProfileStore.ImeConfSnapshot snap;
         synchronized (lock) {
             this.dexImeDisplayMode = clampedMode;
             this.dexLockedImeId = cleanIme;
             this.muteHostImeOnCast = muteHostOnCast;
             this.showImeWithHardKeyboard = clampedHardKbd;
             this.autoBridgeImeOnCast = autoBridgeOnCast;
+            snap = new WindowProfileStore.ImeConfSnapshot(
+                    dexImeDisplayMode, dexLockedImeId, muteHostImeOnCast, showImeWithHardKeyboard, autoBridgeImeOnCast);
         }
-        saveImeConf();
+        profileStore.saveImeConf(snap);
     }
 
     public int getCanvasWidth() {
@@ -349,7 +358,7 @@ public final class DaemonConfig {
                 appCustomDpis.put(pkg, DisplayGeometryUtil.clampDpi(dpi));
             }
         }
-        saveAppCustomDpis();
+        profileStore.saveAppCustomDpis(appCustomDpis);
     }
 
     public void replaceAllAppCustomDpis(Map<String, Integer> nextMap) {
@@ -366,7 +375,7 @@ public final class DaemonConfig {
                 }
             }
         }
-        saveAppCustomDpis();
+        profileStore.saveAppCustomDpis(appCustomDpis);
     }
 
     public Map<String, Integer> getAllAppCustomDpisSnapshot() {
@@ -391,7 +400,7 @@ public final class DaemonConfig {
                 appWindowBounds.put(pkg, bounds);
             }
         }
-        saveAppWindowBounds();
+        profileStore.saveAppWindowBounds(appWindowBounds);
     }
 
     public void replaceAllWindowBounds(Map<String, SavedWindowBounds> nextMap) {
@@ -406,7 +415,7 @@ public final class DaemonConfig {
                 }
             }
         }
-        saveAppWindowBounds();
+        profileStore.saveAppWindowBounds(appWindowBounds);
     }
 
     public Map<String, SavedWindowBounds> getAllSavedWindowBoundsSnapshot() {
@@ -417,27 +426,7 @@ public final class DaemonConfig {
 
     public String toAdvancedStateJson() {
         synchronized (lock) {
-            SimpleJson.ObjectBuilder dpisObj = new SimpleJson.ObjectBuilder();
-            for (Map.Entry<String, Integer> e : appCustomDpis.entrySet()) {
-                dpisObj.put(e.getKey(), e.getValue());
-            }
-            SimpleJson.ObjectBuilder boundsObj = new SimpleJson.ObjectBuilder();
-            for (Map.Entry<String, SavedWindowBounds> e : appWindowBounds.entrySet()) {
-                SavedWindowBounds b = e.getValue();
-                String entryJson = new SimpleJson.ObjectBuilder()
-                        .put("l", Math.round(b.leftRatio * 10000f))
-                        .put("t", Math.round(b.topRatio * 10000f))
-                        .put("r", Math.round(b.rightRatio * 10000f))
-                        .put("b", Math.round(b.bottomRatio * 10000f))
-                        .put("p", b.presentation)
-                        .build();
-                boundsObj.putRaw(e.getKey(), entryJson);
-            }
-            return new SimpleJson.ObjectBuilder()
-                    .put("globalCustomDpi", globalCustomDpi)
-                    .putRaw("appCustomDpis", dpisObj.build())
-                    .putRaw("appWindowBounds", boundsObj.build())
-                    .build();
+            return WindowProfileStore.toAdvancedStateJson(globalCustomDpi, appCustomDpis, appWindowBounds);
         }
     }
 
@@ -560,7 +549,7 @@ public final class DaemonConfig {
                 appProfiles.put(pkg, profile);
             }
         }
-        saveAppProfiles();
+        profileStore.saveAppProfiles(appProfiles);
     }
 
     public int getAppLaunchCount(String pkg) {
@@ -582,7 +571,7 @@ public final class DaemonConfig {
             next = (prev != null ? prev : 0) + 1;
             appLaunchCounts.put(pkg, next);
         }
-        saveAppLaunchCounts();
+        profileStore.saveAppLaunchCounts(appLaunchCounts);
         return next;
     }
 
@@ -667,253 +656,6 @@ public final class DaemonConfig {
                 AtomicFiles.writeAtomicUtf8(confFile, content, AtomicFiles.MODE_OWNER_RW);
             } catch (IOException e) {
                 System.err.println("OPALDESK_CONF_SAVE_WARN: " + e.getMessage());
-            }
-        }
-    }
-
-    private void loadAppProfiles() {
-        if (!profileFile.isFile()) return;
-        synchronized (lock) {
-            appProfiles.clear();
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(new FileInputStream(profileFile), StandardCharsets.UTF_8))) {
-                String ln;
-                while ((ln = br.readLine()) != null) {
-                    int eq = ln.indexOf('=');
-                    if (eq <= 0) continue;
-                    String pkg = ln.substring(0, eq).trim();
-                    WindowProfile p = WindowProfile.fromName(ln.substring(eq + 1).trim());
-                    if (PackagePolicy.isValidPackageName(pkg) && p != null) {
-                        appProfiles.put(pkg, p);
-                    }
-                }
-            } catch (IOException e) {
-                System.err.println("OPALDESK_PROFILES_LOAD_WARN: " + e.getMessage());
-            }
-        }
-    }
-
-    private void saveAppProfiles() {
-        synchronized (ioLock) {
-            StringBuilder sb = new StringBuilder();
-            synchronized (lock) {
-                for (Map.Entry<String, WindowProfile> e : appProfiles.entrySet()) {
-                    sb.append(e.getKey()).append('=').append(e.getValue().name()).append('\n');
-                }
-            }
-            try {
-                AtomicFiles.writeAtomicUtf8(profileFile, sb.toString(), AtomicFiles.MODE_OWNER_RW);
-            } catch (IOException e) {
-                System.err.println("OPALDESK_PROFILES_SAVE_WARN: " + e.getMessage());
-            }
-        }
-    }
-
-    private void loadAppLaunchCounts() {
-        if (!launchCountsFile.isFile()) return;
-        synchronized (lock) {
-            appLaunchCounts.clear();
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(new FileInputStream(launchCountsFile), StandardCharsets.UTF_8))) {
-                String ln;
-                while ((ln = br.readLine()) != null) {
-                    int eq = ln.indexOf('=');
-                    if (eq <= 0) continue;
-                    String pkg = ln.substring(0, eq).trim();
-                    if (!PackagePolicy.isValidPackageName(pkg)) continue;
-                    try {
-                        int c = Integer.parseInt(ln.substring(eq + 1).trim());
-                        if (c > 0) appLaunchCounts.put(pkg, c);
-                    } catch (NumberFormatException ignored) {
-                    }
-                }
-            } catch (IOException e) {
-                System.err.println("OPALDESK_COUNTS_LOAD_WARN: " + e.getMessage());
-            }
-        }
-    }
-
-    private void saveAppLaunchCounts() {
-        synchronized (ioLock) {
-            StringBuilder sb = new StringBuilder();
-            synchronized (lock) {
-                for (Map.Entry<String, Integer> e : appLaunchCounts.entrySet()) {
-                    if (e.getValue() != null && e.getValue() > 0) {
-                        sb.append(e.getKey()).append('=').append(e.getValue()).append('\n');
-                    }
-                }
-            }
-            try {
-                AtomicFiles.writeAtomicUtf8(launchCountsFile, sb.toString(), AtomicFiles.MODE_OWNER_RW);
-            } catch (IOException e) {
-                System.err.println("OPALDESK_COUNTS_SAVE_WARN: " + e.getMessage());
-            }
-        }
-    }
-
-    private void loadAppCustomDpis() {
-        if (!appDpisFile.isFile()) return;
-        synchronized (lock) {
-            appCustomDpis.clear();
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(new FileInputStream(appDpisFile), StandardCharsets.UTF_8))) {
-                String ln;
-                while ((ln = br.readLine()) != null) {
-                    int eq = ln.indexOf('=');
-                    if (eq <= 0) continue;
-                    String pkg = ln.substring(0, eq).trim();
-                    if (!PackagePolicy.isValidPackageName(pkg)) continue;
-                    try {
-                        int dpi = Integer.parseInt(ln.substring(eq + 1).trim());
-                        if (dpi >= DisplayGeometryUtil.MIN_DPI && dpi <= DisplayGeometryUtil.MAX_DPI) {
-                            appCustomDpis.put(pkg, dpi);
-                        }
-                    } catch (NumberFormatException ignored) {
-                    }
-                }
-            } catch (IOException e) {
-                System.err.println("OPALDESK_APP_DPIS_LOAD_WARN: " + e.getMessage());
-            }
-        }
-    }
-
-    private void saveAppCustomDpis() {
-        synchronized (ioLock) {
-            StringBuilder sb = new StringBuilder();
-            synchronized (lock) {
-                for (Map.Entry<String, Integer> e : appCustomDpis.entrySet()) {
-                    if (e.getValue() != null && e.getValue() >= DisplayGeometryUtil.MIN_DPI) {
-                        sb.append(e.getKey()).append('=').append(e.getValue()).append('\n');
-                    }
-                }
-            }
-            try {
-                AtomicFiles.writeAtomicUtf8(appDpisFile, sb.toString(), AtomicFiles.MODE_OWNER_RW);
-            } catch (IOException e) {
-                System.err.println("OPALDESK_APP_DPIS_SAVE_WARN: " + e.getMessage());
-            }
-        }
-    }
-
-    private void loadAppWindowBounds() {
-        if (!appBoundsFile.isFile()) return;
-        synchronized (lock) {
-            appWindowBounds.clear();
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(new FileInputStream(appBoundsFile), StandardCharsets.UTF_8))) {
-                String ln;
-                while ((ln = br.readLine()) != null) {
-                    int eq = ln.indexOf('=');
-                    if (eq <= 0) continue;
-                    String pkg = ln.substring(0, eq).trim();
-                    if (!PackagePolicy.isValidPackageName(pkg)) continue;
-                    String[] parts = ln.substring(eq + 1).trim().split(",");
-                    if (parts.length < 4) continue;
-                    try {
-                        float l = Float.parseFloat(parts[0].trim());
-                        float t = Float.parseFloat(parts[1].trim());
-                        float r = Float.parseFloat(parts[2].trim());
-                        float b = Float.parseFloat(parts[3].trim());
-                        String pres = parts.length >= 5 ? parts[4].trim() : BridgeProtocol.PRES_FLOATING;
-                        appWindowBounds.put(pkg, new SavedWindowBounds(l, t, r, b, pres));
-                    } catch (NumberFormatException ignored) {
-                    }
-                }
-            } catch (IOException e) {
-                System.err.println("OPALDESK_APP_BOUNDS_LOAD_WARN: " + e.getMessage());
-            }
-        }
-    }
-
-    private void saveAppWindowBounds() {
-        synchronized (ioLock) {
-            StringBuilder sb = new StringBuilder();
-            synchronized (lock) {
-                for (Map.Entry<String, SavedWindowBounds> e : appWindowBounds.entrySet()) {
-                    SavedWindowBounds b = e.getValue();
-                    if (b == null) continue;
-                    sb.append(e.getKey()).append('=')
-                            .append(String.format(Locale.US, "%.4f,%.4f,%.4f,%.4f,",
-                                    b.leftRatio, b.topRatio, b.rightRatio, b.bottomRatio))
-                            .append(b.presentation).append('\n');
-                }
-            }
-            try {
-                AtomicFiles.writeAtomicUtf8(appBoundsFile, sb.toString(), AtomicFiles.MODE_OWNER_RW);
-            } catch (IOException e) {
-                System.err.println("OPALDESK_APP_BOUNDS_SAVE_WARN: " + e.getMessage());
-            }
-        }
-    }
-
-    private void loadImeConf() {
-        if (!imeConfFile.isFile()) return;
-        try (BufferedReader br = new BufferedReader(
-                new InputStreamReader(new FileInputStream(imeConfFile), StandardCharsets.UTF_8))) {
-            int mode = BridgeProtocol.DEX_IME_DISPLAY_AUTO;
-            String locked = "";
-            boolean muteCast = false;
-            int hardKbd = BridgeProtocol.HARD_KBD_SOFT_IME_SYSTEM;
-            boolean autoBridgeCast = true;
-            String ln;
-            while ((ln = br.readLine()) != null) {
-                int eq = ln.indexOf('=');
-                if (eq <= 0) continue;
-                String k = ln.substring(0, eq).trim();
-                String v = ln.substring(eq + 1).trim();
-                try {
-                    if ("displayMode".equals(k)) {
-                        int parsed = Integer.parseInt(v);
-                        if (parsed >= BridgeProtocol.DEX_IME_DISPLAY_AUTO
-                                && parsed <= BridgeProtocol.DEX_IME_DISPLAY_FALLBACK_HOST) {
-                            mode = parsed;
-                        }
-                    } else if ("lockedImeId".equals(k)) {
-                        if (v.isEmpty() || PackagePolicy.isValidImeId(v)) {
-                            locked = v;
-                        }
-                    } else if ("muteHostOnCast".equals(k)) {
-                        muteCast = Integer.parseInt(v) != 0;
-                    } else if ("showWithHardKbd".equals(k)) {
-                        int parsed = Integer.parseInt(v);
-                        if (parsed == BridgeProtocol.HARD_KBD_SOFT_IME_HIDE
-                                || parsed == BridgeProtocol.HARD_KBD_SOFT_IME_SHOW) {
-                            hardKbd = parsed;
-                        } else {
-                            hardKbd = BridgeProtocol.HARD_KBD_SOFT_IME_SYSTEM;
-                        }
-                    } else if ("autoBridgeImeOnCast".equals(k)) {
-                        autoBridgeCast = Integer.parseInt(v) != 0;
-                    }
-                } catch (NumberFormatException ignored) {
-                }
-            }
-            synchronized (lock) {
-                dexImeDisplayMode = mode;
-                dexLockedImeId = locked;
-                muteHostImeOnCast = muteCast;
-                showImeWithHardKeyboard = hardKbd;
-                autoBridgeImeOnCast = autoBridgeCast;
-            }
-        } catch (IOException e) {
-            System.err.println("OPALDESK_IME_CONF_LOAD_WARN: " + e.getMessage());
-        }
-    }
-
-    private void saveImeConf() {
-        synchronized (ioLock) {
-            String content;
-            synchronized (lock) {
-                content = "displayMode=" + dexImeDisplayMode + "\n"
-                        + "lockedImeId=" + dexLockedImeId + "\n"
-                        + "muteHostOnCast=" + (muteHostImeOnCast ? 1 : 0) + "\n"
-                        + "showWithHardKbd=" + showImeWithHardKeyboard + "\n"
-                        + "autoBridgeImeOnCast=" + (autoBridgeImeOnCast ? 1 : 0) + "\n";
-            }
-            try {
-                AtomicFiles.writeAtomicUtf8(imeConfFile, content, AtomicFiles.MODE_OWNER_RW);
-            } catch (IOException e) {
-                System.err.println("OPALDESK_IME_CONF_SAVE_WARN: " + e.getMessage());
             }
         }
     }

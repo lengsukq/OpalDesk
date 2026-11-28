@@ -640,384 +640,79 @@ public final class DisplayGeometryUtil {
         return Math.max(MIN_FPS, Math.min(MAX_FPS, fps));
     }
 
-    /**
-     * Validates and even-aligns a custom external display size override ({@code wm size WxH -d <id>}).
-     * Supports both landscape and portrait dimensions up to 4K / ultrawide, returning {@code null}
-     * when {@code width <= 0} or {@code height <= 0}.
-     */
-    public static int[] alignExternalForcedSize(int width, int height) {
-        if (width <= 0 || height <= 0) return null;
-        boolean portrait = height > width;
-        int minW = portrait ? MIN_SHORT_EDGE : MIN_LONG_EDGE;
-        int maxW = portrait ? 2560 : MAX_ENCODER_LONG_EDGE;
-        int minH = portrait ? MIN_LONG_EDGE : MIN_SHORT_EDGE;
-        int maxH = portrait ? MAX_ENCODER_LONG_EDGE : 2560;
-        int safeW = width;
-        int safeH = height;
-        if (safeW > maxW || safeH > maxH) {
-            double scale = Math.min((double) maxW / safeW, (double) maxH / safeH);
-            safeW = (int) Math.round(safeW * scale);
-            safeH = (int) Math.round(safeH * scale);
-        }
-        return new int[]{
-                alignEven(safeW, minW, maxW),
-                alignEven(safeH, minH, maxH)
-        };
-    }
+    // ---- External display EDID / anisotropy & window snap geometry delegates ----
 
-    public static final float ANISOTROPY_DPI_RATIO_THRESHOLD = 1.05f;
-    private static final float MIRROR_COLLAPSE_ASPECT_DIFF_THRESHOLD = 0.20f;
-    private static final int MIRROR_COLLAPSE_SIZE_TOLERANCE_PX = 4;
+    public static final float ANISOTROPY_DPI_RATIO_THRESHOLD = WindowSnapGeometry.ANISOTROPY_DPI_RATIO_THRESHOLD;
+
+    public static int[] alignExternalForcedSize(int width, int height) {
+        return WindowSnapGeometry.alignExternalForcedSize(width, height);
+    }
 
     public static boolean matchesDimensionsIgnoringRotation(int w1, int h1, int w2, int h2) {
-        if (w1 <= 0 || h1 <= 0 || w2 <= 0 || h2 <= 0) return false;
-        return (w1 == w2 && h1 == h2) || (w1 == h2 && h1 == w2);
+        return WindowSnapGeometry.matchesDimensionsIgnoringRotation(w1, h1, w2, h2);
     }
 
-    /**
-     * Detects significant non-square physical pixel density reported by external monitor EDID
-     * (e.g. a 4:3 2048x1536 portable panel whose driver board declares ~16:9 61x35cm physical
-     * dimensions, yielding yDpi/xDpi = 1.307 and triggering AOSP pixel anisotropy correction).
-     */
     public static boolean isAnisotropicPixelDensity(float xDpi, float yDpi) {
-        if (!Float.isFinite(xDpi) || !Float.isFinite(yDpi) || xDpi < 20f || yDpi < 20f) {
-            return false;
-        }
-        float ratio = (xDpi >= yDpi) ? (xDpi / yDpi) : (yDpi / xDpi);
-        return ratio > ANISOTROPY_DPI_RATIO_THRESHOLD;
+        return WindowSnapGeometry.isAnisotropicPixelDensity(xDpi, yDpi);
     }
 
-    /**
-     * Detects whether an external display exhibits AOSP Android 15-17 pixel anisotropy distortion
-     * via either (1) anisotropic physical xDpi/yDpi, (2) OS-flagged synthetic modes sharing one
-     * edge with native dimensions while inflating the other edge by >5%, or (3) missing exact
-     * native mode in supportedModes accompanied by an edge-matching inflated synthetic mode
-     * (e.g. active 2048x1536 absent from supportedModes while 2677x1536 is present).
-     */
     public static boolean hasExternalPixelAnisotropy(
-            int nativeW,
-            int nativeH,
-            float xDpi,
-            float yDpi,
-            int[] modeWidths,
-            int[] modeHeights,
-            boolean[] modeSynthetic) {
-        if (isAnisotropicPixelDensity(xDpi, yDpi)) {
-            return true;
-        }
-        if (nativeW < 320 || nativeH < 320 || modeWidths == null || modeHeights == null) {
-            return false;
-        }
-        int count = Math.min(modeWidths.length, modeHeights.length);
-        if (count <= 0) return false;
-        boolean nativePresent = false;
-        boolean hasInflatedSameEdge = false;
-        for (int i = 0; i < count; i++) {
-            int w = modeWidths[i];
-            int h = modeHeights[i];
-            if (matchesDimensionsIgnoringRotation(w, h, nativeW, nativeH)) {
-                nativePresent = true;
-            }
-            boolean inflatedW = (h == nativeH && w > Math.round(nativeW * ANISOTROPY_DPI_RATIO_THRESHOLD));
-            boolean inflatedH = (w == nativeW && h > Math.round(nativeH * ANISOTROPY_DPI_RATIO_THRESHOLD));
-            if (inflatedW || inflatedH) {
-                if (modeSynthetic != null && i < modeSynthetic.length && modeSynthetic[i]) {
-                    return true;
-                }
-                if ((w & 1) != 0 || (h & 1) != 0) {
-                    return true;
-                }
-                hasInflatedSameEdge = true;
-            }
-        }
-        return !nativePresent && hasInflatedSameEdge;
+            int nativeW, int nativeH, float xDpi, float yDpi,
+            int[] modeWidths, int[] modeHeights, boolean[] modeSynthetic) {
+        return WindowSnapGeometry.hasExternalPixelAnisotropy(
+                nativeW, nativeH, xDpi, yDpi, modeWidths, modeHeights, modeSynthetic);
     }
 
-    /**
-     * Detects when clearing a forced size on a mirroring-backed external display (such as Xiaomi
-     * HyperOS wired DP Presentation displays) collapses its logical size to Display 0's portrait
-     * dimensions (e.g. 1200x2608 on a 2048x1536 landscape panel), which creates severe pillarboxing.
-     */
     public static boolean isMirroredPrimaryDisplayCollapse(
-            int nativeW,
-            int nativeH,
-            int logicalW,
-            int logicalH,
-            int primaryW,
-            int primaryH) {
-        if (nativeW < 320 || nativeH < 320
-                || logicalW < 320 || logicalH < 320
-                || primaryW < 320 || primaryH < 320) {
-            return false;
-        }
-        boolean logicalMatchesPrimary =
-                Math.abs(logicalW - primaryW) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX
-                        && Math.abs(logicalH - primaryH) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX;
-        if (!logicalMatchesPrimary) {
-            return false;
-        }
-        boolean nativeMatchesPrimarySameOrientation =
-                Math.abs(nativeW - primaryW) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX
-                        && Math.abs(nativeH - primaryH) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX;
-        if (nativeMatchesPrimarySameOrientation) {
-            return false;
-        }
-        boolean nativeLandscape = nativeW >= nativeH;
-        boolean logicalLandscape = logicalW >= logicalH;
-        if (nativeLandscape != logicalLandscape) {
-            return true;
-        }
-        float nativeAspect = (float) nativeW / (float) nativeH;
-        float logicalAspect = (float) logicalW / (float) logicalH;
-        return Math.abs(nativeAspect - logicalAspect) / Math.max(nativeAspect, logicalAspect)
-                >= MIRROR_COLLAPSE_ASPECT_DIFF_THRESHOLD;
+            int nativeW, int nativeH, int logicalW, int logicalH, int primaryW, int primaryH) {
+        return WindowSnapGeometry.isMirroredPrimaryDisplayCollapse(
+                nativeW, nativeH, logicalW, logicalH, primaryW, primaryH);
     }
 
-    /**
-     * Decides whether to apply {@code IWindowManager.setForcedDisplayScalingMode(displayId, 1)}
-     * ({@code FORCE_SCALING_MODE_DISABLED}) for 1:1 native pixel output. Strictly gated to targets
-     * matching the display's native physical resolution so lower custom resolutions (e.g. 1080p on
-     * a 4K screen) never shrink into unscaled centered boxes.
-     */
     public static boolean shouldDisableScalingForNativeAnisotropy(
-            int targetW,
-            int targetH,
-            int nativeW,
-            int nativeH,
-            boolean hasAnisotropy,
-            int scalingModePref) {
-        if (scalingModePref == BridgeProtocol.EXTERNAL_SCALING_FORCE_SYSTEM_AUTO) {
-            return false;
-        }
-        if (!matchesDimensionsIgnoringRotation(targetW, targetH, nativeW, nativeH)) {
-            return false;
-        }
-        if (scalingModePref == BridgeProtocol.EXTERNAL_SCALING_NATIVE_1TO1) {
-            return true;
-        }
-        return hasAnisotropy;
+            int targetW, int targetH, int nativeW, int nativeH, boolean hasAnisotropy, int scalingModePref) {
+        return WindowSnapGeometry.shouldDisableScalingForNativeAnisotropy(
+                targetW, targetH, nativeW, nativeH, hasAnisotropy, scalingModePref);
     }
 
-    /**
-     * Picks the best matching EDID mode index for an exact {@code reqW x reqH} request.
-     * Matches either normal orientation or swapped orientation when physical EDID is reported rotated;
-     * when {@code reqFps > 1f}, chooses the closest refresh rate, otherwise chooses the highest refresh rate.
-     */
     public static int selectBestEdidModeIndex(
             int[] widths, int[] heights, float[] rates, int reqW, int reqH, float reqFps) {
         return selectBestEdidModeIndex(widths, heights, rates, null, reqW, reqH, reqFps);
     }
 
-    /**
-     * Synthetic-aware overload of {@link #selectBestEdidModeIndex(int[], int[], float[], int, int, float)}:
-     * prefers native hardware modes over synthetic anisotropy modes when both share the requested size.
-     */
     public static int selectBestEdidModeIndex(
-            int[] widths,
-            int[] heights,
-            float[] rates,
-            boolean[] syntheticFlags,
-            int reqW,
-            int reqH,
-            float reqFps) {
-        if (widths == null || heights == null || rates == null) return -1;
-        int count = Math.min(widths.length, Math.min(heights.length, rates.length));
-        if (count <= 0 || reqW <= 0 || reqH <= 0) return -1;
-        int bestExactIdx = -1;
-        boolean bestExactSynthetic = true;
-        float bestExactScore = Float.MAX_VALUE;
-        int bestRotatedIdx = -1;
-        boolean bestRotatedSynthetic = true;
-        float bestRotatedScore = Float.MAX_VALUE;
-        for (int i = 0; i < count; i++) {
-            float r = rates[i];
-            float score = (reqFps > 1f) ? Math.abs(r - reqFps) : -r;
-            boolean isSynth = (syntheticFlags != null && i < syntheticFlags.length && syntheticFlags[i]);
-            if (widths[i] == reqW && heights[i] == reqH) {
-                if (bestExactIdx < 0
-                        || (bestExactSynthetic && !isSynth)
-                        || (bestExactSynthetic == isSynth && score < bestExactScore)) {
-                    bestExactIdx = i;
-                    bestExactSynthetic = isSynth;
-                    bestExactScore = score;
-                }
-            } else if (reqW != reqH && widths[i] == reqH && heights[i] == reqW) {
-                if (bestRotatedIdx < 0
-                        || (bestRotatedSynthetic && !isSynth)
-                        || (bestRotatedSynthetic == isSynth && score < bestRotatedScore)) {
-                    bestRotatedIdx = i;
-                    bestRotatedSynthetic = isSynth;
-                    bestRotatedScore = score;
-                }
-            }
-        }
-        return bestExactIdx >= 0 ? bestExactIdx : bestRotatedIdx;
+            int[] widths, int[] heights, float[] rates, boolean[] syntheticFlags,
+            int reqW, int reqH, float reqFps) {
+        return WindowSnapGeometry.selectBestEdidModeIndex(widths, heights, rates, syntheticFlags, reqW, reqH, reqFps);
     }
 
-    /**
-     * When applying a custom forced size not present in EDID, optionally finds an EDID mode at the
-     * display's current physical dimensions (or highest native resolution) that matches {@code reqFps}.
-     */
     public static int selectBestEdidModeForRefreshRate(
             int[] widths, int[] heights, float[] rates, int curW, int curH, float reqFps) {
-        if (widths == null || heights == null || rates == null || reqFps <= 1f) return -1;
-        int count = Math.min(widths.length, Math.min(heights.length, rates.length));
-        if (count <= 0) return -1;
-        int sameSizeBest = -1;
-        float sameSizeDiff = Float.MAX_VALUE;
-        int anyBest = -1;
-        float anyDiff = Float.MAX_VALUE;
-        long anyBestArea = -1L;
-        for (int i = 0; i < count; i++) {
-            float diff = Math.abs(rates[i] - reqFps);
-            if (diff > 2.5f) continue;
-            if (curW > 0 && curH > 0 && widths[i] == curW && heights[i] == curH) {
-                if (sameSizeBest < 0 || diff < sameSizeDiff) {
-                    sameSizeBest = i;
-                    sameSizeDiff = diff;
-                }
-            }
-            long area = (long) widths[i] * (long) heights[i];
-            if (anyBest < 0 || diff + 0.1f < anyDiff || (Math.abs(diff - anyDiff) <= 0.1f && area > anyBestArea)) {
-                anyBest = i;
-                anyDiff = diff;
-                anyBestArea = area;
-            }
-        }
-        return sameSizeBest >= 0 ? sameSizeBest : anyBest;
+        return WindowSnapGeometry.selectBestEdidModeForRefreshRate(widths, heights, rates, curW, curH, reqFps);
     }
 
-    /**
-     * Computes the usable desktop work area (excluding top menu bar and bottom floating dock).
-     */
     public static IntRect computeWorkArea(int canvasW, int canvasH, int canvasDpi) {
-        int w = Math.max(360, canvasW);
-        int h = Math.max(360, canvasH);
-        int topInset = dpToPx(TOP_BAR_HEIGHT_DP + 4, canvasDpi);
-        int bottomInset = dpToPx(DOCK_RESERVED_BOTTOM_DP, canvasDpi);
-        int padX = dpToPx(6, canvasDpi);
-        int bottom = Math.max(topInset + MIN_WINDOW_EDGE_PX, h - bottomInset);
-        return new IntRect(padX, topInset, Math.max(padX + MIN_WINDOW_EDGE_PX, w - padX), bottom);
+        return WindowSnapGeometry.computeWorkArea(canvasW, canvasH, canvasDpi);
     }
 
-    /**
-     * Computes staggered cascading initial frame for a newly opened window according to its profile.
-     * Adapts cleanly to both landscape desktop monitors and portrait phone canvases.
-     */
     public static IntRect computeInitialWindowFrame(
             WindowProfile profile, int cascadeIndex, int canvasW, int canvasH, int canvasDpi) {
-        IntRect work = computeWorkArea(canvasW, canvasH, canvasDpi);
-        int workW = work.width();
-        int workH = work.height();
-        boolean portraitCanvas = workH > workW;
-
-        int targetW;
-        int targetH;
-        if (portraitCanvas) {
-            if (profile == WindowProfile.PORTRAIT) {
-                targetW = Math.min(workW - dpToPx(12, canvasDpi), Math.round(workW * 0.90f));
-                targetH = Math.min(workH - dpToPx(16, canvasDpi), Math.round(workH * 0.72f));
-            } else if (profile == WindowProfile.TABLET) {
-                targetW = Math.min(workW - dpToPx(12, canvasDpi), Math.round(workW * 0.94f));
-                targetH = Math.min(workH - dpToPx(20, canvasDpi), Math.round(workH * 0.62f));
-            } else {
-                targetW = Math.min(workW - dpToPx(12, canvasDpi), Math.round(workW * 0.92f));
-                targetH = Math.min(workH - dpToPx(20, canvasDpi), Math.round(workH * 0.54f));
-            }
-        } else if (profile == WindowProfile.PORTRAIT) {
-            targetH = Math.min(workH - dpToPx(16, canvasDpi), Math.max(dpToPx(420, canvasDpi), Math.round(workH * 0.86f)));
-            int contentH = Math.max(240, targetH - dpToPx(WINDOW_CHROME_HEADER_DP, canvasDpi));
-            targetW = Math.min(workW - dpToPx(24, canvasDpi), Math.max(dpToPx(280, canvasDpi), Math.round(contentH * 0.486f)));
-        } else if (profile == WindowProfile.TABLET) {
-            targetH = Math.min(workH - dpToPx(24, canvasDpi), Math.round(workH * 0.80f));
-            targetW = Math.min(workW - dpToPx(32, canvasDpi), Math.round(targetH * 1.33f));
-        } else {
-            targetW = Math.min(workW - dpToPx(36, canvasDpi), Math.max(dpToPx(520, canvasDpi), Math.round(workW * 0.64f)));
-            targetH = Math.min(workH - dpToPx(28, canvasDpi), Math.max(dpToPx(360, canvasDpi), Math.round(workH * 0.76f)));
-        }
-
-        targetW = alignEven(targetW, MIN_WINDOW_EDGE_PX, Math.max(MIN_WINDOW_EDGE_PX, workW));
-        targetH = alignEven(targetH, MIN_WINDOW_EDGE_PX, Math.max(MIN_WINDOW_EDGE_PX, workH));
-
-        int step = Math.max(0, cascadeIndex % 6);
-        int offsetStepPx = dpToPx(portraitCanvas ? 18 : 26, canvasDpi);
-        int baseLeft = portraitCanvas
-                ? work.left + Math.max(0, (workW - targetW) / 2)
-                : work.left + Math.max(0, (workW - targetW) / 2) - dpToPx(40, canvasDpi);
-        int baseTop = work.top + Math.max(0, (workH - targetH) / (portraitCanvas ? 4 : 3));
-
-        int left = baseLeft + (portraitCanvas ? 0 : step * offsetStepPx);
-        int top = baseTop + step * offsetStepPx;
-        return clampWindowFrame(new IntRect(left, top, left + targetW, top + targetH), canvasW, canvasH, canvasDpi);
+        return WindowSnapGeometry.computeInitialWindowFrame(profile, cascadeIndex, canvasW, canvasH, canvasDpi);
     }
 
-    /**
-     * Clamps a window frame so its title bar stays reachable inside the desktop canvas.
-     */
     public static IntRect clampWindowFrame(IntRect raw, int canvasW, int canvasH, int canvasDpi) {
-        int w = alignEven(raw.width(), MIN_WINDOW_EDGE_PX, Math.max(MIN_WINDOW_EDGE_PX, canvasW));
-        int h = alignEven(raw.height(), MIN_WINDOW_EDGE_PX, Math.max(MIN_WINDOW_EDGE_PX, canvasH - dpToPx(TOP_BAR_HEIGHT_DP, canvasDpi)));
-        int minTop = dpToPx(TOP_BAR_HEIGHT_DP, canvasDpi);
-        int maxTop = Math.max(minTop, canvasH - dpToPx(WINDOW_CHROME_HEADER_DP + 24, canvasDpi));
-        int minVisX = dpToPx(96, canvasDpi);
-        int minLeft = -w + minVisX;
-        int maxLeft = Math.max(0, canvasW - minVisX);
-
-        int clampedLeft = Math.max(minLeft, Math.min(maxLeft, raw.left));
-        int clampedTop = Math.max(minTop, Math.min(maxTop, raw.top));
-        return new IntRect(clampedLeft, clampedTop, clampedLeft + w, clampedTop + h);
+        return WindowSnapGeometry.clampWindowFrame(raw, canvasW, canvasH, canvasDpi);
     }
 
-    /**
-     * Computes exact snap-zone bounds inside the desktop work area.
-     */
     public static IntRect computeSnapFrame(String presentation, int canvasW, int canvasH, int canvasDpi) {
-        if (BridgeProtocol.PRES_FULLSCREEN.equals(presentation)) {
-            int w = alignEven(Math.max(360, canvasW), 360, MAX_WINDOW_EDGE_PX);
-            int h = alignEven(Math.max(360, canvasH), 360, MAX_WINDOW_EDGE_PX);
-            return new IntRect(0, 0, w, h);
-        }
-        IntRect work = computeWorkArea(canvasW, canvasH, canvasDpi);
-        int gap = dpToPx(SNAP_GAP_DP, canvasDpi);
-        int midX = work.left + work.width() / 2;
-        int midY = work.top + work.height() / 2;
-
-        if (BridgeProtocol.PRES_SNAP_LEFT.equals(presentation)) {
-            return new IntRect(work.left, work.top, midX - gap / 2, work.bottom);
-        }
-        if (BridgeProtocol.PRES_SNAP_RIGHT.equals(presentation)) {
-            return new IntRect(midX + gap / 2, work.top, work.right, work.bottom);
-        }
-        if (BridgeProtocol.PRES_SNAP_TL.equals(presentation)) {
-            return new IntRect(work.left, work.top, midX - gap / 2, midY - gap / 2);
-        }
-        if (BridgeProtocol.PRES_SNAP_TR.equals(presentation)) {
-            return new IntRect(midX + gap / 2, work.top, work.right, midY - gap / 2);
-        }
-        if (BridgeProtocol.PRES_SNAP_BL.equals(presentation)) {
-            return new IntRect(work.left, midY + gap / 2, midX - gap / 2, work.bottom);
-        }
-        if (BridgeProtocol.PRES_SNAP_BR.equals(presentation)) {
-            return new IntRect(midX + gap / 2, midY + gap / 2, work.right, work.bottom);
-        }
-        return work;
+        return WindowSnapGeometry.computeSnapFrame(presentation, canvasW, canvasH, canvasDpi);
     }
 
-    /**
-     * Computes the VirtualDisplay pixel dimensions for a window's client content area (excluding header bar).
-     */
     public static int[] computeContentBufferSize(IntRect windowFrame, int canvasDpi) {
         return computeContentBufferSize(windowFrame, canvasDpi, false);
     }
 
-    /**
-     * Computes the VirtualDisplay pixel dimensions for a window's client content area.
-     * When {@code fullscreen} is true, no header height is subtracted so video fills 100% edge-to-edge.
-     */
     public static int[] computeContentBufferSize(IntRect windowFrame, int canvasDpi, boolean fullscreen) {
-        int headerPx = fullscreen ? 0 : dpToPx(WINDOW_CHROME_HEADER_DP, canvasDpi);
-        int cw = alignEven(windowFrame.width(), 240, MAX_WINDOW_EDGE_PX);
-        int ch = alignEven(Math.max(200, windowFrame.height() - headerPx), 200, MAX_WINDOW_EDGE_PX);
-        return new int[]{cw, ch};
+        return WindowSnapGeometry.computeContentBufferSize(windowFrame, canvasDpi, fullscreen);
     }
 }

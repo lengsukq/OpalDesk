@@ -5,13 +5,10 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color as AndroidColor
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.view.KeyEvent
-import android.view.SurfaceHolder
-import android.view.SurfaceView
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -19,61 +16,21 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.prefs.OpalLocalePolicy
-import io.github.lengsukq.opaldesk.ui.ChromeGlyph
-import io.github.lengsukq.opaldesk.ui.NativeImeBridgeHost
-import io.github.lengsukq.opaldesk.ui.NativeImeHostController
-import io.github.lengsukq.opaldesk.ui.OpalButton
-import io.github.lengsukq.opaldesk.ui.OpalPalette
-import io.github.lengsukq.opaldesk.ui.OpalText
 import io.github.lengsukq.opaldesk.ui.OpalTheme
-import io.github.lengsukq.opaldesk.ui.OpalTopPillChip
-import io.github.lengsukq.opaldesk.ui.OpalTopPillDivider
-import io.github.lengsukq.opaldesk.ui.OpalTopPillIconButton
-import io.github.lengsukq.opaldesk.ui.WorkstationKeyDispatcher
-import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
 import io.github.lengsukq.opaldesk.ui.rememberNativeImeHostController
 
 /**
@@ -244,7 +201,7 @@ class PeerCastViewerActivity : ComponentActivity() {
                         // do NOT summon the tablet's local IME (NativeImeBridgeHost): forward all
                         // hardware keys directly to the casting phone so the phone's Yuyan IME
                         // handles input and renders its cursor-following candidate bar cleanly.
-                        if (!hasConnectedPhysicalKeyboard()) {
+                        if (!hasConnectedPhysicalKeyboard(this@PeerCastViewerActivity)) {
                             imeController.showKeyboard(remoteImeInputType)
                         } else if (imeVisible) {
                             imeController.hideKeyboard()
@@ -385,7 +342,7 @@ class PeerCastViewerActivity : ComponentActivity() {
                 }
             }
         }
-        applyImmersiveFullscreen()
+        applyPeerCastImmersiveFullscreen(window, display)
     }
 
     private fun startPeerSession() {
@@ -739,378 +696,13 @@ class PeerCastViewerActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun hasConnectedPhysicalKeyboard(): Boolean {
-        val cfg = resources.configuration
-        if (cfg.keyboard != android.content.res.Configuration.KEYBOARD_NOKEYS &&
-            cfg.hardKeyboardHidden == android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
-        ) {
-            return true
-        }
-        return try {
-            android.view.InputDevice.getDeviceIds().any { id ->
-                val dev = android.view.InputDevice.getDevice(id) ?: return@any false
-                val ext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) dev.isExternal else false
-                WorkstationKeyDispatcher.isPhysicalKeyboardDevice(
-                    deviceId = id,
-                    name = dev.name,
-                    isVirtual = dev.isVirtual,
-                    isExternal = ext,
-                    keyboardType = dev.keyboardType,
-                )
-            }
-        } catch (_: Throwable) {
-            false
-        }
-    }
-
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
-        if (connected && (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP)) {
-            if (!WorkstationKeyDispatcher.isForwardableKey(event.keyCode)) {
-                return super.dispatchKeyEvent(event)
-            }
-            // Physical/Bluetooth keyboard events bypass the receiver tablet's local IME completely
-            // and stream directly to the casting phone as if the keyboard were attached to the phone.
-            val isPhysicalKey = WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)
-            val isDirectShortcut = event.isAltPressed || event.isCtrlPressed || event.keyCode == KeyEvent.KEYCODE_ESCAPE
-            if (!isPhysicalKey && imeVisible && !isDirectShortcut && super.dispatchKeyEvent(event)) {
-                return true
-            }
-            if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN) {
-                WorkstationKeyDispatcher.recordBackKeyForwarded()
-            }
-            client?.sendKeyEvent(event.action, event.keyCode, event.metaState, event.repeatCount)
-            return true
-        }
-        return super.dispatchKeyEvent(event)
-    }
-
-    private fun applyImmersiveFullscreen() {
-        // Lock peak display refresh rate so OEM power governors (e.g. HyperOS MI-SF) never drop
-        // the tablet panel down to 30Hz during static desktop frames.
-        try {
-            val disp = display
-            val cur = disp?.mode
-            val peak = disp?.supportedModes
-                ?.filter { cur == null || (it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight) }
-                ?.maxByOrNull { it.refreshRate }
-            if (peak != null) {
-                val lp = window.attributes
-                lp.preferredDisplayModeId = peak.modeId
-                lp.preferredRefreshRate = peak.refreshRate
-                window.attributes = lp
-            }
-        } catch (_: Throwable) {
-        }
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowCompat.getInsetsController(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.systemBars())
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
-    }
-}
-
-@SuppressLint("ClickableViewAccessibility")
-@Composable
-private fun PeerCastViewerContent(
-    peerName: String,
-    statusText: String,
-    errorText: String,
-    connected: Boolean,
-    videoW: Int,
-    videoH: Int,
-    toolbarExpanded: Boolean,
-    isMirrorMode: Boolean,
-    remoteBlackout: Boolean,
-    remoteFullscreenTitle: String,
-    micEnabled: Boolean,
-    cameraEnabled: Boolean,
-    cameraFacing: String,
-    imeVisible: Boolean,
-    composingText: String,
-    imeController: NativeImeHostController,
-    onToggleToolbar: () -> Unit,
-    onToggleMic: () -> Unit,
-    onToggleCamera: () -> Unit,
-    onFlipCamera: () -> Unit,
-    onToggleIme: () -> Unit,
-    onImeVisibilityChanged: (Boolean) -> Unit,
-    onComposingChanged: (String) -> Unit,
-    onSendImeKey: (Int, Int, Int) -> Unit,
-    onCommitImeText: (String) -> Unit,
-    onSurfaceCreated: (android.view.Surface) -> Unit,
-    onSurfaceDestroyed: () -> Unit,
-    onDispatchTouch: (android.view.MotionEvent, Int, Int) -> Unit,
-    onDispatchGenericMotion: (android.view.MotionEvent, Int, Int) -> Boolean,
-    onOpenFloatingPicker: () -> Unit,
-    onRetryConnect: () -> Unit,
-    onSendBack: () -> Unit,
-    onSendHome: () -> Unit,
-    onExitRemoteFullscreen: () -> Unit,
-    onToggleDisplayMode: () -> Unit,
-    onPopOutMirrorFloating: () -> Unit,
-    onToggleBlackout: () -> Unit,
-    onRequestIdr: () -> Unit,
-    onDisconnect: () -> Unit,
-) {
-    val ratio = (videoW.toFloat() / videoH.coerceAtLeast(1).toFloat()).coerceIn(0.38f, 3.0f)
-
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF06080D)),
-        contentAlignment = Alignment.Center,
-    ) {
-        val containerRatio = (maxWidth.value / maxHeight.value.coerceAtLeast(1f)).coerceAtLeast(0.1f)
-        val fitHeightFirst = containerRatio > ratio
-
-        // Invisible native IME host so the receiver tablet/phone's built-in IME pops up seamlessly
-        NativeImeBridgeHost(
-            controller = imeController,
-            onSendKey = onSendImeKey,
-            onCommitText = onCommitImeText,
-            onComposingChanged = onComposingChanged,
-            onImeVisibilityChanged = onImeVisibilityChanged,
-            modifier = Modifier.align(Alignment.BottomStart),
+        return dispatchPeerCastKeyEvent(
+            event = event,
+            connected = connected,
+            imeVisible = imeVisible,
+            client = client,
+            superDispatch = { super.dispatchKeyEvent(it) },
         )
-
-        AndroidView(
-            modifier = Modifier
-                .fillMaxSize()
-                .aspectRatio(ratio, matchHeightConstraintsFirst = fitHeightFirst),
-            factory = { ctx ->
-                SurfaceView(ctx).apply {
-                    setBackgroundColor(AndroidColor.TRANSPARENT)
-                    holder.addCallback(
-                        object : SurfaceHolder.Callback {
-                            override fun surfaceCreated(holder: SurfaceHolder) {
-                                onSurfaceCreated(holder.surface)
-                            }
-                            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-                                onSurfaceCreated(holder.surface)
-                            }
-                            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                                onSurfaceDestroyed()
-                            }
-                        },
-                    )
-                    setOnTouchListener { v, ev ->
-                        onDispatchTouch(ev, v.width, v.height)
-                        true
-                    }
-                    setOnGenericMotionListener { v, ev ->
-                        onDispatchGenericMotion(ev, v.width, v.height)
-                    }
-                }
-            },
-        )
-
-        if (!connected) {
-            val cardShape = RoundedCornerShape(22.dp)
-            Column(
-                modifier = Modifier
-                    .liquidGlassSurface(
-                        shape = cardShape,
-                        fill = OpalPalette.LiquidPopoverFill,
-                        rim = OpalPalette.LiquidGlassRim,
-                        elevation = 24.dp,
-                    )
-                    .padding(horizontal = 24.dp, vertical = 20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                OpalText(text = stringResource(R.string.peercast_connecting_to, peerName), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                OpalText(
-                    text = if (errorText.isNotBlank()) errorText else statusText.ifBlank { stringResource(R.string.peercast_connecting_tls) },
-                    fontSize = 12.5.sp,
-                    color = if (errorText.isNotBlank()) OpalPalette.AccentDanger else OpalPalette.TextSecondary,
-                )
-                Spacer(Modifier.height(4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (errorText.isNotBlank()) {
-                        OpalButton(
-                            label = stringResource(R.string.peercast_reconnect),
-                            accent = OpalPalette.AccentBlue,
-                            compact = true,
-                            onClick = onRetryConnect,
-                        )
-                    }
-                    OpalButton(label = stringResource(R.string.peercast_back_console), filled = errorText.isBlank(), compact = true, onClick = onDisconnect)
-                }
-            }
-        }
-
-        // Live IME composing preview pill just above the tablet/phone soft keyboard
-        if (composingText.isNotEmpty()) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .imePadding()
-                    .padding(bottom = 12.dp)
-                    .liquidGlassSurface(
-                        shape = CircleShape,
-                        fill = OpalPalette.LiquidPopoverFill,
-                        rim = OpalPalette.LiquidGlassRim,
-                        elevation = 16.dp,
-                    )
-                    .padding(horizontal = 16.dp, vertical = 7.dp),
-            ) {
-                OpalText(
-                    text = composingText,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = OpalPalette.AccentBlue,
-                    maxLines = 1,
-                )
-            }
-        }
-
-        // Unified Top-Center Liquid Frosted Glass remote control pill (icons for universal actions,
-        // concise text kept for OpalDesk-specific actions & safe Disconnect)
-        if (toolbarExpanded) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 8.dp, start = 12.dp, end = 12.dp)
-                    .liquidGlassSurface(
-                        shape = CircleShape,
-                        fill = OpalPalette.LiquidDockFill,
-                        rim = OpalPalette.LiquidGlassRim,
-                        elevation = 18.dp,
-                    )
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 11.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                OpalTopPillIconButton(
-                    glyph = ChromeGlyph.KEYBOARD,
-                    contentDescription = stringResource(if (imeVisible) R.string.trackpad_hide_ime else R.string.taskbar_cc_ime),
-                    active = imeVisible,
-                    activeColor = OpalPalette.AccentBlue,
-                    onClick = onToggleIme,
-                )
-                OpalTopPillDivider()
-                if (remoteFullscreenTitle.isNotEmpty() && !isMirrorMode) {
-                    OpalTopPillChip(
-                        label = stringResource(R.string.taskbar_fs_exit),
-                        glyph = ChromeGlyph.EXIT_FULLSCREEN,
-                        filled = true,
-                        activeColor = OpalPalette.AccentBlue,
-                        onClick = onExitRemoteFullscreen,
-                    )
-                }
-                OpalTopPillChip(
-                    label = stringResource(R.string.peercast_floating_btn),
-                    tint = OpalPalette.AccentBlue,
-                    active = true,
-                    activeColor = OpalPalette.AccentBlue,
-                    onClick = onOpenFloatingPicker,
-                )
-                OpalTopPillChip(
-                    label = stringResource(if (isMirrorMode) R.string.peercast_switch_desktop else R.string.picker_mirror_btn),
-                    tint = if (isMirrorMode) OpalPalette.AccentCyan else OpalPalette.TextPrimary,
-                    active = isMirrorMode,
-                    activeColor = OpalPalette.AccentCyan,
-                    onClick = onToggleDisplayMode,
-                )
-                if (isMirrorMode) {
-                    OpalTopPillChip(
-                        label = stringResource(R.string.peercast_float_mini),
-                        tint = OpalPalette.AccentBlue,
-                        active = true,
-                        activeColor = OpalPalette.AccentBlue,
-                        onClick = onPopOutMirrorFloating,
-                    )
-                }
-                OpalTopPillChip(
-                    label = stringResource(if (remoteBlackout) R.string.peercast_screen_on else R.string.peercast_screen_off),
-                    active = remoteBlackout,
-                    activeColor = OpalPalette.AccentAmber,
-                    onClick = onToggleBlackout,
-                )
-                OpalTopPillDivider()
-                OpalTopPillIconButton(
-                    glyph = ChromeGlyph.CHEVRON_UP,
-                    contentDescription = stringResource(R.string.taskbar_fs_collapse),
-                    tint = OpalPalette.TextSecondary,
-                    onClick = onToggleToolbar,
-                )
-                OpalTopPillChip(
-                    label = stringResource(R.string.peercast_disconnect),
-                    danger = true,
-                    onClick = onDisconnect,
-                )
-            }
-        } else {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 3.dp)
-                    .pointerInput(Unit) {
-                        detectVerticalDragGestures { _, dragAmount ->
-                            if (dragAmount > 6f) onToggleToolbar()
-                        }
-                    }
-                    .liquidGlassSurface(
-                        shape = CircleShape,
-                        fill = OpalPalette.LiquidDockFill,
-                        rim = OpalPalette.LiquidGlassRim,
-                        elevation = 12.dp,
-                    )
-                    .padding(horizontal = 6.dp, vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                if (micEnabled) {
-                    OpalTopPillIconButton(
-                        glyph = ChromeGlyph.MIC,
-                        contentDescription = stringResource(R.string.peercast_mute_mic),
-                        active = true,
-                        activeColor = OpalPalette.AccentEmerald,
-                        onClick = onToggleMic,
-                    )
-                }
-                if (cameraEnabled) {
-                    OpalTopPillIconButton(
-                        glyph = ChromeGlyph.CAMERA,
-                        contentDescription = stringResource(R.string.peercast_stop_cam),
-                        active = true,
-                        activeColor = OpalPalette.AccentEmerald,
-                        onClick = onToggleCamera,
-                    )
-                    OpalTopPillChip(
-                        label = stringResource(if (cameraFacing == "back") R.string.peercast_cam_back else R.string.peercast_cam_front),
-                        glyph = ChromeGlyph.CAMERA_FLIP,
-                        tint = OpalPalette.AccentCyan,
-                        active = true,
-                        activeColor = OpalPalette.AccentCyan,
-                        onClick = onFlipCamera,
-                    )
-                }
-                if (remoteFullscreenTitle.isNotEmpty() && !isMirrorMode) {
-                    OpalTopPillIconButton(
-                        glyph = ChromeGlyph.EXIT_FULLSCREEN,
-                        contentDescription = stringResource(R.string.taskbar_fs_exit),
-                        active = true,
-                        activeColor = OpalPalette.AccentBlue,
-                        onClick = onExitRemoteFullscreen,
-                    )
-                }
-                OpalTopPillIconButton(
-                    glyph = ChromeGlyph.KEYBOARD,
-                    contentDescription = stringResource(if (imeVisible) R.string.trackpad_hide_ime else R.string.taskbar_cc_ime),
-                    active = imeVisible,
-                    activeColor = OpalPalette.AccentBlue,
-                    onClick = onToggleIme,
-                )
-                OpalTopPillIconButton(
-                    glyph = ChromeGlyph.CHEVRON_DOWN,
-                    contentDescription = stringResource(R.string.peercast_expand_controls),
-                    tint = OpalPalette.TextSecondary,
-                    onClick = onToggleToolbar,
-                )
-            }
-        }
     }
 }

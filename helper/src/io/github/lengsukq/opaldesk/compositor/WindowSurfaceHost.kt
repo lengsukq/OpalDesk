@@ -2,30 +2,17 @@ package io.github.lengsukq.opaldesk.compositor
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
-import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.os.SystemClock
-import android.provider.Settings
-import android.util.LruCache
-import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -36,183 +23,22 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.PointerType
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import io.github.lengsukq.opaldesk.prefs.ProfileConfigStore
-import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorGeometry
 import io.github.lengsukq.opaldesk.protocol.CompositorWindow
 import io.github.lengsukq.opaldesk.ui.OpalPalette
-import io.github.lengsukq.opaldesk.ui.OpalText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import java.lang.ref.WeakReference
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
-
-/**
- * Lightweight registry of mounted live [TextureView]s so Mission Control / Exposé can capture
- * crisp real-time window previews in <5ms directly on the UI thread without daemon snapshot IPC.
- */
-object LiveWindowPreviewRegistry {
-    private const val MAX_PREVIEW_CACHE_KB = 12 * 1024 // 12 MiB cap for Android 17 MemoryLimiter safety
-    const val RESIZE_BRIDGE_MAX_LONG_EDGE = 768
-    private val liveViews = ConcurrentHashMap<Int, WeakReference<TextureView>>()
-    private val liveContainers = ConcurrentHashMap<Int, WeakReference<WindowSurfaceContainerView>>()
-    private val cachedPreviews = object : LruCache<Int, Bitmap>(MAX_PREVIEW_CACHE_KB) {
-        override fun sizeOf(key: Int, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
-    }
-
-    fun register(windowId: Int, view: TextureView) {
-        liveViews[windowId] = WeakReference(view)
-    }
-
-    fun unregister(windowId: Int, view: TextureView) {
-        val current = liveViews[windowId]?.get()
-        if (current == null || current === view) {
-            liveViews.remove(windowId)
-        }
-    }
-
-    internal fun registerContainer(windowId: Int, container: WindowSurfaceContainerView) {
-        liveContainers[windowId] = WeakReference(container)
-    }
-
-    internal fun unregisterContainer(windowId: Int, container: WindowSurfaceContainerView) {
-        val current = liveContainers[windowId]?.get()
-        if (current == null || current === container) {
-            liveContainers.remove(windowId)
-        }
-    }
-
-    /**
-     * Synchronously captures the currently settled TextureView frame and covers it with the
-     * in-hierarchy sibling `bridgeOverlayView` (`ImageView` strictly above `TextureView` inside
-     * the same `FrameLayout`) BEFORE `BridgeClient` dispatches `VirtualDisplay.resize()`.
-     * If a bridge is already active (rapid back-to-back resizes), preserves the pristine bitmap
-     * instead of snapshotting an intermediate SurfaceFlinger transition frame.
-     */
-    fun armResizeBridgeSync(windowId: Int, maxLongEdge: Int = RESIZE_BRIDGE_MAX_LONG_EDGE): Boolean {
-        val container = liveContainers[windowId]?.get() ?: return false
-        val bmp = if (container.isResizeBridgeShowing) {
-            getCachedPreview(windowId)
-        } else {
-            captureLivePreview(windowId, maxLongEdge)
-        }
-        if (bmp != null && !bmp.isRecycled) {
-            container.showResizeBridgeSync(bmp)
-            OpalLogStore.i(
-                "ResizeBridge",
-                "showSync wid=$windowId view=${container.width}x${container.height} bmp=${bmp.width}x${bmp.height}",
-            )
-            return true
-        }
-        return false
-    }
-
-    /** Must be called on the Android main thread (uses [TextureView.getBitmap]). */
-    fun captureLivePreview(windowId: Int, maxLongEdge: Int = 540): Bitmap? {
-        val view = liveViews[windowId]?.get()
-        if (view != null && view.isAvailable && view.width > 0 && view.height > 0) {
-            val fresh = captureAndCache(windowId, view, maxLongEdge)
-            if (fresh != null && !fresh.isRecycled) return fresh
-        }
-        return getCachedPreview(windowId)
-    }
-
-    fun getCachedPreview(windowId: Int): Bitmap? {
-        val bmp = cachedPreviews.get(windowId)
-        return if (bmp != null && !bmp.isRecycled) bmp else null
-    }
-
-    fun evict(windowId: Int) {
-        liveViews.remove(windowId)
-        liveContainers.remove(windowId)
-        cachedPreviews.remove(windowId)
-    }
-
-    fun trimMemory(clearAll: Boolean) {
-        if (clearAll) {
-            cachedPreviews.evictAll()
-        } else {
-            cachedPreviews.trimToSize(MAX_PREVIEW_CACHE_KB / 2)
-        }
-    }
-
-    private fun captureAndCache(windowId: Int, view: TextureView, maxLongEdge: Int = 540): Bitmap? {
-        val vw = view.width.coerceAtLeast(1)
-        val vh = view.height.coerceAtLeast(1)
-        val scale = (maxLongEdge.toFloat() / maxOf(vw, vh).toFloat()).coerceAtMost(1f)
-        val bw = (vw * scale).toInt().coerceAtLeast(64)
-        val bh = (vh * scale).toInt().coerceAtLeast(64)
-        return try {
-            val bmp = view.getBitmap(bw, bh)
-            if (bmp != null && !bmp.isRecycled) {
-                cachedPreviews.put(windowId, bmp)
-            }
-            bmp
-        } catch (_: Throwable) {
-            null
-        }
-    }
-}
-
-/**
- * Pure JVM-testable timing policy for masking Android `VirtualDisplay.resize()` intermediate
- * frames (`BLASTSyncEngine` + `CompositionEngine.setProjection` old-bounds/new-content top-left
- * shrink + `ShellTransitions` `CHANGE` animation) behind the window's crisp pre-resize frame.
- */
-internal object ResizeBridgePolicy {
-    const val SHRINK_MIN_SETTLE_MS = 380L
-    const val EXPAND_MIN_SETTLE_MS = 320L
-    const val NO_ANIM_MIN_SETTLE_MS = 160L
-    const val MAX_MIN_SETTLE_MS = 560L
-    const val POST_SETTLE_FRAME_WAIT_MS = 160L
-    const val FADE_OUT_MS = 85L
-
-    fun computeMinSettleDelayMs(
-        oldW: Int,
-        oldH: Int,
-        newW: Int,
-        newH: Int,
-        transitionAnimScale: Float,
-    ): Long {
-        if (oldW <= 0 || oldH <= 0 || newW <= 0 || newH <= 0) return 0L
-        if (oldW == newW && oldH == newH) return 0L
-        if (transitionAnimScale <= 0.01f) {
-            return NO_ANIM_MIN_SETTLE_MS
-        }
-        val shrinking = newW < oldW || newH < oldH
-        val base = if (shrinking) SHRINK_MIN_SETTLE_MS else EXPAND_MIN_SETTLE_MS
-        val scaled = (base * transitionAnimScale.coerceIn(0.5f, 1.5f)).roundToInt().toLong()
-        return scaled.coerceIn(NO_ANIM_MIN_SETTLE_MS, MAX_MIN_SETTLE_MS)
-    }
-}
-
-private fun readTransitionAnimationScale(ctx: android.content.Context): Float = try {
-    Settings.Global.getFloat(ctx.contentResolver, Settings.Global.TRANSITION_ANIMATION_SCALE, 1f)
-} catch (_: Throwable) {
-    1f
-}
 
 /**
  * Hardware-accelerated `TextureView` (`GL_TEXTURE_EXTERNAL_OES`) client surface host for a single
@@ -304,124 +130,13 @@ fun WindowSurfaceHost(
             .fillMaxSize()
             .clipToBounds()
             .background(OpalPalette.WindowCanvasBg)
-            // Intercept Compose PointerEventType.Scroll AND unpressed Mouse Hover directly:
-            // AndroidComposeView intercepts GenericMotionEvents (ACTION_SCROLL & ACTION_HOVER_MOVE)
-            // into Compose PointerInput rather than AndroidView.onGenericMotionListener whenever
-            // ancestor pointerInput modifiers exist. Forwarding hover here keeps the VirtualDisplay
-            // cursor continuously synchronized before every USB mouse click!
-            .pointerInput(window.windowId, "mouse_hover_and_scroll") {
-                awaitPointerEventScope {
-                    while (true) {
-                        val ev = awaitPointerEvent(PointerEventPass.Initial)
-                        val change = ev.changes.firstOrNull() ?: continue
-                        if (ev.type == PointerEventType.Scroll) {
-                            val delta = change.scrollDelta
-                            // Android app windows inside OpalWin-* run at higher content DPI and apply
-                            // native wheel-step scaling (RecyclerView / WebView), making raw trackpad
-                            // ticks 2x-3x faster than the desktop App Drawer; damp slightly for parity.
-                            val appScrollDamp = 0.55f
-                            val vScroll = -delta.y * appScrollDamp
-                            val hScroll = delta.x * appScrollDamp
-                            if (vScroll != 0f || hScroll != 0f) {
-                                val win = currentWin
-                                val canvasX = win.frame.left + change.position.x
-                                val canvasY = win.frame.top + currentHeaderPx + change.position.y
-                                val occluded = CompositorGeometry.isPointOccludedByHigherWindow(
-                                    target = win,
-                                    canvasX = canvasX,
-                                    canvasY = canvasY,
-                                    visibleWindows = BridgeClient.sceneFlow.value.visibleWindows,
-                                )
-                                if (!occluded && win.isLive && win.displayId > 0) {
-                                    change.consume()
-                                    val mappedX = CompositorGeometry.mapViewToDisplayCoord(
-                                        change.position.x,
-                                        size.width,
-                                        win.contentWidth.coerceAtLeast(2),
-                                    )
-                                    val mappedY = mapViewYToDisplayY(
-                                        change.position.y,
-                                        size.height,
-                                        win.contentHeight.coerceAtLeast(2),
-                                        currentCropTopPx,
-                                    )
-                                    val now = SystemClock.uptimeMillis()
-                                    BridgeClient.injectWindowMotionOneway(
-                                        windowId = win.windowId,
-                                        action = MotionEvent.ACTION_SCROLL,
-                                        downTime = now,
-                                        eventTime = now,
-                                        source = InputDevice.SOURCE_MOUSE,
-                                        buttonState = 0,
-                                        actionButton = 0,
-                                        hScroll = hScroll,
-                                        vScroll = vScroll,
-                                        pointerIds = intArrayOf(0),
-                                        toolTypes = intArrayOf(MotionEvent.TOOL_TYPE_MOUSE),
-                                        xs = floatArrayOf(mappedX),
-                                        ys = floatArrayOf(mappedY),
-                                        pressures = floatArrayOf(0f),
-                                    )
-                                }
-                            }
-                        } else if (
-                            change.type == PointerType.Mouse &&
-                            !change.pressed &&
-                            !change.previousPressed &&
-                            (ev.type == PointerEventType.Move ||
-                                ev.type == PointerEventType.Enter ||
-                                ev.type == PointerEventType.Exit)
-                        ) {
-                            val win = currentWin
-                            if (win.isLive && win.displayId > 0 && size.width > 0 && size.height > 0) {
-                                val canvasX = win.frame.left + change.position.x
-                                val canvasY = win.frame.top + currentHeaderPx + change.position.y
-                                val occluded = ev.type != PointerEventType.Exit && CompositorGeometry.isPointOccludedByHigherWindow(
-                                    target = win,
-                                    canvasX = canvasX,
-                                    canvasY = canvasY,
-                                    visibleWindows = BridgeClient.sceneFlow.value.visibleWindows,
-                                )
-                                val evtTime = change.uptimeMillis.takeIf { it > 0L } ?: SystemClock.uptimeMillis()
-                                if (!occluded && lastHoverEventTime.getAndSet(evtTime) != evtTime) {
-                                    val hoverAction = when (ev.type) {
-                                        PointerEventType.Enter -> MotionEvent.ACTION_HOVER_ENTER
-                                        PointerEventType.Exit -> MotionEvent.ACTION_HOVER_EXIT
-                                        else -> MotionEvent.ACTION_HOVER_MOVE
-                                    }
-                                    val mappedX = CompositorGeometry.mapViewToDisplayCoord(
-                                        change.position.x,
-                                        size.width,
-                                        win.contentWidth.coerceAtLeast(2),
-                                    )
-                                    val mappedY = mapViewYToDisplayY(
-                                        change.position.y,
-                                        size.height,
-                                        win.contentHeight.coerceAtLeast(2),
-                                        currentCropTopPx,
-                                    )
-                                    BridgeClient.injectWindowMotionOneway(
-                                        windowId = win.windowId,
-                                        action = hoverAction,
-                                        downTime = evtTime,
-                                        eventTime = evtTime,
-                                        source = InputDevice.SOURCE_MOUSE,
-                                        buttonState = 0,
-                                        actionButton = 0,
-                                        hScroll = 0f,
-                                        vScroll = 0f,
-                                        pointerIds = intArrayOf(0),
-                                        toolTypes = intArrayOf(MotionEvent.TOOL_TYPE_MOUSE),
-                                        xs = floatArrayOf(mappedX),
-                                        ys = floatArrayOf(mappedY),
-                                        pressures = floatArrayOf(0f),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            },
+            .windowSurfaceHoverAndScrollInput(
+                windowId = window.windowId,
+                getCurrentWindow = { currentWin },
+                getCurrentHeaderPx = { currentHeaderPx },
+                getCurrentCropTopPx = { currentCropTopPx },
+                lastHoverEventTime = lastHoverEventTime,
+            ),
     ) {
         if (!window.isHibernated && !occludedByFullscreen) {
             val holderState = remember(window.windowId) { SurfaceBindHolder(window.windowId) }
@@ -618,15 +333,7 @@ fun WindowSurfaceHost(
 
             // Seamless wake bridge: keep showing frozen snapshot until the live VirtualDisplay draws frame 1
             if (!hasRenderedLiveFrame) {
-                val snap = hibernateBitmap ?: LiveWindowPreviewRegistry.getCachedPreview(window.windowId)
-                if (snap != null && !snap.isRecycled) {
-                    Image(
-                        bitmap = snap.asImageBitmap(),
-                        contentDescription = window.title,
-                        contentScale = ContentScale.FillBounds,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+                WindowWakeSnapshotOverlay(window = window, hibernateBitmap = hibernateBitmap)
             }
         } else if (occludedByFullscreen && !window.isHibernated) {
             // Completely covered by a fullscreen window: Surface is detached so SurfaceFlinger halts
@@ -634,47 +341,7 @@ fun WindowSurfaceHost(
             Box(modifier = Modifier.fillMaxSize().background(OpalPalette.WindowCanvasBg))
         } else {
             // Hibernated window view: renders frozen TaskSnapshot with one-tap instant wake
-            val snap = hibernateBitmap
-            if (snap != null && !snap.isRecycled) {
-                Image(
-                    bitmap = snap.asImageBitmap(),
-                    contentDescription = window.title,
-                    contentScale = ContentScale.FillBounds,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0x66080A10))
-                    .clickable {
-                        BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.WAKE)
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(OpalPalette.GlassSurface)
-                            .border(1.dp, OpalPalette.BorderFocused, CircleShape)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                    ) {
-                        OpalText(
-                            text = "后台快照休眠 · 点击立即唤醒",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = OpalPalette.TextPrimary,
-                        )
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    OpalText(
-                        text = "自动回收后台虚拟屏配额，唤醒保留应用现场",
-                        fontSize = 11.sp,
-                        color = OpalPalette.TextSecondary,
-                    )
-                }
-            }
+            WindowHibernateCard(window = window, hibernateBitmap = hibernateBitmap)
         }
     }
 }
@@ -1006,206 +673,4 @@ private class SurfaceBindHolder(private val windowId: Int) {
         surfaceTexture = null
         WindowSurfaceCoordinator.disposeHolder(windowId, holderToken, notifyDaemon)
     }
-}
-
-private fun isMouseMotionEvent(ev: MotionEvent): Boolean =
-    (ev.source and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE ||
-        (ev.pointerCount > 0 && ev.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE)
-
-private fun applyTopCropTransform(view: FixedBufferTextureView, cropTopDisplayPx: Int, contentH: Int) {
-    val viewH = view.height
-    if (cropTopDisplayPx <= 0 || contentH <= 2 || viewH <= 0 || cropTopDisplayPx >= contentH - 2) {
-        if (view.hasCustomTopCropTransform) {
-            view.hasCustomTopCropTransform = false
-            view.lastAppliedCropPx = 0
-            view.lastAppliedCropContentH = 0
-            view.lastAppliedCropViewH = 0
-            view.setTransform(null)
-        }
-        return
-    }
-    if (view.hasCustomTopCropTransform &&
-        view.lastAppliedCropPx == cropTopDisplayPx &&
-        view.lastAppliedCropContentH == contentH &&
-        view.lastAppliedCropViewH == viewH
-    ) {
-        return
-    }
-    val cropRatio = cropTopDisplayPx.toFloat() / contentH.toFloat()
-    val scaleY = 1f / (1f - cropRatio)
-    val matrix = Matrix().apply {
-        setScale(1f, scaleY)
-        postTranslate(0f, -cropRatio * viewH * scaleY)
-    }
-    view.hasCustomTopCropTransform = true
-    view.lastAppliedCropPx = cropTopDisplayPx
-    view.lastAppliedCropContentH = contentH
-    view.lastAppliedCropViewH = viewH
-    view.setTransform(matrix)
-}
-
-private fun mapViewYToDisplayY(viewY: Float, viewH: Int, contentH: Int, cropTopDisplayPx: Int): Float {
-    if (cropTopDisplayPx <= 0 || cropTopDisplayPx >= contentH - 2) {
-        return CompositorGeometry.mapViewToDisplayCoord(viewY, viewH, contentH)
-    }
-    val visibleH = (contentH - cropTopDisplayPx).coerceAtLeast(2)
-    val norm = (viewY / viewH.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
-    return (cropTopDisplayPx + norm * (visibleH - 1)).coerceIn(0f, (contentH - 1).toFloat())
-}
-
-private fun handleGenericMotionForWindow(
-    viewW: Int,
-    viewH: Int,
-    ev: MotionEvent?,
-    win: CompositorWindow,
-    headerHeightPx: Int,
-    cropTopDisplayPx: Int,
-    lastHoverEventTime: AtomicLong,
-    onFocusRequested: () -> Unit,
-): Boolean {
-    if (ev == null || viewW <= 0 || viewH <= 0) return false
-    val masked = ev.actionMasked
-    if (masked == MotionEvent.ACTION_BUTTON_PRESS || masked == MotionEvent.ACTION_BUTTON_RELEASE) {
-        val canvasX = win.frame.left + ev.x
-        val canvasY = win.frame.top + headerHeightPx + ev.y
-        if (CompositorGeometry.isPointOccludedByHigherWindow(
-                target = win,
-                canvasX = canvasX,
-                canvasY = canvasY,
-                visibleWindows = BridgeClient.sceneFlow.value.visibleWindows,
-            )
-        ) {
-            return false
-        }
-        if (masked == MotionEvent.ACTION_BUTTON_PRESS) {
-            if (!win.focused) onFocusRequested()
-            if (ev.actionButton == MotionEvent.BUTTON_BACK && win.isLive && win.displayId > 0) {
-                if (io.github.lengsukq.opaldesk.ui.WorkstationKeyDispatcher.tryClaimMouseSideBack()) {
-                    BridgeClient.sendWindowActionAsync(win.windowId, BridgeProtocol.WinAction.SEND_BACK)
-                }
-                return true
-            }
-        }
-        // Consume mouse button generic events locally without injecting invalid ACTION_BUTTON_PRESS/RELEASE
-        // into IInputManager (actual click press/release is delivered cleanly via onTouchListener ACTION_DOWN/UP).
-        return isMouseMotionEvent(ev)
-    }
-    if (masked == MotionEvent.ACTION_HOVER_ENTER ||
-        masked == MotionEvent.ACTION_HOVER_MOVE ||
-        masked == MotionEvent.ACTION_HOVER_EXIT
-    ) {
-        if (lastHoverEventTime.getAndSet(ev.eventTime) == ev.eventTime) {
-            return true
-        }
-        return forwardMotionEventToWindow(viewW, viewH, ev, win, headerHeightPx, cropTopDisplayPx, onFocusRequested)
-    }
-    if (masked == MotionEvent.ACTION_SCROLL) {
-        return forwardMotionEventToWindow(viewW, viewH, ev, win, headerHeightPx, cropTopDisplayPx, onFocusRequested)
-    }
-    return false
-}
-
-private fun forwardMotionEventToWindow(
-    viewW: Int,
-    viewH: Int,
-    ev: MotionEvent?,
-    win: CompositorWindow,
-    headerHeightPx: Int,
-    cropTopDisplayPx: Int,
-    onFocusRequested: () -> Unit,
-): Boolean {
-    if (ev == null || viewW <= 0 || viewH <= 0) return false
-    val masked = ev.actionMasked
-    val canvasX = win.frame.left + ev.x
-    val canvasY = win.frame.top + (if (win.isFullscreen) 0 else headerHeightPx) + ev.y
-    // Geometric Z-order occlusion guard: never accept clicks/hovers underneath a higher-Z floating window
-    if (masked == MotionEvent.ACTION_DOWN ||
-        masked == MotionEvent.ACTION_HOVER_ENTER ||
-        masked == MotionEvent.ACTION_HOVER_MOVE ||
-        masked == MotionEvent.ACTION_SCROLL
-    ) {
-        if (CompositorGeometry.isPointOccludedByHigherWindow(
-                target = win,
-                canvasX = canvasX,
-                canvasY = canvasY,
-                visibleWindows = BridgeClient.sceneFlow.value.visibleWindows,
-            )
-        ) {
-            return false
-        }
-    }
-    if (masked == MotionEvent.ACTION_DOWN) {
-        val isMouseDown = isMouseMotionEvent(ev)
-        io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.recordWindowPointerDown(
-            windowId = win.windowId,
-            displayId = win.displayId,
-            canvasX = canvasX,
-            canvasY = canvasY,
-            modality = if (isMouseDown) {
-                io.github.lengsukq.opaldesk.ime.InputModality.MOUSE
-            } else {
-                io.github.lengsukq.opaldesk.ime.InputModality.TOUCH
-            },
-            uptimeMs = ev.eventTime.takeIf { it > 0L } ?: SystemClock.uptimeMillis(),
-        )
-    }
-    if (!win.isLive || win.displayId <= 0) {
-        if (!win.focused && masked == MotionEvent.ACTION_DOWN) {
-            onFocusRequested()
-        }
-        return true
-    }
-
-    val count = ev.pointerCount.coerceIn(1, 10)
-    val ids = IntArray(count)
-    val toolTypes = IntArray(count)
-    val xs = FloatArray(count)
-    val ys = FloatArray(count)
-    val pressures = FloatArray(count)
-
-    val cw = win.contentWidth.coerceAtLeast(2)
-    val ch = win.contentHeight.coerceAtLeast(2)
-    for (i in 0 until count) {
-        ids[i] = ev.getPointerId(i)
-        toolTypes[i] = ev.getToolType(i)
-        xs[i] = CompositorGeometry.mapViewToDisplayCoord(ev.getX(i), viewW, cw)
-        ys[i] = mapViewYToDisplayY(ev.getY(i), viewH, ch, cropTopDisplayPx)
-        pressures[i] = ev.getPressure(i)
-    }
-
-    val isMouse = isMouseMotionEvent(ev)
-    val effSource = when {
-        isMouse -> InputDevice.SOURCE_MOUSE
-        toolTypes[0] == MotionEvent.TOOL_TYPE_STYLUS -> InputDevice.SOURCE_STYLUS
-        else -> InputDevice.SOURCE_TOUCHSCREEN
-    }
-    val normButtonState = if (
-        isMouse &&
-        (masked == MotionEvent.ACTION_DOWN || masked == MotionEvent.ACTION_MOVE) &&
-        ev.buttonState == 0
-    ) {
-        MotionEvent.BUTTON_PRIMARY
-    } else {
-        ev.buttonState
-    }
-    val hScroll = if (masked == MotionEvent.ACTION_SCROLL) ev.getAxisValue(MotionEvent.AXIS_HSCROLL) else 0f
-    val vScroll = if (masked == MotionEvent.ACTION_SCROLL) ev.getAxisValue(MotionEvent.AXIS_VSCROLL) else 0f
-
-    BridgeClient.injectWindowMotionOneway(
-        windowId = win.windowId,
-        action = ev.action,
-        downTime = ev.downTime,
-        eventTime = ev.eventTime,
-        source = effSource,
-        buttonState = normButtonState,
-        actionButton = 0,
-        hScroll = hScroll,
-        vScroll = vScroll,
-        pointerIds = ids,
-        toolTypes = toolTypes,
-        xs = xs,
-        ys = ys,
-        pressures = pressures,
-    )
-    return true
 }

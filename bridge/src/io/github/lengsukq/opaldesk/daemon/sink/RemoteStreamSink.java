@@ -1,10 +1,7 @@
 package io.github.lengsukq.opaldesk.daemon.sink;
 
 import android.media.MediaCodec;
-import android.media.MediaCodecInfo;
-import android.media.MediaCodecList;
 import android.media.MediaFormat;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.Surface;
@@ -15,7 +12,6 @@ import io.github.lengsukq.opaldesk.daemon.stream.VideoFrameBufferPool;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.Locale;
 import java.util.function.Consumer;
 
 /**
@@ -29,11 +25,8 @@ public final class RemoteStreamSink implements DisplaySink {
 
     private static final String MIME_HEVC = "video/hevc";
     private static final String MIME_AVC = "video/avc";
-    private static final String KEY_MAX_FPS_TO_ENCODER = "max-fps-to-encoder";
     private static final int MIN_BITRATE_KBPS = 1500;
     private static final int MAX_BITRATE_KBPS = DisplayGeometryUtil.WIRED_MAX_BITRATE_KBPS;
-    private static final int DEFAULT_ALIGNMENT = 8;
-    private static final int GOP_INTERVAL_SECONDS = 15;
     public static final long AGGRESSIVE_REPEAT_FRAME_AFTER_US = DisplayGeometryUtil.AGGRESSIVE_REPEAT_FRAME_AFTER_US;
     public static final long DEFAULT_REPEAT_FRAME_AFTER_US = DisplayGeometryUtil.DEFAULT_REPEAT_FRAME_AFTER_US;
     private static final long DEQUEUE_TIMEOUT_US = 10_000L;
@@ -42,12 +35,6 @@ public final class RemoteStreamSink implements DisplaySink {
     private static final long ABR_IDR_COOLDOWN_MS = 350L;
     private static final long ABR_RECOVERY_INTERVAL_MS = 6_000L;
     private static final long ABR_SOFT_RECOVERY_HOLD_MS = 8_000L;
-
-    private enum ConfigTier {
-        OPTIMAL,
-        LOW_LATENCY_COMPAT,
-        MINIMAL
-    }
 
     public interface FrameListener {
         void onVideoConfig(OpalCastProtocol.VideoConfig config, long timestampUs);
@@ -74,32 +61,6 @@ public final class RemoteStreamSink implements DisplaySink {
      */
     public interface SurfaceSwapper {
         void onNewSurfaceReady(Surface newSurface, int alignedW, int alignedH, int dpi);
-    }
-
-    private static final class SelectedEncoder {
-        final String codecName; // nullable -> fallback to MediaCodec.createEncoderByType
-        final int alignW;
-        final int alignH;
-        final int maxW;
-        final int maxH;
-        final float maxFps;
-        final int maxBitrateKbps; // 0 = unknown
-        final int preferredProfile;
-        final int preferredLevel;
-
-        SelectedEncoder(
-                String codecName, int alignW, int alignH, int maxW, int maxH, float maxFps,
-                int maxBitrateKbps, int preferredProfile, int preferredLevel) {
-            this.codecName = codecName;
-            this.alignW = alignW;
-            this.alignH = alignH;
-            this.maxW = maxW;
-            this.maxH = maxH;
-            this.maxFps = maxFps;
-            this.maxBitrateKbps = maxBitrateKbps;
-            this.preferredProfile = preferredProfile;
-            this.preferredLevel = preferredLevel;
-        }
     }
 
     private static final class EncoderSession {
@@ -499,11 +460,11 @@ public final class RemoteStreamSink implements DisplaySink {
             int codecId = MIME_HEVC.equals(mime)
                     ? OpalCastProtocol.VIDEO_CODEC_HEVC
                     : OpalCastProtocol.VIDEO_CODEC_H264;
-            SelectedEncoder selected = selectPreferredEncoder(mime);
+            RemoteVideoEncoderConfig.SelectedEncoder selected = RemoteVideoEncoderConfig.selectPreferredEncoder(mime);
             int effectiveBitrateKbps = (selected.maxBitrateKbps > 0)
                     ? Math.min(bitrateKbps, Math.max(MIN_BITRATE_KBPS, selected.maxBitrateKbps))
                     : bitrateKbps;
-            int[][] dimCandidates = buildDimensionCandidates(
+            int[][] dimCandidates = RemoteVideoEncoderConfig.buildDimensionCandidates(
                     reqW, reqH, selected.alignW, selected.alignH, selected.maxW, selected.maxH);
             float[] fpsCandidates = DisplayGeometryUtil.buildEncoderFpsCandidates(fps, selected.maxFps);
             String[] codecNames = (selected.codecName != null)
@@ -518,7 +479,7 @@ public final class RemoteStreamSink implements DisplaySink {
                     for (float candFps : fpsCandidates) {
                         // Cascade: OPTIMAL (BT.709 + High/Main profile + max-fps cap + low-latency)
                         // -> LOW_LATENCY_COMPAT (proven CBR low-latency) -> MINIMAL safe fallback.
-                        for (ConfigTier tier : ConfigTier.values()) {
+                        for (RemoteVideoEncoderConfig.ConfigTier tier : RemoteVideoEncoderConfig.ConfigTier.values()) {
                             MediaCodec codec = null;
                             Surface surf = null;
                             try {
@@ -526,7 +487,7 @@ public final class RemoteStreamSink implements DisplaySink {
                                         ? MediaCodec.createByCodecName(codecName)
                                         : MediaCodec.createEncoderByType(mime);
                                 String activeName = (codecName != null) ? codecName : codec.getName();
-                                MediaFormat fmt = buildVideoFormat(
+                                MediaFormat fmt = RemoteVideoEncoderConfig.buildVideoFormat(
                                         mime, activeName, w, h, candFps, effectiveBitrateKbps,
                                         selected.preferredProfile, selected.preferredLevel,
                                         repeatPreviousFrameAfterUs, tier);
@@ -568,193 +529,6 @@ public final class RemoteStreamSink implements DisplaySink {
         throw new RuntimeException("Unable to configure video encoder", lastErr);
     }
 
-    /**
-     * Performs a single {@link MediaCodecList} scan to pick the preferred hardware encoder for
-     * {@code mime} (falling back to software if no HW codec matches) and extracts alignment and
-     * size/frame-rate caps from that exact selected encoder.
-     */
-    private static SelectedEncoder selectPreferredEncoder(String mime) {
-        try {
-            MediaCodecList list = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
-            MediaCodecInfo swFallback = null;
-            String swMatchedType = null;
-            for (MediaCodecInfo info : list.getCodecInfos()) {
-                if (!info.isEncoder()) continue;
-                String matchedType = matchSupportedType(info, mime);
-                if (matchedType == null) continue;
-                if (!isSoftwareCodec(info, info.getName())) {
-                    return buildSelectedEncoder(info, matchedType);
-                }
-                if (swFallback == null) {
-                    swFallback = info;
-                    swMatchedType = matchedType;
-                }
-            }
-            if (swFallback != null) {
-                return buildSelectedEncoder(swFallback, swMatchedType);
-            }
-        } catch (Throwable t) {
-            System.err.println("OPALDESK_ENCODER_SCAN_WARN mime=" + mime + ": " + t.getMessage());
-        }
-        return new SelectedEncoder(null, DEFAULT_ALIGNMENT, DEFAULT_ALIGNMENT, 0, 0, 0f, 0, 0, 0);
-    }
-
-    private static SelectedEncoder buildSelectedEncoder(MediaCodecInfo info, String matchedType) {
-        int alignW = DEFAULT_ALIGNMENT;
-        int alignH = DEFAULT_ALIGNMENT;
-        int maxW = 0;
-        int maxH = 0;
-        float maxFps = 0f;
-        int maxBitrateKbps = 0;
-        int preferredProfile = 0;
-        int preferredLevel = 0;
-        try {
-            MediaCodecInfo.CodecCapabilities caps = info.getCapabilitiesForType(matchedType);
-            MediaCodecInfo.VideoCapabilities vc = (caps != null) ? caps.getVideoCapabilities() : null;
-            if (vc != null) {
-                alignW = Math.max(DEFAULT_ALIGNMENT, vc.getWidthAlignment());
-                alignH = Math.max(DEFAULT_ALIGNMENT, vc.getHeightAlignment());
-                android.util.Range<Integer> wRange = vc.getSupportedWidths();
-                android.util.Range<Integer> hRange = vc.getSupportedHeights();
-                android.util.Range<Integer> fpsRange = vc.getSupportedFrameRates();
-                android.util.Range<Integer> brRange = vc.getBitrateRange();
-                if (wRange != null && wRange.getUpper() != null) maxW = wRange.getUpper();
-                if (hRange != null && hRange.getUpper() != null) maxH = hRange.getUpper();
-                if (fpsRange != null && fpsRange.getUpper() != null) maxFps = fpsRange.getUpper();
-                if (brRange != null && brRange.getUpper() != null && brRange.getUpper() > 0) {
-                    maxBitrateKbps = brRange.getUpper() / 1000;
-                }
-            }
-            if (caps != null && caps.profileLevels != null && caps.profileLevels.length > 0) {
-                int[] profiles = new int[caps.profileLevels.length];
-                int[] levels = new int[caps.profileLevels.length];
-                for (int i = 0; i < caps.profileLevels.length; i++) {
-                    MediaCodecInfo.CodecProfileLevel pl = caps.profileLevels[i];
-                    if (pl != null) {
-                        profiles[i] = pl.profile;
-                        levels[i] = pl.level;
-                    }
-                }
-                int[] chosen = selectPreferredProfileLevel(matchedType, profiles, levels);
-                preferredProfile = chosen[0];
-                preferredLevel = chosen[1];
-            }
-        } catch (RuntimeException e) {
-            System.err.println("OPALDESK_ENCODER_CAPS_WARN codec=" + info.getName() + ": " + e.getMessage());
-        }
-        return new SelectedEncoder(
-                info.getName(), alignW, alignH, maxW, maxH, maxFps, maxBitrateKbps, preferredProfile, preferredLevel);
-    }
-
-    private static String matchSupportedType(MediaCodecInfo info, String mime) {
-        for (String type : info.getSupportedTypes()) {
-            if (mime.equalsIgnoreCase(type)) {
-                return type;
-            }
-        }
-        return null;
-    }
-
-    private static boolean isSoftwareCodec(MediaCodecInfo info, String name) {
-        if (Build.VERSION.SDK_INT >= 29) {
-            try {
-                return info.isSoftwareOnly();
-            } catch (NoSuchMethodError ignored) {
-                // Fallback to name heuristic below.
-            }
-        }
-        String lower = (name != null) ? name.toLowerCase(Locale.US) : "";
-        return lower.startsWith("omx.google.") || lower.startsWith("c2.android.");
-    }
-
-    private static int[][] buildDimensionCandidates(
-            int reqW, int reqH, int capAlignW, int capAlignH, int maxW, int maxH) {
-        java.util.ArrayList<int[]> list = new java.util.ArrayList<>(4);
-        int[] fitted = DisplayGeometryUtil.fitDimensionsToMaxBounds(reqW, reqH, maxW, maxH, capAlignW, capAlignH);
-        addUniqueDims(list, fitted);
-        int[] primary = DisplayGeometryUtil.alignForEncoder(reqW, reqH, capAlignW, capAlignH);
-        addUniqueDims(list, primary);
-        int[] strict16 = DisplayGeometryUtil.fitDimensionsToMaxBounds(reqW, reqH, maxW, maxH, 16, 16);
-        addUniqueDims(list, strict16);
-        // Safe 1080p-bounded fallback for mid-tier encoders that reject tall portrait / 2K+ heights.
-        int[] safe1080 = DisplayGeometryUtil.fitDimensionsToMaxBounds(reqW, reqH, 1920, 1920, 16, 16);
-        addUniqueDims(list, safe1080);
-        return list.toArray(new int[0][]);
-    }
-
-    private static void addUniqueDims(java.util.List<int[]> list, int[] dims) {
-        for (int[] existing : list) {
-            if (existing[0] == dims[0] && existing[1] == dims[1]) return;
-        }
-        list.add(dims);
-    }
-
-    private static MediaFormat buildVideoFormat(
-            String mime,
-            String codecName,
-            int width,
-            int height,
-            float fps,
-            int bitrateKbps,
-            int preferredProfile,
-            int preferredLevel,
-            long repeatAfterUs,
-            ConfigTier tier) {
-        MediaFormat fmt = MediaFormat.createVideoFormat(mime, width, height);
-        fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-        fmt.setInteger(MediaFormat.KEY_BIT_RATE, bitrateKbps * 1000);
-        int targetFps = Math.max(15, Math.round(fps));
-        fmt.setInteger(MediaFormat.KEY_FRAME_RATE, targetFps);
-        // Long GOP avoids periodic giant IDR bitrate/heat spikes over reliable TCP/TLS links;
-        // on-demand REQUEST_IDR handles instant recovery on connect, resize, or congestion drop.
-        fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, GOP_INTERVAL_SECONDS);
-        if (repeatAfterUs > 0L) {
-            fmt.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, repeatAfterUs);
-        }
-        if (tier == ConfigTier.OPTIMAL) {
-            // Explicit BT.709 SDR + Limited range VUI signaling prevents BT.601 color shift and
-            // washed-out/crushed greys on macOS VideoToolbox, WebCodecs, and Android decoders.
-            fmt.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709);
-            fmt.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
-            fmt.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED);
-            if (preferredProfile > 0 && preferredLevel > 0) {
-                fmt.setInteger(MediaFormat.KEY_PROFILE, preferredProfile);
-                fmt.setInteger(MediaFormat.KEY_LEVEL, preferredLevel);
-            }
-            if (Build.VERSION.SDK_INT >= 29) {
-                // Drop excess SurfaceFlinger frames when Display 0 touch-boosts above the remote
-                // target FPS (e.g. 120Hz phone feeding a 60Hz stream), preserving bits/frame & thermals.
-                fmt.setFloat(KEY_MAX_FPS_TO_ENCODER, (float) targetFps);
-            }
-        }
-        if (tier != ConfigTier.MINIMAL) {
-            fmt.setInteger(MediaFormat.KEY_PRIORITY, 0);
-            // Match actual target FPS instead of pinning 60fps streams to a 120fps encoder OPP rail.
-            fmt.setInteger(MediaFormat.KEY_OPERATING_RATE, targetFps);
-            if (Build.VERSION.SDK_INT >= 30) {
-                // Critical on Qualcomm C2 (c2.qti.hevc.encoder): disables CVPFilter/evaDme 4-frame
-                // lookahead buffering (~400ms latency) and unlocks true zero-lookahead encoding.
-                fmt.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
-            }
-            if (Build.VERSION.SDK_INT >= 26) {
-                // MediaFormat.KEY_LATENCY is 1-based ("emit 1 output frame after N input frames"):
-                // passing 0 is ignored by Qualcomm C2 (leaving 4-6 frame CVP lookahead); 1 requests
-                // immediate frame-by-frame output with zero lookahead.
-                fmt.setInteger(MediaFormat.KEY_LATENCY, 1);
-            }
-            if (Build.VERSION.SDK_INT >= 29) {
-                fmt.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0);
-            }
-            boolean useCbr = (tier == ConfigTier.LOW_LATENCY_COMPAT) || shouldPreferCbrMode(codecName);
-            fmt.setInteger(
-                    MediaFormat.KEY_BITRATE_MODE,
-                    useCbr
-                            ? MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
-                            : MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR);
-        }
-        return fmt;
-    }
-
     private void startDrainThread(final EncoderSession s) {
         Thread t = new Thread(() -> drainLoop(s), "ExtVideoEncoder");
         t.setDaemon(true);
@@ -779,7 +553,7 @@ public final class RemoteStreamSink implements DisplaySink {
                 }
                 if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     MediaFormat outFmt = s.codec.getOutputFormat();
-                    byte[] csd = extractCsdAnnexB(outFmt);
+                    byte[] csd = RemoteVideoEncoderConfig.extractCsdAnnexB(outFmt);
                     if (csd.length > 0) {
                         s.lastCsd = csd;
                         emitVideoConfig(s, csd, SystemClock.elapsedRealtimeNanos() / 1000L);
@@ -815,7 +589,7 @@ public final class RemoteStreamSink implements DisplaySink {
                             int frameFlags = 0;
                             if (isKey) {
                                 frameFlags |= OpalCastProtocol.FLAG_VIDEO_KEYFRAME;
-                                if (hasInlineParameterSets(s.codecId, data, frameLen)) {
+                                if (RemoteVideoEncoderConfig.hasInlineParameterSets(s.codecId, data, frameLen)) {
                                     frameFlags |= OpalCastProtocol.FLAG_VIDEO_CONFIG_INLINE;
                                 }
                             }
@@ -877,44 +651,6 @@ public final class RemoteStreamSink implements DisplaySink {
                 s.displayMode,
                 csd);
         listener.onVideoConfig(cfg, ptsUs);
-    }
-
-    private static byte[] extractCsdAnnexB(MediaFormat fmt) {
-        if (fmt == null) return OpalCastProtocol.EMPTY_BYTES;
-        ByteBuffer csd0 = fmt.containsKey("csd-0") ? fmt.getByteBuffer("csd-0") : null;
-        ByteBuffer csd1 = fmt.containsKey("csd-1") ? fmt.getByteBuffer("csd-1") : null;
-        int len0 = (csd0 != null) ? csd0.remaining() : 0;
-        int len1 = (csd1 != null) ? csd1.remaining() : 0;
-        if (len0 + len1 <= 0) return OpalCastProtocol.EMPTY_BYTES;
-        byte[] out = new byte[len0 + len1];
-        if (len0 > 0) {
-            ByteBuffer dup0 = csd0.duplicate();
-            dup0.get(out, 0, len0);
-        }
-        if (len1 > 0) {
-            ByteBuffer dup1 = csd1.duplicate();
-            dup1.get(out, len0, len1);
-        }
-        return out;
-    }
-
-    private static boolean hasInlineParameterSets(int codecId, byte[] annexB, int length) {
-        if (annexB == null || length < 5 || annexB.length < 5) return false;
-        int offset;
-        if (annexB[0] == 0 && annexB[1] == 0 && annexB[2] == 0 && annexB[3] == 1) {
-            offset = 4;
-        } else if (annexB[0] == 0 && annexB[1] == 0 && annexB[2] == 1) {
-            offset = 3;
-        } else {
-            return false;
-        }
-        int nalByte = annexB[offset] & 0xFF;
-        if (codecId == OpalCastProtocol.VIDEO_CODEC_HEVC) {
-            int nalType = (nalByte >> 1) & 0x3F;
-            return nalType == 32 || nalType == 33 || nalType == 34; // VPS, SPS, PPS
-        }
-        int nalType = nalByte & 0x1F;
-        return nalType == 7 || nalType == 8; // SPS, PPS
     }
 
     private static void stopSessionQuietly(EncoderSession s) {

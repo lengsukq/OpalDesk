@@ -7,89 +7,34 @@
 import {
   DEFAULT_REMOTE_ROOT,
   DEFAULT_DIRECT_OPEN_MAX_MB,
-  DIRECT_OPEN_MAX_MB_OPTIONS,
-  QUICK_NAV_SHORTCUTS,
   normalizeRemotePath,
   joinRemotePath,
   getParentRemotePath,
-  buildPathBreadcrumbs,
   formatBytes,
-  formatFileTimestamp,
-  classifyEntryKind,
   isPreviewableImageEntry,
   sanitizeDirectOpenMaxMb,
-  shouldDirectOpenEntry,
   sortRemoteEntries,
-  getStorageCategoryMeta,
 } from './file_browser_client.js';
 import { inferApkFormat } from './protocol.js';
 import { t } from './i18n.js';
+import {
+  APK_STAGE_KEYS,
+  triggerBrowserBlobDownload,
+  renderDirectOpenSelect,
+  renderStatusBanner,
+  renderQuickNavList,
+  renderBreadcrumbsBar,
+  renderEntriesList,
+  renderStorageOverview,
+  renderStorageCategories,
+  renderStorageFolders,
+  renderStorageApps,
+  renderApkProgressCard,
+} from './file_browser_view.js';
 
 const STORAGE_DIRECT_OPEN_MAX_MB = 'opaldesk-direct-open-max-mb-v1';
 
 const $ = (id) => document.getElementById(id);
-
-const ENTRY_KIND_ICON = Object.freeze({
-  dir: '📁',
-  image: '🖼️',
-  video: '🎬',
-  audio: '🎵',
-  apk: '📦',
-  archive: '🗜️',
-  doc: '📄',
-  file: '📃',
-});
-
-const APK_STAGE_KEYS = Object.freeze({
-  uploading: 'fm.apkStageUploading',
-  extracting: 'fm.apkStageExtracting',
-  installing: 'fm.apkStageInstalling',
-  succeeded: 'fm.apkStageSucceeded',
-  failed: 'fm.apkStageFailed',
-});
-
-const QUICK_NAV_I18N_KEYS = Object.freeze({
-  '/sdcard': 'fm.quickInternal',
-  '/sdcard/Download': 'fm.quickDownloads',
-  '/sdcard/DCIM': 'fm.quickDcim',
-  '/sdcard/Pictures': 'fm.quickPictures',
-  '/sdcard/Documents': 'fm.quickDocuments',
-  '/sdcard/Android/data/com.tencent.mm/MicroMsg/Download': 'fm.quickWechat',
-});
-
-const STORAGE_CAT_I18N_KEYS = Object.freeze({
-  photos: 'fm.catPhotos',
-  images: 'fm.catPhotos',
-  videos: 'fm.catVideos',
-  audio: 'fm.catAudio',
-  documents: 'fm.catDocuments',
-  apks: 'fm.catApks',
-  archives: 'fm.catArchives',
-  downloads: 'fm.catDownloads',
-  other: 'fm.catOther',
-});
-
-function createEl(tag, className = '', text = '') {
-  const el = document.createElement(tag);
-  if (className) el.className = className;
-  if (text) el.textContent = text;
-  return el;
-}
-
-function triggerBrowserBlobDownload(bytes, fileName) {
-  const blob = new Blob([bytes]);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    URL.revokeObjectURL(url);
-    a.remove();
-  }, 1500);
-}
 
 export class OpalFileBrowserController {
   constructor({ app, client }) {
@@ -139,20 +84,7 @@ export class OpalFileBrowserController {
       this.directOpenMaxMb = sanitizeDirectOpenMaxMb(desktopPref, DEFAULT_DIRECT_OPEN_MAX_MB);
       this._saveLocalDirectOpenMaxMb(this.directOpenMaxMb);
     }
-    const sel = $('fmDirectOpenSelect');
-    if (!sel) return;
-    sel.textContent = '';
-    const options = DIRECT_OPEN_MAX_MB_OPTIONS.includes(this.directOpenMaxMb)
-      ? DIRECT_OPEN_MAX_MB_OPTIONS
-      : [...DIRECT_OPEN_MAX_MB_OPTIONS, this.directOpenMaxMb].sort((a, b) => a - b);
-    for (const mb of options) {
-      const opt = document.createElement('option');
-      opt.value = String(mb);
-      opt.textContent = mb === 0 ? t('fm.directOpenOff') : t('fm.directOpenOption', { mb });
-      sel.appendChild(opt);
-    }
-    sel.value = String(this.directOpenMaxMb);
-    sel.title = t('fm.directOpenTitle');
+    renderDirectOpenSelect($('fmDirectOpenSelect'), this.directOpenMaxMb);
   }
 
   bindEvents() {
@@ -306,34 +238,14 @@ export class OpalFileBrowserController {
   }
 
   setStatusBanner(text, tone = '') {
-    const el = $('fmStatusBanner');
-    if (!el) return;
-    if (!text) {
-      el.hidden = true;
-      el.textContent = '';
-      el.className = 'fm-status-banner';
-      return;
-    }
-    el.hidden = false;
-    el.textContent = text;
-    el.className = `fm-status-banner${tone ? ` tone-${tone}` : ''}`;
+    renderStatusBanner($('fmStatusBanner'), text, tone);
   }
 
   renderQuickNav() {
-    const host = $('fmQuickNavList');
-    if (!host) return;
-    host.textContent = '';
-    for (const item of QUICK_NAV_SHORTCUTS) {
-      const labelKey = QUICK_NAV_I18N_KEYS[item.path];
-      const btn = createEl('button', 'fm-quick-nav-btn', labelKey ? t(labelKey) : item.label);
-      btn.type = 'button';
-      btn.dataset.path = item.path;
-      btn.addEventListener('click', () => {
-        if (this.activeTab !== 'files') this.selectTab('files');
-        void this.navigate(item.path);
-      });
-      host.appendChild(btn);
-    }
+    renderQuickNavList($('fmQuickNavList'), (path) => {
+      if (this.activeTab !== 'files') this.selectTab('files');
+      void this.navigate(path);
+    });
   }
 
   async navigate(path) {
@@ -354,19 +266,7 @@ export class OpalFileBrowserController {
   }
 
   renderBreadcrumbs() {
-    const host = $('fmBreadcrumbs');
-    if (!host) return;
-    host.textContent = '';
-    const crumbs = buildPathBreadcrumbs(this.currentPath);
-    crumbs.forEach((crumb, idx) => {
-      if (idx > 0) host.appendChild(createEl('span', 'fm-crumb-sep', '/'));
-      const label = crumb.path === '/sdcard' ? t('fm.crumbPhoneStorage') : crumb.label;
-      const btn = createEl('button', 'fm-crumb-btn', label);
-      btn.type = 'button';
-      btn.disabled = idx === crumbs.length - 1;
-      btn.addEventListener('click', () => void this.navigate(crumb.path));
-      host.appendChild(btn);
-    });
+    renderBreadcrumbsBar($('fmBreadcrumbs'), this.currentPath, (p) => void this.navigate(p));
   }
 
   async refreshCurrentDir() {
@@ -399,119 +299,32 @@ export class OpalFileBrowserController {
   }
 
   renderEntries() {
-    const host = $('fmEntriesWrap');
-    if (!host) return;
-    host.classList.toggle('is-grid', this.viewMode === 'grid');
-    host.textContent = '';
     this.syncBatchBar();
-
     let list = sortRemoteEntries(this.entries, this.sortBy, this.sortDir);
     if (this.searchQuery) {
       list = list.filter((e) => e.name.toLowerCase().includes(this.searchQuery));
     }
-
-    if (list.length === 0) {
-      host.appendChild(createEl('div', 'fm-empty', this.loading ? t('fm.loading') : t('fm.emptyDir')));
-      return;
-    }
-
-    for (const entry of list) {
-      const kind = classifyEntryKind(entry);
-      const row = createEl('div', `fm-entry-item${this.selectedPaths.has(entry.path) ? ' selected' : ''}`);
-
-      const chk = document.createElement('input');
-      chk.type = 'checkbox';
-      chk.className = 'fm-entry-check';
-      chk.checked = this.selectedPaths.has(entry.path);
-      chk.addEventListener('change', () => {
-        if (chk.checked) this.selectedPaths.add(entry.path);
-        else this.selectedPaths.delete(entry.path);
-        row.classList.toggle('selected', chk.checked);
+    renderEntriesList($('fmEntriesWrap'), {
+      list,
+      viewMode: this.viewMode,
+      loading: this.loading,
+      selectedPaths: this.selectedPaths,
+      desktopEnabled: Boolean(this.app.desktop?.enabled),
+      directOpenMaxMb: this.directOpenMaxMb,
+      onToggleSelect: (path, checked) => {
+        if (checked) this.selectedPaths.add(path);
+        else this.selectedPaths.delete(path);
         this.syncBatchBar();
-      });
-
-      const iconWrap = createEl('div', 'fm-entry-icon', ENTRY_KIND_ICON[kind] || '📃');
-      if (kind === 'image' && this.viewMode === 'grid') {
-        void this._populateGridThumbnail(entry, iconWrap);
-      }
-
-      const info = createEl('div', 'fm-entry-info');
-      const nameEl = createEl('div', 'fm-entry-name', entry.name);
-      const metaEl = createEl(
-        'div',
-        'fm-entry-meta',
-        entry.isDir ? formatFileTimestamp(entry.modifiedMs) : `${formatBytes(entry.size)} · ${formatFileTimestamp(entry.modifiedMs)}`
-      );
-      info.append(nameEl, metaEl);
-      info.addEventListener('click', () => {
-        if (entry.isDir) {
-          void this.navigate(entry.path);
-        } else if (kind === 'apk') {
-          void this.installRemoteApk(entry.path);
-        } else if (this.app.desktop?.enabled && shouldDirectOpenEntry(entry, this.directOpenMaxMb)) {
-          void this.openEntryDirectly(entry);
-        } else if (isPreviewableImageEntry(entry)) {
-          void this.previewImage(entry);
-        } else {
-          void this.downloadEntry(entry);
-        }
-      });
-
-      const actions = createEl('div', 'fm-entry-actions');
-      if (!entry.isDir) {
-        if (kind === 'apk') {
-          const instBtn = createEl('button', 'btn-pill small primary', t('fm.btnInstall'));
-          instBtn.type = 'button';
-          instBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            void this.installRemoteApk(entry.path);
-          });
-          actions.appendChild(instBtn);
-        } else {
-          if (this.app.desktop?.enabled) {
-            const openBtn = createEl('button', 'btn-pill small primary', t('fm.btnOpen'));
-            openBtn.type = 'button';
-            openBtn.addEventListener('click', (e) => {
-              e.stopPropagation();
-              void this.openEntryDirectly(entry);
-            });
-            actions.appendChild(openBtn);
-          } else if (isPreviewableImageEntry(entry)) {
-            const prevBtn = createEl('button', 'btn-pill small', t('fm.btnPreview'));
-            prevBtn.type = 'button';
-            prevBtn.addEventListener('click', (e) => {
-              e.stopPropagation();
-              void this.previewImage(entry);
-            });
-            actions.appendChild(prevBtn);
-          }
-        }
-        const dlBtn = createEl('button', 'btn-pill small', t('fm.btnDownload'));
-        dlBtn.type = 'button';
-        dlBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          void this.downloadEntry(entry);
-        });
-        actions.appendChild(dlBtn);
-      }
-
-      const renBtn = createEl('button', 'btn-pill small ghost', t('fm.btnRename'));
-      renBtn.type = 'button';
-      renBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        void this.promptRename(entry);
-      });
-      const delBtn = createEl('button', 'btn-pill small danger-ghost', t('fm.btnDelete'));
-      delBtn.type = 'button';
-      delBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        void this.confirmDelete([entry]);
-      });
-      actions.append(renBtn, delBtn);
-
-      row.append(chk, iconWrap, info, actions);
-      host.appendChild(row);
-    }
+      },
+      onPopulateGridThumbnail: (entry, iconWrap) => void this._populateGridThumbnail(entry, iconWrap),
+      onNavigate: (path) => void this.navigate(path),
+      onInstallApk: (path) => void this.installRemoteApk(path),
+      onOpenDirectly: (entry) => void this.openEntryDirectly(entry),
+      onPreviewImage: (entry) => void this.previewImage(entry),
+      onDownload: (entry) => void this.downloadEntry(entry),
+      onRename: (entry) => void this.promptRename(entry),
+      onDelete: (entries) => void this.confirmDelete(entries),
+    });
   }
 
   async _populateGridThumbnail(entry, container) {
@@ -766,26 +579,7 @@ export class OpalFileBrowserController {
   }
 
   renderStorage() {
-    const head = $('fmStorageOverview');
-    const summary = this.storageSummary;
-    if (head) {
-      head.textContent = '';
-      if (!summary) {
-        head.appendChild(createEl('div', 'fm-empty', this.storageLoading ? t('fm.storageScanning') : t('fm.storageRescanHint')));
-      } else {
-        const pct = summary.totalBytes > 0 ? Math.min(100, Math.round((summary.usedBytes / summary.totalBytes) * 100)) : 0;
-        const stats = createEl('div', 'fm-storage-stats');
-        stats.append(
-          createEl('strong', '', t('fm.storageUsed', { used: formatBytes(summary.usedBytes), total: formatBytes(summary.totalBytes), pct })),
-          createEl('span', 'muted', t('fm.storageFree', { free: formatBytes(summary.freeBytes) }))
-        );
-        const track = createEl('div', 'fm-storage-bar-track');
-        const fill = createEl('div', 'fm-storage-bar-fill');
-        fill.style.width = `${pct}%`;
-        track.appendChild(fill);
-        head.append(stats, track);
-      }
-    }
+    renderStorageOverview($('fmStorageOverview'), this.storageSummary, this.storageLoading);
     this.renderStorageBody();
   }
 
@@ -797,151 +591,27 @@ export class OpalFileBrowserController {
     if (!summary) return;
 
     if (this.storageSubTab === 'categories') {
-      this._renderStorageCategories(host, summary);
-    } else if (this.storageSubTab === 'folders') {
-      this._renderStorageFolders(host, summary);
-    } else {
-      this._renderStorageApps(host, summary);
-    }
-  }
-
-  _renderStorageCategories(host, summary) {
-    const grid = createEl('div', 'fm-cat-grid');
-    const total = Math.max(1, summary.usedBytes || summary.totalBytes);
-    for (const cat of summary.categories || []) {
-      const meta = getStorageCategoryMeta(cat.name);
-      const catKey = STORAGE_CAT_I18N_KEYS[String(cat.name || '').toLowerCase()];
-      const catLabel = catKey ? t(catKey) : meta.label;
-      const card = createEl('div', 'fm-cat-card');
-      const dot = createEl('span', 'fm-cat-dot');
-      dot.style.background = meta.color;
-      const top = createEl('div', 'fm-cat-top');
-      top.append(dot, createEl('strong', '', catLabel));
-      const val = createEl('div', 'fm-cat-val', formatBytes(cat.bytes));
-      const sub = createEl('div', 'fm-cat-sub', t('fm.fileCount', { count: cat.fileCount, pct: ((cat.bytes / total) * 100).toFixed(1) }));
-      card.append(top, val, sub);
-      grid.appendChild(card);
-    }
-    host.appendChild(grid);
-
-    if (summary.largeFiles?.length) {
-      host.appendChild(createEl('h4', 'fm-sub-heading', t('fm.largeFilesHeading')));
-      const list = createEl('div', 'fm-rank-list');
-      for (const f of summary.largeFiles.slice(0, 20)) {
-        const row = createEl('div', 'fm-rank-row');
-        const info = createEl('div', 'fm-rank-info');
-        info.append(createEl('div', 'fm-rank-title', f.name), createEl('div', 'fm-rank-path mono', f.path));
-        const right = createEl('div', 'fm-rank-right');
-        right.appendChild(createEl('span', 'fm-rank-size mono', formatBytes(f.size)));
-        const dlBtn = createEl('button', 'btn-pill small', t('fm.btnDownload'));
-        dlBtn.type = 'button';
-        dlBtn.addEventListener('click', () => void this.downloadEntry({ name: f.name, path: f.path, size: f.size, isDir: false }));
-        const delBtn = createEl('button', 'btn-pill small danger-ghost', t('fm.btnDelete'));
-        delBtn.type = 'button';
-        delBtn.addEventListener('click', async () => {
+      renderStorageCategories(host, summary, {
+        onDownload: (entry) => void this.downloadEntry(entry),
+        onDeleteLargeFile: async (f) => {
           await this.confirmDelete([{ name: f.name, path: f.path }]);
           void this.scanStorage(true);
-        });
-        right.append(dlBtn, delBtn);
-        row.append(info, right);
-        list.appendChild(row);
-      }
-      host.appendChild(list);
-    }
-  }
-
-  _renderStorageFolders(host, summary) {
-    const folders = summary.folders || [];
-    if (!folders.length) {
-      host.appendChild(createEl('div', 'fm-empty', t('fm.noFolders')));
-      return;
-    }
-    const maxBytes = Math.max(1, folders[0]?.bytes || 1);
-    const list = createEl('div', 'fm-rank-list');
-    for (const folder of folders.slice(0, 25)) {
-      const row = createEl('div', 'fm-rank-row clickable');
-      const info = createEl('div', 'fm-rank-info');
-      info.append(
-        createEl('div', 'fm-rank-title', `📁 ${folder.name || folder.path}`),
-        createEl('div', 'fm-rank-path mono', t('fm.folderFiles', { path: folder.path, count: folder.fileCount }))
-      );
-      const bar = createEl('div', 'fm-mini-bar');
-      const fill = createEl('div', 'fm-mini-bar-fill');
-      fill.style.width = `${Math.max(4, Math.round((folder.bytes / maxBytes) * 100))}%`;
-      bar.appendChild(fill);
-      info.appendChild(bar);
-
-      const right = createEl('div', 'fm-rank-right');
-      right.appendChild(createEl('span', 'fm-rank-size mono', formatBytes(folder.bytes)));
-      const openBtn = createEl('button', 'btn-pill small primary', t('fm.btnView'));
-      openBtn.type = 'button';
-      openBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.currentPath = normalizeRemotePath(folder.path);
+        },
+      });
+    } else if (this.storageSubTab === 'folders') {
+      renderStorageFolders(host, summary, (folderPath) => {
+        this.currentPath = normalizeRemotePath(folderPath);
         this.selectTab('files');
       });
-      right.appendChild(openBtn);
-      row.addEventListener('click', () => {
-        this.currentPath = normalizeRemotePath(folder.path);
-        this.selectTab('files');
-      });
-      row.append(info, right);
-      list.appendChild(row);
+    } else {
+      renderStorageApps(host, summary, (pkg, label) => this.app.launchPopoutByPackage(pkg, label));
     }
-    host.appendChild(list);
-  }
-
-  _renderStorageApps(host, summary) {
-    const apps = summary.apps || [];
-    if (!apps.length) {
-      host.appendChild(createEl('div', 'fm-empty', t('fm.noApps')));
-      return;
-    }
-    const maxBytes = Math.max(1, apps[0]?.totalBytes || 1);
-    const list = createEl('div', 'fm-rank-list');
-    for (const app of apps.slice(0, 40)) {
-      const row = createEl('div', 'fm-rank-row');
-      const info = createEl('div', 'fm-rank-info');
-      info.append(
-        createEl('div', 'fm-rank-title', app.appLabel || app.pkg),
-        createEl(
-          'div',
-          'fm-rank-path mono',
-          t('fm.appBreakdown', { apk: formatBytes(app.apkBytes), data: formatBytes(app.dataBytes), cache: formatBytes(app.cacheBytes) })
-        )
-      );
-      const bar = createEl('div', 'fm-mini-bar');
-      const fill = createEl('div', 'fm-mini-bar-fill accent');
-      fill.style.width = `${Math.max(4, Math.round((app.totalBytes / maxBytes) * 100))}%`;
-      bar.appendChild(fill);
-      info.appendChild(bar);
-
-      const right = createEl('div', 'fm-rank-right');
-      right.appendChild(createEl('span', 'fm-rank-size mono', formatBytes(app.totalBytes)));
-      if (app.pkg) {
-        const popBtn = createEl('button', 'btn-pill small', t('fm.btnPopout'));
-        popBtn.type = 'button';
-        popBtn.addEventListener('click', () => {
-          this.app.launchPopoutByPackage(app.pkg, app.appLabel || app.pkg);
-        });
-        right.appendChild(popBtn);
-      }
-      row.append(info, right);
-      list.appendChild(row);
-    }
-    host.appendChild(list);
   }
 
   // ==================== WIRELESS APK INSTALLER ====================
 
-  _renderApkProgress({ stageLabel, progress, detail = '', tone = '' }) {
-    const card = $('fmApkProgressCard');
-    if (!card) return;
-    card.hidden = false;
-    card.className = `fm-apk-progress-card${tone ? ` tone-${tone}` : ''}`;
-    if ($('fmApkStageText')) $('fmApkStageText').textContent = stageLabel;
-    if ($('fmApkDetailText')) $('fmApkDetailText').textContent = detail;
-    if ($('fmApkProgressFill')) $('fmApkProgressFill').style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  _renderApkProgress(opts) {
+    renderApkProgressCard(opts);
   }
 
   async uploadAndInstallApk(file) {

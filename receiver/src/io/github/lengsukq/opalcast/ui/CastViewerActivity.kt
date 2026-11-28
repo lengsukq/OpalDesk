@@ -7,8 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
-import android.graphics.Color
-import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -16,8 +14,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
-import android.text.TextUtils
-import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.Surface
@@ -29,9 +25,6 @@ import android.view.WindowManager
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
 import io.github.lengsukq.opalcast.R
 import io.github.lengsukq.opalcast.compat.AndroidApiCompat
@@ -95,22 +88,7 @@ class CastViewerActivity : Activity() {
     private lateinit var rootFrame: FrameLayout
     private lateinit var surfaceView: SurfaceView
     private lateinit var imeBridgeView: CastImeBridgeView
-    private lateinit var collapsedHandle: TextView
-    private lateinit var expandedToolbar: HorizontalScrollView
-    private lateinit var statusLabel: TextView
-    private lateinit var modeBtn: TextView
-    private lateinit var floatMirrorBtn: TextView
-    private lateinit var blackoutBtn: TextView
-    private lateinit var imeBtn: TextView
-    private lateinit var micBtn: TextView
-    private lateinit var camBtn: TextView
-    private lateinit var flipCamBtn: TextView
-    private lateinit var fullscreenExitChip: TextView
-    private lateinit var composingPill: TextView
-    private lateinit var overlayCard: LinearLayout
-    private lateinit var overlayTitle: TextView
-    private lateinit var overlaySubtitle: TextView
-    private lateinit var overlayRetryBtn: TextView
+    private lateinit var chrome: CastViewerChromeViews
 
     private val autoCollapseRunnable = Runnable {
         if (connected && toolbarExpanded) {
@@ -190,7 +168,6 @@ class CastViewerActivity : Activity() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun buildUi() {
-        val pal = OpalCastTheme.resolve(this)
         rootFrame = FrameLayout(this).apply {
             setBackgroundColor(0xFF040A0E.toInt())
         }
@@ -234,8 +211,8 @@ class CastViewerActivity : Activity() {
             onCommitText = { text -> client?.sendTextEvent(text, commitPaste = true) },
             onComposingChanged = { comp ->
                 runOnUiThread {
-                    composingPill.text = comp
-                    composingPill.visibility = if (comp.isNotBlank()) View.VISIBLE else View.GONE
+                    chrome.composingPill.text = comp
+                    chrome.composingPill.visibility = if (comp.isNotBlank()) View.VISIBLE else View.GONE
                 }
             },
             onImeVisibilityChanged = { visible ->
@@ -244,208 +221,46 @@ class CastViewerActivity : Activity() {
         )
         rootFrame.addView(imeBridgeView, FrameLayout.LayoutParams(1, 1, Gravity.BOTTOM or Gravity.START))
 
-        // Collapsed top pill handle
-        collapsedHandle = TextView(this).apply {
-            text = getString(R.string.viewer_toolbar_handle)
-            setTextColor(0xE6E0FBF5.toInt())
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            gravity = Gravity.CENTER
-            background = OpalCastTheme.roundedDrawable(this@CastViewerActivity, 0xCC091820.toInt(), 99, 0x552DD4BF, 1f)
-            setPadding(dp(14), dp(5), dp(14), dp(5))
-            visibility = View.GONE
-            setOnClickListener { setToolbarExpanded(true) }
-        }
-        rootFrame.addView(
-            collapsedHandle,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-                topMargin = dp(10)
-            },
-        )
-
-        // Expanded frosted Liquid Glass top toolbar
-        val barInner = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = OpalCastTheme.roundedDrawable(this@CastViewerActivity, 0xE60B1D26.toInt(), 18, 0x552DD4BF, 1f)
-            setPadding(dp(10), dp(7), dp(10), dp(7))
-        }
-
-        statusLabel = TextView(this).apply {
-            text = peerName
-            setTextColor(0xFFF0FDF9.toInt())
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-            setPadding(dp(4), 0, dp(8), 0)
-        }
-        barInner.addView(statusLabel)
-
-        fun addToolChip(label: String, tintBg: Int = 0x1FFFFFFF, tintText: Int = 0xFFE6FFFA.toInt(), onClick: () -> Unit): TextView {
-            val tv = TextView(this).apply {
-                text = label
-                setTextColor(tintText)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-                typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-                gravity = Gravity.CENTER
-                background = OpalCastTheme.roundedDrawable(this@CastViewerActivity, tintBg, 10, 0x2EFFFFFF, 0.8f)
-                setPadding(dp(10), dp(6), dp(10), dp(6))
-                setOnClickListener {
-                    scheduleAutoCollapse(5_000L)
-                    onClick()
-                }
-            }
-            barInner.addView(tv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                leftMargin = dp(6)
-            })
-            return tv
-        }
-
-        addToolChip(getString(R.string.common_back)) { client?.sendSystemAction(OpalCastClient.SYS_BACK) }
-        addToolChip(getString(R.string.common_home)) { client?.sendSystemAction(OpalCastClient.SYS_HOME) }
-        modeBtn = addToolChip(getString(R.string.viewer_chip_to_mirror)) { toggleDisplayMode() }
-        floatMirrorBtn = addToolChip(getString(R.string.viewer_chip_float_window)) { popOutMirrorToFloating() }
-        blackoutBtn = addToolChip(getString(R.string.viewer_chip_screen_off)) { toggleBlackout() }
-        imeBtn = addToolChip(getString(R.string.viewer_chip_keyboard)) { imeBridgeView.toggleIme() }
-        micBtn = addToolChip(getString(R.string.viewer_chip_mic)) { toggleRemoteMic() }
-        camBtn = addToolChip(getString(R.string.viewer_chip_camera)) { toggleRemoteCamera() }
-        flipCamBtn = addToolChip(getString(R.string.viewer_chip_flip_camera)) { flipRemoteCamera() }.apply { visibility = View.GONE }
-        addToolChip(getString(R.string.viewer_chip_app_window)) {
-            setToolbarExpanded(false)
-            client?.requestAppList()
-            RemoteAppPickerDialog(
-                activity = this,
-                host = targetHost,
-                port = targetPort,
-                peerLabel = peerName,
-                preloadedApps = remoteApps.takeIf { it.isNotEmpty() },
-            ).show()
-        }
-        addToolChip(getString(R.string.common_refresh)) { client?.requestKeyFrame() }
-        addToolChip(getString(R.string.viewer_chip_collapse)) { setToolbarExpanded(false) }
-        addToolChip(getString(R.string.viewer_chip_disconnect), tintBg = 0x38EF4444, tintText = 0xFFFCA5A5.toInt()) { finish() }
-
-        expandedToolbar = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(barInner)
-        }
-        rootFrame.addView(
-            expandedToolbar,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-                topMargin = dp(10)
-                leftMargin = dp(12)
-                rightMargin = dp(12)
-            },
-        )
-
-        // Remote fullscreen exit helper chip
-        fullscreenExitChip = TextView(this).apply {
-            text = getString(R.string.viewer_exit_fullscreen)
-            setTextColor(0xFFF0FDF9.toInt())
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            typeface = Typeface.DEFAULT_BOLD
-            background = OpalCastTheme.roundedDrawable(this@CastViewerActivity, 0xD90D9488.toInt(), 99, 0x66FFFFFF, 1f)
-            setPadding(dp(14), dp(7), dp(14), dp(7))
-            visibility = View.GONE
-            setOnClickListener {
-                remoteFullscreenTitle = ""
-                visibility = View.GONE
-                client?.sendSystemAction(OpalCastClient.SYS_HOME)
-            }
-        }
-        rootFrame.addView(
-            fullscreenExitChip,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
-                topMargin = dp(60)
-                rightMargin = dp(14)
-            },
-        )
-
-        // CJK IME composing preview pill
-        composingPill = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            background = OpalCastTheme.roundedDrawable(this@CastViewerActivity, 0xE60D9488.toInt(), 12, 0x66FFFFFF, 1f)
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            visibility = View.GONE
-        }
-        rootFrame.addView(
-            composingPill,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-                bottomMargin = dp(18)
-            },
-        )
-
-        // Connection / approval / error overlay card
-        overlayCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            background = OpalCastTheme.roundedDrawable(this@CastViewerActivity, 0xEB0B1C24.toInt(), 20, pal.borderStrong, 1.1f)
-            setPadding(dp(24), dp(22), dp(24), dp(22))
-        }
-        overlayTitle = TextView(this).apply {
-            text = peerName
-            setTextColor(0xFFF0FDF9.toInt())
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            gravity = Gravity.CENTER
-        }
-        overlaySubtitle = TextView(this).apply {
-            text = getString(R.string.viewer_connecting_tls)
-            setTextColor(0xFFA7D3CC.toInt())
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            gravity = Gravity.CENTER
-        }
-        val overlayBtnRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
-        overlayRetryBtn = OpalCastTheme.buildPillButton(this, getString(R.string.common_reconnect), pal.accent, Color.WHITE) {
-            startPeerSession()
-        }.apply { visibility = View.GONE }
-        val backBtn = OpalCastTheme.buildPillButton(this, getString(R.string.viewer_back_home), 0x22FFFFFF, 0xFFE6FFFA.toInt(), 0x33FFFFFF) {
-            finish()
-        }
-        overlayBtnRow.addView(overlayRetryBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            rightMargin = dp(10)
-        })
-        overlayBtnRow.addView(backBtn)
-
-        overlayCard.addView(overlayTitle)
-        overlayCard.addView(overlaySubtitle, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(8)
-            bottomMargin = dp(16)
-        })
-        overlayCard.addView(overlayBtnRow)
-        rootFrame.addView(
-            overlayCard,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER),
+        chrome = CastViewerToolbarHelper.attachChromeViews(
+            activity = this,
+            rootFrame = rootFrame,
+            initialPeerName = peerName,
+            callbacks = CastViewerToolbarCallbacks(
+                onScheduleAutoCollapse = ::scheduleAutoCollapse,
+                onExpandToolbar = { setToolbarExpanded(true) },
+                onCollapseToolbar = { setToolbarExpanded(false) },
+                onBack = { client?.sendSystemAction(OpalCastClient.SYS_BACK) },
+                onHome = { client?.sendSystemAction(OpalCastClient.SYS_HOME) },
+                onToggleDisplayMode = ::toggleDisplayMode,
+                onPopOutMirror = ::popOutMirrorToFloating,
+                onToggleBlackout = ::toggleBlackout,
+                onToggleIme = { imeBridgeView.toggleIme() },
+                onToggleMic = ::toggleRemoteMic,
+                onToggleCamera = ::toggleRemoteCamera,
+                onFlipCamera = ::flipRemoteCamera,
+                onOpenAppPicker = {
+                    setToolbarExpanded(false)
+                    client?.requestAppList()
+                    RemoteAppPickerDialog(
+                        activity = this,
+                        host = targetHost,
+                        port = targetPort,
+                        peerLabel = peerName,
+                        preloadedApps = remoteApps.takeIf { it.isNotEmpty() },
+                    ).show()
+                },
+                onRefreshKeyFrame = { client?.requestKeyFrame() },
+                onDisconnect = { finish() },
+                onExitFullscreen = {
+                    remoteFullscreenTitle = ""
+                    chrome.fullscreenExitChip.visibility = View.GONE
+                    client?.sendSystemAction(OpalCastClient.SYS_HOME)
+                },
+                onRetryConnect = ::startPeerSession,
+            ),
         )
 
         setContentView(rootFrame)
-        AndroidApiCompat.observeTopCutoutInset(rootFrame) { cutoutTop ->
-            val topMargin = maxOf(dp(14), cutoutTop + dp(8))
-            (collapsedHandle.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
-                if (lp.topMargin != topMargin) {
-                    lp.topMargin = topMargin
-                    collapsedHandle.layoutParams = lp
-                }
-            }
-            (expandedToolbar.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
-                if (lp.topMargin != topMargin) {
-                    lp.topMargin = topMargin
-                    expandedToolbar.layoutParams = lp
-                }
-            }
-            (fullscreenExitChip.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
-                val chipTop = topMargin + dp(48)
-                if (lp.topMargin != chipTop) {
-                    lp.topMargin = chipTop
-                    fullscreenExitChip.layoutParams = lp
-                }
-            }
-        }
         refreshToolbarStates(imeVis = false)
     }
 
@@ -478,10 +293,10 @@ class CastViewerActivity : Activity() {
         connected = false
         displayMode = initialDisplayMode
         remoteBlackout = false
-        overlayTitle.text = peerName
-        overlaySubtitle.text = getString(R.string.viewer_connecting_tls)
-        overlayRetryBtn.visibility = View.GONE
-        overlayCard.visibility = View.VISIBLE
+        chrome.overlayTitle.text = peerName
+        chrome.overlaySubtitle.text = getString(R.string.viewer_connecting_tls)
+        chrome.overlayRetryBtn.visibility = View.GONE
+        chrome.overlayCard.visibility = View.VISIBLE
 
         val boundNet = if (ReceiverPrefs.isUsbTetherEnabled(this)) {
             UsbTetherDiscovery.resolveBoundNetworkForHost(targetHost)
@@ -512,7 +327,7 @@ class CastViewerActivity : Activity() {
             listener = object : OpalCastClient.Listener {
                 override fun onWaitingForApproval() {
                     runOnUiThread {
-                        overlaySubtitle.text = getString(R.string.viewer_waiting_approval)
+                        chrome.overlaySubtitle.text = getString(R.string.viewer_waiting_approval)
                     }
                 }
 
@@ -527,9 +342,9 @@ class CastViewerActivity : Activity() {
                     runOnUiThread {
                         this@CastViewerActivity.peerName = resolvedName
                         connected = true
-                        overlayTitle.text = resolvedName
-                        overlaySubtitle.text = getString(R.string.viewer_connected_waiting_frame)
-                        statusLabel.text = getString(R.string.viewer_status_connected_fmt, resolvedName)
+                        chrome.overlayTitle.text = resolvedName
+                        chrome.overlaySubtitle.text = getString(R.string.viewer_connected_waiting_frame)
+                        chrome.statusLabel.text = getString(R.string.viewer_status_connected_fmt, resolvedName)
                         refreshToolbarStates(imeVis = imeBridgeView.isImeVisible)
                         scheduleAutoCollapse(2_400L)
                     }
@@ -589,10 +404,10 @@ class CastViewerActivity : Activity() {
                     runOnUiThread {
                         remoteFullscreenTitle = windowTitle
                         if (windowTitle.isNotEmpty()) {
-                            fullscreenExitChip.text = getString(R.string.viewer_exit_fullscreen_fmt, windowTitle)
-                            fullscreenExitChip.visibility = View.VISIBLE
+                            chrome.fullscreenExitChip.text = getString(R.string.viewer_exit_fullscreen_fmt, windowTitle)
+                            chrome.fullscreenExitChip.visibility = View.VISIBLE
                         } else {
-                            fullscreenExitChip.visibility = View.GONE
+                            chrome.fullscreenExitChip.visibility = View.GONE
                         }
                     }
                 }
@@ -610,7 +425,7 @@ class CastViewerActivity : Activity() {
                         videoW = width.coerceAtLeast(2)
                         videoH = height.coerceAtLeast(2)
                         videoFps = fps
-                        overlayCard.visibility = View.GONE
+                        chrome.overlayCard.visibility = View.GONE
                         updateStatusLabel()
                         updateSurfaceAspectBounds()
                     }
@@ -618,10 +433,10 @@ class CastViewerActivity : Activity() {
 
                 override fun onError(message: String) {
                     runOnUiThread {
-                        overlayTitle.text = getString(R.string.viewer_error_title)
-                        overlaySubtitle.text = message
-                        overlayRetryBtn.visibility = View.VISIBLE
-                        overlayCard.visibility = View.VISIBLE
+                        chrome.overlayTitle.text = getString(R.string.viewer_error_title)
+                        chrome.overlaySubtitle.text = message
+                        chrome.overlayRetryBtn.visibility = View.VISIBLE
+                        chrome.overlayCard.visibility = View.VISIBLE
                     }
                 }
 
@@ -633,11 +448,11 @@ class CastViewerActivity : Activity() {
                         micEnabled = false
                         cameraEnabled = false
                         refreshToolbarStates(imeVis = false)
-                        if (overlayCard.visibility != View.VISIBLE) {
-                            overlayTitle.text = getString(R.string.viewer_disconnected_title)
-                            overlaySubtitle.text = reason
-                            overlayRetryBtn.visibility = View.VISIBLE
-                            overlayCard.visibility = View.VISIBLE
+                        if (chrome.overlayCard.visibility != View.VISIBLE) {
+                            chrome.overlayTitle.text = getString(R.string.viewer_disconnected_title)
+                            chrome.overlaySubtitle.text = reason
+                            chrome.overlayRetryBtn.visibility = View.VISIBLE
+                            chrome.overlayCard.visibility = View.VISIBLE
                         }
                     }
                 }
@@ -654,13 +469,13 @@ class CastViewerActivity : Activity() {
         } else {
             getString(R.string.viewer_mode_desktop)
         }
-        statusLabel.text = getString(R.string.viewer_status_stream_fmt, peerName, prefix, videoW, videoH, videoFps)
+        chrome.statusLabel.text = getString(R.string.viewer_status_stream_fmt, peerName, prefix, videoW, videoH, videoFps)
     }
 
     private fun setToolbarExpanded(expanded: Boolean) {
         toolbarExpanded = expanded
-        expandedToolbar.visibility = if (expanded) View.VISIBLE else View.GONE
-        collapsedHandle.visibility = if (expanded) View.GONE else View.VISIBLE
+        chrome.expandedToolbar.visibility = if (expanded) View.VISIBLE else View.GONE
+        chrome.collapsedHandle.visibility = if (expanded) View.GONE else View.VISIBLE
         mainHandler.removeCallbacks(autoCollapseRunnable)
         if (expanded && connected) scheduleAutoCollapse(5_000L)
     }
@@ -673,28 +488,15 @@ class CastViewerActivity : Activity() {
     }
 
     private fun refreshToolbarStates(imeVis: Boolean) {
-        val isMirror = (displayMode == OpalCastClient.DISPLAY_MODE_MIRROR)
-        modeBtn.text = getString(if (isMirror) R.string.viewer_chip_to_desktop else R.string.viewer_chip_to_mirror)
-        floatMirrorBtn.visibility = if (isMirror) View.VISIBLE else View.GONE
-        blackoutBtn.text = getString(if (remoteBlackout) R.string.viewer_chip_screen_on else R.string.viewer_chip_screen_off)
-        blackoutBtn.background = OpalCastTheme.roundedDrawable(
-            this,
-            if (remoteBlackout) 0x45F59E0B else 0x1FFFFFFF,
-            10,
-            if (remoteBlackout) 0x88F59E0B.toInt() else 0x2EFFFFFF,
-            0.8f,
+        CastViewerToolbarHelper.refreshToolbarStates(
+            activity = this,
+            chrome = chrome,
+            displayMode = displayMode,
+            remoteBlackout = remoteBlackout,
+            imeVis = imeVis,
+            micEnabled = micEnabled,
+            cameraEnabled = cameraEnabled,
         )
-        imeBtn.text = getString(if (imeVis) R.string.viewer_chip_hide_keyboard else R.string.viewer_chip_keyboard)
-        micBtn.text = getString(if (micEnabled) R.string.viewer_chip_mute_mic else R.string.viewer_chip_mic)
-        micBtn.background = OpalCastTheme.roundedDrawable(
-            this,
-            if (micEnabled) 0x4514B8A6 else 0x1FFFFFFF,
-            10,
-            if (micEnabled) 0x882DD4BF.toInt() else 0x2EFFFFFF,
-            0.8f,
-        )
-        camBtn.text = getString(if (cameraEnabled) R.string.viewer_chip_stop_camera else R.string.viewer_chip_camera)
-        flipCamBtn.visibility = if (cameraEnabled) View.VISIBLE else View.GONE
     }
 
     private fun toggleDisplayMode() {
@@ -877,6 +679,4 @@ class CastViewerActivity : Activity() {
         wifiLowLatencyLock = null
         super.onDestroy()
     }
-
-    private fun dp(v: Int): Int = OpalCastTheme.dp(this, v)
 }
