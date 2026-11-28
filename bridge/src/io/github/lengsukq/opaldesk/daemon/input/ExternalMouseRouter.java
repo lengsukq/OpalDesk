@@ -72,6 +72,7 @@ public final class ExternalMouseRouter {
     private volatile boolean externalTouchscreenConnected = false;
     private volatile PhysicalKeyboardListener physicalKeyboardListener;
     private volatile Runnable externalImeContextListener;
+    private volatile Runnable externalDisplayAddedListener;
     private volatile KeyboardRoutingListener keyboardRoutingListener;
     private volatile FocusedWindowTargetProvider focusedWindowTargetProvider;
     private volatile boolean localDesktopPinned = false;
@@ -96,6 +97,7 @@ public final class ExternalMouseRouter {
 
     public void setPhysicalKeyboardListener(PhysicalKeyboardListener listener) { this.physicalKeyboardListener = listener; }
     public void setExternalImeContextListener(Runnable listener) { this.externalImeContextListener = listener; }
+    public void setExternalDisplayAddedListener(Runnable listener) { this.externalDisplayAddedListener = listener; }
     public void setKeyboardRoutingListener(KeyboardRoutingListener listener) { this.keyboardRoutingListener = listener; }
     public void setFocusedWindowTargetProvider(FocusedWindowTargetProvider provider) { this.focusedWindowTargetProvider = provider; }
 
@@ -167,6 +169,14 @@ public final class ExternalMouseRouter {
         }
     }
 
+    private void onExternalDisplayAdded(int displayId) {
+        if (displayId <= 0) return;
+        String uid = synthesizer.getDisplayUniqueId(displayId);
+        if (uid != null && uid.startsWith("virtual:")) return;
+        Runnable listener = this.externalDisplayAddedListener;
+        if (listener != null) listener.run();
+    }
+
     private void onInputTopologyChanged() {
         refreshFocusedWindowTargetFromProvider();
         refreshPhysicalKeyboardState(true);
@@ -216,7 +226,7 @@ public final class ExternalMouseRouter {
             }
             if (services.displayManager != null) {
                 displayListener = new DisplayManager.DisplayListener() {
-                    @Override public void onDisplayAdded(int displayId) {}
+                    @Override public void onDisplayAdded(int displayId) { owner.onExternalDisplayAdded(displayId); }
                     @Override public void onDisplayChanged(int displayId) {}
                     @Override public void onDisplayRemoved(int displayId) { owner.onExternalDisplayRemoved(displayId); }
                 };

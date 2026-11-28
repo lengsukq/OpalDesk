@@ -192,6 +192,15 @@ public final class OpalDeskDaemon implements Runnable {
                 services.setPrimaryPhysicalDisplayPower(true);
             }
         }));
+        this.mouseRouter.setExternalDisplayAddedListener(() -> {
+            if (services == null || !config.isForcePhoneSpeaker()) return;
+            mainHandler.postDelayed(() -> bgExec.execute(() -> {
+                if (!config.shuttingDown && config.isForcePhoneSpeaker()) services.setForcePhoneSpeaker(true);
+            }), 350L);
+            mainHandler.postDelayed(() -> bgExec.execute(() -> {
+                if (!config.shuttingDown && config.isForcePhoneSpeaker()) services.reapplyForcePhoneSpeakerIfEnabled();
+            }), 1000L);
+        });
         this.displayDriver.setAllSurfacesDetachedListener(() -> {
             if (services != null && MouseRoutingPolicy.shouldRestoreDefaultDisplayFocusOnLocalExit(
                     mouseRouter.isLocalDesktopPinned(),
@@ -245,6 +254,9 @@ public final class OpalDeskDaemon implements Runnable {
             imeManager.setClientDexSessionActive(false);
             if (services != null && !remoteBridge.hasActiveDesktopSession()) {
                 services.restoreDefaultDisplayTopFocus();
+            }
+            if (services != null) {
+                services.restoreHostAudioRouteOnShutdown();
             }
         });
     }
@@ -608,6 +620,7 @@ public final class OpalDeskDaemon implements Runnable {
         try {
             if (services != null) {
                 services.clearAllForcedExternalDisplaySizes();
+                services.restoreHostAudioRouteOnShutdown();
                 services.restoreDefaultDisplayTopFocus();
             }
         } catch (RuntimeException ignored) {

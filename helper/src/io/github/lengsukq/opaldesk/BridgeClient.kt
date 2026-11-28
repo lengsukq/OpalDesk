@@ -206,10 +206,7 @@ object BridgeClient {
                     d.writeInt(if (micOn) 1 else 0)
                     d.writeInt(if (camOn) 1 else 0)
                 }) { it.readInt() }
-                val audioMode = io.github.lengsukq.opaldesk.prefs.AppPrefs.getAudioRouteMode(ctx)
-                transact(next, BridgeProtocol.Tx.SET_AUDIO_ROUTE_MODE, oneway = false, writeArgs = { d ->
-                    d.writeInt(audioMode)
-                }) { it.readInt() }
+                syncAudioPrefsOnConnectSync(next, ctx)
                 syncDexImeConfigSync(next, ctx)
             }
             if (activeDexSessionTags.isNotEmpty()) {
@@ -404,6 +401,7 @@ object BridgeClient {
                 remoteCameraEnabled = if (reply.dataAvail() >= 4) reply.readInt() != 0 else false,
                 audioRouteMode = if (reply.dataAvail() >= 4) reply.readInt() else BridgeProtocol.AudioRoute.SPLIT_BY_APP,
                 windowSupersampleMode = if (reply.dataAvail() >= 4) reply.readInt() else BridgeProtocol.WindowSupersample.COMPAT,
+                forcePhoneSpeaker = if (reply.dataAvail() >= 4) reply.readInt() != 0 else false,
             )
         }?.also { st ->
             _statusFlow.value = st
@@ -453,6 +451,13 @@ object BridgeClient {
         mode: Int,
         onDone: ((Boolean) -> Unit)? = null,
     ) = setAudioRouteModeAsyncImpl(ctx, mode, onDone)
+
+    fun setForcePhoneSpeakerAsync(
+        ctx: Context?,
+        enabled: Boolean,
+        persist: Boolean = true,
+        onDone: ((Boolean) -> Unit)? = null,
+    ) = setForcePhoneSpeakerAsyncImpl(ctx, enabled, persist, onDone)
 
     fun injectRemoteTrackpadOneway(
         action: Int,

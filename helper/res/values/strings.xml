@@ -751,6 +751,8 @@
     <string name="window_profile_portrait">Portrait</string>
     <string name="window_profile_tablet">Tablet</string>
     <string name="window_profile_desktop">Desktop</string>
+    <string name="window_action_close">Close</string>
+    <string name="window_action_minimize">Minimize</string>
     <string name="taskbar_apps">Apps</string>
     <string name="taskbar_recents">Overview</string>
     <string name="taskbar_fullscreen">Fullscreen</string>

@@ -329,6 +329,126 @@ class DesktopWidgetModelsTest {
         assertEquals(TodoChecklistConfig(), decodeTodoChecklistConfig(""))
     }
 
+    @Test
+    fun computePortraitLayoutPacksWideAndSquareWidgetsWithoutOverlapOrMutatingLandscape() {
+        val landscape = listOf(
+            DesktopWidgetInstance("hub", DesktopWidgetType.DESKTOP_HUB, col = 1, row = 0, colSpan = 6, rowSpan = 3),
+            DesktopWidgetInstance("clock", DesktopWidgetType.CLOCK_TIMER, col = 7, row = 0, colSpan = 4, rowSpan = 3),
+            DesktopWidgetInstance("todo", DesktopWidgetType.TODO_CHECKLIST, col = 7, row = 3, colSpan = 4, rowSpan = 2),
+            DesktopWidgetInstance("notes", DesktopWidgetType.QUICK_NOTES, col = 1, row = 3, colSpan = 4, rowSpan = 3),
+            DesktopWidgetInstance("media", DesktopWidgetType.MEDIA_PLAYER, col = 1, row = 5, colSpan = 6, rowSpan = 2),
+        )
+        val snapshotBefore = landscape.map { it.copy() }
+
+        val portrait = DesktopWidgetGridMath.computePortraitLayout(
+            instances = landscape,
+            portraitCols = DesktopWidgetGridMath.PORTRAIT_GRID_COLS,
+            portraitRows = DesktopWidgetGridMath.PORTRAIT_DEFAULT_GRID_ROWS,
+        )
+
+        // Original landscape coordinates remain untouched
+        assertEquals(snapshotBefore, landscape)
+        assertEquals(landscape.size, portrait.size)
+
+        val byId = portrait.associateBy { it.id }
+        assertEquals(4, byId.getValue("hub").colSpan)
+        assertEquals(2, byId.getValue("hub").rowSpan)
+        assertEquals(4, byId.getValue("clock").colSpan)
+        assertEquals(2, byId.getValue("clock").rowSpan)
+        assertEquals(4, byId.getValue("media").colSpan)
+        assertEquals(2, byId.getValue("media").rowSpan)
+
+        // Square widgets pack side-by-side in 2x2 pairs on the same row
+        val notes = byId.getValue("notes")
+        val todo = byId.getValue("todo")
+        assertEquals(2, notes.colSpan)
+        assertEquals(2, notes.rowSpan)
+        assertEquals(2, todo.colSpan)
+        assertEquals(2, todo.rowSpan)
+        assertEquals(notes.row, todo.row)
+        assertEquals(setOf(0, 2), setOf(notes.col, todo.col))
+
+        // All portrait widgets stay within 4 columns and never overlap each other
+        for (i in portrait.indices) {
+            val a = portrait[i]
+            assertTrue("Portrait col out of bounds: $a", a.col >= 0 && a.col + a.colSpan <= 4)
+            assertTrue("Portrait row < 0: $a", a.row >= 0)
+            for (j in i + 1 until portrait.size) {
+                val b = portrait[j]
+                assertFalse(
+                    "Portrait widgets ${a.id} and ${b.id} overlap",
+                    overlapsAny(listOf(a), b.col, b.row, b.colSpan, b.rowSpan),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun allocateShortcutSlotsPortraitPlacesIconsBelowWidgetsFourPerRowWithZeroOverlap() {
+        val portraitWidgets = DesktopWidgetGridMath.computePortraitLayout(DesktopWidgetStore.defaultInstances())
+        val bottomWidgetRow = portraitWidgets.maxOf { it.row + it.rowSpan }
+        val slots = DesktopWidgetGridMath.allocateShortcutSlots(
+            iconCount = 6,
+            occupiedWidgets = portraitWidgets,
+            gridCols = DesktopWidgetGridMath.PORTRAIT_GRID_COLS,
+            gridRows = DesktopWidgetGridMath.PORTRAIT_DEFAULT_GRID_ROWS,
+            isPortrait = true,
+        )
+
+        assertEquals(6, slots.size)
+        assertEquals(
+            listOf(
+                0 to bottomWidgetRow,
+                1 to bottomWidgetRow,
+                2 to bottomWidgetRow,
+                3 to bottomWidgetRow,
+                0 to (bottomWidgetRow + 1),
+                1 to (bottomWidgetRow + 1),
+            ),
+            slots,
+        )
+        assertEquals(slots.size, slots.toSet().size)
+        for ((col, row) in slots) {
+            assertFalse("Portrait shortcut ($col,$row) overlaps widget", overlapsAny(portraitWidgets, col, row, 1, 1))
+        }
+    }
+
+    @Test
+    fun allocateShortcutSlotsLandscapePrefersFreeLeftColumnAndNeverOverlapsWidgets() {
+        val widgets = listOf(
+            DesktopWidgetInstance("left_blocker", DesktopWidgetType.CLOCK_TIMER, col = 0, row = 0, colSpan = 2, rowSpan = 2),
+            DesktopWidgetInstance("hub", DesktopWidgetType.DESKTOP_HUB, col = 2, row = 0, colSpan = 6, rowSpan = 3),
+        )
+        val slots = DesktopWidgetGridMath.allocateShortcutSlots(
+            iconCount = 10,
+            occupiedWidgets = widgets,
+            gridCols = DesktopWidgetGridMath.DEFAULT_GRID_COLS,
+            gridRows = DesktopWidgetGridMath.DEFAULT_GRID_ROWS,
+            isPortrait = false,
+        )
+
+        assertEquals(10, slots.size)
+        assertEquals(slots.size, slots.toSet().size)
+        // Column 0 rows 0..1 are blocked by left_blocker, so first shortcut lands at (0, 2)
+        assertEquals(0 to 2, slots.first())
+        for ((col, row) in slots) {
+            assertTrue(col in 0 until DesktopWidgetGridMath.DEFAULT_GRID_COLS)
+            assertTrue(row in 0 until DesktopWidgetGridMath.DEFAULT_GRID_ROWS)
+            assertFalse("Landscape shortcut ($col,$row) overlaps widget", overlapsAny(widgets, col, row, 1, 1))
+        }
+
+        // Full grid spills cleanly below without overlapping any widget
+        val fullWidget = listOf(
+            DesktopWidgetInstance("full", DesktopWidgetType.DESKTOP_HUB, col = 0, row = 0, colSpan = 12, rowSpan = 7),
+        )
+        val spillSlots = DesktopWidgetGridMath.allocateShortcutSlots(
+            iconCount = 2,
+            occupiedWidgets = fullWidget,
+            isPortrait = false,
+        )
+        assertEquals(listOf(0 to 7, 1 to 7), spillSlots)
+    }
+
     private fun overlapsAny(
         existing: List<DesktopWidgetInstance>,
         col: Int,

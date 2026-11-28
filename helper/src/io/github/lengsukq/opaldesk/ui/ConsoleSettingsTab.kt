@@ -66,6 +66,7 @@ fun ConsoleEngineSettingsTab(
     val remoteMicEnabled by AppPrefs.remoteMicEnabledFlow.collectAsState()
     val remoteCameraEnabled by AppPrefs.remoteCameraEnabledFlow.collectAsState()
     val audioRouteMode by AppPrefs.audioRouteModeFlow.collectAsState()
+    val forcePhoneSpeaker by AppPrefs.forcePhoneSpeakerFlow.collectAsState()
     val usbTetherEnabled by AppPrefs.usbTetherCastEnabledFlow.collectAsState()
     val callControlEnabled by AppPrefs.callControlSyncEnabledFlow.collectAsState()
     val bleNearbyEnabled by AppPrefs.bleNearbyEnabledFlow.collectAsState()
@@ -450,6 +451,7 @@ fun ConsoleEngineSettingsTab(
         ConsoleAudioMediaCard(
             audioRouteMode = audioRouteMode,
             splitAudioOn = splitAudioOn,
+            forcePhoneSpeaker = forcePhoneSpeaker,
             remoteMicEnabled = remoteMicEnabled,
             remoteCameraEnabled = remoteCameraEnabled,
             canUseRootCamera = canUseRootCamera,

@@ -115,6 +115,7 @@ public final class BridgeBinderService extends Binder {
                     reply.writeInt(config.isRemoteCameraEnabled() ? 1 : 0);
                     reply.writeInt(config.getAudioRouteMode());
                     reply.writeInt(config.getWindowSupersampleMode());
+                    reply.writeInt(config.isForcePhoneSpeaker() ? 1 : 0);
                 }
                 return true;
             }
@@ -763,6 +764,14 @@ public final class BridgeBinderService extends Binder {
                     reply.writeInt(active ? 1 : 0);
                     reply.writeString(captured);
                 }
+                return true;
+            }
+            case BridgeProtocol.TX_SET_FORCE_PHONE_SPEAKER: {
+                boolean enable = data.readInt() != 0;
+                boolean persist = (data.dataAvail() >= 4) ? (data.readInt() != 0) : true;
+                if (persist) config.setForcePhoneSpeaker(enable);
+                boolean ok = services != null && services.setForcePhoneSpeaker(enable);
+                if (reply != null) reply.writeInt(ok ? 1 : 0);
                 return true;
             }
             case BridgeProtocol.TX_SHUTDOWN: {

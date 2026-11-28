@@ -647,45 +647,6 @@ fun OpalStatusBadge(label: String, color: Color) {
     }
 }
 
-enum class TrafficLightType { CLOSE, MINIMIZE, ZOOM }
-
-@Composable
-fun MacTrafficLightButton(
-    type: TrafficLightType,
-    focused: Boolean,
-    onClick: () -> Unit,
-) {
-    val inactive = OpalPalette.TrafficInactive
-    val fill = when {
-        !focused -> inactive
-        type == TrafficLightType.CLOSE -> OpalPalette.TrafficRed
-        type == TrafficLightType.MINIMIZE -> OpalPalette.TrafficYellow
-        else -> OpalPalette.TrafficGreen
-    }
-    val stroke = when {
-        !focused -> OpalPalette.BorderHairline
-        type == TrafficLightType.CLOSE -> OpalPalette.TrafficRedBorder
-        type == TrafficLightType.MINIMIZE -> OpalPalette.TrafficYellowBorder
-        else -> OpalPalette.TrafficGreenBorder
-    }
-
-    Box(
-        modifier = Modifier
-            .size(22.dp)
-            .clip(CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(12.5.dp)
-                .clip(CircleShape)
-                .background(fill)
-                .border(0.75.dp, stroke, CircleShape),
-        )
-    }
-}
-
 /**
  * Compact capsule icon button shared by top-center floating control pills (Fullscreen overlay & PeerCast bar).
  */

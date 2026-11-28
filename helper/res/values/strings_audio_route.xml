@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_force_phone_speaker_title">Play All Audio on Phone</string>
+    <string name="settings_force_phone_speaker_sub">Force built-in speaker when monitor has no speakers</string>
+    <string name="settings_force_phone_speaker_toast_on">All audio routed to phone speaker</string>
+    <string name="settings_force_phone_speaker_toast_off">Restored default system audio output</string>
+    <string name="settings_force_phone_speaker_badge">Phone Speaker</string>
+</resources>

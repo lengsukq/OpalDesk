@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,6 +47,7 @@ import io.github.lengsukq.opaldesk.protocol.CompositorWindow
 import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.OpalSpotlightController
 import io.github.lengsukq.opaldesk.ui.onTapOrContextAction
+import io.github.lengsukq.opaldesk.widgets.DesktopGridShortcutItem
 import io.github.lengsukq.opaldesk.widgets.DesktopWidgetCallbacks
 import io.github.lengsukq.opaldesk.widgets.DesktopWidgetHostLayer
 import io.github.lengsukq.opaldesk.widgets.DesktopWidgetStore
@@ -119,47 +121,22 @@ internal fun BoxScope.WorkspaceWindowLayer(
             ),
     )
 
-    // Samsung DeX-style Left-Column Desktop App Shortcuts (hidden during true app fullscreen)
-    if (status.connected && (showDesktopGuideIcon || ui.allApps.isNotEmpty()) && fullscreenWin == null) {
-        DesktopShortcutColumn(
-            allApps = ui.allApps,
-            desktopPkgs = desktopPkgs,
-            showGuideIcon = showDesktopGuideIcon,
-            rowsPerColumn = shortcutRowsPerCol,
-            onOpenGuide = {
-                ui.dismissAllPopovers()
-                ui.showFeatureGuide = true
-            },
-            onContextGuide = { rootPos ->
-                ui.dismissAllPopovers()
-                ui.guideIconMenuPos = rootPos
-            },
-            onLaunch = { entry ->
-                ui.dismissAllPopovers()
-                AppPrefs.recordAppLaunch(ctx, entry.appKey)
-                scope.launch(Dispatchers.IO) {
-                    BridgeClient.openWindow(
-                        entry.pkg, entry.activityClass, BridgeProtocol.Profile.AUTO, userId = entry.userId,
-                    )
-                }
-            },
-            onContextApp = { appKey, rootPos ->
-                ui.dismissAllPopovers()
-                val running = scene.windows.firstOrNull { it.appKey == appKey }
-                ui.contextMenuTarget = Triple(appKey, running, rootPos)
-            },
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(
-                    top = (CompositorGeometry.TOP_BAR_DP + 14f).dp,
-                    start = if (isCompactWidth) 10.dp else 16.dp,
-                    bottom = (effectiveDockInsetDp + 14f).dp,
-                ),
-        )
-    }
-
-    // Desktop Liquid Glass Widget Layer (above wallpaper, below live app windows)
+    // Unified Desktop Liquid Glass Widget & App Shortcut Grid Layer (above wallpaper, below live app windows)
     if (fullscreenWin == null) {
+        val desktopGridShortcuts = remember(status.connected, showDesktopGuideIcon, ui.allApps, desktopPkgs) {
+            if (!status.connected || (!showDesktopGuideIcon && ui.allApps.isEmpty())) {
+                emptyList()
+            } else {
+                val byKey = ui.allApps.associateBy { it.appKey }
+                buildList<DesktopGridShortcutItem>(16) {
+                    if (showDesktopGuideIcon) add(DesktopGridShortcutItem.BuiltinGuide)
+                    val maxApps = if (showDesktopGuideIcon) 14 else 15
+                    desktopPkgs.mapNotNull { byKey[it] }.take(maxApps).forEach { entry ->
+                        add(DesktopGridShortcutItem.App(entry))
+                    }
+                }
+            }
+        }
         val mediaArtwork = remember(mediaSnap.artworkBase64) {
             if (mediaSnap.artworkBase64.isBlank()) {
                 null
@@ -304,6 +281,29 @@ internal fun BoxScope.WorkspaceWindowLayer(
             notifications = widgetNotifications,
             appShortcuts = widgetAppShortcuts,
             callbacks = widgetCallbacks,
+            desktopShortcuts = desktopGridShortcuts,
+            onOpenGuide = {
+                ui.dismissAllPopovers()
+                ui.showFeatureGuide = true
+            },
+            onContextGuide = { rootPos ->
+                ui.dismissAllPopovers()
+                ui.guideIconMenuPos = rootPos
+            },
+            onLaunchDesktopApp = { entry ->
+                ui.dismissAllPopovers()
+                AppPrefs.recordAppLaunch(ctx, entry.appKey)
+                scope.launch(Dispatchers.IO) {
+                    BridgeClient.openWindow(
+                        entry.pkg, entry.activityClass, BridgeProtocol.Profile.AUTO, userId = entry.userId,
+                    )
+                }
+            },
+            onContextDesktopApp = { appKey, rootPos ->
+                ui.dismissAllPopovers()
+                val running = scene.windows.firstOrNull { it.appKey == appKey }
+                ui.contextMenuTarget = Triple(appKey, running, rootPos)
+            },
             onEnterEditMode = { ui.isWidgetEditMode = true },
             onExitEditMode = { ui.isWidgetEditMode = false },
             onOpenWidgetStore = {
@@ -367,6 +367,20 @@ internal fun BoxScope.WorkspaceWindowLayer(
             windowTitle = fullscreenWin.title,
             imeActive = imeActive,
             onToggleSoftKeyboard = onToggleSoftKeyboard,
+            onCloseWindow = {
+                ui.dismissAllPopovers()
+                BridgeClient.sendWindowActionAsync(
+                    fullscreenWin.windowId,
+                    BridgeProtocol.WinAction.CLOSE,
+                )
+            },
+            onMinimizeWindow = {
+                ui.dismissAllPopovers()
+                BridgeClient.sendWindowActionAsync(
+                    fullscreenWin.windowId,
+                    BridgeProtocol.WinAction.MINIMIZE,
+                )
+            },
             onExitFullscreen = {
                 ui.dismissAllPopovers()
                 BridgeClient.sendWindowActionAsync(
@@ -400,6 +414,7 @@ internal fun BoxScope.WorkspaceWindowLayer(
             },
             modifier = Modifier
                 .align(Alignment.TopCenter)
+                .fillMaxWidth()
                 .zIndex(10_040f),
         )
     }

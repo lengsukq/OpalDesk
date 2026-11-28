@@ -11,6 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -256,134 +257,141 @@ private fun HubOverviewPage(
         else -> colors.textPrimary
     }
 
-    WidgetInnerPanel(
-        modifier = Modifier.fillMaxSize(),
-        cornerRadius = 20.dp,
-        accent = colors.accentCyan,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = if (isCompact) 10.dp else 12.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val tightWidth = isCompact || maxWidth < 360.dp
+        val tightHeight = maxHeight < 170.dp
+        WidgetInnerPanel(
+            modifier = Modifier.fillMaxSize(),
+            cornerRadius = 20.dp,
+            accent = colors.accentCyan,
+            contentPadding = PaddingValues(
+                horizontal = if (tightWidth) 11.dp else 14.dp,
+                vertical = if (tightWidth || tightHeight) 8.dp else 12.dp,
+            ),
         ) {
             Row(
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .background(connAccent.copy(alpha = if (colors.isDark) 0.20f else 0.14f))
-                    .border(0.8.dp, connAccent.copy(alpha = 0.45f), CircleShape)
-                    .padding(horizontal = 9.dp, vertical = 3.5.dp),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Box(
+                Row(
                     modifier = Modifier
-                        .size(6.5.dp)
-                        .alpha(if (status.isConnected) pulse else 0.7f)
                         .clip(CircleShape)
-                        .background(connAccent),
-                )
-                OpalText(
-                    text = connLabel,
-                    color = connAccent,
-                    fontSize = 10.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                )
+                        .background(connAccent.copy(alpha = if (colors.isDark) 0.20f else 0.14f))
+                        .border(0.8.dp, connAccent.copy(alpha = 0.45f), CircleShape)
+                        .padding(horizontal = 9.dp, vertical = 3.5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.5.dp)
+                            .alpha(if (status.isConnected) pulse else 0.7f)
+                            .clip(CircleShape)
+                            .background(connAccent),
+                    )
+                    OpalText(
+                        text = connLabel,
+                        color = connAccent,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    WidgetGlassBadge(
+                        text = "${status.batteryPercent.coerceIn(0, 100)}%",
+                        accent = if (status.isCharging || status.batteryPercent <= 25) batteryColor else null,
+                        leadingIcon = if (status.isCharging) {
+                            { tint -> WidgetGlyphIcon(WidgetGlyph.BOLT, tint, 11.dp) }
+                        } else {
+                            null
+                        },
+                    )
+                    WidgetGlassBadge(
+                        text = if (isZh) "${status.activeWindowCount} 窗口" else "${status.activeWindowCount} Win",
+                    )
+                }
             }
+
+            Spacer(Modifier.weight(1f))
+
+            // Golden-ratio hero row: Left = Refined Gradient Clock + Date; Right = Live Weather Card
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (tightWidth) 8.dp else 12.dp),
             ) {
-                WidgetGlassBadge(
-                    text = "${status.batteryPercent.coerceIn(0, 100)}%",
-                    accent = if (status.isCharging || status.batteryPercent <= 25) batteryColor else null,
-                    leadingIcon = if (status.isCharging) {
-                        { tint -> WidgetGlyphIcon(WidgetGlyph.BOLT, tint, 11.dp) }
-                    } else {
-                        null
+                Column(
+                    modifier = Modifier.weight(1.15f),
+                    verticalArrangement = Arrangement.spacedBy(if (tightWidth) 2.dp else 5.dp),
+                ) {
+                    LiquidGradientClockDigits(
+                        hours = hoursText,
+                        minutes = minutesText,
+                        seconds = secText,
+                        amPm = amPmText,
+                        digitSize = if (tightWidth) 32.sp else 44.sp,
+                        accent = colors.accentCyan,
+                        showSecondsBadge = true,
+                    )
+                    OpalText(
+                        text = dateText,
+                        color = colors.textSecondary,
+                        fontSize = if (tightWidth) 10.5.sp else 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                    )
+                }
+                HubWeatherMiniCard(
+                    weather = weather,
+                    isCompact = tightWidth,
+                    isZh = isZh,
+                    onRefresh = {
+                        WidgetWeatherRepository.refresh(ctx, force = true)
                     },
-                )
-                WidgetGlassBadge(
-                    text = if (isZh) "${status.activeWindowCount} 窗口" else "${status.activeWindowCount} Win",
+                    modifier = Modifier.weight(1f),
                 )
             }
-        }
 
-        Spacer(Modifier.weight(1f))
+            Spacer(Modifier.weight(1f))
 
-        // Golden-ratio hero row: Left = Refined Gradient Clock + Date; Right = Live Weather Card
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(if (isCompact) 8.dp else 12.dp),
-        ) {
-            Column(
-                modifier = Modifier.weight(1.15f),
-                verticalArrangement = Arrangement.spacedBy(if (isCompact) 3.dp else 5.dp),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(if (tightWidth) 6.dp else 8.dp),
             ) {
-                LiquidGradientClockDigits(
-                    hours = hoursText,
-                    minutes = minutesText,
-                    seconds = secText,
-                    amPm = amPmText,
-                    digitSize = if (isCompact) 34.sp else 44.sp,
-                    accent = colors.accentCyan,
-                    showSecondsBadge = true,
+                WidgetGlassActionButton(
+                    onClick = callbacks.onOpenSpotlight,
+                    label = if (isZh) (if (tightWidth) "搜索" else "Spotlight 搜索") else "Spotlight",
+                    accent = colors.accentBlue,
+                    active = true,
+                    circular = false,
+                    size = if (tightHeight) 28.dp else 32.dp,
+                    modifier = Modifier.weight(if (tightWidth) 1f else 1.2f),
+                    icon = { tint -> OpalGlyphIcon(ChromeGlyph.SEARCH, tint = tint, size = 13.dp) },
                 )
-                OpalText(
-                    text = dateText,
-                    color = colors.textSecondary,
-                    fontSize = if (isCompact) 11.sp else 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
+                WidgetGlassActionButton(
+                    onClick = callbacks.onOpenWidgetStore,
+                    label = if (isZh) (if (tightWidth) "商店" else "组件商店") else "Store",
+                    accent = colors.accentCyan,
+                    circular = false,
+                    size = if (tightHeight) 28.dp else 32.dp,
+                    modifier = Modifier.weight(1f),
+                    icon = { tint -> OpalGlyphIcon(ChromeGlyph.APPS_GRID, tint = tint, size = 13.dp) },
+                )
+                WidgetGlassActionButton(
+                    onClick = callbacks.onToggleWidgetEditMode,
+                    label = if (isZh) (if (tightWidth) "编辑" else "编辑组件") else "Edit",
+                    accent = colors.accentEmerald,
+                    circular = false,
+                    size = if (tightHeight) 28.dp else 32.dp,
+                    modifier = Modifier.weight(1f),
+                    icon = { tint -> WidgetGlyphIcon(WidgetGlyph.SPLIT_SCREEN, tint = tint, size = 13.dp) },
                 )
             }
-            HubWeatherMiniCard(
-                weather = weather,
-                isCompact = isCompact,
-                isZh = isZh,
-                onRefresh = {
-                    WidgetWeatherRepository.refresh(ctx, force = true)
-                },
-                modifier = Modifier.weight(1f),
-            )
-        }
-
-        Spacer(Modifier.weight(1f))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            WidgetGlassActionButton(
-                onClick = callbacks.onOpenSpotlight,
-                label = if (isZh) "Spotlight 搜索" else "Spotlight",
-                accent = colors.accentBlue,
-                active = true,
-                circular = false,
-                size = 32.dp,
-                modifier = Modifier.weight(1.2f),
-                icon = { tint -> OpalGlyphIcon(ChromeGlyph.SEARCH, tint = tint, size = 13.dp) },
-            )
-            WidgetGlassActionButton(
-                onClick = callbacks.onOpenWidgetStore,
-                label = if (isZh) "组件商店" else "Store",
-                accent = colors.accentCyan,
-                circular = false,
-                size = 32.dp,
-                modifier = Modifier.weight(1f),
-                icon = { tint -> OpalGlyphIcon(ChromeGlyph.APPS_GRID, tint = tint, size = 13.dp) },
-            )
-            WidgetGlassActionButton(
-                onClick = callbacks.onToggleWidgetEditMode,
-                label = if (isZh) "编辑组件" else "Edit",
-                accent = colors.accentEmerald,
-                circular = false,
-                size = 32.dp,
-                modifier = Modifier.weight(1f),
-                icon = { tint -> WidgetGlyphIcon(WidgetGlyph.SPLIT_SCREEN, tint = tint, size = 13.dp) },
-            )
         }
     }
 }

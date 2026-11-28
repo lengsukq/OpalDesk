@@ -751,6 +751,8 @@
     <string name="window_profile_portrait">竖屏</string>
     <string name="window_profile_tablet">平板</string>
     <string name="window_profile_desktop">桌面</string>
+    <string name="window_action_close">关闭</string>
+    <string name="window_action_minimize">最小化</string>
     <string name="taskbar_apps">应用</string>
     <string name="taskbar_recents">多任务</string>
     <string name="taskbar_fullscreen">全屏</string>

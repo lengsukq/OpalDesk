@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -192,61 +193,66 @@ internal fun LiquidDigitalClockFace(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalOpalColors.current
-    val digitSize = when (sizeClass) {
-        WidgetSizeClass.COMPACT -> 38.sp
-        WidgetSizeClass.MEDIUM -> 48.sp
-        WidgetSizeClass.EXPANDED -> 56.sp
-    }
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val tightPortraitCard = maxHeight < 148.dp || maxWidth < 290.dp
+        val digitSize = when {
+            sizeClass == WidgetSizeClass.COMPACT -> 36.sp
+            tightPortraitCard -> 40.sp
+            sizeClass == WidgetSizeClass.MEDIUM -> 48.sp
+            else -> 56.sp
+        }
+        val compactQuote = sizeClass == WidgetSizeClass.COMPACT || tightPortraitCard
 
-    Column(
-        modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-        // Center-weighted Hero Time + Date Capsule (tap to toggle Analog dial)
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .clickable(onClick = onSwitchDial)
-                .padding(vertical = 2.dp),
-            verticalArrangement = Arrangement.spacedBy(if (sizeClass == WidgetSizeClass.COMPACT) 4.dp else 6.dp),
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            LiquidGradientClockDigits(
-                hours = hours,
-                minutes = minutes,
-                seconds = seconds,
-                amPm = amPm,
-                digitSize = digitSize,
-                accent = accent,
-                showSecondsBadge = true,
-            )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            // Center-weighted Hero Time + Date Capsule (tap to toggle Analog dial)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable(onClick = onSwitchDial)
+                    .padding(vertical = if (compactQuote) 0.dp else 2.dp),
+                verticalArrangement = Arrangement.spacedBy(if (compactQuote) 3.dp else 6.dp),
             ) {
-                WidgetGlassBadge(
-                    text = dateText,
-                    dotColor = accent,
+                LiquidGradientClockDigits(
+                    hours = hours,
+                    minutes = minutes,
+                    seconds = seconds,
+                    amPm = amPm,
+                    digitSize = digitSize,
+                    accent = accent,
+                    showSecondsBadge = true,
                 )
-                if (sizeClass != WidgetSizeClass.COMPACT) {
-                    OpalText(
-                        text = if (isZh) "轻触切模拟表盘" else "Tap for analog",
-                        color = colors.textMuted,
-                        fontSize = 10.sp,
-                        maxLines = 1,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    WidgetGlassBadge(
+                        text = dateText,
+                        dotColor = accent,
                     )
+                    if (!compactQuote) {
+                        OpalText(
+                            text = if (isZh) "轻触切模拟表盘" else "Tap for analog",
+                            color = colors.textMuted,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
-        }
 
-        // Integrated Hitokoto (每日一言) Glass Quote Bar — eliminates empty void
-        HitokotoGlassCard(
-            quote = quote,
-            accent = accent,
-            compact = sizeClass == WidgetSizeClass.COMPACT,
-            onRefresh = onRefreshQuote,
-            modifier = Modifier.fillMaxWidth(),
-        )
+            // Integrated Hitokoto (每日一言) Glass Quote Bar — eliminates empty void
+            HitokotoGlassCard(
+                quote = quote,
+                accent = accent,
+                compact = compactQuote,
+                onRefresh = onRefreshQuote,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 

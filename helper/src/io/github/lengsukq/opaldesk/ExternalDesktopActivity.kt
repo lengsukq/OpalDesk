@@ -714,6 +714,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         val extId = ExternalTrackpadBridge.sessionFlow.value.displayId
         if (extId > Display.DEFAULT_DISPLAY) {
             syncExternalMouseRouting(this, extId)
+            syncExternalDesktopAudioRoute(this, entering = true)
         }
         Thread({
             BridgeClient.refreshStatus()
@@ -753,6 +754,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         dismissPresentation()
         BridgeClient.setDexImeSessionActive("external_desktop", false)
         ExternalTrackpadBridge.clearSessionIfOwner(this)
+        syncExternalDesktopAudioRoute(this, entering = false)
         if (BridgeClient.statusFlow.value.hostScreenOff) {
             BridgeClient.setHostScreenPowerAsync(true)
         }
@@ -772,6 +774,7 @@ class ExternalDesktopActivity : ComponentActivity() {
 
     private fun dismissPresentation() {
         BridgeClient.releaseExternalMouseRoutingAsync()
+        syncExternalDesktopAudioRoute(this, entering = false)
         val p = presentation
         presentation = null
         if (p != null) {

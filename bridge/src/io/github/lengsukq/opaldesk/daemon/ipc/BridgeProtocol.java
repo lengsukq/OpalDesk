@@ -120,6 +120,7 @@ public final class BridgeProtocol {
     public static final int TX_GET_INPUT_BINDINGS = 55;
     public static final int TX_SET_INPUT_BINDINGS = 56;
     public static final int TX_INPUT_BINDING_CAPTURE = 57;
+    public static final int TX_SET_FORCE_PHONE_SPEAKER = 58;
     public static final int TX_SHUTDOWN = 99;
 
     // ---- Input Binding Capture Mode Ops (TX_INPUT_BINDING_CAPTURE) ----

@@ -321,6 +321,9 @@ object DesktopWidgetCatalog {
 object DesktopWidgetGridMath {
     const val DEFAULT_GRID_COLS = 12
     const val DEFAULT_GRID_ROWS = 7
+    const val PORTRAIT_GRID_COLS = 4
+    const val PORTRAIT_MIN_GRID_ROWS = 7
+    const val PORTRAIT_DEFAULT_GRID_ROWS = 8
 
     fun clampInstance(
         instance: DesktopWidgetInstance,
@@ -424,6 +427,103 @@ object DesktopWidgetGridMath {
             }
         }
         return 0 to 0
+    }
+
+    fun portraitSpanFor(type: DesktopWidgetType, portraitCols: Int = PORTRAIT_GRID_COLS): Pair<Int, Int> {
+        val safeCols = portraitCols.coerceAtLeast(1)
+        val halfCols = (safeCols / 2).coerceAtLeast(1)
+        return when (type) {
+            DesktopWidgetType.TODO_CHECKLIST,
+            DesktopWidgetType.QUICK_NOTES,
+            DesktopWidgetType.QUICK_ACTION_TILES,
+            DesktopWidgetType.CALENDAR_MONTH,
+            -> halfCols to 2
+            else -> safeCols to 2
+        }
+    }
+
+    fun computePortraitLayout(
+        instances: List<DesktopWidgetInstance>,
+        portraitCols: Int = PORTRAIT_GRID_COLS,
+        portraitRows: Int = PORTRAIT_DEFAULT_GRID_ROWS,
+    ): List<DesktopWidgetInstance> {
+        if (instances.isEmpty()) return emptyList()
+        val safeCols = portraitCols.coerceAtLeast(1)
+        val occupied = ArrayList<BooleanArray>(portraitRows.coerceAtLeast(1))
+        fun ensureRows(targetRows: Int) { while (occupied.size < targetRows) occupied.add(BooleanArray(safeCols)) }
+        ensureRows(portraitRows.coerceAtLeast(1))
+
+        val ordered = instances.sortedWith(compareBy<DesktopWidgetInstance>({ it.row }, { it.col }))
+        val result = ArrayList<DesktopWidgetInstance>(ordered.size)
+        for (item in ordered) {
+            val (rawSpanC, spanR) = portraitSpanFor(item.type, safeCols)
+            val spanC = rawSpanC.coerceIn(1, safeCols)
+            var placedCol = 0
+            var placedRow = 0
+            var found = false
+            var r = 0
+            while (!found) {
+                ensureRows(r + spanR)
+                for (c in 0..(safeCols - spanC)) {
+                    val fits = (0 until spanR).all { dr -> (0 until spanC).all { dc -> !occupied[r + dr][c + dc] } }
+                    if (fits) {
+                        placedCol = c; placedRow = r; found = true; break
+                    }
+                }
+                if (!found) r++
+            }
+            for (dr in 0 until spanR) {
+                for (dc in 0 until spanC) occupied[placedRow + dr][placedCol + dc] = true
+            }
+            result.add(item.copy(col = placedCol, row = placedRow, colSpan = spanC, rowSpan = spanR))
+        }
+        return result
+    }
+
+    fun allocateShortcutSlots(
+        iconCount: Int,
+        occupiedWidgets: List<DesktopWidgetInstance>,
+        gridCols: Int = DEFAULT_GRID_COLS,
+        gridRows: Int = DEFAULT_GRID_ROWS,
+        isPortrait: Boolean = false,
+    ): List<Pair<Int, Int>> {
+        if (iconCount <= 0) return emptyList()
+        val safeCols = gridCols.coerceAtLeast(1)
+        val safeRows = gridRows.coerceAtLeast(1)
+
+        if (isPortrait) {
+            val startRow = occupiedWidgets.maxOfOrNull { (it.row + it.rowSpan).coerceAtLeast(0) } ?: 0
+            return List(iconCount) { idx -> (idx % safeCols) to (startRow + idx / safeCols) }
+        }
+
+        val maxWidgetRow = occupiedWidgets.maxOfOrNull { (it.row + it.rowSpan).coerceAtLeast(0) } ?: 0
+        val totalRows = maxOf(safeRows, maxWidgetRow)
+        val occupied = Array(totalRows) { BooleanArray(safeCols) }
+        for (w in occupiedWidgets) {
+            val rStart = w.row.coerceIn(0, totalRows)
+            val rEnd = (w.row + w.rowSpan).coerceIn(0, totalRows)
+            val cStart = w.col.coerceIn(0, safeCols)
+            val cEnd = (w.col + w.colSpan).coerceIn(0, safeCols)
+            for (r in rStart until rEnd) {
+                for (c in cStart until cEnd) occupied[r][c] = true
+            }
+        }
+
+        val slots = ArrayList<Pair<Int, Int>>(iconCount)
+        for (c in 0 until safeCols) {
+            for (r in 0 until safeRows) {
+                if (!occupied[r][c]) {
+                    slots.add(c to r)
+                    if (slots.size >= iconCount) return slots
+                }
+            }
+        }
+        var spillIdx = 0
+        while (slots.size < iconCount) {
+            slots.add((spillIdx % safeCols) to (totalRows + spillIdx / safeCols))
+            spillIdx++
+        }
+        return slots
     }
 
     fun serializeInstances(instances: List<DesktopWidgetInstance>): String {

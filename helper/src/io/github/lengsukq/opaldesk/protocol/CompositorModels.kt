@@ -36,6 +36,7 @@ data class DaemonStatus(
     val remoteCameraEnabled: Boolean = false,
     val audioRouteMode: Int = BridgeProtocol.AudioRoute.SPLIT_BY_APP,
     val windowSupersampleMode: Int = BridgeProtocol.WindowSupersample.COMPAT,
+    val forcePhoneSpeaker: Boolean = false,
 ) {
     val injectBackendLabel: String
         get() = when {

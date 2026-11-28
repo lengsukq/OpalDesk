@@ -165,6 +165,7 @@ public final class DaemonConfig {
     private boolean remoteMicEnabled = false;
     private boolean remoteCameraEnabled = false;
     private int audioRouteMode = BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP;
+    private boolean forcePhoneSpeaker = false;
     private int dexImeDisplayMode = BridgeProtocol.DEX_IME_DISPLAY_AUTO;
     private String dexLockedImeId = "";
     private boolean muteHostImeOnCast = false;
@@ -539,6 +540,17 @@ public final class DaemonConfig {
         saveMainConf();
     }
 
+    public boolean isForcePhoneSpeaker() {
+        synchronized (lock) { return forcePhoneSpeaker; }
+    }
+
+    public void setForcePhoneSpeaker(boolean enabled) {
+        synchronized (lock) {
+            this.forcePhoneSpeaker = enabled;
+        }
+        saveMainConf();
+    }
+
     public void markRootEnhanced(boolean enhanced, boolean secureCapture) {
         synchronized (lock) {
             this.rootEnhanced = enhanced;
@@ -669,6 +681,9 @@ public final class DaemonConfig {
                     windowSupersampleMode = DisplayGeometryUtil.clampWindowSupersampleMode(
                             Integer.parseInt(parts[12].trim()));
                 }
+                if (parts.length >= 14) {
+                    forcePhoneSpeaker = Integer.parseInt(parts[13].trim()) != 0;
+                }
             }
         } catch (IOException | NumberFormatException e) {
             System.err.println("OPALDESK_CONF_LOAD_WARN: " + e.getMessage());
@@ -686,7 +701,8 @@ public final class DaemonConfig {
                         + (remoteMicEnabled ? 1 : 0) + ","
                         + (remoteCameraEnabled ? 1 : 0) + ","
                         + audioRouteMode + ","
-                        + windowSupersampleMode + "\n";
+                        + windowSupersampleMode + ","
+                        + (forcePhoneSpeaker ? 1 : 0) + "\n";
             }
             try {
                 AtomicFiles.writeAtomicUtf8(confFile, content, AtomicFiles.MODE_OWNER_RW);

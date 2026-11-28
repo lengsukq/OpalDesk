@@ -68,6 +68,7 @@ public final class AndroidServices {
     private final AndroidDisplayPowerHelper displayPowerHelper;
     private final AndroidImePolicyHelper imePolicyHelper;
     private final AndroidActivityLauncher activityLauncher;
+    private final HostAudioRouteHelper audioRouteHelper;
 
     public AndroidServices(
             Context context,
@@ -129,6 +130,7 @@ public final class AndroidServices {
         this.displayPowerHelper = new AndroidDisplayPowerHelper(this);
         this.imePolicyHelper = new AndroidImePolicyHelper(this);
         this.activityLauncher = new AndroidActivityLauncher(this);
+        this.audioRouteHelper = new HostAudioRouteHelper();
     }
 
     public static Context createSystemContext() throws ReflectiveOperationException {
@@ -234,6 +236,13 @@ public final class AndroidServices {
     public boolean setForcedExternalDisplaySize(int displayId, int width, int height) { return displayPowerHelper.setForcedExternalDisplaySize(displayId, width, height); }
     public boolean clearForcedExternalDisplaySize(int displayId) { return displayPowerHelper.clearForcedExternalDisplaySize(displayId); }
     public void clearAllForcedExternalDisplaySizes() { displayPowerHelper.clearAllForcedExternalDisplaySizes(); }
+
+    // ---- Host audio output route delegates ----
+
+    public boolean setForcePhoneSpeaker(boolean enabled) { return audioRouteHelper.setForcePhoneSpeaker(enabled); }
+    public boolean reapplyForcePhoneSpeakerIfEnabled() { return audioRouteHelper.reapplyIfEnabled(); }
+    public boolean isForcePhoneSpeakerActive() { return audioRouteHelper.isForcePhoneSpeakerActive(); }
+    public void restoreHostAudioRouteOnShutdown() { audioRouteHelper.restoreDefaultOnShutdown(); }
 
     // ---- Activity launch & provider delegates ----
 

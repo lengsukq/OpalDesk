@@ -235,6 +235,7 @@ internal fun ConsoleNotificationAndCompanionCard(
 internal fun ConsoleAudioMediaCard(
     audioRouteMode: Int,
     splitAudioOn: Boolean,
+    forcePhoneSpeaker: Boolean,
     remoteMicEnabled: Boolean,
     remoteCameraEnabled: Boolean,
     canUseRootCamera: Boolean,
@@ -243,6 +244,7 @@ internal fun ConsoleAudioMediaCard(
 ) {
     val ctx = LocalContext.current
     val audioSummary = when {
+        forcePhoneSpeaker -> stringResource(R.string.settings_force_phone_speaker_badge)
         splitAudioOn && (remoteMicEnabled || effectiveCameraEnabled) -> stringResource(R.string.settings_audio_sum_split_media)
         splitAudioOn -> stringResource(R.string.settings_audio_sum_split)
         remoteMicEnabled || effectiveCameraEnabled -> stringResource(R.string.settings_audio_sum_all_media)
@@ -254,7 +256,7 @@ internal fun ConsoleAudioMediaCard(
         sectionKey = ConsoleSectionKeys.AUDIO_MEDIA,
         controller = navController,
         summaryText = audioSummary,
-        summaryAccent = if (splitAudioOn || remoteMicEnabled || effectiveCameraEnabled) {
+        summaryAccent = if (forcePhoneSpeaker || splitAudioOn || remoteMicEnabled || effectiveCameraEnabled) {
             OpalPalette.AccentEmerald
         } else {
             OpalPalette.TextMuted
@@ -287,6 +289,20 @@ internal fun ConsoleAudioMediaCard(
                     } else {
                         ctx.getString(R.string.settings_audio_toast_all)
                     }
+                    Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+                }
+            },
+        )
+        Spacer(Modifier.height(8.dp))
+        OpalSwitchRow(
+            title = stringResource(R.string.settings_force_phone_speaker_title),
+            subtitle = stringResource(R.string.settings_force_phone_speaker_sub),
+            checked = forcePhoneSpeaker,
+            onCheckedChange = { enabled ->
+                BridgeClient.setForcePhoneSpeakerAsync(ctx, enabled) {
+                    val msg = ctx.getString(
+                        if (enabled) R.string.settings_force_phone_speaker_toast_on else R.string.settings_force_phone_speaker_toast_off,
+                    )
                     Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
                 }
             },

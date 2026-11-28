@@ -51,11 +51,11 @@ import io.github.lengsukq.opaldesk.protocol.CompositorWindow
 import io.github.lengsukq.opaldesk.protocol.ResizeEdge
 import io.github.lengsukq.opaldesk.protocol.WindowRect
 import io.github.lengsukq.opaldesk.ui.ChromeGlyph
-import io.github.lengsukq.opaldesk.ui.MacTrafficLightButton
 import io.github.lengsukq.opaldesk.ui.OpalGlyphIcon
 import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.OpalText
-import io.github.lengsukq.opaldesk.ui.TrafficLightType
+import io.github.lengsukq.opaldesk.ui.WindowTrafficLightCluster
+import io.github.lengsukq.opaldesk.ui.WindowTrafficLightPolicy
 import kotlinx.coroutines.delay
 import kotlin.math.hypot
 import kotlin.math.roundToInt
@@ -349,16 +349,20 @@ fun CompositorWindowFrameNode(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    MacTrafficLightButton(TrafficLightType.CLOSE, window.focused) {
-                        BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.CLOSE)
-                    }
-                    MacTrafficLightButton(TrafficLightType.MINIMIZE, window.focused) {
-                        BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.MINIMIZE)
-                    }
-                    MacTrafficLightButton(TrafficLightType.ZOOM, window.focused) {
-                        armResizeBridge(shrinking = window.isMaximized || window.isFullscreen)
-                        BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.TOGGLE_MAXIMIZE)
-                    }
+                    WindowTrafficLightCluster(
+                        focused = window.focused,
+                        isFullscreen = window.isFullscreen,
+                        onClose = {
+                            BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.CLOSE)
+                        },
+                        onMinimize = {
+                            BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.MINIMIZE)
+                        },
+                        onToggleFullscreen = {
+                            armResizeBridge(shrinking = WindowTrafficLightPolicy.shouldArmShrinkOnFullscreenToggle(window.isFullscreen))
+                            BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.TOGGLE_FULLSCREEN)
+                        },
+                    )
                     Spacer(Modifier.width(5.dp))
                     Box(
                         modifier = Modifier
@@ -462,43 +466,24 @@ fun CompositorWindowFrameNode(
                         io.github.lengsukq.opaldesk.protocol.OpalWindowPinStore.toggle(window.windowId)
                     }
 
-                    HeaderSubtleIconButton(glyph = ChromeGlyph.ORIENTATION, focused = window.focused) {
-                        armResizeBridge(shrinking = true)
-                        BridgeClient.sendWindowActionAsync(
-                            window.windowId,
-                            BridgeProtocol.WinAction.TOGGLE_ORIENTATION,
-                        )
-                    }
-
                     val ctx = androidx.compose.ui.platform.LocalContext.current
                     val profileLabel = when (window.profileCode) {
                         BridgeProtocol.Profile.PORTRAIT -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_portrait)
                         BridgeProtocol.Profile.TABLET -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_tablet)
                         else -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_desktop)
                     }
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (window.focused) OpalPalette.ChipFill else Color.Transparent)
-                            .border(0.6.dp, OpalPalette.BorderHairline, RoundedCornerShape(6.dp))
-                            .clickable {
-                                armResizeBridge(shrinking = true)
-                                val nextAct = when (window.profileCode) {
-                                    BridgeProtocol.Profile.DESKTOP -> BridgeProtocol.WinAction.SET_PROFILE_TABLET
-                                    BridgeProtocol.Profile.TABLET -> BridgeProtocol.WinAction.SET_PROFILE_PORTRAIT
-                                    else -> BridgeProtocol.WinAction.SET_PROFILE_DESKTOP
-                                }
-                                BridgeClient.sendWindowActionAsync(window.windowId, nextAct)
-                            }
-                            .padding(horizontal = 7.dp, vertical = 3.dp),
+                    HeaderProfileIconButton(
+                        profileCode = window.profileCode,
+                        contentDescription = profileLabel,
+                        focused = window.focused,
                     ) {
-                        OpalText(
-                            text = profileLabel,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = if (window.focused) OpalPalette.TextPrimary else OpalPalette.TextMuted,
-                            maxLines = 1,
-                        )
+                        armResizeBridge(shrinking = true)
+                        val nextAct = when (window.profileCode) {
+                            BridgeProtocol.Profile.DESKTOP -> BridgeProtocol.WinAction.SET_PROFILE_TABLET
+                            BridgeProtocol.Profile.TABLET -> BridgeProtocol.WinAction.SET_PROFILE_PORTRAIT
+                            else -> BridgeProtocol.WinAction.SET_PROFILE_DESKTOP
+                        }
+                        BridgeClient.sendWindowActionAsync(window.windowId, nextAct)
                     }
 
                     if (showReloadButton) {

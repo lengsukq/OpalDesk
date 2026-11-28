@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_force_phone_speaker_title">全部用本机播放</string>
+    <string name="settings_force_phone_speaker_sub">便携屏无音响时强制使用手机扬声器</string>
+    <string name="settings_force_phone_speaker_toast_on">已开启：音频全部使用手机扬声器播放</string>
+    <string name="settings_force_phone_speaker_toast_off">已恢复系统默认音频输出</string>
+    <string name="settings_force_phone_speaker_badge">本机播放</string>
+</resources>

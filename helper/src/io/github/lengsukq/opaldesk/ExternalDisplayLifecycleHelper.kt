@@ -329,3 +329,11 @@ internal fun applyImmersiveFullscreen(window: Window) {
         systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
 }
+
+internal fun syncExternalDesktopAudioRoute(ctx: Context, entering: Boolean) {
+    if (entering) {
+        if (AppPrefs.isForcePhoneSpeakerEnabled(ctx)) BridgeClient.setForcePhoneSpeakerAsync(ctx, enabled = true, persist = true)
+    } else if (AppPrefs.isForcePhoneSpeakerEnabled(ctx)) {
+        BridgeClient.setForcePhoneSpeakerAsync(ctx, enabled = false, persist = false)
+    }
+}

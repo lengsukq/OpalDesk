@@ -64,6 +64,7 @@ object AppPrefs {
     val remoteMicEnabledFlow: StateFlow<Boolean> = CastAndCompanionPrefs.remoteMicEnabledFlow
     val remoteCameraEnabledFlow: StateFlow<Boolean> = CastAndCompanionPrefs.remoteCameraEnabledFlow
     val audioRouteModeFlow: StateFlow<Int> = CastAndCompanionPrefs.audioRouteModeFlow
+    val forcePhoneSpeakerFlow: StateFlow<Boolean> = CastAndCompanionPrefs.forcePhoneSpeakerFlow
     val dockVisibleFlow: StateFlow<Boolean> = DisplayAndInputPrefs.dockVisibleFlow
     val dockOpacityFlow: StateFlow<Float> = DisplayAndInputPrefs.dockOpacityFlow
     val dockScaleFlow: StateFlow<Float> = DisplayAndInputPrefs.dockScaleFlow
@@ -164,6 +165,12 @@ object AppPrefs {
 
     fun setAudioRouteMode(ctx: Context?, mode: Int) =
         CastAndCompanionPrefs.setAudioRouteMode(ctx, mode)
+
+    fun isForcePhoneSpeakerEnabled(ctx: Context?): Boolean =
+        CastAndCompanionPrefs.isForcePhoneSpeakerEnabled(ctx)
+
+    fun setForcePhoneSpeakerEnabled(ctx: Context?, enabled: Boolean) =
+        CastAndCompanionPrefs.setForcePhoneSpeakerEnabled(ctx, enabled)
 
     fun getDesktopShortcuts(ctx: Context?): List<String> =
         DisplayAndInputPrefs.getDesktopShortcuts(ctx)

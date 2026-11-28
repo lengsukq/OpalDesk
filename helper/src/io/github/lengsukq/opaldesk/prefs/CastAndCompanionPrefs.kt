@@ -31,6 +31,7 @@ internal object CastAndCompanionPrefs {
     private const val KEY_REMOTE_MIC_ENABLED = "remote_mic_uplink_enabled_v1"
     private const val KEY_REMOTE_CAMERA_ENABLED = "remote_camera_mapping_enabled_v1"
     private const val KEY_AUDIO_ROUTE_MODE = "audio_route_mode_v2"
+    private const val KEY_FORCE_PHONE_SPEAKER = "force_phone_speaker_v1"
     private const val KEY_USB_TETHER_CAST_ENABLED = "usb_tether_cast_enabled_v1"
     private const val KEY_CALL_CONTROL_SYNC_ENABLED = "call_control_sync_enabled_v1"
     private const val KEY_BLE_NEARBY_ENABLED = "ble_nearby_enabled_v1"
@@ -63,6 +64,9 @@ internal object CastAndCompanionPrefs {
     private val _audioRouteModeFlow = MutableStateFlow(BridgeProtocol.AudioRoute.SPLIT_BY_APP)
     val audioRouteModeFlow: StateFlow<Int> = _audioRouteModeFlow.asStateFlow()
 
+    private val _forcePhoneSpeakerFlow = MutableStateFlow(false)
+    val forcePhoneSpeakerFlow: StateFlow<Boolean> = _forcePhoneSpeakerFlow.asStateFlow()
+
     private val _usbTetherCastEnabledFlow = MutableStateFlow(false)
     val usbTetherCastEnabledFlow: StateFlow<Boolean> = _usbTetherCastEnabledFlow.asStateFlow()
 
@@ -94,6 +98,7 @@ internal object CastAndCompanionPrefs {
             BridgeProtocol.AudioRoute.ALL_TO_DEX,
             BridgeProtocol.AudioRoute.SPLIT_BY_APP,
         )
+        _forcePhoneSpeakerFlow.value = p.getBoolean(KEY_FORCE_PHONE_SPEAKER, false)
         _usbTetherCastEnabledFlow.value = p.getBoolean(KEY_USB_TETHER_CAST_ENABLED, false)
         _callControlSyncEnabledFlow.value = p.getBoolean(KEY_CALL_CONTROL_SYNC_ENABLED, false)
         _bleNearbyEnabledFlow.value = p.getBoolean(KEY_BLE_NEARBY_ENABLED, false)
@@ -173,6 +178,16 @@ internal object CastAndCompanionPrefs {
         )
         AppPrefs.sharedPrefs(ctx)?.edit()?.putInt(KEY_AUDIO_ROUTE_MODE, clamped)?.apply()
         _audioRouteModeFlow.value = clamped
+    }
+
+    fun isForcePhoneSpeakerEnabled(ctx: Context?): Boolean {
+        AppPrefs.hydrateFlows(ctx)
+        return _forcePhoneSpeakerFlow.value
+    }
+
+    fun setForcePhoneSpeakerEnabled(ctx: Context?, enabled: Boolean) {
+        AppPrefs.sharedPrefs(ctx)?.edit()?.putBoolean(KEY_FORCE_PHONE_SPEAKER, enabled)?.apply()
+        _forcePhoneSpeakerFlow.value = enabled
     }
 
     fun isAutoBlackoutOnCast(ctx: Context?): Boolean {

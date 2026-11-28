@@ -11,11 +11,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -38,6 +42,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import io.github.lengsukq.opaldesk.compositor.InstalledAppEntry
 import io.github.lengsukq.opaldesk.ui.ChromeGlyph
 import io.github.lengsukq.opaldesk.ui.LocalOpalColors
 import io.github.lengsukq.opaldesk.ui.OpalButton
@@ -77,6 +82,11 @@ fun DesktopWidgetHostLayer(
     notifications: List<WidgetNotificationItem>,
     appShortcuts: List<WidgetAppShortcut>,
     callbacks: DesktopWidgetCallbacks,
+    desktopShortcuts: List<DesktopGridShortcutItem> = emptyList(),
+    onOpenGuide: () -> Unit = {},
+    onContextGuide: (Offset) -> Unit = {},
+    onLaunchDesktopApp: (InstalledAppEntry) -> Unit = {},
+    onContextDesktopApp: (String, Offset) -> Unit = { _, _ -> },
     onEnterEditMode: () -> Unit,
     onExitEditMode: () -> Unit,
     onOpenWidgetStore: () -> Unit,
@@ -94,90 +104,190 @@ fun DesktopWidgetHostLayer(
         }.getOrNull() ?: Locale.getDefault().language
         lang.equals("zh", ignoreCase = true)
     }
-    val gridCols = DesktopWidgetGridMath.DEFAULT_GRID_COLS
-    val gridRows = DesktopWidgetGridMath.DEFAULT_GRID_ROWS
     var activeGhost by remember(isEditMode) { mutableStateOf<WidgetGhostPreview?>(null) }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
-        val heightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-        val cellW = widthPx / gridCols.toFloat()
-        val cellH = heightPx / gridRows.toFloat()
-        val cardGapPx = with(density) { 10.dp.toPx() }
-
-        if (isEditMode) {
-            WidgetGridAlignmentDots(
+        val isPortraitCompact = maxWidth < maxHeight && maxWidth < 600.dp
+        val gridCols = if (isPortraitCompact) {
+            DesktopWidgetGridMath.PORTRAIT_GRID_COLS
+        } else {
+            DesktopWidgetGridMath.DEFAULT_GRID_COLS
+        }
+        val displayInstances = remember(instances, isPortraitCompact, gridCols) {
+            if (isPortraitCompact) {
+                DesktopWidgetGridMath.computePortraitLayout(
+                    instances = instances,
+                    portraitCols = gridCols,
+                    portraitRows = DesktopWidgetGridMath.PORTRAIT_DEFAULT_GRID_ROWS,
+                )
+            } else {
+                instances
+            }
+        }
+        val baseGridRows = if (isPortraitCompact) {
+            DesktopWidgetGridMath.PORTRAIT_DEFAULT_GRID_ROWS
+        } else {
+            DesktopWidgetGridMath.DEFAULT_GRID_ROWS
+        }
+        val shortcutSlots = remember(desktopShortcuts.size, displayInstances, gridCols, baseGridRows, isPortraitCompact) {
+            DesktopWidgetGridMath.allocateShortcutSlots(
+                iconCount = desktopShortcuts.size,
+                occupiedWidgets = displayInstances,
                 gridCols = gridCols,
-                gridRows = gridRows,
-                cellW = cellW,
-                cellH = cellH,
-                modifier = Modifier.fillMaxSize(),
+                gridRows = baseGridRows,
+                isPortrait = isPortraitCompact,
             )
         }
-
-        activeGhost?.let { ghost ->
-            val gx = (ghost.col * cellW + cardGapPx * 0.5f).roundToInt()
-            val gy = (ghost.row * cellH + cardGapPx * 0.5f).roundToInt()
-            val gw = (ghost.colSpan * cellW - cardGapPx).coerceAtLeast(48f)
-            val gh = (ghost.rowSpan * cellH - cardGapPx).coerceAtLeast(48f)
-            val ghostShape = RoundedCornerShape(24.dp)
-            Box(
-                modifier = Modifier
-                    .offset { IntOffset(gx, gy) }
-                    .size(
-                        width = with(density) { gw.toDp() },
-                        height = with(density) { gh.toDp() },
-                    )
-                    .zIndex(1f)
-                    .clip(ghostShape)
-                    .background(ghost.accent.copy(alpha = 0.16f))
-                    .border(2.dp, ghost.accent.copy(alpha = 0.78f), ghostShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(ghost.accent.copy(alpha = 0.24f))
-                        .padding(horizontal = 10.dp, vertical = 4.dp),
-                ) {
-                    OpalText(
-                        text = "${ghost.colSpan}×${ghost.rowSpan}",
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                    )
-                }
+        val contentRows = remember(displayInstances, shortcutSlots, baseGridRows, isPortraitCompact) {
+            val maxWidgetRow = displayInstances.maxOfOrNull { it.row + it.rowSpan } ?: 0
+            val maxShortcutRow = shortcutSlots.maxOfOrNull { it.second + 1 } ?: 0
+            if (isPortraitCompact) {
+                maxOf(DesktopWidgetGridMath.PORTRAIT_MIN_GRID_ROWS, maxWidgetRow, maxShortcutRow)
+            } else {
+                maxOf(baseGridRows, maxWidgetRow, maxShortcutRow)
             }
         }
 
-        for (instance in instances) {
-            key(instance.id) {
-                DesktopWidgetCardSlot(
-                    instance = instance,
-                    isEditMode = isEditMode,
-                    isZh = isZh,
-                    cellW = cellW,
-                    cellH = cellH,
-                    cardGapPx = cardGapPx,
-                    gridCols = gridCols,
-                    gridRows = gridRows,
-                    mediaSnapshot = mediaSnapshot,
-                    workstationSnapshot = workstationSnapshot,
-                    notifications = notifications,
-                    appShortcuts = appShortcuts,
-                    callbacks = callbacks,
-                    onEnterEditMode = onEnterEditMode,
-                    onGhostChanged = { activeGhost = it },
-                    onMoveCommitted = { col, row ->
-                        activeGhost = null
-                        onMoveWidget(instance.id, col, row)
-                    },
-                    onResizeCommitted = { cSpan, rSpan ->
-                        activeGhost = null
-                        onResizeWidget(instance.id, cSpan, rSpan)
-                    },
-                    onRemove = { onRemoveWidget(instance.id) },
-                )
+        val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+        val heightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+        val topClearanceDp = if (isEditMode) 56.dp else if (isPortraitCompact) 6.dp else 0.dp
+        val topClearancePx = with(density) { topClearanceDp.toPx() }
+        val availableGridHeightPx = (heightPx - topClearancePx).coerceAtLeast(1f)
+        val cellW = widthPx / gridCols.toFloat()
+        val cellH = if (isPortraitCompact) {
+            val minCellH = with(density) { 84.dp.toPx() }
+            val maxCellH = with(density) { 104.dp.toPx() }
+            (cellW * 1.04f).coerceIn(minCellH, maxCellH)
+        } else {
+            availableGridHeightPx / DesktopWidgetGridMath.DEFAULT_GRID_ROWS.toFloat()
+        }
+        val cardGapPx = with(density) { (if (isPortraitCompact) 10.dp else 10.dp).toPx() }
+        val totalGridHeightDp = with(density) { (contentRows * cellH + if (isPortraitCompact) 16.dp.toPx() else 0f).toDp() }
+        val scrollState = rememberScrollState()
+
+        val gridContainerModifier = if (isPortraitCompact) {
+            Modifier
+                .fillMaxSize()
+                .padding(top = topClearanceDp)
+                .verticalScroll(scrollState)
+        } else {
+            Modifier
+                .fillMaxSize()
+                .padding(top = topClearanceDp)
+        }
+
+        Box(modifier = gridContainerModifier) {
+            Box(
+                modifier = if (isPortraitCompact) {
+                    Modifier
+                        .fillMaxWidth()
+                        .height(totalGridHeightDp)
+                } else {
+                    Modifier.fillMaxSize()
+                },
+            ) {
+                if (isEditMode) {
+                    WidgetGridAlignmentDots(
+                        gridCols = gridCols,
+                        gridRows = contentRows,
+                        cellW = cellW,
+                        cellH = cellH,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+
+                if (!isPortraitCompact) {
+                    activeGhost?.let { ghost ->
+                        val gx = (ghost.col * cellW + cardGapPx * 0.5f).roundToInt()
+                        val gy = (ghost.row * cellH + cardGapPx * 0.5f).roundToInt()
+                        val gw = (ghost.colSpan * cellW - cardGapPx).coerceAtLeast(48f)
+                        val gh = (ghost.rowSpan * cellH - cardGapPx).coerceAtLeast(48f)
+                        val ghostShape = RoundedCornerShape(24.dp)
+                        Box(
+                            modifier = Modifier
+                                .offset { IntOffset(gx, gy) }
+                                .size(
+                                    width = with(density) { gw.toDp() },
+                                    height = with(density) { gh.toDp() },
+                                )
+                                .zIndex(1f)
+                                .clip(ghostShape)
+                                .background(ghost.accent.copy(alpha = 0.16f))
+                                .border(2.dp, ghost.accent.copy(alpha = 0.78f), ghostShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(ghost.accent.copy(alpha = 0.24f))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                            ) {
+                                OpalText(
+                                    text = "${ghost.colSpan}×${ghost.rowSpan}",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Unified Desktop App Shortcuts (1x1 grid cells with zero widget overlap)
+                desktopShortcuts.forEachIndexed { idx, shortcutItem ->
+                    val slot = shortcutSlots.getOrNull(idx) ?: return@forEachIndexed
+                    key(shortcutItem.stableKey) {
+                        val sx = (slot.first * cellW).roundToInt()
+                        val sy = (slot.second * cellH).roundToInt()
+                        DesktopGridShortcutTile(
+                            item = shortcutItem,
+                            isEditMode = isEditMode,
+                            onOpenGuide = onOpenGuide,
+                            onContextGuide = onContextGuide,
+                            onLaunchApp = onLaunchDesktopApp,
+                            onContextApp = onContextDesktopApp,
+                            modifier = Modifier
+                                .offset { IntOffset(sx, sy) }
+                                .size(
+                                    width = with(density) { cellW.toDp() },
+                                    height = with(density) { cellH.toDp() },
+                                )
+                                .zIndex(6f),
+                        )
+                    }
+                }
+
+                for (instance in displayInstances) {
+                    key(instance.id) {
+                        DesktopWidgetCardSlot(
+                            instance = instance,
+                            isEditMode = isEditMode,
+                            allowDragResize = !isPortraitCompact,
+                            isZh = isZh,
+                            cellW = cellW,
+                            cellH = cellH,
+                            cardGapPx = cardGapPx,
+                            gridCols = gridCols,
+                            gridRows = contentRows,
+                            mediaSnapshot = mediaSnapshot,
+                            workstationSnapshot = workstationSnapshot,
+                            notifications = notifications,
+                            appShortcuts = appShortcuts,
+                            callbacks = callbacks,
+                            onEnterEditMode = onEnterEditMode,
+                            onGhostChanged = { activeGhost = it },
+                            onMoveCommitted = { col, row ->
+                                activeGhost = null
+                                onMoveWidget(instance.id, col, row)
+                            },
+                            onResizeCommitted = { cSpan, rSpan ->
+                                activeGhost = null
+                                onResizeWidget(instance.id, cSpan, rSpan)
+                            },
+                            onRemove = { onRemoveWidget(instance.id) },
+                        )
+                    }
+                }
             }
         }
 
@@ -200,6 +310,7 @@ fun DesktopWidgetHostLayer(
 private fun DesktopWidgetCardSlot(
     instance: DesktopWidgetInstance,
     isEditMode: Boolean,
+    allowDragResize: Boolean,
     isZh: Boolean,
     cellW: Float,
     cellH: Float,
@@ -276,7 +387,7 @@ private fun DesktopWidgetCardSlot(
                     borderWidth = if (isEditMode) 1.6.dp else 1.dp,
                 )
                 .then(
-                    if (isEditMode) {
+                    if (isEditMode && allowDragResize) {
                         Modifier.pointerInput(instance.id, instance.col, instance.row, instance.colSpan, instance.rowSpan, cellW, cellH) {
                             detectDragGestures(
                                 onDragStart = {
@@ -325,10 +436,12 @@ private fun DesktopWidgetCardSlot(
                                 },
                             )
                         }
-                    } else {
+                    } else if (!isEditMode) {
                         Modifier.pointerInput(instance.id) {
                             detectTapGestures(onLongPress = { onEnterEditMode() })
                         }
+                    } else {
+                        Modifier
                     },
                 )
                 .padding(12.dp),
@@ -442,65 +555,67 @@ private fun DesktopWidgetCardSlot(
                 OpalGlyphIcon(glyph = ChromeGlyph.CLOSE, tint = OpalPalette.AccentDanger, size = 11.dp)
             }
 
-            // Bottom-right resize grip handle
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .offset(x = 5.dp, y = 5.dp)
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(if (colors.isDark) Color(0xE0232A3C) else Color(0xF2FFFFFF))
-                    .border(1.2.dp, accent.copy(alpha = 0.78f), CircleShape)
-                    .pointerInput(instance.id, instance.col, instance.row, instance.colSpan, instance.rowSpan, cellW, cellH) {
-                        detectDragGestures(
-                            onDragStart = {
-                                isDragging = true
-                                onGhostChanged(
-                                    WidgetGhostPreview(instance.col, instance.row, instance.colSpan, instance.rowSpan, accent),
-                                )
-                            },
-                            onDragCancel = {
-                                isDragging = false
-                                resizeDw = 0f
-                                resizeDh = 0f
-                                onGhostChanged(null)
-                            },
-                            onDragEnd = {
-                                val rawColSpan = ((instance.colSpan * cellW + resizeDw) / cellW).roundToInt()
-                                val rawRowSpan = ((instance.rowSpan * cellH + resizeDh) / cellH).roundToInt()
-                                val clamped = DesktopWidgetGridMath.clampInstance(
-                                    instance.copy(colSpan = rawColSpan, rowSpan = rawRowSpan),
-                                    gridCols = gridCols,
-                                    gridRows = gridRows,
-                                )
-                                isDragging = false
-                                resizeDw = 0f
-                                resizeDh = 0f
-                                onResizeCommitted(clamped.colSpan, clamped.rowSpan)
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                resizeDw += dragAmount.x
-                                resizeDh += dragAmount.y
-                                val rawColSpan = ((instance.colSpan * cellW + resizeDw) / cellW).roundToInt()
-                                val rawRowSpan = ((instance.rowSpan * cellH + resizeDh) / cellH).roundToInt()
-                                val clamped = DesktopWidgetGridMath.clampInstance(
-                                    instance.copy(colSpan = rawColSpan, rowSpan = rawRowSpan),
-                                    gridCols = gridCols,
-                                    gridRows = gridRows,
-                                )
-                                onGhostChanged(
-                                    WidgetGhostPreview(clamped.col, clamped.row, clamped.colSpan, clamped.rowSpan, accent),
-                                )
-                            },
-                        )
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Canvas(modifier = Modifier.size(12.dp)) {
-                    val sw = 1.6.dp.toPx()
-                    drawLine(accent, Offset(size.width * 0.25f, size.height * 0.85f), Offset(size.width * 0.85f, size.height * 0.25f), sw, StrokeCap.Round)
-                    drawLine(accent, Offset(size.width * 0.58f, size.height * 0.85f), Offset(size.width * 0.85f, size.height * 0.58f), sw, StrokeCap.Round)
+            // Bottom-right resize grip handle (landscape 12x7 grid only; portrait uses adaptive 4-col spans)
+            if (allowDragResize) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 5.dp, y = 5.dp)
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(if (colors.isDark) Color(0xE0232A3C) else Color(0xF2FFFFFF))
+                        .border(1.2.dp, accent.copy(alpha = 0.78f), CircleShape)
+                        .pointerInput(instance.id, instance.col, instance.row, instance.colSpan, instance.rowSpan, cellW, cellH) {
+                            detectDragGestures(
+                                onDragStart = {
+                                    isDragging = true
+                                    onGhostChanged(
+                                        WidgetGhostPreview(instance.col, instance.row, instance.colSpan, instance.rowSpan, accent),
+                                    )
+                                },
+                                onDragCancel = {
+                                    isDragging = false
+                                    resizeDw = 0f
+                                    resizeDh = 0f
+                                    onGhostChanged(null)
+                                },
+                                onDragEnd = {
+                                    val rawColSpan = ((instance.colSpan * cellW + resizeDw) / cellW).roundToInt()
+                                    val rawRowSpan = ((instance.rowSpan * cellH + resizeDh) / cellH).roundToInt()
+                                    val clamped = DesktopWidgetGridMath.clampInstance(
+                                        instance.copy(colSpan = rawColSpan, rowSpan = rawRowSpan),
+                                        gridCols = gridCols,
+                                        gridRows = gridRows,
+                                    )
+                                    isDragging = false
+                                    resizeDw = 0f
+                                    resizeDh = 0f
+                                    onResizeCommitted(clamped.colSpan, clamped.rowSpan)
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    resizeDw += dragAmount.x
+                                    resizeDh += dragAmount.y
+                                    val rawColSpan = ((instance.colSpan * cellW + resizeDw) / cellW).roundToInt()
+                                    val rawRowSpan = ((instance.rowSpan * cellH + resizeDh) / cellH).roundToInt()
+                                    val clamped = DesktopWidgetGridMath.clampInstance(
+                                        instance.copy(colSpan = rawColSpan, rowSpan = rawRowSpan),
+                                        gridCols = gridCols,
+                                        gridRows = gridRows,
+                                    )
+                                    onGhostChanged(
+                                        WidgetGhostPreview(clamped.col, clamped.row, clamped.colSpan, clamped.rowSpan, accent),
+                                    )
+                                },
+                            )
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Canvas(modifier = Modifier.size(12.dp)) {
+                        val sw = 1.6.dp.toPx()
+                        drawLine(accent, Offset(size.width * 0.25f, size.height * 0.85f), Offset(size.width * 0.85f, size.height * 0.25f), sw, StrokeCap.Round)
+                        drawLine(accent, Offset(size.width * 0.58f, size.height * 0.85f), Offset(size.width * 0.85f, size.height * 0.58f), sw, StrokeCap.Round)
+                    }
                 }
             }
         }

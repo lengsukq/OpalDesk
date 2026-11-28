@@ -1,6 +1,7 @@
 package io.github.lengsukq.opaldesk
 
 import android.content.Context
+import android.os.IBinder
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.PairingJsonParser
@@ -242,6 +243,48 @@ internal fun BridgeClient.setAudioRouteModeAsyncImpl(
         if (svc != null) {
             refreshStatus()
         }
+        if (onDone != null) mainHandler.post { onDone(ok) }
+    }
+}
+
+internal fun BridgeClient.syncAudioPrefsOnConnectSync(svc: IBinder, ctx: Context) {
+    val audioMode = AppPrefs.getAudioRouteMode(ctx)
+    transact(svc, BridgeProtocol.Tx.SET_AUDIO_ROUTE_MODE, oneway = false, writeArgs = { d ->
+        d.writeInt(audioMode)
+    }) { it.readInt() }
+    val forceSpeaker = AppPrefs.isForcePhoneSpeakerEnabled(ctx)
+    transact(svc, BridgeProtocol.Tx.SET_FORCE_PHONE_SPEAKER, oneway = false, writeArgs = { d ->
+        d.writeInt(if (forceSpeaker) 1 else 0)
+        d.writeInt(1)
+    }) { it.readInt() }
+}
+
+internal fun BridgeClient.setForcePhoneSpeakerAsyncImpl(
+    ctx: Context?,
+    enabled: Boolean,
+    persist: Boolean,
+    onDone: ((Boolean) -> Unit)?,
+) {
+    bindAppContext(ctx)
+    if (persist) {
+        AppPrefs.setForcePhoneSpeakerEnabled(ctx, enabled)
+    }
+    ioExec.execute {
+        val svc = getService()
+        val ok = if (svc != null) {
+            transact(
+                svc,
+                BridgeProtocol.Tx.SET_FORCE_PHONE_SPEAKER,
+                oneway = false,
+                writeArgs = { d ->
+                    d.writeInt(if (enabled) 1 else 0)
+                    d.writeInt(if (persist) 1 else 0)
+                },
+            ) { it.readInt() != 0 } ?: false
+        } else {
+            false
+        }
+        if (svc != null) refreshStatus()
         if (onDone != null) mainHandler.post { onDone(ok) }
     }
 }

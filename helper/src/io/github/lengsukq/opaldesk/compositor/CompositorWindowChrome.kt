@@ -23,14 +23,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import io.github.lengsukq.opaldesk.BridgeClient
@@ -99,6 +104,96 @@ internal fun HeaderPinIconButton(
             drawLine(tint, Offset(w * 0.68f, h * 0.32f), Offset(w * 0.44f, h * 0.56f), strokeWidth = stroke * 1.15f, cap = StrokeCap.Round)
             drawLine(tint, Offset(w * 0.30f, h * 0.42f), Offset(w * 0.58f, h * 0.70f), strokeWidth = stroke, cap = StrokeCap.Round)
             drawLine(tint, Offset(w * 0.44f, h * 0.56f), Offset(w * 0.14f, h * 0.86f), strokeWidth = stroke, cap = StrokeCap.Round)
+        }
+    }
+}
+
+/**
+ * Pure-icon window form-factor profile switcher (Portrait phone / Landscape tablet / Desktop monitor)
+ * with liquid frosted micro-button styling and localized accessibility semantics.
+ */
+@Composable
+internal fun HeaderProfileIconButton(
+    profileCode: Int,
+    contentDescription: String,
+    focused: Boolean,
+    onClick: () -> Unit,
+) {
+    val tint = if (focused) OpalPalette.TextSecondary else OpalPalette.TextMuted
+    Box(
+        modifier = Modifier
+            .size(24.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (focused) OpalPalette.ChipFill else Color.Transparent)
+            .border(0.6.dp, OpalPalette.BorderHairline, RoundedCornerShape(6.dp))
+            .semantics { this.contentDescription = contentDescription }
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.size(13.dp)) {
+            val w = size.width
+            val h = size.height
+            val stroke = 1.35.dp.toPx()
+            when (profileCode) {
+                BridgeProtocol.Profile.PORTRAIT -> {
+                    // Vertical phone outline + subtle bottom home indicator
+                    val bodyW = w * 0.56f
+                    val bodyH = h * 0.86f
+                    val left = (w - bodyW) * 0.5f
+                    val top = (h - bodyH) * 0.5f
+                    drawRoundRect(
+                        color = tint,
+                        topLeft = Offset(left, top),
+                        size = Size(bodyW, bodyH),
+                        cornerRadius = CornerRadius(2.2.dp.toPx(), 2.2.dp.toPx()),
+                        style = Stroke(width = stroke),
+                    )
+                    drawLine(
+                        color = tint,
+                        start = Offset(w * 0.39f, top + bodyH - 2.2.dp.toPx()),
+                        end = Offset(w * 0.61f, top + bodyH - 2.2.dp.toPx()),
+                        strokeWidth = stroke * 0.9f,
+                        cap = StrokeCap.Round,
+                    )
+                }
+                BridgeProtocol.Profile.TABLET -> {
+                    // Horizontal tablet outline + subtle right bezel dot
+                    val bodyW = w * 0.88f
+                    val bodyH = h * 0.66f
+                    val left = (w - bodyW) * 0.5f
+                    val top = (h - bodyH) * 0.5f
+                    drawRoundRect(
+                        color = tint,
+                        topLeft = Offset(left, top),
+                        size = Size(bodyW, bodyH),
+                        cornerRadius = CornerRadius(2.2.dp.toPx(), 2.2.dp.toPx()),
+                        style = Stroke(width = stroke),
+                    )
+                    drawCircle(
+                        color = tint,
+                        radius = 0.85.dp.toPx(),
+                        center = Offset(left + bodyW - 2.1.dp.toPx(), h * 0.5f),
+                    )
+                }
+                else -> {
+                    // Desktop monitor outline + clean center neck & horizontal stand
+                    val bodyW = w * 0.88f
+                    val bodyH = h * 0.58f
+                    val left = (w - bodyW) * 0.5f
+                    val top = h * 0.10f
+                    drawRoundRect(
+                        color = tint,
+                        topLeft = Offset(left, top),
+                        size = Size(bodyW, bodyH),
+                        cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
+                        style = Stroke(width = stroke),
+                    )
+                    val neckTop = top + bodyH
+                    val baseY = h * 0.88f
+                    drawLine(tint, Offset(w * 0.5f, neckTop), Offset(w * 0.5f, baseY), strokeWidth = stroke, cap = StrokeCap.Round)
+                    drawLine(tint, Offset(w * 0.30f, baseY), Offset(w * 0.70f, baseY), strokeWidth = stroke, cap = StrokeCap.Round)
+                }
+            }
         }
     }
 }

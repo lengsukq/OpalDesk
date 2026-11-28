@@ -267,6 +267,7 @@ internal fun ControlCenterQuickTab(
     }
 
     val volPct = ((mediaVolume * 100f) / maxVolume.toFloat()).roundToInt().coerceIn(0, 100)
+    val forcePhoneSpeaker by AppPrefs.forcePhoneSpeakerFlow.collectAsState()
     val brightPct = (screenBrightness * 100f).roundToInt().coerceIn(5, 100)
     Column(
         modifier = Modifier
@@ -289,6 +290,21 @@ internal fun ControlCenterQuickTab(
             value = mediaVolume.toFloat(),
             valueRange = 0f..maxVolume.toFloat(),
             onValueChange = { v -> onApplyMediaVolume(v.roundToInt()) },
+        )
+
+        Box(modifier = Modifier.fillMaxWidth().height(0.75.dp).background(OpalPalette.DividerColor))
+        OpalSwitchRow(
+            title = stringResource(R.string.settings_force_phone_speaker_title),
+            subtitle = stringResource(R.string.settings_force_phone_speaker_sub),
+            checked = forcePhoneSpeaker,
+            onCheckedChange = { enabled ->
+                BridgeClient.setForcePhoneSpeakerAsync(ctx, enabled) {
+                    val msg = ctx.getString(
+                        if (enabled) R.string.settings_force_phone_speaker_toast_on else R.string.settings_force_phone_speaker_toast_off,
+                    )
+                    Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+                }
+            },
         )
 
         if (!isExternalMonitor) {

@@ -55,6 +55,8 @@ import io.github.lengsukq.opaldesk.ui.OpalText
 import io.github.lengsukq.opaldesk.ui.OpalTopPillChip
 import io.github.lengsukq.opaldesk.ui.OpalTopPillDivider
 import io.github.lengsukq.opaldesk.ui.OpalTopPillIconButton
+import io.github.lengsukq.opaldesk.ui.WindowTrafficLightCluster
+import io.github.lengsukq.opaldesk.ui.WindowTrafficLightPolicy
 import io.github.lengsukq.opaldesk.ui.TilingLayoutPreviewIcon
 import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
 import kotlinx.coroutines.delay
@@ -533,6 +535,8 @@ fun FullscreenExitOverlay(
     windowTitle: String,
     imeActive: Boolean = false,
     onToggleSoftKeyboard: (() -> Unit)? = null,
+    onCloseWindow: () -> Unit,
+    onMinimizeWindow: () -> Unit,
     onExitFullscreen: () -> Unit,
     onToggleOrientation: (() -> Unit)? = null,
     onReturnToDesktop: () -> Unit,
@@ -556,59 +560,87 @@ fun FullscreenExitOverlay(
         contentAlignment = Alignment.TopCenter,
     ) {
         if (!expanded) {
+            // Full-width top-edge mouse hover strip so moving cursor to top-left or any top edge
+            // always reveals the fullscreen control bar even with TOP_BAR_DP == 0 (never traps user).
             Box(
-                modifier = Modifier
-                    .width(104.dp)
-                    .height(22.dp)
-                    .pointerInput(Unit) {
-                        detectTapGestures {
-                            initialReveal = false
-                            expanded = true
-                        }
-                    }
-                    .pointerInput(Unit) {
-                        detectVerticalDragGestures { _, dragAmount ->
-                            if (dragAmount > 6f) {
-                                initialReveal = false
-                                expanded = true
-                            }
-                        }
-                    }
-                    .pointerInput(Unit) {
-                        awaitPointerEventScope {
-                            while (true) {
-                                val ev = awaitPointerEvent()
-                                if (ev.type == PointerEventType.Enter &&
-                                    ev.changes.any { it.type == PointerType.Mouse }
-                                ) {
-                                    val elapsed = SystemClock.uptimeMillis() - manualCollapseAtMs
-                                    if (elapsed >= FULLSCREEN_COLLAPSE_HOVER_GUARD_MS) {
-                                        initialReveal = false
-                                        expanded = true
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .padding(top = 4.dp),
+                modifier = Modifier.fillMaxWidth(),
                 contentAlignment = Alignment.TopCenter,
             ) {
                 Box(
                     modifier = Modifier
-                        .width(48.dp)
-                        .height(7.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.34f))
-                        .border(0.6.dp, Color.White.copy(alpha = 0.34f), CircleShape),
-                    contentAlignment = Alignment.Center,
+                        .fillMaxWidth()
+                        .height(10.dp)
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val ev = awaitPointerEvent()
+                                    if ((ev.type == PointerEventType.Enter || ev.type == PointerEventType.Move) &&
+                                        ev.changes.any { it.type == PointerType.Mouse }
+                                    ) {
+                                        val elapsed = SystemClock.uptimeMillis() - manualCollapseAtMs
+                                        if (WindowTrafficLightPolicy.shouldRevealFullscreenBarOnMouseHover(elapsed, FULLSCREEN_COLLAPSE_HOVER_GUARD_MS)) {
+                                            initialReveal = false
+                                            expanded = true
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                )
+                Box(
+                    modifier = Modifier
+                        .width(104.dp)
+                        .height(22.dp)
+                        .pointerInput(Unit) {
+                            detectTapGestures {
+                                initialReveal = false
+                                expanded = true
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures { _, dragAmount ->
+                                if (dragAmount > 6f) {
+                                    initialReveal = false
+                                    expanded = true
+                                }
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val ev = awaitPointerEvent()
+                                    if ((ev.type == PointerEventType.Enter || ev.type == PointerEventType.Move) &&
+                                        ev.changes.any { it.type == PointerType.Mouse }
+                                    ) {
+                                        val elapsed = SystemClock.uptimeMillis() - manualCollapseAtMs
+                                        if (WindowTrafficLightPolicy.shouldRevealFullscreenBarOnMouseHover(elapsed, FULLSCREEN_COLLAPSE_HOVER_GUARD_MS)) {
+                                            initialReveal = false
+                                            expanded = true
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(top = 4.dp),
+                    contentAlignment = Alignment.TopCenter,
                 ) {
                     Box(
                         modifier = Modifier
-                            .width(26.dp)
-                            .height(2.5.dp)
+                            .width(48.dp)
+                            .height(7.dp)
                             .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.82f)),
-                    )
+                            .background(Color.Black.copy(alpha = 0.34f))
+                            .border(0.6.dp, Color.White.copy(alpha = 0.34f), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(26.dp)
+                                .height(2.5.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.82f)),
+                        )
+                    }
                 }
             }
         } else {
@@ -621,7 +653,7 @@ fun FullscreenExitOverlay(
                                 val ev = awaitPointerEvent()
                                 if (ev.changes.any { it.type == PointerType.Mouse }) {
                                     when (ev.type) {
-                                        PointerEventType.Enter -> isPointerHovering = true
+                                        PointerEventType.Enter, PointerEventType.Move -> isPointerHovering = true
                                         PointerEventType.Exit -> isPointerHovering = false
                                     }
                                 }
@@ -639,6 +671,27 @@ fun FullscreenExitOverlay(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                WindowTrafficLightCluster(
+                    focused = true,
+                    isFullscreen = true,
+                    alwaysShowSymbols = true,
+                    onClose = {
+                        isPointerHovering = false
+                        expanded = false
+                        onCloseWindow()
+                    },
+                    onMinimize = {
+                        isPointerHovering = false
+                        expanded = false
+                        onMinimizeWindow()
+                    },
+                    onToggleFullscreen = {
+                        isPointerHovering = false
+                        expanded = false
+                        onExitFullscreen()
+                    },
+                )
+                OpalTopPillDivider()
                 OpalText(
                     text = windowTitle,
                     fontSize = 11.5.sp,

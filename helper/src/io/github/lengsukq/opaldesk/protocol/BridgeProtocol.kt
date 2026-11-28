@@ -109,6 +109,7 @@ object BridgeProtocol {
         const val GET_INPUT_BINDINGS = 55
         const val SET_INPUT_BINDINGS = 56
         const val INPUT_BINDING_CAPTURE = 57
+        const val SET_FORCE_PHONE_SPEAKER = 58
         const val SHUTDOWN = 99
     }
 
