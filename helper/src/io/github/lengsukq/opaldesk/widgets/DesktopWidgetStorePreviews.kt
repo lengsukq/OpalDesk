@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.ui.LocalOpalColors
 import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.OpalText
+import io.github.lengsukq.opaldesk.widgets.renderers.WeatherMiniGlyph
 
 @Composable
 internal fun WidgetBadgeIcon(type: DesktopWidgetType, accent: Color) {
@@ -101,6 +102,43 @@ internal fun WidgetBadgeIcon(type: DesktopWidgetType, accent: Color) {
                     drawLine(Color.White, Offset(w * 0.44f, h * 0.32f), Offset(w * 0.84f, h * 0.32f), sw, StrokeCap.Round)
                     drawCircle(Color.White, radius = w * 0.11f, center = Offset(w * 0.24f, h * 0.68f), style = Stroke(sw * 0.85f))
                     drawLine(Color.White, Offset(w * 0.44f, h * 0.68f), Offset(w * 0.74f, h * 0.68f), sw, StrokeCap.Round)
+                }
+                DesktopWidgetType.WEATHER_FORECAST -> {
+                    drawCircle(Color.White, radius = w * 0.18f, center = Offset(w * 0.36f, h * 0.34f))
+                    drawCircle(Color.White, radius = w * 0.20f, center = Offset(w * 0.56f, h * 0.52f))
+                    drawRoundRect(
+                        Color.White,
+                        Offset(w * 0.22f, h * 0.50f),
+                        Size(w * 0.62f, h * 0.28f),
+                        CornerRadius(h * 0.14f),
+                    )
+                }
+                DesktopWidgetType.SYSTEM_MONITOR -> {
+                    drawArc(
+                        color = Color.White,
+                        startAngle = 140f,
+                        sweepAngle = 260f,
+                        useCenter = false,
+                        topLeft = Offset(w * 0.12f, h * 0.14f),
+                        size = Size(w * 0.76f, h * 0.76f),
+                        style = Stroke(width = sw, cap = StrokeCap.Round),
+                    )
+                    drawLine(Color.White, Offset(w * 0.50f, h * 0.54f), Offset(w * 0.70f, h * 0.34f), sw, StrokeCap.Round)
+                    drawCircle(Color.White, radius = w * 0.08f, center = Offset(w * 0.50f, h * 0.54f))
+                }
+                DesktopWidgetType.CALENDAR_MONTH -> {
+                    drawRoundRect(Color.White, Offset(w * 0.14f, h * 0.20f), Size(w * 0.72f, h * 0.66f), CornerRadius(2.5.dp.toPx()), Stroke(sw))
+                    drawLine(Color.White, Offset(w * 0.14f, h * 0.42f), Offset(w * 0.86f, h * 0.42f), sw * 0.85f)
+                    drawLine(Color.White, Offset(w * 0.34f, h * 0.12f), Offset(w * 0.34f, h * 0.28f), sw, StrokeCap.Round)
+                    drawLine(Color.White, Offset(w * 0.66f, h * 0.12f), Offset(w * 0.66f, h * 0.28f), sw, StrokeCap.Round)
+                    drawCircle(Color.White, radius = w * 0.09f, center = Offset(w * 0.50f, h * 0.64f))
+                }
+                DesktopWidgetType.QUICK_ACTION_TILES -> {
+                    val r = CornerRadius(2.2.dp.toPx())
+                    drawRoundRect(Color.White, Offset(w * 0.12f, h * 0.12f), Size(w * 0.33f, h * 0.33f), r)
+                    drawRoundRect(Color.White.copy(alpha = 0.72f), Offset(w * 0.55f, h * 0.12f), Size(w * 0.33f, h * 0.33f), r)
+                    drawRoundRect(Color.White.copy(alpha = 0.72f), Offset(w * 0.12f, h * 0.55f), Size(w * 0.33f, h * 0.33f), r)
+                    drawRoundRect(Color.White, Offset(w * 0.55f, h * 0.55f), Size(w * 0.33f, h * 0.33f), r)
                 }
             }
         }
@@ -288,6 +326,121 @@ internal fun WidgetMiniPreview(type: DesktopWidgetType, accent: Color) {
                                 .height(6.dp)
                                 .clip(CircleShape)
                                 .background(OpalPalette.TextPrimary.copy(alpha = if (done) 0.30f else 0.60f)),
+                        )
+                    }
+                }
+            }
+            DesktopWidgetType.WEATHER_FORECAST -> Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    WeatherMiniGlyph(
+                        weatherCode = 2,
+                        isDay = true,
+                        modifier = Modifier.size(30.dp),
+                    )
+                    Column {
+                        OpalText("23°", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = OpalPalette.TextPrimary)
+                        OpalText("H 26° / L 17°", fontSize = 9.5.sp, color = accent, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("14h" to "23°", "15h" to "24°", "16h" to "22°").forEach { (h, t) ->
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(OpalPalette.ChipFill)
+                                .padding(horizontal = 6.dp, vertical = 3.dp),
+                        ) {
+                            OpalText(h, fontSize = 8.5.sp, color = OpalPalette.TextMuted)
+                            OpalText(t, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold, color = OpalPalette.TextPrimary)
+                        }
+                    }
+                }
+            }
+            DesktopWidgetType.SYSTEM_MONITOR -> Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    listOf("RAM" to 0.56f, "Disk" to 0.68f).forEachIndexed { idx, (label, pct) ->
+                        val col = if (idx == 0) OpalPalette.AccentCyan else accent
+                        val trackColor = OpalPalette.ChipFill
+                        Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                            Canvas(modifier = Modifier.size(36.dp)) {
+                                val sw = 3.2.dp.toPx()
+                                drawArc(trackColor, 135f, 270f, false, style = Stroke(sw, cap = StrokeCap.Round))
+                                drawArc(col, 135f, 270f * pct, false, style = Stroke(sw, cap = StrokeCap.Round))
+                            }
+                            OpalText(label, fontSize = 8.sp, fontWeight = FontWeight.Bold, color = OpalPalette.TextPrimary)
+                        }
+                    }
+                }
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    OpalText("↓ 1.8 MB/s", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = OpalPalette.AccentCyan)
+                    OpalText("34.2°C", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                }
+            }
+            DesktopWidgetType.CALENDAR_MONTH -> Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    OpalText("NOV", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = accent)
+                    OpalText("28", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = OpalPalette.TextPrimary)
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    repeat(3) { r ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            repeat(7) { c ->
+                                val isToday = r == 1 && c == 4
+                                Box(
+                                    modifier = Modifier
+                                        .size(if (isToday) 9.dp else 6.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            when {
+                                                isToday -> accent
+                                                c >= 5 -> accent.copy(alpha = 0.35f)
+                                                else -> OpalPalette.TextMuted.copy(alpha = 0.42f)
+                                            },
+                                        ),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            DesktopWidgetType.QUICK_ACTION_TILES -> Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val tileColors = listOf(accent, OpalPalette.AccentCyan, Color(0xFF5E5CE6), OpalPalette.AccentAmber)
+                tileColors.forEachIndexed { idx, col ->
+                    val active = idx == 0
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                            .clip(RoundedCornerShape(11.dp))
+                            .background(col.copy(alpha = if (active) 0.32f else 0.14f))
+                            .border(0.8.dp, col.copy(alpha = if (active) 0.72f else 0.32f), RoundedCornerShape(11.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(11.dp)
+                                .clip(CircleShape)
+                                .background(if (active) col else col.copy(alpha = 0.75f)),
                         )
                     }
                 }

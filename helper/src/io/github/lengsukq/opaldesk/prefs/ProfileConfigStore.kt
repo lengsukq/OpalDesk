@@ -3,6 +3,7 @@ package io.github.lengsukq.opaldesk.prefs
 import android.content.Context
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorScene
+import io.github.lengsukq.opaldesk.widgets.DesktopWidgetStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -234,6 +235,7 @@ object ProfileConfigStore {
                 _stateFlow.value = loaded
             }
             hydrated = true
+            DesktopWidgetStore.switchSlot(ctx, _stateFlow.value.activeSlotId)
         }
     }
 
@@ -270,6 +272,7 @@ object ProfileConfigStore {
                 hasUnsavedChanges = false,
             )
             persistSlotsLocked(ctx, next)
+            if (ctx != null) DesktopWidgetStore.switchSlot(ctx, clamped)
             target
         }
     }
@@ -492,6 +495,7 @@ object ProfileConfigStore {
                 hasUnsavedChanges = false,
             )
             persistSlotsLocked(ctx, next)
+            if (ctx != null) DesktopWidgetStore.saveToSlot(ctx, clamped)
             committed
         }
     }

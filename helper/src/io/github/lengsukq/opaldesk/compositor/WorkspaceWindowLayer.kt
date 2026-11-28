@@ -413,6 +413,7 @@ internal fun BoxScope.WorkspaceWindowLayer(
             showAppDrawer = ui.showAppDrawer,
             showExpose = ui.showExposeOverview,
             showSpotlight = ui.showSpotlight,
+            showControlCenter = ui.showControlCenter,
             isCompactWidth = isCompactWidth,
             dockOpacity = dockOpacity,
             dockScale = dockScale,
@@ -430,6 +431,12 @@ internal fun BoxScope.WorkspaceWindowLayer(
                     spotlightController.resetSelection()
                     ui.showSpotlight = true
                 }
+            },
+            onToggleControlCenter = {
+                val next = !ui.showControlCenter
+                ui.dismissAllPopovers()
+                ui.controlCenterInitialTab = 0
+                ui.showControlCenter = next
             },
             onToggleExpose = {
                 val next = !ui.showExposeOverview
@@ -463,23 +470,6 @@ internal fun BoxScope.WorkspaceWindowLayer(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(10_010f),
-        )
-    }
-
-    // Bottom-Right Floating Liquid Glass Control Center Trigger (Setting Gear Icon)
-    if (fullscreenWin == null) {
-        DesktopFloatingSettingButton(
-            active = ui.showControlCenter,
-            onClick = {
-                val next = !ui.showControlCenter
-                ui.dismissAllPopovers()
-                ui.controlCenterInitialTab = 0
-                ui.showControlCenter = next
-            },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = if (isCompactWidth) 12.dp else 18.dp, bottom = if (isCompactWidth) 12.dp else 18.dp)
-                .zIndex(10_015f),
         )
     }
 }

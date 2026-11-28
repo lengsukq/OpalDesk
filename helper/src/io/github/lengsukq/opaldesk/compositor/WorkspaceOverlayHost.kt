@@ -1,11 +1,21 @@
 package io.github.lengsukq.opaldesk.compositor
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -14,6 +24,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -102,8 +113,48 @@ internal fun BoxScope.WorkspaceOverlayHost(
         hasFullscreenWindow = hasFullscreenWindow,
     )
 
-    // Unified Top-Right macOS Control Center Popover
-    if (ui.showControlCenter) {
+    // Unified Liquid Glass Control Center Popover (anchored directly above Dock Setting button)
+    val ccBottomPadDp = if (dockVisible) effectiveDockInsetDp + 10f else 16f
+    val canvasWidthDp = if (densityVal > 0f) canvasW / densityVal else 0f
+    val ccHorizontalShiftDp = when {
+        isCompactWidth || !dockVisible -> 0f
+        canvasWidthDp >= 900f -> -124f
+        else -> -72f
+    }
+    val ccAnchorModifier = if (hasFullscreenWindow) {
+        Modifier
+            .align(Alignment.TopCenter)
+            .padding(top = 48.dp, start = 12.dp, end = 12.dp)
+            .zIndex(10_020f)
+    } else {
+        Modifier
+            .align(Alignment.BottomCenter)
+            .then(if (ccHorizontalShiftDp != 0f) Modifier.offset(x = ccHorizontalShiftDp.dp) else Modifier)
+            .padding(start = 12.dp, end = 12.dp, bottom = ccBottomPadDp.dp)
+            .zIndex(10_020f)
+    }
+    AnimatedVisibility(
+        visible = ui.showControlCenter,
+        enter = fadeIn(tween(180)) +
+            slideInVertically(tween(220, easing = FastOutSlowInEasing)) {
+                if (hasFullscreenWindow) -it / 8 else it / 6
+            } +
+            scaleIn(
+                tween(220, easing = FastOutSlowInEasing),
+                initialScale = 0.94f,
+                transformOrigin = TransformOrigin(0.5f, if (hasFullscreenWindow) 0f else 1f),
+            ),
+        exit = fadeOut(tween(140)) +
+            slideOutVertically(tween(160, easing = FastOutSlowInEasing)) {
+                if (hasFullscreenWindow) -it / 10 else it / 8
+            } +
+            scaleOut(
+                tween(160, easing = FastOutSlowInEasing),
+                targetScale = 0.95f,
+                transformOrigin = TransformOrigin(0.5f, if (hasFullscreenWindow) 0f else 1f),
+            ),
+        modifier = ccAnchorModifier,
+    ) {
         WorkspaceControlCenterHost(
             ui = ui,
             trayInfo = trayInfo,
@@ -112,6 +163,7 @@ internal fun BoxScope.WorkspaceOverlayHost(
             maxHeight = maxHeight,
             densityVal = densityVal,
             effectiveDockInsetDp = effectiveDockInsetDp,
+            bottomClearanceDp = ccBottomPadDp,
             displaySummary = displaySummary,
             actualRefreshHz = actualRefreshHz,
             maxSupportedRefreshHz = maxSupportedRefreshHz,
@@ -265,7 +317,7 @@ private fun BoxScope.WorkspaceNotificationsHost(
 }
 
 @Composable
-private fun BoxScope.WorkspaceControlCenterHost(
+private fun WorkspaceControlCenterHost(
     ui: WorkspaceUiState,
     trayInfo: SystemTrayInfo,
     canvasW: Int,
@@ -273,6 +325,7 @@ private fun BoxScope.WorkspaceControlCenterHost(
     maxHeight: Dp,
     densityVal: Float,
     effectiveDockInsetDp: Float,
+    bottomClearanceDp: Float,
     displaySummary: String,
     actualRefreshHz: Int,
     maxSupportedRefreshHz: Int,
@@ -305,7 +358,12 @@ private fun BoxScope.WorkspaceControlCenterHost(
     val dexLockedImeId by AppPrefs.dexLockedImeIdFlow.collectAsState()
     val showDesktopGuideIcon by AppPrefs.showDesktopGuideIconFlow.collectAsState()
 
-    val ccMaxH = (maxHeight - (CompositorGeometry.TOP_BAR_DP + 24f).dp).coerceAtLeast(240.dp)
+    val verticalReserveDp = if (hasFullscreenWindow) {
+        CompositorGeometry.TOP_BAR_DP + 56f
+    } else {
+        CompositorGeometry.TOP_BAR_DP + bottomClearanceDp + 18f
+    }
+    val ccMaxH = (maxHeight - verticalReserveDp.dp).coerceAtLeast(240.dp)
     MacControlCenterPopover(
         tray = trayInfo,
         totalWindows = scene.windows.size,
@@ -476,14 +534,6 @@ private fun BoxScope.WorkspaceControlCenterHost(
             ui.showControlCenter = false
             ui.showExitSlotModal = true
         },
-        modifier = Modifier
-            .align(if (hasFullscreenWindow) Alignment.TopCenter else Alignment.TopEnd)
-            .padding(
-                top = if (hasFullscreenWindow) 48.dp else (CompositorGeometry.TOP_BAR_DP + 8f).dp,
-                start = 12.dp,
-                end = 12.dp,
-            )
-            .zIndex(10_020f),
     )
 }
 

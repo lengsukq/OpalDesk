@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,6 +54,7 @@ import io.github.lengsukq.opaldesk.widgets.WidgetMediaSnapshot
 import io.github.lengsukq.opaldesk.widgets.WidgetNotificationItem
 import io.github.lengsukq.opaldesk.widgets.WidgetSizeClass
 import io.github.lengsukq.opaldesk.widgets.WidgetWorkstationSnapshot
+import io.github.lengsukq.opaldesk.widgets.data.WidgetWeatherRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -203,6 +206,9 @@ private fun HubOverviewPage(
     isZh: Boolean,
 ) {
     val colors = LocalOpalColors.current
+    val ctx = LocalContext.current
+    val weatherFlow = remember(ctx) { WidgetWeatherRepository.observe(ctx) }
+    val weather by weatherFlow.collectAsState()
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -211,14 +217,20 @@ private fun HubOverviewPage(
         }
     }
     val locale = if (isZh) Locale.CHINA else Locale.US
-    val hmText = remember(nowMs / 1000L) {
-        SimpleDateFormat("HH:mm", Locale.US).format(Date(nowMs))
+    val hoursText = remember(nowMs / 1000L) {
+        SimpleDateFormat("HH", Locale.US).format(Date(nowMs))
+    }
+    val minutesText = remember(nowMs / 1000L) {
+        SimpleDateFormat("mm", Locale.US).format(Date(nowMs))
     }
     val secText = remember(nowMs / 1000L) {
         SimpleDateFormat("ss", Locale.US).format(Date(nowMs))
     }
+    val amPmText = remember(nowMs / 60_000L) {
+        SimpleDateFormat("a", Locale.US).format(Date(nowMs))
+    }
     val dateText = remember(nowMs / 60_000L, isZh) {
-        SimpleDateFormat(if (isZh) "M月d日 EEEE" else "EEE, MMM d", locale).format(Date(nowMs))
+        SimpleDateFormat(if (isZh) "M月d日 · EEEE" else "EEE, MMM d", locale).format(Date(nowMs))
     }
     val pulse by rememberInfiniteTransition(label = "hub_conn_pulse").animateFloat(
         initialValue = 0.38f,
@@ -300,40 +312,41 @@ private fun HubOverviewPage(
 
         Spacer(Modifier.weight(1f))
 
+        // Golden-ratio hero row: Left = Refined Gradient Clock + Date; Right = Live Weather Card
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (isCompact) 8.dp else 12.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            Column(
+                modifier = Modifier.weight(1.15f),
+                verticalArrangement = Arrangement.spacedBy(if (isCompact) 3.dp else 5.dp),
             ) {
-                OpalText(
-                    text = hmText,
-                    color = colors.textPrimary,
-                    fontSize = if (isCompact) 32.sp else 40.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
+                LiquidGradientClockDigits(
+                    hours = hoursText,
+                    minutes = minutesText,
+                    seconds = secText,
+                    amPm = amPmText,
+                    digitSize = if (isCompact) 34.sp else 44.sp,
+                    accent = colors.accentCyan,
+                    showSecondsBadge = true,
                 )
                 OpalText(
-                    text = secText,
-                    color = colors.accentCyan,
-                    fontSize = if (isCompact) 13.sp else 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace,
+                    text = dateText,
+                    color = colors.textSecondary,
+                    fontSize = if (isCompact) 11.sp else 12.sp,
+                    fontWeight = FontWeight.Medium,
                     maxLines = 1,
-                    modifier = Modifier.padding(bottom = if (isCompact) 5.dp else 7.dp),
                 )
             }
-            OpalText(
-                text = dateText,
-                color = colors.textSecondary,
-                fontSize = if (isCompact) 11.5.sp else 12.5.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                modifier = Modifier.padding(bottom = if (isCompact) 5.dp else 7.dp),
+            HubWeatherMiniCard(
+                weather = weather,
+                isCompact = isCompact,
+                isZh = isZh,
+                onRefresh = {
+                    WidgetWeatherRepository.refresh(ctx, force = true)
+                },
+                modifier = Modifier.weight(1f),
             )
         }
 

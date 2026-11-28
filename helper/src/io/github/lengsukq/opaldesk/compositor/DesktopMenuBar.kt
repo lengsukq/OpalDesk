@@ -7,25 +7,6 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.unit.dp
-import io.github.lengsukq.opaldesk.ui.LocalOpalColors
-import io.github.lengsukq.opaldesk.ui.OpalPalette
-import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.sin
 
 data class TrayNetworkState(
     val wifiEnabled: Boolean = false,
@@ -114,66 +95,4 @@ fun querySystemTrayStatus(ctx: Context, clockText: String, dateText: String): Sy
         wifiConnected = net.wifiConnected,
         ethernetConnected = net.ethernetConnected,
     )
-}
-
-/**
- * Bottom-right floating Liquid Glass Control Center trigger (Setting Gear Icon) replacing the
- * retired top status bar Control Center button without overlapping the Dock or desktop widgets.
- */
-@Composable
-internal fun DesktopFloatingSettingButton(
-    active: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = LocalOpalColors.current
-    val accent = colors.accentBlue
-    val fill = if (active) {
-        Brush.verticalGradient(
-            listOf(
-                accent.copy(alpha = if (colors.isDark) 0.42f else 0.30f),
-                accent.copy(alpha = if (colors.isDark) 0.24f else 0.16f),
-            ),
-        )
-    } else {
-        OpalPalette.LiquidDockFill
-    }
-    val rim = if (active) {
-        Brush.linearGradient(listOf(accent.copy(alpha = 0.92f), colors.accentCyan.copy(alpha = 0.72f)))
-    } else {
-        OpalPalette.LiquidGlassRim
-    }
-    Box(
-        modifier = modifier
-            .size(44.dp)
-            .liquidGlassSurface(
-                shape = CircleShape,
-                fill = fill,
-                rim = rim,
-                elevation = if (active) 24.dp else 18.dp,
-                borderWidth = if (active) 1.35.dp else 1.dp,
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(modifier = Modifier.size(20.dp)) {
-            val tint = if (active) accent else colors.textPrimary
-            val cx = size.width * 0.5f
-            val cy = size.height * 0.5f
-            val sw = 1.7.dp.toPx()
-            val innerR = size.minDimension * 0.17f
-            val bodyR = size.minDimension * 0.33f
-            val toothOut = size.minDimension * 0.46f
-            drawCircle(color = tint, radius = innerR, center = Offset(cx, cy), style = Stroke(sw))
-            drawCircle(color = tint, radius = bodyR, center = Offset(cx, cy), style = Stroke(sw))
-            for (i in 0 until 8) {
-                val rad = (i * 45.0) * PI / 180.0
-                val sx = cx + (bodyR * cos(rad)).toFloat()
-                val sy = cy + (bodyR * sin(rad)).toFloat()
-                val ex = cx + (toothOut * cos(rad)).toFloat()
-                val ey = cy + (toothOut * sin(rad)).toFloat()
-                drawLine(color = tint, start = Offset(sx, sy), end = Offset(ex, ey), strokeWidth = sw, cap = StrokeCap.Round)
-            }
-        }
-    }
 }

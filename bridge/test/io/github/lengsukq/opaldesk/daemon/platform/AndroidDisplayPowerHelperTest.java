@@ -2,9 +2,12 @@ package io.github.lengsukq.opaldesk.daemon.platform;
 
 import io.github.lengsukq.opaldesk.daemon.input.DoubleTapWakeDetector;
 import io.github.lengsukq.opaldesk.daemon.input.VolumeKeyWakeDetector;
+import io.github.lengsukq.opaldesk.daemon.util.ShellCommand;
 
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -22,6 +25,10 @@ public class AndroidDisplayPowerHelperTest {
         boolean wakeUpOk = true;
         boolean userActivityOk = true;
         boolean keyEventOk = true;
+        boolean scBrightOk = true;
+        boolean dpcBrightOk = true;
+        DisplayBrightnessRestorer.BrightnessSnapshot capturedBrightness =
+                new DisplayBrightnessRestorer.BrightnessSnapshot(180, 180 / 255.0f);
         long nowMs = 123456L;
 
         int surfaceOnCalls;
@@ -29,6 +36,11 @@ public class AndroidDisplayPowerHelperTest {
         int wakeUpCalls;
         int userActivityCalls;
         int keyEventCalls;
+        int captureBrightnessCalls;
+        int restoreScBrightnessCalls;
+        int refreshDpcBrightnessCalls;
+        float lastRestoredBrightness = -1f;
+        DisplayBrightnessRestorer.BrightnessSnapshot lastRefreshedSnapshot;
 
         @Override
         public boolean setSurfaceControlPowerMode(boolean screenOn) {
@@ -56,6 +68,27 @@ public class AndroidDisplayPowerHelperTest {
         public boolean sendWakeupKeyEvent() {
             keyEventCalls++;
             return keyEventOk;
+        }
+
+        @Override
+        public DisplayBrightnessRestorer.BrightnessSnapshot captureCurrentBrightness() {
+            captureBrightnessCalls++;
+            return capturedBrightness;
+        }
+
+        @Override
+        public boolean restoreSurfaceControlBrightness(float brightness) {
+            restoreScBrightnessCalls++;
+            lastRestoredBrightness = brightness;
+            return scBrightOk;
+        }
+
+        @Override
+        public boolean refreshDisplayPowerControllerBrightness(
+                DisplayBrightnessRestorer.BrightnessSnapshot snapshot) {
+            refreshDpcBrightnessCalls++;
+            lastRefreshedSnapshot = snapshot;
+            return dpcBrightOk;
         }
 
         @Override
@@ -128,6 +161,39 @@ public class AndroidDisplayPowerHelperTest {
         }
     }
 
+    public static final class FakeSurfaceControlApi31To37 {
+        static Object lastToken;
+        static float lastSdr;
+        static float lastSdrNits;
+        static float lastDisplay;
+        static float lastDisplayNits;
+
+        public static void setDisplayBrightness(
+                Object token, float sdrBrightness, float sdrNits, float displayBrightness, float displayNits) {
+            lastToken = token;
+            lastSdr = sdrBrightness;
+            lastSdrNits = sdrNits;
+            lastDisplay = displayBrightness;
+            lastDisplayNits = displayNits;
+        }
+    }
+
+    public static final class FakeSurfaceControlApi29To30 {
+        static Object lastToken;
+        static float lastBrightness;
+
+        public static void setDisplayBrightness(Object token, float brightness) {
+            lastToken = token;
+            lastBrightness = brightness;
+        }
+    }
+
+    public static final class ThrowingSurfaceControl {
+        public static void setDisplayBrightness(Object token, float brightness) {
+            throw new SecurityException("missing BRIGHTNESS permission");
+        }
+    }
+
     @Test
     public void wakeFailureKeepsHostScreenOffAndRearmsWakeMonitor() {
         FakeDisplayPowerBackend backend = new FakeDisplayPowerBackend();
@@ -181,6 +247,12 @@ public class AndroidDisplayPowerHelperTest {
         assertEquals(1, backend.surfaceOnCalls);
         assertEquals(1, backend.wakeUpCalls);
         assertEquals(1, backend.userActivityCalls);
+        assertEquals(1, backend.captureBrightnessCalls);
+        assertEquals(1, backend.restoreScBrightnessCalls);
+        assertEquals(1, backend.refreshDpcBrightnessCalls);
+        assertEquals(180 / 255.0f, backend.lastRestoredBrightness, 0.0001f);
+        assertNotNull(backend.lastRefreshedSnapshot);
+        assertEquals(180, backend.lastRefreshedSnapshot.rawSetting);
         assertEquals("Should not fork shell keyevent when wakeUp and userActivity succeed",
                 0, backend.keyEventCalls);
     }
@@ -255,6 +327,95 @@ public class AndroidDisplayPowerHelperTest {
         assertFalse(AndroidDisplayPowerHelper.invokePowerManagerUserActivity(throwingPm, 22222L));
         assertFalse(AndroidDisplayPowerHelper.invokePowerManagerWakeUp(null, 22222L));
         assertFalse(AndroidDisplayPowerHelper.invokePowerManagerUserActivity(null, 22222L));
+    }
+
+    @Test
+    public void brightnessParsingAndClampingHandlesAospOemFloatAndInvalidInputs() {
+        DisplayBrightnessRestorer.BrightnessSnapshot s128 = DisplayBrightnessRestorer.parseBrightnessSetting("128\n");
+        assertTrue(s128.hasRawSetting());
+        assertEquals(128, s128.rawSetting);
+        assertEquals(128 / 255.0f, s128.normalized, 0.0001f);
+
+        DisplayBrightnessRestorer.BrightnessSnapshot sLow = DisplayBrightnessRestorer.parseBrightnessSetting("2");
+        assertTrue(sLow.hasRawSetting());
+        assertEquals(DisplayBrightnessRestorer.MIN_BRIGHTNESS, sLow.normalized, 0.0001f);
+
+        DisplayBrightnessRestorer.BrightnessSnapshot sOem = DisplayBrightnessRestorer.parseBrightnessSetting("2048");
+        assertTrue(sOem.hasRawSetting());
+        assertEquals(2048, sOem.rawSetting);
+        assertEquals(2048 / 4095.0f, sOem.normalized, 0.0001f);
+
+        DisplayBrightnessRestorer.BrightnessSnapshot sFloat = DisplayBrightnessRestorer.parseBrightnessSetting("0.72");
+        assertFalse(sFloat.hasRawSetting());
+        assertEquals(0.72f, sFloat.normalized, 0.0001f);
+
+        DisplayBrightnessRestorer.BrightnessSnapshot sInvalid = DisplayBrightnessRestorer.parseBrightnessSetting("null");
+        assertFalse(sInvalid.hasRawSetting());
+        assertEquals(DisplayBrightnessRestorer.DEFAULT_BRIGHTNESS, sInvalid.normalized, 0.0001f);
+
+        assertEquals(179, DisplayBrightnessRestorer.computeNudgedBrightness(180));
+        assertEquals(2, DisplayBrightnessRestorer.computeNudgedBrightness(1));
+    }
+
+    @Test
+    public void surfaceControlBrightnessReflectionSupportsApi29To37Overloads() {
+        Object token = new Object();
+
+        assertTrue(DisplayBrightnessRestorer.invokeSurfaceControlSetDisplayBrightness(
+                FakeSurfaceControlApi31To37.class, Object.class, token, 0.65f));
+        assertEquals(token, FakeSurfaceControlApi31To37.lastToken);
+        assertEquals(0.65f, FakeSurfaceControlApi31To37.lastSdr, 0.0001f);
+        assertEquals(-1.0f, FakeSurfaceControlApi31To37.lastSdrNits, 0.0001f);
+        assertEquals(0.65f, FakeSurfaceControlApi31To37.lastDisplay, 0.0001f);
+        assertEquals(-1.0f, FakeSurfaceControlApi31To37.lastDisplayNits, 0.0001f);
+
+        assertTrue(DisplayBrightnessRestorer.invokeSurfaceControlSetDisplayBrightness(
+                FakeSurfaceControlApi29To30.class, Object.class, token, 0.01f));
+        assertEquals(token, FakeSurfaceControlApi29To30.lastToken);
+        assertEquals(DisplayBrightnessRestorer.MIN_BRIGHTNESS, FakeSurfaceControlApi29To30.lastBrightness, 0.0001f);
+
+        assertFalse(DisplayBrightnessRestorer.invokeSurfaceControlSetDisplayBrightness(
+                ThrowingSurfaceControl.class, Object.class, token, 0.5f));
+        assertFalse(DisplayBrightnessRestorer.invokeSurfaceControlSetDisplayBrightness(
+                FakeSurfaceControlApi31To37.class, Object.class, null, 0.5f));
+    }
+
+    @Test
+    public void displayPowerControllerRefreshNudgesRawSettingOrFallsBackToCmdDisplay() {
+        List<String> executed = new ArrayList<>();
+        DisplayBrightnessRestorer.ShellExecutor okShell = (cmd, timeoutMs) -> {
+            executed.add(String.join(" ", cmd));
+            return new ShellCommand.Result(0, "", false);
+        };
+
+        DisplayBrightnessRestorer.BrightnessSnapshot rawSnap =
+                new DisplayBrightnessRestorer.BrightnessSnapshot(120, 120 / 255.0f);
+        assertTrue(DisplayBrightnessRestorer.refreshDisplayPowerControllerBrightness(rawSnap, okShell));
+        assertEquals(2, executed.size());
+        assertEquals("settings put system screen_brightness 119", executed.get(0));
+        assertEquals("settings put system screen_brightness 120", executed.get(1));
+
+        executed.clear();
+        DisplayBrightnessRestorer.BrightnessSnapshot floatSnap =
+                new DisplayBrightnessRestorer.BrightnessSnapshot(
+                        DisplayBrightnessRestorer.INVALID_RAW_BRIGHTNESS, 0.5f);
+        assertTrue(DisplayBrightnessRestorer.refreshDisplayPowerControllerBrightness(floatSnap, okShell));
+        assertEquals(1, executed.size());
+        assertEquals("/system/bin/cmd display set-brightness 0.500", executed.get(0));
+
+        // When settings put fails, must fall back to cmd display set-brightness
+        executed.clear();
+        DisplayBrightnessRestorer.ShellExecutor settingsFailShell = (cmd, timeoutMs) -> {
+            String joined = String.join(" ", cmd);
+            executed.add(joined);
+            if (joined.startsWith("settings ")) {
+                return new ShellCommand.Result(1, "SecurityException", false);
+            }
+            return new ShellCommand.Result(0, "", false);
+        };
+        assertTrue(DisplayBrightnessRestorer.refreshDisplayPowerControllerBrightness(rawSnap, settingsFailShell));
+        assertEquals(3, executed.size());
+        assertTrue(executed.get(2).startsWith("/system/bin/cmd display set-brightness "));
     }
 
     @Test

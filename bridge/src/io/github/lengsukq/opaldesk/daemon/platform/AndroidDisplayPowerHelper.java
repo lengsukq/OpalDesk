@@ -37,7 +37,16 @@ final class AndroidDisplayPowerHelper {
         boolean wakeUpPowerManager(long uptimeMillis);
         boolean triggerUserActivity(long uptimeMillis);
         boolean sendWakeupKeyEvent();
-        default void tryResetDisplayPower() {}
+        default DisplayBrightnessRestorer.BrightnessSnapshot captureCurrentBrightness() {
+            return DisplayBrightnessRestorer.BrightnessSnapshot.defaultSnapshot();
+        }
+        default boolean restoreSurfaceControlBrightness(float brightness) {
+            return false;
+        }
+        default boolean refreshDisplayPowerControllerBrightness(
+                DisplayBrightnessRestorer.BrightnessSnapshot snapshot) {
+            return false;
+        }
         default int sdkInt() { return 0; }
         long uptimeMillis();
     }
@@ -53,6 +62,8 @@ final class AndroidDisplayPowerHelper {
     private volatile Class<?> displayControlClass;
     private volatile Method surfaceControlSetPowerModeMethod;
     private volatile Object iPowerManager;
+    private volatile DisplayBrightnessRestorer.BrightnessSnapshot savedBrightness =
+            DisplayBrightnessRestorer.BrightnessSnapshot.defaultSnapshot();
 
     AndroidDisplayPowerHelper(AndroidServices services) {
         this(services, null, new HostScreenWakeMonitor());
@@ -74,22 +85,35 @@ final class AndroidDisplayPowerHelper {
     boolean setPrimaryPhysicalDisplayPower(boolean screenOn) {
         boolean surfaceControlOk = false;
         boolean powerManagerOk = false;
+        boolean brightnessOk = false;
         boolean wakeUpOk = false;
         boolean userActivityOk = false;
         boolean keyEventOk = false;
         boolean ok;
         int api = powerBackend.sdkInt();
         synchronized (displayPowerLock) {
+            if (!screenOn) {
+                try {
+                    DisplayBrightnessRestorer.BrightnessSnapshot snap = powerBackend.captureCurrentBrightness();
+                    if (snap != null) {
+                        savedBrightness = snap;
+                    }
+                } catch (RuntimeException ignored) {
+                    savedBrightness = DisplayBrightnessRestorer.BrightnessSnapshot.defaultSnapshot();
+                }
+            }
             surfaceControlOk = powerBackend.setSurfaceControlPowerMode(screenOn);
             if (screenOn) {
+                DisplayBrightnessRestorer.BrightnessSnapshot snap =
+                        (savedBrightness != null) ? savedBrightness : DisplayBrightnessRestorer.BrightnessSnapshot.defaultSnapshot();
+                boolean scBrightOk = powerBackend.restoreSurfaceControlBrightness(snap.normalized);
+                boolean dpcBrightOk = powerBackend.refreshDisplayPowerControllerBrightness(snap);
+                brightnessOk = scBrightOk || dpcBrightOk;
                 long nowMs = powerBackend.uptimeMillis();
                 wakeUpOk = powerBackend.wakeUpPowerManager(nowMs);
                 userActivityOk = powerBackend.triggerUserActivity(nowMs);
                 if (!wakeUpOk || !userActivityOk) {
                     keyEventOk = powerBackend.sendWakeupKeyEvent();
-                }
-                if (!surfaceControlOk || api >= 35) {
-                    powerBackend.tryResetDisplayPower();
                 }
                 powerManagerOk = wakeUpOk || userActivityOk || keyEventOk;
                 ok = surfaceControlOk || powerManagerOk;
@@ -109,7 +133,8 @@ final class AndroidDisplayPowerHelper {
         } else if (screenOn) {
             System.err.println("OPALDESK_HOST_SCREEN_WAKE_FAILED surfaceControl=" + surfaceControlOk
                     + " wakeUp=" + wakeUpOk + " userActivity=" + userActivityOk
-                    + " keyEvent=" + keyEventOk + " hostScreenOff=" + hostScreenOff);
+                    + " keyEvent=" + keyEventOk + " brightOk=" + brightnessOk
+                    + " hostScreenOff=" + hostScreenOff);
             if (hostScreenOff && !wakeMonitor.isActive()) {
                 startWakeMonitor();
             }
@@ -118,6 +143,7 @@ final class AndroidDisplayPowerHelper {
                 + " api=" + api
                 + " scOk=" + surfaceControlOk
                 + " pmOk=" + powerManagerOk
+                + " brightOk=" + brightnessOk
                 + " ok=" + ok);
         return ok;
     }
@@ -160,11 +186,21 @@ final class AndroidDisplayPowerHelper {
         }
 
         @Override
-        public void tryResetDisplayPower() {
-            try {
-                ShellCommand.runOutput("cmd", "display", "power-reset", "0");
-            } catch (RuntimeException ignored) {
-            }
+        public DisplayBrightnessRestorer.BrightnessSnapshot captureCurrentBrightness() {
+            return DisplayBrightnessRestorer.captureCurrentBrightness();
+        }
+
+        @Override
+        public boolean restoreSurfaceControlBrightness(float brightness) {
+            IBinder token = resolvePrimaryPhysicalDisplayTokenLocked();
+            if (token == null) return false;
+            return DisplayBrightnessRestorer.restoreSurfaceControlBrightness(token, brightness);
+        }
+
+        @Override
+        public boolean refreshDisplayPowerControllerBrightness(
+                DisplayBrightnessRestorer.BrightnessSnapshot snapshot) {
+            return DisplayBrightnessRestorer.refreshDisplayPowerControllerBrightness(snapshot);
         }
 
         @Override

@@ -17,10 +17,10 @@ import org.junit.Test
 class DesktopWidgetModelsTest {
 
     @Test
-    fun catalogCoversAllSevenWidgetTypesWithValidSpansAndBilingualCopy() {
-        assertEquals(8, DesktopWidgetType.entries.size)
-        assertEquals(8, DesktopWidgetCatalog.specs.size)
-        assertEquals(8, DesktopWidgetCatalog.specs.map { it.type }.toSet().size)
+    fun catalogCoversAllTwelveWidgetTypesWithValidSpansAndBilingualCopy() {
+        assertEquals(12, DesktopWidgetType.entries.size)
+        assertEquals(12, DesktopWidgetCatalog.specs.size)
+        assertEquals(12, DesktopWidgetCatalog.specs.map { it.type }.toSet().size)
 
         for (type in DesktopWidgetType.entries) {
             val spec = DesktopWidgetCatalog.specOf(type)
@@ -78,6 +78,41 @@ class DesktopWidgetModelsTest {
                 assertFalse("Default widgets ${a.id} and ${b.id} overlap", overlapsAny(listOf(a), b.col, b.row, b.colSpan, b.rowSpan))
             }
         }
+    }
+
+    @Test
+    fun newWeatherMonitorCalendarAndQuickTilesSpecsMatchExpectedDefaults() {
+        val weather = DesktopWidgetCatalog.specOf(DesktopWidgetType.WEATHER_FORECAST)
+        assertEquals(DesktopWidgetCategory.INFO, weather.category)
+        assertEquals(4, weather.defaultColSpan)
+        assertEquals(2, weather.defaultRowSpan)
+        assertEquals("实况天气", weather.titleZh)
+        assertEquals("Live Weather", weather.titleEn)
+
+        val monitor = DesktopWidgetCatalog.specOf(DesktopWidgetType.SYSTEM_MONITOR)
+        assertEquals(DesktopWidgetCategory.SYSTEM, monitor.category)
+        assertEquals(4, monitor.defaultColSpan)
+        assertEquals(2, monitor.defaultRowSpan)
+        assertEquals("性能仪表盘", monitor.titleZh)
+        assertEquals("System Monitor", monitor.titleEn)
+
+        val calendar = DesktopWidgetCatalog.specOf(DesktopWidgetType.CALENDAR_MONTH)
+        assertEquals(DesktopWidgetCategory.TIME, calendar.category)
+        assertEquals(3, calendar.defaultColSpan)
+        assertEquals(3, calendar.defaultRowSpan)
+        assertEquals("极简月历", calendar.titleZh)
+        assertEquals("Calendar", calendar.titleEn)
+
+        val tiles = DesktopWidgetCatalog.specOf(DesktopWidgetType.QUICK_ACTION_TILES)
+        assertEquals(DesktopWidgetCategory.SYSTEM, tiles.category)
+        assertEquals(2, tiles.defaultColSpan)
+        assertEquals(2, tiles.defaultRowSpan)
+        assertEquals(2, tiles.minColSpan)
+        assertEquals(2, tiles.minRowSpan)
+        assertEquals(4, tiles.maxColSpan)
+        assertEquals(3, tiles.maxRowSpan)
+        assertEquals("快捷方格磁贴", tiles.titleZh)
+        assertEquals("Quick Tiles", tiles.titleEn)
     }
 
     @Test

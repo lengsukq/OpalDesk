@@ -1,5 +1,6 @@
 package io.github.lengsukq.opaldesk.compositor
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,7 +30,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -42,6 +46,7 @@ import io.github.lengsukq.opaldesk.protocol.AppProfileKey
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorWindow
 import io.github.lengsukq.opaldesk.ui.ChromeGlyph
+import io.github.lengsukq.opaldesk.ui.LocalOpalColors
 import io.github.lengsukq.opaldesk.ui.OpalGlyphIcon
 import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.OpalSegmentedRow
@@ -50,6 +55,9 @@ import io.github.lengsukq.opaldesk.ui.UnifiedAppItem
 import io.github.lengsukq.opaldesk.ui.UnifiedAppLauncherPanel
 import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
 import io.github.lengsukq.opaldesk.ui.onTapOrContextAction
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 private data class TaskbarAppSlot(
     val pkg: String,
@@ -73,6 +81,7 @@ fun DexMacTaskbar(
     showAppDrawer: Boolean,
     showExpose: Boolean,
     showSpotlight: Boolean = false,
+    showControlCenter: Boolean = false,
     isCompactWidth: Boolean = false,
     dockOpacity: Float = DockAppearancePolicy.DEFAULT_OPACITY,
     dockScale: Float = DockAppearancePolicy.DEFAULT_SCALE,
@@ -80,6 +89,7 @@ fun DexMacTaskbar(
     onToggleSoftKeyboard: (() -> Unit)? = null,
     onToggleAppDrawer: () -> Unit,
     onOpenSearch: () -> Unit,
+    onToggleControlCenter: () -> Unit = {},
     onToggleExpose: () -> Unit,
     onSendBackToFocused: () -> Unit,
     onShowDesktopToggle: () -> Unit,
@@ -172,6 +182,11 @@ fun DexMacTaskbar(
                     onClick = onOpenSearch,
                 )
             }
+            GlassDockSettingButton(
+                active = showControlCenter,
+                size = if (isCompactWidth) leadBtnSize else searchBtnSize,
+                onClick = onToggleControlCenter,
+            )
 
             GlassDockDivider(height = metrics.dividerHeightDp.dp)
 
@@ -322,6 +337,89 @@ private fun GlassDockButton(
             tint = if (active) Color.White else OpalPalette.TextPrimary.copy(alpha = 0.86f),
             size = size * 0.46f,
         )
+    }
+}
+
+@Composable
+private fun GlassDockSettingButton(
+    active: Boolean,
+    size: Dp = 38.dp,
+    onClick: () -> Unit,
+) {
+    val colors = LocalOpalColors.current
+    val accent = colors.accentBlue
+    val shape = RoundedCornerShape((size * 0.34f).coerceIn(9.dp, 16.dp))
+    val fill = if (active) {
+        Brush.verticalGradient(
+            listOf(
+                accent.copy(alpha = if (colors.isDark) 0.92f else 0.95f),
+                colors.accentCyan.copy(alpha = if (colors.isDark) 0.78f else 0.84f),
+            ),
+        )
+    } else {
+        Brush.verticalGradient(
+            listOf(
+                if (colors.isDark) Color(0x28FFFFFF) else Color(0x8AFFFFFF),
+                colors.chipFill,
+            ),
+        )
+    }
+    val borderBrush = if (active) {
+        Brush.linearGradient(
+            listOf(
+                Color.White.copy(alpha = 0.88f),
+                colors.accentCyan.copy(alpha = 0.85f),
+            ),
+        )
+    } else {
+        Brush.linearGradient(
+            listOf(
+                colors.glassRimTop.copy(alpha = if (colors.isDark) 0.40f else 0.88f),
+                colors.borderHairline,
+            ),
+        )
+    }
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(shape)
+            .background(fill)
+            .border(width = if (active) 1.1.dp else 0.8.dp, brush = borderBrush, shape = shape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.size(size * 0.48f)) {
+            val cx = this.size.width * 0.5f
+            val cy = this.size.height * 0.5f
+            val sw = 1.65.dp.toPx()
+            val innerR = this.size.minDimension * 0.17f
+            val bodyR = this.size.minDimension * 0.33f
+            val toothOut = this.size.minDimension * 0.47f
+            val tint = if (active) Color.White else colors.textPrimary.copy(alpha = 0.88f)
+            if (active) {
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        listOf(Color.White.copy(alpha = 0.36f), Color.Transparent),
+                        center = Offset(cx, cy),
+                        radius = this.size.minDimension * 0.65f,
+                    ),
+                    radius = this.size.minDimension * 0.65f,
+                    center = Offset(cx, cy),
+                )
+            }
+            drawCircle(color = tint, radius = innerR, center = Offset(cx, cy), style = Stroke(sw))
+            drawCircle(color = tint, radius = bodyR, center = Offset(cx, cy), style = Stroke(sw))
+            for (i in 0 until 8) {
+                val rad = (i * 45.0) * PI / 180.0
+                drawLine(
+                    color = tint,
+                    start = Offset(cx + (bodyR * cos(rad)).toFloat(), cy + (bodyR * sin(rad)).toFloat()),
+                    end = Offset(cx + (toothOut * cos(rad)).toFloat(), cy + (toothOut * sin(rad)).toFloat()),
+                    strokeWidth = sw,
+                    cap = StrokeCap.Round,
+                )
+            }
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 package io.github.lengsukq.opaldesk.widgets.renderers
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -32,6 +33,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,6 +47,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -55,6 +58,7 @@ import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.OpalText
 import io.github.lengsukq.opaldesk.widgets.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -473,11 +477,25 @@ fun ClockTimerWidgetContent(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalOpalColors.current
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     var isTimerMode by rememberSaveable(instance.id) { mutableStateOf(false) }
+    var isAnalogDial by rememberSaveable(instance.id) { mutableStateOf(false) }
     var isBreakPhase by rememberSaveable(instance.id) { mutableStateOf(false) }
     var remainingSeconds by rememberSaveable(instance.id) { mutableIntStateOf(POMODORO_FOCUS_SECONDS) }
     var isTimerRunning by rememberSaveable(instance.id) { mutableStateOf(false) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var quote by remember(instance.id, isZh) {
+        mutableStateOf(HitokotoRepository.loadInitial(ctx, isZh))
+    }
+    var isRefreshingQuote by remember { mutableStateOf(false) }
+
+    LaunchedEffect(instance.id, isZh) {
+        if (isRefreshingQuote) return@LaunchedEffect
+        isRefreshingQuote = true
+        quote = HitokotoRepository.fetchFresh(ctx, isZh)
+        isRefreshingQuote = false
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -498,15 +516,23 @@ fun ClockTimerWidgetContent(
     }
 
     val accent = when {
-        !isTimerMode -> colors.accentBlue
+        !isTimerMode -> if (isAnalogDial) colors.accentCyan else colors.accentBlue
         isBreakPhase -> colors.accentEmerald
         else -> colors.accentAmber
     }
 
     val locale = if (isZh) Locale.SIMPLIFIED_CHINESE else Locale.ENGLISH
-    val timeText = remember(nowMs, sizeClass) {
-        val pattern = if (sizeClass == WidgetSizeClass.EXPANDED) "HH:mm:ss" else "HH:mm"
-        SimpleDateFormat(pattern, Locale.US).format(Date(nowMs))
+    val hoursText = remember(nowMs / 1000L) {
+        SimpleDateFormat("HH", Locale.US).format(Date(nowMs))
+    }
+    val minutesText = remember(nowMs / 1000L) {
+        SimpleDateFormat("mm", Locale.US).format(Date(nowMs))
+    }
+    val secondsText = remember(nowMs / 1000L) {
+        SimpleDateFormat("ss", Locale.US).format(Date(nowMs))
+    }
+    val amPmText = remember(nowMs / 60_000L) {
+        SimpleDateFormat("a", Locale.US).format(Date(nowMs))
     }
     val dateText = remember(nowMs, isZh) {
         val pattern = if (isZh) "M月d日 · EEEE" else "EEE, MMM d"
@@ -519,11 +545,19 @@ fun ClockTimerWidgetContent(
         val secs = remainingSeconds % 60
         "%02d:%02d".format(Locale.US, mins, secs)
     }
-
-    val displayFontSize = when (sizeClass) {
-        WidgetSizeClass.COMPACT -> 30.sp
-        WidgetSizeClass.MEDIUM -> 38.sp
-        WidgetSizeClass.EXPANDED -> 44.sp
+    val refreshQuoteAction: () -> Unit = {
+        if (!isRefreshingQuote) {
+            scope.launch {
+                isRefreshingQuote = true
+                quote = HitokotoRepository.fetchFresh(ctx, isZh)
+                isRefreshingQuote = false
+            }
+        }
+    }
+    val faceKey = when {
+        isTimerMode -> 2
+        isAnalogDial -> 1
+        else -> 0
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -535,7 +569,7 @@ fun ClockTimerWidgetContent(
         )
         Column(
             modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(if (sizeClass == WidgetSizeClass.COMPACT) 6.dp else 10.dp),
         ) {
             // Top mode pill row
             Row(
@@ -545,7 +579,8 @@ fun ClockTimerWidgetContent(
             ) {
                 WidgetGlassBadge(
                     text = when {
-                        !isTimerMode -> if (isZh) "时钟" else "Clock"
+                        !isTimerMode && isAnalogDial -> if (isZh) "模拟表盘" else "Analog"
+                        !isTimerMode -> if (isZh) "时钟 · 一言" else "Clock"
                         isBreakPhase -> if (isZh) "休息 5m" else "Break 5m"
                         else -> if (isZh) "专注 25m" else "Focus 25m"
                     },
@@ -559,18 +594,15 @@ fun ClockTimerWidgetContent(
                     },
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (isTimerMode && sizeClass != WidgetSizeClass.COMPACT) {
+                    if (!isTimerMode) {
                         WidgetGlassActionButton(
-                            onClick = {
-                                isBreakPhase = !isBreakPhase
-                                isTimerRunning = false
-                                remainingSeconds = if (isBreakPhase) POMODORO_BREAK_SECONDS else POMODORO_FOCUS_SECONDS
-                            },
-                            label = if (isBreakPhase) {
-                                if (isZh) "25m 专注" else "25m Focus"
+                            onClick = { isAnalogDial = !isAnalogDial },
+                            label = if (isAnalogDial) {
+                                if (isZh) "数字" else "Digital"
                             } else {
-                                if (isZh) "5m 休息" else "5m Break"
+                                if (isZh) "模拟" else "Analog"
                             },
+                            accent = accent,
                             circular = false,
                             size = 26.dp,
                         )
@@ -590,100 +622,67 @@ fun ClockTimerWidgetContent(
                 }
             }
 
-            // Hero monospace time / countdown
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                OpalText(
-                    text = if (isTimerMode) timerText else timeText,
-                    color = colors.textPrimary,
-                    fontSize = displayFontSize,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                )
-                if (!isTimerMode) {
-                    OpalText(
-                        text = dateText,
-                        color = colors.textSecondary,
-                        fontSize = if (sizeClass == WidgetSizeClass.COMPACT) 11.5.sp else 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
+            // Main visual face: Digital+Hitokoto / Liquid Analog Dial / Pomodoro Glowing Ring
+            Crossfade(
+                targetState = faceKey,
+                label = "clock_face_mode",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) { mode ->
+                when (mode) {
+                    0 -> LiquidDigitalClockFace(
+                        hours = hoursText,
+                        minutes = minutesText,
+                        seconds = secondsText,
+                        amPm = amPmText,
+                        dateText = dateText,
+                        quote = quote,
+                        accent = accent,
+                        sizeClass = sizeClass,
+                        isZh = isZh,
+                        onSwitchDial = { isAnalogDial = true },
+                        onRefreshQuote = refreshQuoteAction,
                     )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(5.dp)
-                            .clip(CircleShape)
-                            .background(colors.segmentedTrack),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(timerProgress.coerceIn(0.02f, 1f))
-                                .fillMaxHeight()
-                                .clip(CircleShape)
-                                .background(accent),
-                        )
-                    }
-                }
-            }
-
-            // Footer controls for timer mode or subtle ambient hint in clock mode
-            if (isTimerMode) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    WidgetGlassActionButton(
-                        onClick = {
+                    1 -> LiquidAnalogClockFace(
+                        nowMs = nowMs,
+                        digitalSummary = "$hoursText:$minutesText:$secondsText",
+                        dateText = dateText,
+                        quote = quote,
+                        pomodoroSummary = if (isTimerRunning) {
+                            if (isZh) "专注中 $timerText" else "Focus $timerText"
+                        } else {
+                            if (isZh) "番茄专注 $timerText" else "Focus $timerText"
+                        },
+                        accent = accent,
+                        sizeClass = sizeClass,
+                        onSwitchDial = { isAnalogDial = false },
+                        onOpenPomodoro = { isTimerMode = true },
+                        onRefreshQuote = refreshQuoteAction,
+                    )
+                    else -> PomodoroRingTimerFace(
+                        timerText = timerText,
+                        progress = timerProgress,
+                        isRunning = isTimerRunning,
+                        isBreakPhase = isBreakPhase,
+                        accent = accent,
+                        sizeClass = sizeClass,
+                        isZh = isZh,
+                        onToggleRun = {
                             if (remainingSeconds == 0) {
                                 remainingSeconds = timerTotal
                             }
                             isTimerRunning = !isTimerRunning
                         },
-                        label = if (isTimerRunning) {
-                            if (isZh) "暂停" else "Pause"
-                        } else {
-                            if (isZh) "开始" else "Start"
-                        },
-                        accent = accent,
-                        filled = true,
-                        circular = false,
-                        size = 30.dp,
-                        modifier = Modifier.weight(1f),
-                        icon = { tint ->
-                            WidgetGlyphIcon(
-                                glyph = if (isTimerRunning) WidgetGlyph.PAUSE else WidgetGlyph.PLAY,
-                                tint = tint,
-                                size = 12.dp,
-                            )
-                        },
-                    )
-                    WidgetGlassActionButton(
-                        onClick = {
+                        onReset = {
                             isTimerRunning = false
                             remainingSeconds = timerTotal
                         },
-                        circular = true,
-                        size = 30.dp,
-                        contentDescription = if (isZh) "重置" else "Reset",
-                        icon = { tint -> WidgetGlyphIcon(WidgetGlyph.RESET, tint, 13.dp) },
-                    )
-                }
-            } else if (sizeClass == WidgetSizeClass.EXPANDED) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    OpalText(
-                        text = if (isZh) "点击右上角切换番茄专注计时" else "Switch to Pomodoro focus timer above",
-                        color = colors.textMuted,
-                        fontSize = 11.sp,
-                        maxLines = 1,
+                        onTogglePhase = {
+                            isBreakPhase = !isBreakPhase
+                            isTimerRunning = false
+                            remainingSeconds = if (isBreakPhase) POMODORO_BREAK_SECONDS else POMODORO_FOCUS_SECONDS
+                        },
                     )
                 }
             }

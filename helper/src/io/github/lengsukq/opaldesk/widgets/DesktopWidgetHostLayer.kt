@@ -46,12 +46,16 @@ import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.OpalText
 import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
 import io.github.lengsukq.opaldesk.widgets.renderers.AppGroupLauncherWidgetContent
+import io.github.lengsukq.opaldesk.widgets.renderers.CalendarWidgetContent
 import io.github.lengsukq.opaldesk.widgets.renderers.ClockTimerWidgetContent
 import io.github.lengsukq.opaldesk.widgets.renderers.DesktopHubCarouselWidgetContent
 import io.github.lengsukq.opaldesk.widgets.renderers.MediaPlayerWidgetContent
 import io.github.lengsukq.opaldesk.widgets.renderers.NotificationOtpWidgetContent
+import io.github.lengsukq.opaldesk.widgets.renderers.QuickActionTilesWidgetContent
 import io.github.lengsukq.opaldesk.widgets.renderers.QuickNotesWidgetContent
+import io.github.lengsukq.opaldesk.widgets.renderers.SystemMonitorWidgetContent
 import io.github.lengsukq.opaldesk.widgets.renderers.TodoChecklistWidgetContent
+import io.github.lengsukq.opaldesk.widgets.renderers.WeatherWidgetContent
 import io.github.lengsukq.opaldesk.widgets.renderers.WorkstationStatusWidgetContent
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -388,6 +392,33 @@ private fun DesktopWidgetCardSlot(
                 DesktopWidgetType.TODO_CHECKLIST -> TodoChecklistWidgetContent(
                     instance = instance,
                     sizeClass = sizeClass,
+                    callbacks = callbacks,
+                    isZh = isZh,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                DesktopWidgetType.WEATHER_FORECAST -> WeatherWidgetContent(
+                    instance = instance,
+                    sizeClass = sizeClass,
+                    isZh = isZh,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                DesktopWidgetType.SYSTEM_MONITOR -> SystemMonitorWidgetContent(
+                    instance = instance,
+                    sizeClass = sizeClass,
+                    isZh = isZh,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                DesktopWidgetType.CALENDAR_MONTH -> CalendarWidgetContent(
+                    instance = instance,
+                    sizeClass = sizeClass,
+                    isZh = isZh,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                DesktopWidgetType.QUICK_ACTION_TILES -> QuickActionTilesWidgetContent(
+                    instance = instance,
+                    sizeClass = sizeClass,
+                    workstation = workstationSnapshot,
+                    apps = appShortcuts,
                     callbacks = callbacks,
                     isZh = isZh,
                     modifier = Modifier.fillMaxSize(),

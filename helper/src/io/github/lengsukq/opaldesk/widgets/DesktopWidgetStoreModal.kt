@@ -147,7 +147,7 @@ fun DesktopWidgetStoreModal(
                 OpalTextInput(
                     value = query,
                     onValueChange = { query = it },
-                    placeholder = if (isZh) "搜索组件名称或功能…" else "Search widgets or plugins…",
+                    placeholder = if (isZh) "搜索组件名称或功能…" else "Search widgets…",
                     modifier = Modifier.weight(1f),
                 )
                 if (query.isNotEmpty()) {
@@ -276,9 +276,9 @@ private fun StoreHeaderBar(
             )
             OpalText(
                 text = if (isZh) {
-                    "液态毛玻璃插件 · 当前桌面已添加 $installedCount 个组件"
+                    "液态毛玻璃组件 · 当前桌面已添加 $installedCount 个组件"
                 } else {
-                    "Liquid glass plugins · $installedCount active on desktop"
+                    "Liquid glass widgets · $installedCount active on desktop"
                 },
                 fontSize = 12.sp,
                 color = OpalPalette.TextSecondary,
@@ -316,7 +316,7 @@ private fun StoreCategoryStrip(
         StoreFilterTab.MEDIA to (if (isZh) "媒体" else "Media"),
         StoreFilterTab.TIME to (if (isZh) "时间" else "Time"),
         StoreFilterTab.SYSTEM to (if (isZh) "系统" else "System"),
-        StoreFilterTab.INFO to (if (isZh) "通知" else "Alerts"),
+        StoreFilterTab.INFO to (if (isZh) "资讯" else "Info"),
         StoreFilterTab.PRODUCTIVITY to (if (isZh) "效率" else "Productivity"),
         StoreFilterTab.INSTALLED to (if (isZh) "已添加管理 ($installedCount)" else "Installed ($installedCount)"),
     )
