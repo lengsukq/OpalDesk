@@ -59,8 +59,8 @@ android {
         applicationId = "io.github.lengsukq.opaldesk"
         minSdk = 30
         targetSdk = 37
-        versionCode = 10022
-        versionName = "1.0.22"
+        versionCode = 10023
+        versionName = "1.0.23"
         buildConfigField("String", "SENTRY_DSN", escapeBuildConfigString(resolvedSentryDsn))
         buildConfigField("String", "SENTRY_TUNNEL_URL", escapeBuildConfigString(resolvedSentryTunnelUrl))
         buildConfigField("String", "FEEDBACK_STATUS_URL", escapeBuildConfigString(resolvedFeedbackStatusUrl))
