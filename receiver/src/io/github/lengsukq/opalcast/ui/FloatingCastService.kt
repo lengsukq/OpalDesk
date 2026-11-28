@@ -47,6 +47,7 @@ import io.github.lengsukq.opalcast.net.UsbTetherDiscovery
 import io.github.lengsukq.opalcast.net.WifiLowLatencyLock
 import io.github.lengsukq.opalcast.policy.FloatingGeometry
 import io.github.lengsukq.opalcast.policy.ReceiverPolicy
+import io.github.lengsukq.opalcast.prefs.ReceiverLocalePolicy
 import io.github.lengsukq.opalcast.prefs.ReceiverPrefs
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.abs
@@ -65,6 +66,7 @@ class FloatingCastService : Service() {
         val peerName: String,
         val appPackage: String,
         val appLabel: String,
+        val appUserId: Int = 0,
         val isMirror: Boolean = false,
     )
 
@@ -83,6 +85,7 @@ class FloatingCastService : Service() {
         const val EXTRA_APP_PACKAGE = "app_pkg"
         const val EXTRA_APP_ACTIVITY = "app_cls"
         const val EXTRA_APP_LABEL = "app_label"
+        const val EXTRA_APP_USER_ID = "app_user_id"
         const val EXTRA_HANDOVER_TOKEN = "handover_token"
         const val EXTRA_IS_MIRROR = "is_mirror"
 
@@ -118,6 +121,7 @@ class FloatingCastService : Service() {
             appPackage: String,
             appActivity: String,
             appLabel: String,
+            appUserId: Int = 0,
             handoverToken: String = "",
         ): Boolean {
             if (!AndroidApiCompat.canDrawOverlays(ctx)) return false
@@ -129,6 +133,7 @@ class FloatingCastService : Service() {
                 putExtra(EXTRA_APP_PACKAGE, appPackage)
                 putExtra(EXTRA_APP_ACTIVITY, appActivity)
                 putExtra(EXTRA_APP_LABEL, appLabel)
+                putExtra(EXTRA_APP_USER_ID, appUserId.coerceAtLeast(0))
                 putExtra(EXTRA_HANDOVER_TOKEN, handoverToken)
                 putExtra(EXTRA_IS_MIRROR, false)
             }
@@ -152,7 +157,7 @@ class FloatingCastService : Service() {
                 putExtra(EXTRA_PEER_LABEL, displayPeer)
                 putExtra(EXTRA_APP_PACKAGE, MIRROR_SENTINEL_PKG)
                 putExtra(EXTRA_APP_ACTIVITY, "")
-                putExtra(EXTRA_APP_LABEL, "$displayPeer · 主屏镜像")
+                putExtra(EXTRA_APP_LABEL, ctx.getString(R.string.float_mirror_label_fmt, displayPeer))
                 putExtra(EXTRA_HANDOVER_TOKEN, handoverToken)
                 putExtra(EXTRA_IS_MIRROR, true)
             }
@@ -197,6 +202,7 @@ class FloatingCastService : Service() {
     private var appPackage: String = ""
     private var appActivity: String = ""
     private var appLabel: String = ""
+    private var appUserId: Int = 0
     private var handoverToken: String = ""
     private var isMirrorMode = false
     private var attachedMirrorMode: Boolean? = null
@@ -215,6 +221,10 @@ class FloatingCastService : Service() {
     private var savedY = 140
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(ReceiverLocalePolicy.wrapContext(newBase))
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -236,18 +246,21 @@ class FloatingCastService : Service() {
         val nextCls = if (nextIsMirror) "" else intent?.getStringExtra(EXTRA_APP_ACTIVITY).orEmpty().trim()
         val nextPeerLabel = intent?.getStringExtra(EXTRA_PEER_LABEL).orEmpty().ifBlank { nextHost }
         val nextAppLabel = intent?.getStringExtra(EXTRA_APP_LABEL).orEmpty().ifBlank {
-            if (nextIsMirror) "$nextPeerLabel · 主屏镜像" else nextPkg
+            if (nextIsMirror) getString(R.string.float_mirror_label_fmt, nextPeerLabel) else nextPkg
         }
+        val nextUserId = if (nextIsMirror) 0 else (intent?.getIntExtra(EXTRA_APP_USER_ID, 0) ?: 0).coerceAtLeast(0)
         val nextHandover = intent?.getStringExtra(EXTRA_HANDOVER_TOKEN).orEmpty().trim()
 
         startForegroundNotification(
-            nextAppLabel.ifBlank { if (nextIsMirror) "主屏镜像" else "远程应用" },
-            nextPeerLabel.ifBlank { "远端设备" },
+            nextAppLabel.ifBlank {
+                getString(if (nextIsMirror) R.string.float_default_mirror_name else R.string.float_default_app_name)
+            },
+            nextPeerLabel.ifBlank { getString(R.string.float_default_peer_name) },
             nextIsMirror,
         )
 
         if (!AndroidApiCompat.canDrawOverlays(this)) {
-            Toast.makeText(this, "请先授予 OpalCast 悬浮窗权限", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.perm_overlay_required), Toast.LENGTH_SHORT).show()
             stopForegroundAndSelf()
             return START_NOT_STICKY
         }
@@ -263,14 +276,15 @@ class FloatingCastService : Service() {
         appPackage = nextPkg
         appActivity = nextCls
         appLabel = nextAppLabel
+        appUserId = nextUserId
         handoverToken = nextHandover
         isMirrorMode = nextIsMirror
         remoteBlackout = false
         lastSnappedMirrorW = 0
         lastSnappedMirrorH = 0
 
-        updateActiveInfo(ActiveFloatingInfo(host, port, peerLabel, appPackage, appLabel, isMirror = isMirrorMode))
-        if (!isMirrorMode) ReceiverPrefs.recordAppLaunch(this, nextPkg)
+        updateActiveInfo(ActiveFloatingInfo(host, port, peerLabel, appPackage, appLabel, appUserId = appUserId, isMirror = isMirrorMode))
+        if (!isMirrorMode) ReceiverPrefs.recordAppLaunch(this, ReceiverPolicy.formatAppKey(nextPkg, nextUserId))
         ReceiverPrefs.recordRecentPeer(this, host, port, peerLabel)
 
         tearDownSessionOnly()
@@ -298,7 +312,7 @@ class FloatingCastService : Service() {
     }
 
     private fun connectRemoteSession() {
-        updateOverlayStatus("正在连接 $peerLabel…", dotColor = 0xFFF59E0B.toInt(), showRetry = false)
+        updateOverlayStatus(getString(R.string.float_connecting_peer_fmt, peerLabel), dotColor = 0xFFF59E0B.toInt(), showRetry = false)
         val dm = resources.displayMetrics
         val (streamW, streamH, reqDpi) = if (isMirrorMode) {
             val maxEdge = max(dm.widthPixels, dm.heightPixels).coerceIn(1280, 2400)
@@ -331,14 +345,17 @@ class FloatingCastService : Service() {
             sessionRole = if (isMirrorMode) OpalCastClient.SESSION_ROLE_DESKTOP else OpalCastClient.SESSION_ROLE_STANDALONE_APP,
             appPackage = if (isMirrorMode) "" else appPackage,
             appActivity = if (isMirrorMode) "" else appActivity,
+            appUserId = if (isMirrorMode) 0 else appUserId,
             targetNetwork = boundNet,
             audioEnabled = isMirrorMode,
             initialDisplayMode = if (isMirrorMode) OpalCastClient.DISPLAY_MODE_MIRROR else OpalCastClient.DISPLAY_MODE_DEX,
             preferredCodec = AndroidApiCompat.resolvePreferredCastCodec(ReceiverPrefs.getVideoCodecPref(this)),
+            defaultDisconnectReason = getString(R.string.client_disconnected),
+            defaultRejectedMessage = getString(R.string.client_rejected),
             listener = object : OpalCastClient.Listener {
                 override fun onWaitingForApproval() {
                     mainHandler.post {
-                        updateOverlayStatus("等待对方设备点击允许…", dotColor = 0xFFF59E0B.toInt(), showRetry = false)
+                        updateOverlayStatus(getString(R.string.float_waiting_approval), dotColor = 0xFFF59E0B.toInt(), showRetry = false)
                     }
                 }
 
@@ -354,11 +371,15 @@ class FloatingCastService : Service() {
                     mainHandler.post {
                         peerLabel = peerName.ifBlank { peerLabel }
                         if (isMirrorMode) {
-                            appLabel = "$peerLabel · 主屏镜像"
+                            appLabel = getString(R.string.float_mirror_label_fmt, peerLabel)
                             titleTextView?.text = peerLabel
                         }
-                        updateActiveInfo(ActiveFloatingInfo(host, port, peerLabel, appPackage, appLabel, isMirror = isMirrorMode))
-                        val hint = if (isMirrorMode) "正在镜像 $peerLabel 主屏…" else "正在启动 $appLabel…"
+                        updateActiveInfo(ActiveFloatingInfo(host, port, peerLabel, appPackage, appLabel, appUserId = appUserId, isMirror = isMirrorMode))
+                        val hint = if (isMirrorMode) {
+                            getString(R.string.float_mirroring_peer_fmt, peerLabel)
+                        } else {
+                            getString(R.string.float_launching_app_fmt, appLabel)
+                        }
                         updateOverlayStatus(hint, dotColor = 0xFF14B8A6.toInt(), showRetry = false)
                     }
                 }
@@ -408,7 +429,11 @@ class FloatingCastService : Service() {
                             return@post
                         }
                         if (overlayBanner?.visibility != View.VISIBLE || overlayRetryBtn?.visibility != View.VISIBLE) {
-                            updateOverlayStatus(reason.ifBlank { "连接已断开" }, dotColor = 0xFFEF4444.toInt(), showRetry = true)
+                            updateOverlayStatus(
+                                reason.ifBlank { getString(R.string.float_disconnected) },
+                                dotColor = 0xFFEF4444.toInt(),
+                                showRetry = true,
+                            )
                         }
                     }
                 }
@@ -530,7 +555,7 @@ class FloatingCastService : Service() {
         })
 
         if (isMirrorMode) {
-            val (bBtn, bIcon) = buildChromeIconButton(Glyph.SCREEN_OFF, "熄屏", 13.5f, isDark) {
+            val (bBtn, bIcon) = buildChromeIconButton(Glyph.SCREEN_OFF, getString(R.string.viewer_chip_screen_off), 13.5f, isDark) {
                 remoteBlackout = !remoteBlackout
                 refreshBlackoutAppearance()
                 client?.sendSystemAction(OpalCastClient.SYS_TOGGLE_BLACKOUT, if (remoteBlackout) 1 else 0)
@@ -540,7 +565,7 @@ class FloatingCastService : Service() {
             refreshBlackoutAppearance()
             header.addView(bBtn, LinearLayout.LayoutParams(dp(30), dp(26)).apply { rightMargin = dp(5) })
 
-            val (iBtn, iIcon) = buildChromeIconButton(Glyph.KEYBOARD, "键盘", 14f, isDark) { toggleImeBar() }
+            val (iBtn, iIcon) = buildChromeIconButton(Glyph.KEYBOARD, getString(R.string.viewer_chip_keyboard), 14f, isDark) { toggleImeBar() }
             imeBtnContainer = iBtn
             imeIconView = iIcon
             refreshImeButtonAppearance()
@@ -551,14 +576,14 @@ class FloatingCastService : Service() {
             imeBtnContainer = null
             imeIconView = null
             header.addView(
-                buildHeaderPill("返回", pillBg, pillBorder, pillInk) {
+                buildHeaderPill(getString(R.string.common_back), pillBg, pillBorder, pillInk) {
                     client?.sendSystemAction(OpalCastClient.SYS_BACK)
                 },
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     rightMargin = dp(5)
                 },
             )
-            header.addView(buildHeaderPill("键盘", pillBg, pillBorder, pillInk) { toggleImeBar() })
+            header.addView(buildHeaderPill(getString(R.string.viewer_chip_keyboard), pillBg, pillBorder, pillInk) { toggleImeBar() })
         }
 
         installDragMoveListener(header)
@@ -577,7 +602,7 @@ class FloatingCastService : Service() {
             visibility = View.GONE
         }
         val edit = EditText(this).apply {
-            hint = "输入文字发送到 $appLabel…"
+            hint = getString(R.string.float_ime_hint_fmt, appLabel)
             setHintTextColor(pal.inkMuted)
             setTextColor(titleInk)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
@@ -596,7 +621,7 @@ class FloatingCastService : Service() {
             }
         }
         imeEditText = edit
-        val sendBtn = OpalCastTheme.buildPillButton(this, "发送", pal.accent, Color.WHITE) { sendImeBarText() }
+        val sendBtn = OpalCastTheme.buildPillButton(this, getString(R.string.common_send), pal.accent, Color.WHITE) { sendImeBarText() }
         imeBar.addView(edit, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         imeBar.addView(sendBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             leftMargin = dp(8)
@@ -656,12 +681,12 @@ class FloatingCastService : Service() {
             setPadding(dp(18), dp(18), dp(18), dp(18))
         }
         val bannerTv = TextView(this).apply {
-            text = "正在连接…"
+            text = getString(R.string.float_connecting)
             setTextColor(titleInk)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             gravity = Gravity.CENTER
         }
-        val retryBtn = OpalCastTheme.buildPillButton(this, "重新连接", pal.accent, Color.WHITE) {
+        val retryBtn = OpalCastTheme.buildPillButton(this, getString(R.string.common_reconnect), pal.accent, Color.WHITE) {
             tearDownSessionOnly()
             connectRemoteSession()
         }.apply { visibility = View.GONE }
@@ -718,11 +743,11 @@ class FloatingCastService : Service() {
                     LinearLayout.LayoutParams(max(1, (0.8f * dm.density).roundToInt()), dp(12)),
                 )
             }
-            navCapsule.addView(buildDockNavIconButton(Glyph.BACK, "返回", isDark) { client?.sendSystemAction(OpalCastClient.SYS_BACK) }, LinearLayout.LayoutParams(dp(46), dp(26)))
+            navCapsule.addView(buildDockNavIconButton(Glyph.BACK, getString(R.string.common_back), isDark) { client?.sendSystemAction(OpalCastClient.SYS_BACK) }, LinearLayout.LayoutParams(dp(46), dp(26)))
             addSep()
-            navCapsule.addView(buildDockNavIconButton(Glyph.HOME, "主页", isDark) { client?.sendSystemAction(OpalCastClient.SYS_HOME) }, LinearLayout.LayoutParams(dp(46), dp(26)))
+            navCapsule.addView(buildDockNavIconButton(Glyph.HOME, getString(R.string.common_home), isDark) { client?.sendSystemAction(OpalCastClient.SYS_HOME) }, LinearLayout.LayoutParams(dp(46), dp(26)))
             addSep()
-            navCapsule.addView(buildDockNavIconButton(Glyph.RECENTS, "多任务", isDark) { client?.sendSystemAction(OpalCastClient.SYS_RECENTS) }, LinearLayout.LayoutParams(dp(46), dp(26)))
+            navCapsule.addView(buildDockNavIconButton(Glyph.RECENTS, getString(R.string.common_recents), isDark) { client?.sendSystemAction(OpalCastClient.SYS_RECENTS) }, LinearLayout.LayoutParams(dp(46), dp(26)))
             bottomFrame.addView(navCapsule, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30), Gravity.CENTER))
             bottomFrame.addView(resizeGrip, FrameLayout.LayoutParams(dp(34), dp(34), Gravity.BOTTOM or Gravity.END))
             container.addView(bottomFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)))
@@ -750,7 +775,7 @@ class FloatingCastService : Service() {
             attachedMirrorMode = isMirrorMode
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to attach overlay", t)
-            Toast.makeText(this, "无法创建悬浮窗：${t.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.float_create_failed_fmt, t.message ?: t.javaClass.simpleName), Toast.LENGTH_SHORT).show()
             stopSelf()
         }
     }
@@ -910,7 +935,7 @@ class FloatingCastService : Service() {
         val btn = blackoutBtnContainer ?: return
         val glyph = blackoutIconView ?: return
         val isDark = OpalCastTheme.resolve(this).isDark
-        btn.contentDescription = if (remoteBlackout) "亮屏" else "熄屏"
+        btn.contentDescription = getString(if (remoteBlackout) R.string.viewer_chip_screen_on else R.string.viewer_chip_screen_off)
         if (remoteBlackout) {
             glyph.setIconTint(if (isDark) 0xFFFBBF24.toInt() else 0xFFD97706.toInt())
             btn.background = OpalCastTheme.roundedDrawable(this, if (isDark) 0x30F59E0B else 0x24F59E0B, 13, 0x7AF59E0B, 0.85f)
@@ -924,7 +949,7 @@ class FloatingCastService : Service() {
         val btn = imeBtnContainer ?: return
         val glyph = imeIconView ?: return
         val pal = OpalCastTheme.resolve(this)
-        btn.contentDescription = if (isImeBarVisible) "收起键盘" else "键盘"
+        btn.contentDescription = getString(if (isImeBarVisible) R.string.float_desc_hide_keyboard else R.string.viewer_chip_keyboard)
         if (isImeBarVisible) {
             glyph.setIconTint(pal.accent)
             btn.background = OpalCastTheme.roundedDrawable(this, pal.accentSoft, 13, pal.accentBorder, 0.85f)
@@ -1163,7 +1188,11 @@ class FloatingCastService : Service() {
         rootView?.visibility = View.GONE
 
         val windowManager = wm ?: return
-        val initial = if (isMirrorMode) "镜" else appLabel.trim().take(1).ifEmpty { "浮" }
+        val initial = if (isMirrorMode) {
+            getString(R.string.float_bubble_mirror_char)
+        } else {
+            appLabel.trim().take(1).ifEmpty { getString(R.string.float_bubble_app_fallback_char) }
+        }
         val pill = TextView(this).apply {
             text = initial
             setTextColor(Color.WHITE)
@@ -1274,7 +1303,12 @@ class FloatingCastService : Service() {
 
     private fun startForegroundNotification(appName: String, peerName: String, isMirror: Boolean) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        AndroidApiCompat.ensureNotificationChannel(nm, CHANNEL_ID, "OpalCast 远程悬浮窗", "跨设备悬浮小窗与主屏镜像投屏通道")
+        AndroidApiCompat.ensureNotificationChannel(
+            nm,
+            CHANNEL_ID,
+            getString(R.string.float_notif_channel_name),
+            getString(R.string.float_notif_channel_desc),
+        )
         val immFlag = AndroidApiCompat.pendingIntentImmutableFlag()
         val openHome = PendingIntent.getActivity(
             this,
@@ -1288,8 +1322,16 @@ class FloatingCastService : Service() {
             Intent(this, FloatingCastService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_UPDATE_CURRENT or immFlag,
         )
-        val title = if (isMirror) "主屏镜像悬浮窗 · $peerName" else "远程应用悬浮窗 · $appName"
-        val body = if (isMirror) "正在以悬浮小窗实时镜像 $peerName 主屏" else "正在流式运行来自 $peerName 的 $appName"
+        val title = if (isMirror) {
+            getString(R.string.float_notif_title_mirror_fmt, peerName)
+        } else {
+            getString(R.string.float_notif_title_app_fmt, appName)
+        }
+        val body = if (isMirror) {
+            getString(R.string.float_notif_body_mirror_fmt, peerName)
+        } else {
+            getString(R.string.float_notif_body_app_fmt, appName, peerName)
+        }
         val builder = AndroidApiCompat.createNotificationBuilder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_opalcast)
             .setContentTitle(title)
@@ -1300,7 +1342,7 @@ class FloatingCastService : Service() {
             this,
             builder,
             android.R.drawable.ic_menu_close_clear_cancel,
-            "关闭小窗",
+            getString(R.string.home_floating_close),
             stopPending,
         )
         val notif = builder.build()

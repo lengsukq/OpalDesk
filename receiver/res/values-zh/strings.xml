@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OpalCast</string>
+
+    <!-- Common -->
+    <string name="common_close">关闭</string>
+    <string name="common_refresh">刷新</string>
+    <string name="common_reconnect">重新连接</string>
+    <string name="common_send">发送</string>
+    <string name="common_back">返回</string>
+    <string name="common_home">主页</string>
+    <string name="common_recents">多任务</string>
+    <string name="common_on">已开启</string>
+    <string name="common_off">已关闭</string>
+    <string name="common_copied_fmt">已复制：%1$s</string>
+    <string name="perm_overlay_required">请先授予 OpalCast 悬浮窗权限</string>
+
+    <!-- Language selector -->
+    <string name="home_language_label">语言</string>
+    <string name="lang_follow_system">跟随系统</string>
+    <string name="lang_zh_cn">简体中文</string>
+    <string name="lang_en">English</string>
+
+    <!-- Home hero & device badges -->
+    <string name="home_join_qq_badge">加QQ群</string>
+    <string name="home_subtitle">通用安卓被投屏端 · 适配 32/64 位与低版本系统</string>
+    <string name="home_abi_64_fmt">%1$s · 64位</string>
+    <string name="home_abi_32_fmt">%1$s · 32位</string>
+    <string name="home_abi_unknown">未知架构</string>
+    <string name="home_api_badge_fmt">Android %1$s (API %2$d)</string>
+    <string name="home_codec_badge_hevc_h264">HEVC + H.264 硬解</string>
+    <string name="home_codec_badge_h264_fallback">H.264 硬解 · 自动降级</string>
+    <string name="home_codec_badge_sw">兼容软解模式</string>
+
+    <!-- Home banners -->
+    <string name="home_local_net_banner">Android 17 需要授予「局域网」权限才能自动发现附近 OpalDesk 设备</string>
+    <string name="home_local_net_grant">立即授权</string>
+    <string name="home_local_net_denied_toast">未授予局域网发现权限，仍可通过手动输入 IP 连接</string>
+    <string name="home_floating_active_fmt">悬浮小窗运行中：%1$s</string>
+    <string name="home_floating_close">关闭小窗</string>
+
+    <!-- Home discovery & USB tether -->
+    <string name="home_discover_title">附近可连接的 OpalDesk 主机</string>
+    <string name="home_discover_subtitle">局域网自动发现 · 需发送端开启无线投屏</string>
+    <string name="home_discover_rescan_toast">正在重新扫描局域网设备…</string>
+    <string name="home_discover_empty">暂未发现附近主机。请在发送端手机打开 OpalDesk → 无线投屏并保持在同一 Wi-Fi，或下方手动输入 IP。</string>
+    <string name="home_peer_fingerprint_fmt"> · 指纹 %1$s</string>
+    <string name="home_usb_title">USB 有线直连主机 (Beta)</string>
+    <string name="home_usb_disclaimer">Beta 测试功能：受各系统 USB 网卡驱动与机型策略差异影响，不保证所有设备均可正常使用。</string>
+    <string name="home_usb_probe">探测</string>
+    <string name="home_usb_scanning">正在探测 USB 共享网卡网关…</string>
+    <string name="home_usb_empty">未检测到 USB 直连主机（请用数据线连接并在发送端手机开启「USB 网络共享」与无线投屏）</string>
+    <string name="home_usb_found_fmt">已发现 %1$d 台 USB 直连主机</string>
+
+    <!-- Home manual connect -->
+    <string name="home_manual_title">手动输入地址连接</string>
+    <string name="home_manual_subtitle">支持 IPv4 / IPv6，默认端口 19878，跨网段或旧路由器也能直连</string>
+    <string name="home_manual_hint">例如 192.168.31.88 或 192.168.31.88:19878</string>
+    <string name="home_action_cast_desktop">投屏桌面</string>
+    <string name="home_action_mirror">主屏镜像</string>
+    <string name="home_action_app_window">应用小窗</string>
+    <string name="home_recent_title">最近连接（点击填入地址）</string>
+    <string name="home_invalid_ip_toast">请输入有效的主机 IP（例如 192.168.31.88）</string>
+    <string name="home_enter_ip_for_app_toast">请先输入主机 IP 再打开远端应用小窗</string>
+
+    <!-- Home settings -->
+    <string name="home_settings_title">解码与接收端设置</string>
+    <string name="home_settings_subtitle">兼容老旧 32 位与低版本安卓平板、手机和电视盒</string>
+    <string name="home_codec_status_fmt">视频解码策略（当前协商：%1$s · 硬解 H.264 %2$s / HEVC %3$s）</string>
+    <string name="home_codec_auto">自动协商</string>
+    <string name="home_codec_h264">优先 H.264</string>
+    <string name="home_codec_hevc">优先 HEVC</string>
+    <string name="home_theme_label">界面外观</string>
+    <string name="home_theme_system">跟随系统</string>
+    <string name="home_theme_light">浅色</string>
+    <string name="home_theme_dark">深色</string>
+    <string name="home_usb_toggle_title">USB 网络共享有线直连 (Beta)</string>
+    <string name="home_usb_toggle_subtitle">开启后自动探测 USB-C 共享网卡并绑定高码率通道</string>
+    <string name="home_footer_cert_fmt">OpalCast v%1$s · 独立密钥 %2$s</string>
+    <string name="home_clear_trusted">清除已信任主机</string>
+    <string name="home_clear_trusted_done_fmt">已清除 %1$d 台主机免确认授权</string>
+    <string name="home_clear_trusted_empty">当前无已保存授权</string>
+
+    <!-- Home about card -->
+    <string name="home_about_title">关于主投屏端 OpalDesk 与开源项目</string>
+    <string name="home_about_subtitle">OpalCast 为 OpalDesk 生态的通用安卓被投屏端 · MIT 免费开源</string>
+    <string name="home_about_host_title">主投屏端 · OpalDesk</string>
+    <string name="home_about_host_badge">Android 11–17 · 免 Root 优先</string>
+    <string name="home_about_host_desc">全品牌安卓通用的 Wayland 式 120fps 液态毛玻璃多窗工作站（一窗一独立虚拟屏，零厂商 Freeform 魔改）。在发送端手机安装 OpalDesk 并开启无线投屏后，本设备即可接收完整多窗桌面、主屏镜像与单应用悬浮小窗，支持物理键鼠、多指触控、中文输入法桥接及音频/麦克风互通。</string>
+    <string name="home_about_host_tip">提示：下方项目介绍页已包含主投屏端及各平台伴侣端的详细介绍与下载地址。</string>
+    <string name="home_about_intro_title">项目介绍页（含主投屏端介绍与下载）</string>
+    <string name="home_about_intro_open">打开介绍页</string>
+    <string name="home_about_github_title">GitHub 开源仓库（lengsukq/OpalDesk · MIT）</string>
+    <string name="home_about_github_open">访问 GitHub</string>
+    <string name="home_about_copy_url">复制地址</string>
+    <string name="home_about_qq_title_fmt">交流反馈 QQ 群 · %1$s</string>
+    <string name="home_about_qq_subtitle">获取最新版安装包、反馈适配问题与交流跨屏玩法</string>
+    <string name="home_about_qq_join">加入 QQ 群</string>
+    <string name="home_about_qq_copy">复制群号</string>
+    <string name="home_about_qq_opening_fmt">已复制群号 %1$s，正在打开 QQ…</string>
+    <string name="home_about_qq_copied_fmt">已复制 QQ 群号 %1$s，请打开 QQ 搜索加入</string>
+    <string name="home_about_link_label">OpalDesk 链接</string>
+    <string name="home_about_no_browser_toast">未检测到浏览器，已复制链接到剪贴板</string>
+
+    <!-- Viewer activity -->
+    <string name="viewer_toolbar_handle">OpalCast · 工具栏</string>
+    <string name="viewer_chip_to_mirror">切镜像</string>
+    <string name="viewer_chip_to_desktop">切桌面</string>
+    <string name="viewer_chip_float_window">悬浮小窗</string>
+    <string name="viewer_chip_screen_off">熄屏</string>
+    <string name="viewer_chip_screen_on">亮屏</string>
+    <string name="viewer_chip_keyboard">键盘</string>
+    <string name="viewer_chip_hide_keyboard">收键盘</string>
+    <string name="viewer_chip_mic">麦克风</string>
+    <string name="viewer_chip_mute_mic">闭麦</string>
+    <string name="viewer_chip_camera">摄像头</string>
+    <string name="viewer_chip_stop_camera">关镜头</string>
+    <string name="viewer_chip_flip_camera">切镜头</string>
+    <string name="viewer_chip_app_window">应用小窗</string>
+    <string name="viewer_chip_collapse">收起</string>
+    <string name="viewer_chip_disconnect">断开</string>
+    <string name="viewer_exit_fullscreen">退出全屏</string>
+    <string name="viewer_exit_fullscreen_fmt">退出全屏 · %1$s</string>
+    <string name="viewer_connecting_tls">正在建立 TLS 加密连接…</string>
+    <string name="viewer_back_home">返回主页</string>
+    <string name="viewer_waiting_approval">等待对方设备点击「允许」…</string>
+    <string name="viewer_connected_waiting_frame">已连接 · 等待首帧画面…</string>
+    <string name="viewer_status_connected_fmt">%1$s · 已连接</string>
+    <string name="viewer_mode_mirror">镜像</string>
+    <string name="viewer_mode_desktop">桌面</string>
+    <string name="viewer_status_stream_fmt">%1$s · %2$s %3$d×%4$d@%5$dHz</string>
+    <string name="viewer_error_title">连接中断</string>
+    <string name="viewer_disconnected_title">投屏已断开</string>
+    <string name="viewer_float_mirror_failed">无法启动悬浮镜像窗</string>
+    <string name="viewer_perm_mic_required">需要麦克风权限</string>
+    <string name="viewer_perm_camera_required">需要摄像头权限</string>
+
+    <!-- Floating cast service -->
+    <string name="float_mirror_label_fmt">%1$s · 主屏镜像</string>
+    <string name="float_default_mirror_name">主屏镜像</string>
+    <string name="float_default_app_name">远程应用</string>
+    <string name="float_default_peer_name">远端设备</string>
+    <string name="float_connecting">正在连接…</string>
+    <string name="float_connecting_peer_fmt">正在连接 %1$s…</string>
+    <string name="float_waiting_approval">等待对方设备点击允许…</string>
+    <string name="float_mirroring_peer_fmt">正在镜像 %1$s 主屏…</string>
+    <string name="float_launching_app_fmt">正在启动 %1$s…</string>
+    <string name="float_disconnected">连接已断开</string>
+    <string name="float_ime_hint_fmt">输入文字发送到 %1$s…</string>
+    <string name="float_create_failed_fmt">无法创建悬浮窗：%1$s</string>
+    <string name="float_desc_hide_keyboard">收起键盘</string>
+    <string name="float_bubble_mirror_char">镜</string>
+    <string name="float_bubble_app_fallback_char">浮</string>
+    <string name="float_notif_channel_name">OpalCast 远程悬浮窗</string>
+    <string name="float_notif_channel_desc">跨设备悬浮小窗与主屏镜像投屏通道</string>
+    <string name="float_notif_title_mirror_fmt">主屏镜像悬浮窗 · %1$s</string>
+    <string name="float_notif_title_app_fmt">远程应用悬浮窗 · %1$s</string>
+    <string name="float_notif_body_mirror_fmt">正在以悬浮小窗实时镜像 %1$s 主屏</string>
+    <string name="float_notif_body_app_fmt">正在流式运行来自 %2$s 的 %1$s</string>
+
+    <!-- Remote app picker dialog -->
+    <string name="picker_title">打开远端应用小窗</string>
+    <string name="picker_subtitle_fmt">来自 %1$s · 点击即以独立悬浮小窗运行</string>
+    <string name="picker_search_hint">搜索应用名称或包名…</string>
+    <string name="picker_loading_list">正在获取远端应用列表…</string>
+    <string name="picker_count_fmt">共 %1$d 个应用</string>
+    <string name="picker_connected_loading_fmt">已连接 %1$s，正在加载应用列表…</string>
+    <string name="picker_remote_count_fmt">共 %1$d 个远端应用</string>
+    <string name="picker_load_failed_fmt">加载失败：%1$s</string>
+    <string name="picker_waiting_catalog">等待应用目录…</string>
+    <string name="picker_no_match">未找到匹配的远端应用</string>
+    <string name="picker_badge_window">小窗</string>
+    <string name="picker_launch_failed">无法启动远端应用小窗</string>
+    <string name="profile_badge_clone">分身</string>
+    <string name="profile_badge_work">工作</string>
+    <string name="profile_badge_private">隐私</string>
+    <string name="profile_badge_secondary_fmt">用户 %1$d</string>
+
+    <!-- Client & media capturer errors -->
+    <string name="client_disconnected">已断开连接</string>
+    <string name="client_rejected">对方拒绝了连接请求</string>
+    <string name="cam_err_service">无法获取系统摄像头服务</string>
+    <string name="cam_err_no_camera">未检测到可用的本机摄像头</string>
+    <string name="cam_err_disconnected">本机摄像头连接已断开</string>
+    <string name="cam_err_open_code_fmt">打开本机摄像头失败 (code=%1$d)</string>
+    <string name="cam_err_start_fmt">启动本机摄像头失败：%1$s</string>
+    <string name="cam_err_preview_start">摄像头预览流启动失败</string>
+    <string name="cam_err_session_config">摄像头会话配置失败</string>
+    <string name="cam_err_session_create_fmt">创建摄像头会话失败：%1$s</string>
+    <string name="mic_err_init_fmt">无法初始化本地麦克风：%1$s</string>
+    <string name="mic_err_permission">本地麦克风初始化失败，请检查录音权限</string>
+    <string name="mic_err_start_fmt">启动本地麦克风失败：%1$s</string>
+    <string name="mic_err_read_fmt">麦克风采集异常 (err=%1$d)</string>
+</resources>

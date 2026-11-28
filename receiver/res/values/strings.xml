@@ -1,4 +1,194 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OpalCast</string>
+
+    <!-- Common -->
+    <string name="common_close">Close</string>
+    <string name="common_refresh">Refresh</string>
+    <string name="common_reconnect">Reconnect</string>
+    <string name="common_send">Send</string>
+    <string name="common_back">Back</string>
+    <string name="common_home">Home</string>
+    <string name="common_recents">Recents</string>
+    <string name="common_on">On</string>
+    <string name="common_off">Off</string>
+    <string name="common_copied_fmt">Copied: %1$s</string>
+    <string name="perm_overlay_required">Please grant overlay permission to OpalCast first</string>
+
+    <!-- Language selector -->
+    <string name="home_language_label">Language</string>
+    <string name="lang_follow_system">Follow System</string>
+    <string name="lang_zh_cn">简体中文</string>
+    <string name="lang_en">English</string>
+
+    <!-- Home hero & device badges -->
+    <string name="home_join_qq_badge">QQ Group</string>
+    <string name="home_subtitle">Universal Android cast receiver · 32/64-bit &amp; legacy OS ready</string>
+    <string name="home_abi_64_fmt">%1$s · 64-bit</string>
+    <string name="home_abi_32_fmt">%1$s · 32-bit</string>
+    <string name="home_abi_unknown">Unknown ABI</string>
+    <string name="home_api_badge_fmt">Android %1$s (API %2$d)</string>
+    <string name="home_codec_badge_hevc_h264">HEVC + H.264 HW</string>
+    <string name="home_codec_badge_h264_fallback">H.264 HW · Auto Fallback</string>
+    <string name="home_codec_badge_sw">Software Decode</string>
+
+    <!-- Home banners -->
+    <string name="home_local_net_banner">Android 17 requires Local Network permission to discover nearby OpalDesk hosts</string>
+    <string name="home_local_net_grant">Grant</string>
+    <string name="home_local_net_denied_toast">Local Network permission denied; you can still connect by IP</string>
+    <string name="home_floating_active_fmt">Floating window active: %1$s</string>
+    <string name="home_floating_close">Close Window</string>
+
+    <!-- Home discovery & USB tether -->
+    <string name="home_discover_title">Nearby OpalDesk Hosts</string>
+    <string name="home_discover_subtitle">LAN auto-discovery · Enable Wireless Cast on host</string>
+    <string name="home_discover_rescan_toast">Scanning LAN devices…</string>
+    <string name="home_discover_empty">No nearby hosts found. Open OpalDesk → Wireless Cast on the host phone on the same Wi-Fi, or enter an IP below.</string>
+    <string name="home_peer_fingerprint_fmt"> · FP %1$s</string>
+    <string name="home_usb_title">USB Direct Host (Beta)</string>
+    <string name="home_usb_disclaimer">Beta feature: Compatibility varies by USB network driver and OEM policy.</string>
+    <string name="home_usb_probe">Probe</string>
+    <string name="home_usb_scanning">Probing USB tethering gateway…</string>
+    <string name="home_usb_empty">No USB host detected (connect via cable and enable USB Tethering &amp; Wireless Cast on host)</string>
+    <string name="home_usb_found_fmt">Found %1$d USB host(s)</string>
+
+    <!-- Home manual connect -->
+    <string name="home_manual_title">Connect by IP Address</string>
+    <string name="home_manual_subtitle">Supports IPv4 / IPv6 (default port 19878) across subnets or legacy routers</string>
+    <string name="home_manual_hint">e.g. 192.168.31.88 or 192.168.31.88:19878</string>
+    <string name="home_action_cast_desktop">Desktop</string>
+    <string name="home_action_mirror">Mirror</string>
+    <string name="home_action_app_window">App Window</string>
+    <string name="home_recent_title">Recent hosts (tap to fill)</string>
+    <string name="home_invalid_ip_toast">Enter a valid host IP (e.g. 192.168.31.88)</string>
+    <string name="home_enter_ip_for_app_toast">Enter a host IP before opening a remote app window</string>
+
+    <!-- Home settings -->
+    <string name="home_settings_title">Decoder &amp; Receiver Settings</string>
+    <string name="home_settings_subtitle">Built for 32/64-bit and legacy Android tablets, phones, and TV boxes</string>
+    <string name="home_codec_status_fmt">Video decoder (Active: %1$s · HW H.264 %2$s / HEVC %3$s)</string>
+    <string name="home_codec_auto">Auto</string>
+    <string name="home_codec_h264">Prefer H.264</string>
+    <string name="home_codec_hevc">Prefer HEVC</string>
+    <string name="home_theme_label">Appearance</string>
+    <string name="home_theme_system">Follow System</string>
+    <string name="home_theme_light">Light</string>
+    <string name="home_theme_dark">Dark</string>
+    <string name="home_usb_toggle_title">USB Tethering Direct Link (Beta)</string>
+    <string name="home_usb_toggle_subtitle">Auto-probe USB-C tether interface for high-bitrate streaming</string>
+    <string name="home_footer_cert_fmt">OpalCast v%1$s · Key %2$s</string>
+    <string name="home_clear_trusted">Clear Trusted</string>
+    <string name="home_clear_trusted_done_fmt">Cleared %1$d trusted host(s)</string>
+    <string name="home_clear_trusted_empty">No saved host authorizations</string>
+
+    <!-- Home about card -->
+    <string name="home_about_title">About OpalDesk Host &amp; Open Source</string>
+    <string name="home_about_subtitle">OpalCast is the universal Android receiver for OpalDesk · MIT License</string>
+    <string name="home_about_host_title">Host Sender · OpalDesk</string>
+    <string name="home_about_host_badge">Android 11–17 · Rootless-First</string>
+    <string name="home_about_host_desc">OEM-agnostic Wayland-style 120fps Liquid Glass multi-window workstation (one VirtualDisplay per window, zero vendor Freeform hacks). Install OpalDesk on your host phone and enable Wireless Cast to stream a full multi-window desktop, screen mirror, or standalone app window with keyboard, mouse, multi-touch, IME bridge, and audio/mic support.</string>
+    <string name="home_about_host_tip">Tip: The project showcase page below includes host &amp; companion downloads.</string>
+    <string name="home_about_intro_title">Project Showcase (Host Info &amp; Downloads)</string>
+    <string name="home_about_intro_open">Open Page</string>
+    <string name="home_about_github_title">GitHub Repository (lengsukq/OpalDesk · MIT)</string>
+    <string name="home_about_github_open">Open GitHub</string>
+    <string name="home_about_copy_url">Copy URL</string>
+    <string name="home_about_qq_title_fmt">Community QQ Group · %1$s</string>
+    <string name="home_about_qq_subtitle">Get latest APKs, report compatibility issues, and share tips</string>
+    <string name="home_about_qq_join">Join QQ Group</string>
+    <string name="home_about_qq_copy">Copy ID</string>
+    <string name="home_about_qq_opening_fmt">Copied group %1$s, opening QQ…</string>
+    <string name="home_about_qq_copied_fmt">Copied QQ group %1$s. Open QQ to search and join</string>
+    <string name="home_about_link_label">OpalDesk Link</string>
+    <string name="home_about_no_browser_toast">No browser found; link copied to clipboard</string>
+
+    <!-- Viewer activity -->
+    <string name="viewer_toolbar_handle">OpalCast · Toolbar</string>
+    <string name="viewer_chip_to_mirror">Mirror</string>
+    <string name="viewer_chip_to_desktop">Desktop</string>
+    <string name="viewer_chip_float_window">Float</string>
+    <string name="viewer_chip_screen_off">Screen Off</string>
+    <string name="viewer_chip_screen_on">Screen On</string>
+    <string name="viewer_chip_keyboard">Keyboard</string>
+    <string name="viewer_chip_hide_keyboard">Hide KB</string>
+    <string name="viewer_chip_mic">Mic</string>
+    <string name="viewer_chip_mute_mic">Mute</string>
+    <string name="viewer_chip_camera">Camera</string>
+    <string name="viewer_chip_stop_camera">Cam Off</string>
+    <string name="viewer_chip_flip_camera">Flip</string>
+    <string name="viewer_chip_app_window">Apps</string>
+    <string name="viewer_chip_collapse">Hide</string>
+    <string name="viewer_chip_disconnect">Disconnect</string>
+    <string name="viewer_exit_fullscreen">Exit Fullscreen</string>
+    <string name="viewer_exit_fullscreen_fmt">Exit Fullscreen · %1$s</string>
+    <string name="viewer_connecting_tls">Establishing encrypted TLS connection…</string>
+    <string name="viewer_back_home">Home</string>
+    <string name="viewer_waiting_approval">Waiting for host approval…</string>
+    <string name="viewer_connected_waiting_frame">Connected · Waiting for first frame…</string>
+    <string name="viewer_status_connected_fmt">%1$s · Connected</string>
+    <string name="viewer_mode_mirror">Mirror</string>
+    <string name="viewer_mode_desktop">Desktop</string>
+    <string name="viewer_status_stream_fmt">%1$s · %2$s %3$d×%4$d@%5$dHz</string>
+    <string name="viewer_error_title">Connection Interrupted</string>
+    <string name="viewer_disconnected_title">Cast Disconnected</string>
+    <string name="viewer_float_mirror_failed">Unable to start floating mirror window</string>
+    <string name="viewer_perm_mic_required">Microphone permission required</string>
+    <string name="viewer_perm_camera_required">Camera permission required</string>
+
+    <!-- Floating cast service -->
+    <string name="float_mirror_label_fmt">%1$s · Screen Mirror</string>
+    <string name="float_default_mirror_name">Screen Mirror</string>
+    <string name="float_default_app_name">Remote App</string>
+    <string name="float_default_peer_name">Remote Host</string>
+    <string name="float_connecting">Connecting…</string>
+    <string name="float_connecting_peer_fmt">Connecting to %1$s…</string>
+    <string name="float_waiting_approval">Waiting for host approval…</string>
+    <string name="float_mirroring_peer_fmt">Mirroring %1$s screen…</string>
+    <string name="float_launching_app_fmt">Launching %1$s…</string>
+    <string name="float_disconnected">Disconnected</string>
+    <string name="float_ime_hint_fmt">Type text to send to %1$s…</string>
+    <string name="float_create_failed_fmt">Unable to create floating window: %1$s</string>
+    <string name="float_desc_hide_keyboard">Hide Keyboard</string>
+    <string name="float_bubble_mirror_char">M</string>
+    <string name="float_bubble_app_fallback_char">F</string>
+    <string name="float_notif_channel_name">OpalCast Floating Window</string>
+    <string name="float_notif_channel_desc">Floating window and screen mirror channel</string>
+    <string name="float_notif_title_mirror_fmt">Floating Mirror · %1$s</string>
+    <string name="float_notif_title_app_fmt">Floating App · %1$s</string>
+    <string name="float_notif_body_mirror_fmt">Mirroring %1$s in a floating window</string>
+    <string name="float_notif_body_app_fmt">Streaming %1$s from %2$s</string>
+
+    <!-- Remote app picker dialog -->
+    <string name="picker_title">Open Remote App Window</string>
+    <string name="picker_subtitle_fmt">From %1$s · Tap to launch in a floating window</string>
+    <string name="picker_search_hint">Search app name or package…</string>
+    <string name="picker_loading_list">Fetching remote app list…</string>
+    <string name="picker_count_fmt">%1$d app(s)</string>
+    <string name="picker_connected_loading_fmt">Connected to %1$s, loading apps…</string>
+    <string name="picker_remote_count_fmt">%1$d remote app(s)</string>
+    <string name="picker_load_failed_fmt">Load failed: %1$s</string>
+    <string name="picker_waiting_catalog">Waiting for app catalog…</string>
+    <string name="picker_no_match">No matching remote apps</string>
+    <string name="picker_badge_window">Window</string>
+    <string name="picker_launch_failed">Unable to launch remote app window</string>
+    <string name="profile_badge_clone">Clone</string>
+    <string name="profile_badge_work">Work</string>
+    <string name="profile_badge_private">Private</string>
+    <string name="profile_badge_secondary_fmt">User %1$d</string>
+
+    <!-- Client & media capturer errors -->
+    <string name="client_disconnected">Disconnected</string>
+    <string name="client_rejected">Connection rejected by host</string>
+    <string name="cam_err_service">Unable to access system camera service</string>
+    <string name="cam_err_no_camera">No available camera detected</string>
+    <string name="cam_err_disconnected">Local camera disconnected</string>
+    <string name="cam_err_open_code_fmt">Failed to open camera (code=%1$d)</string>
+    <string name="cam_err_start_fmt">Failed to start camera: %1$s</string>
+    <string name="cam_err_preview_start">Failed to start camera preview stream</string>
+    <string name="cam_err_session_config">Camera session configuration failed</string>
+    <string name="cam_err_session_create_fmt">Failed to create camera session: %1$s</string>
+    <string name="mic_err_init_fmt">Unable to initialize microphone: %1$s</string>
+    <string name="mic_err_permission">Microphone init failed; check recording permission</string>
+    <string name="mic_err_start_fmt">Failed to start microphone: %1$s</string>
+    <string name="mic_err_read_fmt">Microphone capture error (err=%1$d)</string>
 </resources>

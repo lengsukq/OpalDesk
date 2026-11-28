@@ -12,6 +12,7 @@ import java.util.UUID
 object ReceiverPrefs {
     private const val PREF_NAME = "opalcast_receiver_prefs"
     private const val KEY_THEME_MODE = "theme_mode"
+    private const val KEY_LANGUAGE_PREF = "language_pref"
     private const val KEY_VIDEO_CODEC = "video_codec_pref"
     private const val KEY_USB_TETHER_BETA = "usb_tether_beta"
     private const val KEY_CLIENT_ID = "receiver_client_id"
@@ -31,13 +32,22 @@ object ReceiverPrefs {
     )
 
     private fun prefs(ctx: Context): SharedPreferences =
-        ctx.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        (ctx.applicationContext ?: ctx).getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 
     fun getThemeMode(ctx: Context): Int =
         prefs(ctx).getInt(KEY_THEME_MODE, THEME_SYSTEM).coerceIn(THEME_SYSTEM, THEME_DARK)
 
     fun setThemeMode(ctx: Context, mode: Int) {
         prefs(ctx).edit().putInt(KEY_THEME_MODE, mode.coerceIn(THEME_SYSTEM, THEME_DARK)).apply()
+    }
+
+    fun getLanguagePref(ctx: Context): String =
+        ReceiverLocalePolicy.normalizeLanguagePref(
+            prefs(ctx).getString(KEY_LANGUAGE_PREF, ReceiverLocalePolicy.LANG_SYSTEM),
+        )
+
+    fun setLanguagePref(ctx: Context, pref: String) {
+        prefs(ctx).edit().putString(KEY_LANGUAGE_PREF, ReceiverLocalePolicy.normalizeLanguagePref(pref)).apply()
     }
 
     fun getVideoCodecPref(ctx: Context): Int =

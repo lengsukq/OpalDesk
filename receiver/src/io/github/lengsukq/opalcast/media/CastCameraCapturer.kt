@@ -17,6 +17,7 @@ import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
+import io.github.lengsukq.opalcast.R
 import io.github.lengsukq.opalcast.compat.AndroidApiCompat
 import io.github.lengsukq.opalcast.policy.CameraGeometry
 import java.io.ByteArrayOutputStream
@@ -94,13 +95,13 @@ internal class CastCameraCapturer(
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
         if (manager == null) {
             stopLocked()
-            onError("无法获取系统摄像头服务")
+            onError(context.getString(R.string.cam_err_service))
             return false
         }
         val cameraId = selectCameraId(manager, currentFacing)
         if (cameraId == null) {
             stopLocked()
-            onError("未检测到可用的本机摄像头")
+            onError(context.getString(R.string.cam_err_no_camera))
             return false
         }
         val chars = runCatching { manager.getCameraCharacteristics(cameraId) }.getOrNull()
@@ -159,7 +160,7 @@ internal class CastCameraCapturer(
                             return
                         }
                         stop()
-                        onError("本机摄像头连接已断开")
+                        onError(context.getString(R.string.cam_err_disconnected))
                     }
 
                     override fun onError(camera: CameraDevice, error: Int) {
@@ -168,7 +169,7 @@ internal class CastCameraCapturer(
                             return
                         }
                         stop()
-                        onError("打开本机摄像头失败 (code=$error)")
+                        onError(context.getString(R.string.cam_err_open_code_fmt, error))
                     }
                 },
                 handler,
@@ -177,7 +178,7 @@ internal class CastCameraCapturer(
         } catch (t: Throwable) {
             Log.w(TAG, "openCamera failed", t)
             stopLocked()
-            onError("启动本机摄像头失败：${t.message ?: t.javaClass.simpleName}")
+            onError(context.getString(R.string.cam_err_start_fmt, t.message ?: t.javaClass.simpleName))
             false
         }
     }
@@ -205,7 +206,7 @@ internal class CastCameraCapturer(
                                 session.setRepeatingRequest(builder.build(), null, handler)
                             } catch (_: Throwable) {
                                 stopLocked()
-                                onError("摄像头预览流启动失败")
+                                onError(context.getString(R.string.cam_err_preview_start))
                             }
                         }
                     }
@@ -213,7 +214,7 @@ internal class CastCameraCapturer(
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         if (openGen.get() != gen) return
                         stop()
-                        onError("摄像头会话配置失败")
+                        onError(context.getString(R.string.cam_err_session_config))
                     }
                 },
                 handler,
@@ -221,7 +222,7 @@ internal class CastCameraCapturer(
         } catch (t: Throwable) {
             if (openGen.get() != gen) return
             stopLocked()
-            onError("创建摄像头会话失败：${t.message ?: t.javaClass.simpleName}")
+            onError(context.getString(R.string.cam_err_session_create_fmt, t.message ?: t.javaClass.simpleName))
         }
     }
 

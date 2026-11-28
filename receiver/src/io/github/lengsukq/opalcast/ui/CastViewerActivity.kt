@@ -3,6 +3,7 @@ package io.github.lengsukq.opalcast.ui
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -32,6 +33,7 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import io.github.lengsukq.opalcast.R
 import io.github.lengsukq.opalcast.compat.AndroidApiCompat
 import io.github.lengsukq.opalcast.media.CastCameraCapturer
 import io.github.lengsukq.opalcast.media.CastMicCapturer
@@ -41,6 +43,7 @@ import io.github.lengsukq.opalcast.net.WifiLowLatencyLock
 import io.github.lengsukq.opalcast.policy.CameraGeometry
 import io.github.lengsukq.opalcast.policy.InputGuardPolicy
 import io.github.lengsukq.opalcast.policy.ReceiverPolicy
+import io.github.lengsukq.opalcast.prefs.ReceiverLocalePolicy
 import io.github.lengsukq.opalcast.prefs.ReceiverPrefs
 import kotlin.math.roundToInt
 
@@ -113,6 +116,10 @@ class CastViewerActivity : Activity() {
         if (connected && toolbarExpanded) {
             setToolbarExpanded(false)
         }
+    }
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(ReceiverLocalePolicy.wrapContext(newBase))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -239,7 +246,7 @@ class CastViewerActivity : Activity() {
 
         // Collapsed top pill handle
         collapsedHandle = TextView(this).apply {
-            text = "OpalCast · 工具栏"
+            text = getString(R.string.viewer_toolbar_handle)
             setTextColor(0xE6E0FBF5.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
@@ -295,16 +302,16 @@ class CastViewerActivity : Activity() {
             return tv
         }
 
-        addToolChip("返回") { client?.sendSystemAction(OpalCastClient.SYS_BACK) }
-        addToolChip("主页") { client?.sendSystemAction(OpalCastClient.SYS_HOME) }
-        modeBtn = addToolChip("切镜像") { toggleDisplayMode() }
-        floatMirrorBtn = addToolChip("悬浮小窗") { popOutMirrorToFloating() }
-        blackoutBtn = addToolChip("熄屏") { toggleBlackout() }
-        imeBtn = addToolChip("键盘") { imeBridgeView.toggleIme() }
-        micBtn = addToolChip("麦克风") { toggleRemoteMic() }
-        camBtn = addToolChip("摄像头") { toggleRemoteCamera() }
-        flipCamBtn = addToolChip("切镜头") { flipRemoteCamera() }.apply { visibility = View.GONE }
-        addToolChip("应用小窗") {
+        addToolChip(getString(R.string.common_back)) { client?.sendSystemAction(OpalCastClient.SYS_BACK) }
+        addToolChip(getString(R.string.common_home)) { client?.sendSystemAction(OpalCastClient.SYS_HOME) }
+        modeBtn = addToolChip(getString(R.string.viewer_chip_to_mirror)) { toggleDisplayMode() }
+        floatMirrorBtn = addToolChip(getString(R.string.viewer_chip_float_window)) { popOutMirrorToFloating() }
+        blackoutBtn = addToolChip(getString(R.string.viewer_chip_screen_off)) { toggleBlackout() }
+        imeBtn = addToolChip(getString(R.string.viewer_chip_keyboard)) { imeBridgeView.toggleIme() }
+        micBtn = addToolChip(getString(R.string.viewer_chip_mic)) { toggleRemoteMic() }
+        camBtn = addToolChip(getString(R.string.viewer_chip_camera)) { toggleRemoteCamera() }
+        flipCamBtn = addToolChip(getString(R.string.viewer_chip_flip_camera)) { flipRemoteCamera() }.apply { visibility = View.GONE }
+        addToolChip(getString(R.string.viewer_chip_app_window)) {
             setToolbarExpanded(false)
             client?.requestAppList()
             RemoteAppPickerDialog(
@@ -315,9 +322,9 @@ class CastViewerActivity : Activity() {
                 preloadedApps = remoteApps.takeIf { it.isNotEmpty() },
             ).show()
         }
-        addToolChip("刷新") { client?.requestKeyFrame() }
-        addToolChip("收起") { setToolbarExpanded(false) }
-        addToolChip("断开", tintBg = 0x38EF4444, tintText = 0xFFFCA5A5.toInt()) { finish() }
+        addToolChip(getString(R.string.common_refresh)) { client?.requestKeyFrame() }
+        addToolChip(getString(R.string.viewer_chip_collapse)) { setToolbarExpanded(false) }
+        addToolChip(getString(R.string.viewer_chip_disconnect), tintBg = 0x38EF4444, tintText = 0xFFFCA5A5.toInt()) { finish() }
 
         expandedToolbar = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -334,7 +341,7 @@ class CastViewerActivity : Activity() {
 
         // Remote fullscreen exit helper chip
         fullscreenExitChip = TextView(this).apply {
-            text = "退出全屏"
+            text = getString(R.string.viewer_exit_fullscreen)
             setTextColor(0xFFF0FDF9.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = Typeface.DEFAULT_BOLD
@@ -385,7 +392,7 @@ class CastViewerActivity : Activity() {
             gravity = Gravity.CENTER
         }
         overlaySubtitle = TextView(this).apply {
-            text = "正在建立 TLS 加密连接…"
+            text = getString(R.string.viewer_connecting_tls)
             setTextColor(0xFFA7D3CC.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             gravity = Gravity.CENTER
@@ -394,10 +401,10 @@ class CastViewerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        overlayRetryBtn = OpalCastTheme.buildPillButton(this, "重新连接", pal.accent, Color.WHITE) {
+        overlayRetryBtn = OpalCastTheme.buildPillButton(this, getString(R.string.common_reconnect), pal.accent, Color.WHITE) {
             startPeerSession()
         }.apply { visibility = View.GONE }
-        val backBtn = OpalCastTheme.buildPillButton(this, "返回主页", 0x22FFFFFF, 0xFFE6FFFA.toInt(), 0x33FFFFFF) {
+        val backBtn = OpalCastTheme.buildPillButton(this, getString(R.string.viewer_back_home), 0x22FFFFFF, 0xFFE6FFFA.toInt(), 0x33FFFFFF) {
             finish()
         }
         overlayBtnRow.addView(overlayRetryBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -472,7 +479,7 @@ class CastViewerActivity : Activity() {
         displayMode = initialDisplayMode
         remoteBlackout = false
         overlayTitle.text = peerName
-        overlaySubtitle.text = "正在建立 TLS 加密连接…"
+        overlaySubtitle.text = getString(R.string.viewer_connecting_tls)
         overlayRetryBtn.visibility = View.GONE
         overlayCard.visibility = View.VISIBLE
 
@@ -500,10 +507,12 @@ class CastViewerActivity : Activity() {
             initialDisplayMode = initialDisplayMode,
             targetNetwork = boundNet,
             preferredCodec = AndroidApiCompat.resolvePreferredCastCodec(ReceiverPrefs.getVideoCodecPref(this)),
+            defaultDisconnectReason = getString(R.string.client_disconnected),
+            defaultRejectedMessage = getString(R.string.client_rejected),
             listener = object : OpalCastClient.Listener {
                 override fun onWaitingForApproval() {
                     runOnUiThread {
-                        overlaySubtitle.text = "等待对方设备点击「允许」…"
+                        overlaySubtitle.text = getString(R.string.viewer_waiting_approval)
                     }
                 }
 
@@ -519,8 +528,8 @@ class CastViewerActivity : Activity() {
                         this@CastViewerActivity.peerName = resolvedName
                         connected = true
                         overlayTitle.text = resolvedName
-                        overlaySubtitle.text = "已连接 · 等待首帧画面…"
-                        statusLabel.text = "$resolvedName · 已连接"
+                        overlaySubtitle.text = getString(R.string.viewer_connected_waiting_frame)
+                        statusLabel.text = getString(R.string.viewer_status_connected_fmt, resolvedName)
                         refreshToolbarStates(imeVis = imeBridgeView.isImeVisible)
                         scheduleAutoCollapse(2_400L)
                     }
@@ -580,7 +589,7 @@ class CastViewerActivity : Activity() {
                     runOnUiThread {
                         remoteFullscreenTitle = windowTitle
                         if (windowTitle.isNotEmpty()) {
-                            fullscreenExitChip.text = "退出全屏 · $windowTitle"
+                            fullscreenExitChip.text = getString(R.string.viewer_exit_fullscreen_fmt, windowTitle)
                             fullscreenExitChip.visibility = View.VISIBLE
                         } else {
                             fullscreenExitChip.visibility = View.GONE
@@ -609,7 +618,7 @@ class CastViewerActivity : Activity() {
 
                 override fun onError(message: String) {
                     runOnUiThread {
-                        overlayTitle.text = "连接中断"
+                        overlayTitle.text = getString(R.string.viewer_error_title)
                         overlaySubtitle.text = message
                         overlayRetryBtn.visibility = View.VISIBLE
                         overlayCard.visibility = View.VISIBLE
@@ -625,7 +634,7 @@ class CastViewerActivity : Activity() {
                         cameraEnabled = false
                         refreshToolbarStates(imeVis = false)
                         if (overlayCard.visibility != View.VISIBLE) {
-                            overlayTitle.text = "投屏已断开"
+                            overlayTitle.text = getString(R.string.viewer_disconnected_title)
                             overlaySubtitle.text = reason
                             overlayRetryBtn.visibility = View.VISIBLE
                             overlayCard.visibility = View.VISIBLE
@@ -640,8 +649,12 @@ class CastViewerActivity : Activity() {
     }
 
     private fun updateStatusLabel() {
-        val prefix = if (displayMode == OpalCastClient.DISPLAY_MODE_MIRROR) "镜像" else "桌面"
-        statusLabel.text = "$peerName · $prefix ${videoW}×${videoH}@${videoFps}Hz"
+        val prefix = if (displayMode == OpalCastClient.DISPLAY_MODE_MIRROR) {
+            getString(R.string.viewer_mode_mirror)
+        } else {
+            getString(R.string.viewer_mode_desktop)
+        }
+        statusLabel.text = getString(R.string.viewer_status_stream_fmt, peerName, prefix, videoW, videoH, videoFps)
     }
 
     private fun setToolbarExpanded(expanded: Boolean) {
@@ -661,9 +674,9 @@ class CastViewerActivity : Activity() {
 
     private fun refreshToolbarStates(imeVis: Boolean) {
         val isMirror = (displayMode == OpalCastClient.DISPLAY_MODE_MIRROR)
-        modeBtn.text = if (isMirror) "切桌面" else "切镜像"
+        modeBtn.text = getString(if (isMirror) R.string.viewer_chip_to_desktop else R.string.viewer_chip_to_mirror)
         floatMirrorBtn.visibility = if (isMirror) View.VISIBLE else View.GONE
-        blackoutBtn.text = if (remoteBlackout) "亮屏" else "熄屏"
+        blackoutBtn.text = getString(if (remoteBlackout) R.string.viewer_chip_screen_on else R.string.viewer_chip_screen_off)
         blackoutBtn.background = OpalCastTheme.roundedDrawable(
             this,
             if (remoteBlackout) 0x45F59E0B else 0x1FFFFFFF,
@@ -671,8 +684,8 @@ class CastViewerActivity : Activity() {
             if (remoteBlackout) 0x88F59E0B.toInt() else 0x2EFFFFFF,
             0.8f,
         )
-        imeBtn.text = if (imeVis) "收键盘" else "键盘"
-        micBtn.text = if (micEnabled) "闭麦" else "麦克风"
+        imeBtn.text = getString(if (imeVis) R.string.viewer_chip_hide_keyboard else R.string.viewer_chip_keyboard)
+        micBtn.text = getString(if (micEnabled) R.string.viewer_chip_mute_mic else R.string.viewer_chip_mic)
         micBtn.background = OpalCastTheme.roundedDrawable(
             this,
             if (micEnabled) 0x4514B8A6 else 0x1FFFFFFF,
@@ -680,7 +693,7 @@ class CastViewerActivity : Activity() {
             if (micEnabled) 0x882DD4BF.toInt() else 0x2EFFFFFF,
             0.8f,
         )
-        camBtn.text = if (cameraEnabled) "关镜头" else "摄像头"
+        camBtn.text = getString(if (cameraEnabled) R.string.viewer_chip_stop_camera else R.string.viewer_chip_camera)
         flipCamBtn.visibility = if (cameraEnabled) View.VISIBLE else View.GONE
     }
 
@@ -703,7 +716,7 @@ class CastViewerActivity : Activity() {
 
     private fun popOutMirrorToFloating() {
         if (!AndroidApiCompat.canDrawOverlays(this)) {
-            Toast.makeText(this, "请先授予 OpalCast 悬浮窗权限", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, getString(R.string.perm_overlay_required), Toast.LENGTH_LONG).show()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 runCatching {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
@@ -717,7 +730,7 @@ class CastViewerActivity : Activity() {
         client = null
         val ok = FloatingCastService.startMirror(this, targetHost, targetPort, peerName.ifBlank { targetLabel })
         if (ok) finish() else {
-            Toast.makeText(this, "无法启动悬浮镜像窗", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.viewer_float_mirror_failed), Toast.LENGTH_SHORT).show()
             startPeerSession()
         }
     }
@@ -742,6 +755,7 @@ class CastViewerActivity : Activity() {
         val peer = client ?: return
         stopLocalMicCaptureOnly()
         val cap = CastMicCapturer(
+            context = this,
             onPcmFrame = { pcm -> client?.sendMicFrame(pcm) },
             onError = { err ->
                 runOnUiThread {
@@ -820,8 +834,8 @@ class CastViewerActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
         when (requestCode) {
-            REQ_MIC -> if (granted) enableRemoteMic() else Toast.makeText(this, "需要麦克风权限", Toast.LENGTH_SHORT).show()
-            REQ_CAM -> if (granted) enableRemoteCamera() else Toast.makeText(this, "需要摄像头权限", Toast.LENGTH_SHORT).show()
+            REQ_MIC -> if (granted) enableRemoteMic() else Toast.makeText(this, getString(R.string.viewer_perm_mic_required), Toast.LENGTH_SHORT).show()
+            REQ_CAM -> if (granted) enableRemoteCamera() else Toast.makeText(this, getString(R.string.viewer_perm_camera_required), Toast.LENGTH_SHORT).show()
         }
     }
 

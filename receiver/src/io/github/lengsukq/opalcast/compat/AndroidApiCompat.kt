@@ -49,6 +49,9 @@ object AndroidApiCompat {
     fun primaryAbiLabel(): String =
         ReceiverPolicy.primaryAbiLabel(Build.SUPPORTED_ABIS ?: emptyArray())
 
+    fun primaryAbiInfo(): ReceiverPolicy.PrimaryAbiInfo? =
+        ReceiverPolicy.primaryAbiInfo(Build.SUPPORTED_ABIS ?: emptyArray())
+
     fun overlayWindowType(): Int =
         ReceiverPolicy.overlayWindowType(Build.VERSION.SDK_INT)
 

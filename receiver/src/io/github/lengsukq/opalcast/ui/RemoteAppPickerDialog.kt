@@ -24,9 +24,11 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import io.github.lengsukq.opalcast.R
 import io.github.lengsukq.opalcast.compat.AndroidApiCompat
 import io.github.lengsukq.opalcast.net.OpalCastClient
 import io.github.lengsukq.opalcast.net.UsbTetherDiscovery
+import io.github.lengsukq.opalcast.policy.ReceiverPolicy
 import io.github.lengsukq.opalcast.prefs.ReceiverPrefs
 
 /**
@@ -70,19 +72,19 @@ internal class RemoteAppPickerDialog(
         }
         val titleCol = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         titleCol.addView(TextView(activity).apply {
-            text = "打开远端应用小窗"
+            text = activity.getString(R.string.picker_title)
             setTextColor(pal.inkPrimary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
         })
         titleCol.addView(TextView(activity).apply {
-            text = "来自 $peerLabel · 点击即以独立悬浮小窗运行"
+            text = activity.getString(R.string.picker_subtitle_fmt, peerLabel)
             setTextColor(pal.inkSecondary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         })
         header.addView(titleCol, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         header.addView(
-            OpalCastTheme.buildPillButton(activity, "关闭", pal.chipBg, pal.inkSecondary, pal.border, bold = false) {
+            OpalCastTheme.buildPillButton(activity, activity.getString(R.string.common_close), pal.chipBg, pal.inkSecondary, pal.border, bold = false) {
                 dlg.dismiss()
             },
         )
@@ -90,7 +92,7 @@ internal class RemoteAppPickerDialog(
 
         // Search input
         val searchBox = EditText(activity).apply {
-            hint = "搜索应用名称或包名…"
+            hint = activity.getString(R.string.picker_search_hint)
             setHintTextColor(pal.inkMuted)
             setTextColor(pal.inkPrimary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
@@ -113,7 +115,11 @@ internal class RemoteAppPickerDialog(
 
         // Status hint
         val statusTv = TextView(activity).apply {
-            text = if (allApps.isEmpty()) "正在获取远端应用列表…" else "共 ${allApps.size} 个应用"
+            text = if (allApps.isEmpty()) {
+                activity.getString(R.string.picker_loading_list)
+            } else {
+                activity.getString(R.string.picker_count_fmt, allApps.size)
+            }
             setTextColor(pal.inkSecondary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         }
@@ -164,9 +170,11 @@ internal class RemoteAppPickerDialog(
             sessionRole = OpalCastClient.SESSION_ROLE_APP_CATALOG,
             audioEnabled = false,
             targetNetwork = boundNet,
+            defaultDisconnectReason = activity.getString(R.string.client_disconnected),
+            defaultRejectedMessage = activity.getString(R.string.client_rejected),
             listener = object : OpalCastClient.Listener {
                 override fun onWaitingForApproval() {
-                    mainHandler.post { statusTextView?.text = "等待对方设备点击「允许」…" }
+                    mainHandler.post { statusTextView?.text = activity.getString(R.string.viewer_waiting_approval) }
                 }
 
                 override fun onAuthenticated(peerName: String, authToken: String, permanent: Boolean, certFingerprint: String) {
@@ -175,14 +183,14 @@ internal class RemoteAppPickerDialog(
                     } else if (authToken.isNotBlank()) {
                         handoverToken = authToken
                     }
-                    mainHandler.post { statusTextView?.text = "已连接 $peerName，正在加载应用列表…" }
+                    mainHandler.post { statusTextView?.text = activity.getString(R.string.picker_connected_loading_fmt, peerName) }
                     catalogClient?.requestAppList()
                 }
 
                 override fun onAppListReceived(apps: List<OpalCastClient.RemoteAppEntry>) {
                     mainHandler.post {
                         allApps = apps
-                        statusTextView?.text = "共 ${apps.size} 个远端应用"
+                        statusTextView?.text = activity.getString(R.string.picker_remote_count_fmt, apps.size)
                         renderApps()
                     }
                     catalogClient?.stop()
@@ -191,7 +199,7 @@ internal class RemoteAppPickerDialog(
                 override fun onVideoSizeChanged(width: Int, height: Int, fps: Int) = Unit
 
                 override fun onError(message: String) {
-                    mainHandler.post { statusTextView?.text = "加载失败：$message" }
+                    mainHandler.post { statusTextView?.text = activity.getString(R.string.picker_load_failed_fmt, message) }
                 }
 
                 override fun onDisconnected(reason: String) = Unit
@@ -206,20 +214,30 @@ internal class RemoteAppPickerDialog(
         container.removeAllViews()
         val pal = OpalCastTheme.resolve(activity)
         val filtered = allApps
-            .filter {
-                query.isEmpty() ||
-                    it.label.contains(query, ignoreCase = true) ||
-                    it.pkg.contains(query, ignoreCase = true)
+            .filter { entry ->
+                if (query.isEmpty()) return@filter true
+                if (entry.label.contains(query, ignoreCase = true) || entry.pkg.contains(query, ignoreCase = true)) {
+                    return@filter true
+                }
+                if (!entry.isSecondaryProfile) return@filter false
+                val badgeText = formatProfileBadge(entry.userId, entry.profileType)
+                badgeText.contains(query, ignoreCase = true) ||
+                    ReceiverPolicy.profileSearchKeywords(entry.userId, entry.profileType)
+                        .any { it.contains(query, ignoreCase = true) }
             }
             .sortedWith(
                 compareByDescending<OpalCastClient.RemoteAppEntry> {
-                    ReceiverPrefs.getAppLaunchCount(activity, it.pkg) * 3 + it.openCount
-                }.thenBy { it.label.lowercase() },
+                    ReceiverPrefs.getAppLaunchCount(activity, it.appKey) * 3 + it.openCount
+                }.thenBy { it.label.lowercase() }.thenBy { it.userId },
             )
 
         if (filtered.isEmpty()) {
             container.addView(TextView(activity).apply {
-                text = if (allApps.isEmpty()) "等待应用目录…" else "未找到匹配的远端应用"
+                text = if (allApps.isEmpty()) {
+                    activity.getString(R.string.picker_waiting_catalog)
+                } else {
+                    activity.getString(R.string.picker_no_match)
+                }
                 setTextColor(pal.inkMuted)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                 gravity = Gravity.CENTER
@@ -248,16 +266,31 @@ internal class RemoteAppPickerDialog(
             row.addView(badge, LinearLayout.LayoutParams(dp(34), dp(34)).apply { rightMargin = dp(10) })
 
             val textCol = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-            textCol.addView(TextView(activity).apply {
+            val titleRow = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            titleRow.addView(TextView(activity).apply {
                 text = entry.label
                 setTextColor(pal.inkPrimary)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
                 typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
-            })
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            if (entry.isSecondaryProfile) {
+                val profileBadgeText = formatProfileBadge(entry.userId, entry.profileType)
+                val (badgeBg, badgeFg, badgeBorder) = resolveProfileBadgeColors(entry.userId, entry.profileType)
+                titleRow.addView(
+                    OpalCastTheme.buildBadge(activity, profileBadgeText, badgeBg, badgeFg, badgeBorder),
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        leftMargin = dp(6)
+                    },
+                )
+            }
+            textCol.addView(titleRow)
             textCol.addView(TextView(activity).apply {
-                text = entry.pkg
+                text = if (entry.isSecondaryProfile) "${entry.pkg} · u${entry.userId}" else entry.pkg
                 setTextColor(pal.inkMuted)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
                 maxLines = 1
@@ -266,7 +299,7 @@ internal class RemoteAppPickerDialog(
             row.addView(textCol, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 rightMargin = dp(8)
             })
-            row.addView(OpalCastTheme.buildBadge(activity, "小窗", pal.accentSoft, pal.accent, pal.accentBorder))
+            row.addView(OpalCastTheme.buildBadge(activity, activity.getString(R.string.picker_badge_window), pal.accentSoft, pal.accent, pal.accentBorder))
 
             container.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 bottomMargin = dp(7)
@@ -276,7 +309,7 @@ internal class RemoteAppPickerDialog(
 
     private fun launchFloatingApp(entry: OpalCastClient.RemoteAppEntry) {
         if (!AndroidApiCompat.canDrawOverlays(activity)) {
-            Toast.makeText(activity, "请先授予 OpalCast 悬浮窗权限", Toast.LENGTH_LONG).show()
+            Toast.makeText(activity, activity.getString(R.string.perm_overlay_required), Toast.LENGTH_LONG).show()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 runCatching {
                     activity.startActivity(
@@ -286,6 +319,12 @@ internal class RemoteAppPickerDialog(
             }
             return
         }
+        val launchLabel = if (entry.isSecondaryProfile) {
+            val badge = formatProfileBadge(entry.userId, entry.profileType)
+            if (entry.label.contains(badge)) entry.label else "${entry.label} ($badge)"
+        } else {
+            entry.label
+        }
         val started = FloatingCastService.startApp(
             ctx = activity,
             host = host,
@@ -293,16 +332,33 @@ internal class RemoteAppPickerDialog(
             peerLabel = peerLabel,
             appPackage = entry.pkg,
             appActivity = entry.cls,
-            appLabel = entry.label,
+            appLabel = launchLabel,
+            appUserId = entry.userId,
             handoverToken = handoverToken,
         )
         if (started) {
             onLaunched()
             dialog?.dismiss()
         } else {
-            Toast.makeText(activity, "无法启动远端应用小窗", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, activity.getString(R.string.picker_launch_failed), Toast.LENGTH_SHORT).show()
         }
     }
+
+    private fun formatProfileBadge(userId: Int, profileType: String): String =
+        when (ReceiverPolicy.normalizeProfileType(profileType, userId)) {
+            ReceiverPolicy.PROFILE_CLONE -> activity.getString(R.string.profile_badge_clone)
+            ReceiverPolicy.PROFILE_WORK -> activity.getString(R.string.profile_badge_work)
+            ReceiverPolicy.PROFILE_PRIVATE -> activity.getString(R.string.profile_badge_private)
+            else -> activity.getString(R.string.profile_badge_secondary_fmt, userId)
+        }
+
+    private fun resolveProfileBadgeColors(userId: Int, profileType: String): Triple<Int, Int, Int> =
+        when (ReceiverPolicy.normalizeProfileType(profileType, userId)) {
+            ReceiverPolicy.PROFILE_WORK -> Triple(0x293B82F6, 0xFF60A5FA.toInt(), 0x5C3B82F6)
+            ReceiverPolicy.PROFILE_PRIVATE -> Triple(0x298B5CF6, 0xFFA78BFA.toInt(), 0x5C8B5CF6)
+            ReceiverPolicy.PROFILE_GENERIC -> Triple(0x2914B8A6, 0xFF2DD4BF.toInt(), 0x5C14B8A6)
+            else -> Triple(0x29F59E0B, 0xFFF59E0B.toInt(), 0x5CF59E0B)
+        }
 
     private fun cleanup() {
         catalogClient?.stop()

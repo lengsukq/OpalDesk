@@ -1,8 +1,10 @@
 package io.github.lengsukq.opalcast.media
 
+import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.util.Log
+import io.github.lengsukq.opalcast.R
 import io.github.lengsukq.opalcast.compat.AndroidApiCompat
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -10,6 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * API 21–37 compatible 16 kHz mono PCM16 microphone capturer for OpalCast voice uplink.
  */
 internal class CastMicCapturer(
+    private val context: Context,
     private val sampleRate: Int = DEFAULT_SAMPLE_RATE,
     private val onPcmFrame: (ByteArray) -> Unit,
     private val onError: (String) -> Unit,
@@ -42,14 +45,14 @@ internal class CastMicCapturer(
         } catch (t: Throwable) {
             Log.w(TAG, "AudioRecord init failed", t)
             running.set(false)
-            onError("无法初始化本地麦克风：${t.message ?: t.javaClass.simpleName}")
+            onError(context.getString(R.string.mic_err_init_fmt, t.message ?: t.javaClass.simpleName))
             return false
         }
 
         if (rec.state != AudioRecord.STATE_INITIALIZED) {
             try { rec.release() } catch (_: Throwable) {}
             running.set(false)
-            onError("本地麦克风初始化失败，请检查录音权限")
+            onError(context.getString(R.string.mic_err_permission))
             return false
         }
 
@@ -69,7 +72,7 @@ internal class CastMicCapturer(
             try { rec.release() } catch (_: Throwable) {}
             recorder = null
             running.set(false)
-            onError("启动本地麦克风失败：${t.message ?: t.javaClass.simpleName}")
+            onError(context.getString(R.string.mic_err_start_fmt, t.message ?: t.javaClass.simpleName))
             false
         }
     }
@@ -102,7 +105,7 @@ internal class CastMicCapturer(
             if (n < 0) {
                 consecutiveErrors++
                 if (consecutiveErrors >= 5) {
-                    onError("麦克风采集异常 (err=$n)")
+                    onError(context.getString(R.string.mic_err_read_fmt, n))
                     break
                 }
                 continue

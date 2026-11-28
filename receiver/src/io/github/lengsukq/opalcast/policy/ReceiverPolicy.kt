@@ -32,6 +32,52 @@ object ReceiverPolicy {
     const val TRANSPORT_HINT_WIFI_TLS = "wifi_tls"
     const val TRANSPORT_HINT_USB_TETHER = "usb_tether"
 
+    const val PROFILE_CLONE = "clone"
+    const val PROFILE_WORK = "work"
+    const val PROFILE_PRIVATE = "private"
+    const val PROFILE_GENERIC = "profile"
+
+    fun formatAppKey(pkg: String, userId: Int = 0): String {
+        val clean = pkg.trim()
+        return if (userId > 0) "$clean#u$userId" else clean
+    }
+
+    fun normalizeProfileType(raw: String?, userId: Int): String {
+        if (userId <= 0) return ""
+        return when (raw?.trim()?.lowercase(Locale.ROOT)) {
+            PROFILE_CLONE -> PROFILE_CLONE
+            PROFILE_WORK -> PROFILE_WORK
+            PROFILE_PRIVATE -> PROFILE_PRIVATE
+            PROFILE_GENERIC -> PROFILE_GENERIC
+            else -> if (userId == 999 || userId == 95 || userId == 128) PROFILE_CLONE else PROFILE_GENERIC
+        }
+    }
+
+    fun profileSearchKeywords(userId: Int, profileType: String = ""): List<String> {
+        if (userId <= 0) return emptyList()
+        val out = ArrayList<String>(10)
+        out.add("u$userId")
+        out.add("user $userId")
+        out.add("分身")
+        out.add("多开")
+        out.add("双开")
+        out.add("clone")
+        out.add("dual")
+        when (normalizeProfileType(profileType, userId)) {
+            PROFILE_WORK -> {
+                out.add("工作")
+                out.add("work")
+                out.add("企业")
+            }
+            PROFILE_PRIVATE -> {
+                out.add("隐私")
+                out.add("私密")
+                out.add("private")
+            }
+        }
+        return out
+    }
+
     const val MIN_BITRATE_KBPS = 2_500
     const val MAX_WIFI_BITRATE_KBPS = 32_000
     const val MAX_USB_TETHER_BITRATE_KBPS = 50_000
@@ -82,11 +128,21 @@ object ReceiverPolicy {
             clean == "arm64-v8a" || clean == "x86_64" || clean.contains("64")
         }
 
-    fun primaryAbiLabel(supportedAbis: Array<String>): String {
+    data class PrimaryAbiInfo(
+        val abi: String,
+        val is64Bit: Boolean,
+    )
+
+    fun primaryAbiInfo(supportedAbis: Array<String>): PrimaryAbiInfo? {
         val primary = supportedAbis.firstOrNull { it.isNotBlank() }?.trim().orEmpty()
-        if (primary.isEmpty()) return "未知架构"
-        val bits = if (primary.contains("64")) "64位" else "32位"
-        return "$primary · $bits"
+        if (primary.isEmpty()) return null
+        return PrimaryAbiInfo(abi = primary, is64Bit = primary.contains("64"))
+    }
+
+    fun primaryAbiLabel(supportedAbis: Array<String>): String {
+        val info = primaryAbiInfo(supportedAbis) ?: return "未知架构"
+        val bits = if (info.is64Bit) "64位" else "32位"
+        return "${info.abi} · $bits"
     }
 
     /**
@@ -644,7 +700,7 @@ object UsbTetherPolicy {
 
         val ints = HashMap<String, Int>()
         INT_FIELD_REGEX.findAll(body).forEach { m -> m.groupValues[2].toIntOrNull()?.let { ints[m.groupValues[1]] = it } }
-        val devName = strs["deviceName"].orEmpty().trim().ifEmpty { "Android 设备" }
+        val devName = strs["deviceName"].orEmpty().trim().ifEmpty { "Android" }
         val shortFp = strs["certShortFp"].orEmpty().trim()
         val protoVer = ints["protocolVersion"] ?: 1
         return CastHealthInfo(devName, shortFp, protoVer)
