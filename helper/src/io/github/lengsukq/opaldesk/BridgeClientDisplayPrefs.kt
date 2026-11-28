@@ -257,11 +257,40 @@ internal fun BridgeClient.pullDaemonWindowBoundsAsyncImpl(onDone: (() -> Unit)?)
     }
 }
 
+internal data class PendingExternalMouseTarget(
+    val mode: Int,
+    val externalDisplayId: Int,
+)
+
+internal fun BridgeClient.replayPendingMouseTargetsSync(svc: IBinder) {
+    if (localDesktopMousePinned) {
+        transact(svc, BridgeProtocol.Tx.SET_MOUSE_TARGET, oneway = false, writeArgs = { d ->
+            d.writeInt(BridgeProtocol.MouseTarget.PIN_LOCAL_DISPLAY0)
+            d.writeInt(-1)
+        }) { it.readInt() }
+    }
+    val pendingExt = pendingExternalMouseTarget
+    if (pendingExt != null && pendingExt.externalDisplayId > android.view.Display.DEFAULT_DISPLAY) {
+        transact(svc, BridgeProtocol.Tx.SET_MOUSE_TARGET, oneway = false, writeArgs = { d ->
+            d.writeInt(pendingExt.mode)
+            d.writeInt(pendingExt.externalDisplayId)
+        }) { it.readInt() }
+    }
+}
+
 internal fun BridgeClient.setMouseTargetAsyncImpl(
     targetMode: Int,
     externalDisplayId: Int,
     onDone: ((Int) -> Unit)?,
 ) {
+    pendingExternalMouseTarget = if (
+        externalDisplayId > android.view.Display.DEFAULT_DISPLAY &&
+        targetMode != BridgeProtocol.MouseTarget.RELEASE_EXTERNAL
+    ) {
+        PendingExternalMouseTarget(targetMode, externalDisplayId)
+    } else {
+        null
+    }
     ioExec.execute {
         val svc = getService()
         val bound = if (svc != null) {
@@ -307,6 +336,7 @@ internal fun BridgeClient.setLocalDesktopMousePinAsyncImpl(pinned: Boolean) {
 }
 
 internal fun BridgeClient.releaseExternalMouseRoutingAsyncImpl() {
+    pendingExternalMouseTarget = null
     ioExec.execute {
         val svc = getService() ?: return@execute
         transact(
@@ -324,6 +354,7 @@ internal fun BridgeClient.releaseExternalMouseRoutingAsyncImpl() {
 
 internal fun BridgeClient.onHostTaskRemovedImpl(hasPhysicalExternal: Boolean) {
     localDesktopMousePinned = false
+    if (!hasPhysicalExternal) pendingExternalMouseTarget = null
     ioExec.execute {
         val svc = getService() ?: return@execute
         if (_statusFlow.value.hostScreenOff && !_remoteStatusFlow.value.connected && !hasPhysicalExternal) {

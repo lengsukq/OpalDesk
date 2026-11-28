@@ -13,14 +13,16 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
 /**
  * Persistence serializer for per-app {@link WindowProfile}, launch counts, custom DPI overrides,
- * normalized {@link SavedWindowBounds}, and DeX IME configuration files for {@link DaemonConfig}.
+ * normalized {@link SavedWindowBounds}, DeX IME config, and input binding rules for {@link DaemonConfig}.
  */
-final class WindowProfileStore {
+public final class WindowProfileStore {
     static final class ImeConfSnapshot {
         final int displayMode;
         final String lockedImeId;
@@ -46,6 +48,7 @@ final class WindowProfileStore {
     private final File appDpisFile;
     private final File appBoundsFile;
     private final File imeConfFile;
+    private final File inputBindingsFile;
 
     WindowProfileStore(
             Object lock,
@@ -54,7 +57,8 @@ final class WindowProfileStore {
             File launchCountsFile,
             File appDpisFile,
             File appBoundsFile,
-            File imeConfFile) {
+            File imeConfFile,
+            File inputBindingsFile) {
         this.lock = lock;
         this.ioLock = ioLock;
         this.profileFile = profileFile;
@@ -62,6 +66,7 @@ final class WindowProfileStore {
         this.appDpisFile = appDpisFile;
         this.appBoundsFile = appBoundsFile;
         this.imeConfFile = imeConfFile;
+        this.inputBindingsFile = inputBindingsFile;
     }
 
     void loadAppProfiles(Map<String, WindowProfile> appProfiles) {
@@ -298,6 +303,29 @@ final class WindowProfileStore {
         }
     }
 
+    String loadInputBindingsJson() {
+        if (inputBindingsFile == null || !inputBindingsFile.isFile()) return null;
+        try {
+            byte[] bytes = Files.readAllBytes(inputBindingsFile.toPath());
+            return new String(bytes, StandardCharsets.UTF_8).trim();
+        } catch (IOException e) {
+            System.err.println("OPALDESK_INPUT_BINDINGS_LOAD_WARN: " + e.getMessage());
+            return null;
+        }
+    }
+
+    void saveInputBindingsJson(String json) {
+        if (inputBindingsFile == null) return;
+        synchronized (ioLock) {
+            String content = (json != null ? json : "[]") + "\n";
+            try {
+                AtomicFiles.writeAtomicUtf8(inputBindingsFile, content, AtomicFiles.MODE_OWNER_RW);
+            } catch (IOException e) {
+                System.err.println("OPALDESK_INPUT_BINDINGS_SAVE_WARN: " + e.getMessage());
+            }
+        }
+    }
+
     static String toAdvancedStateJson(
             int globalCustomDpi,
             Map<String, Integer> appCustomDpis,
@@ -323,5 +351,43 @@ final class WindowProfileStore {
                 .putRaw("appCustomDpis", dpisObj.build())
                 .putRaw("appWindowBounds", boundsObj.build())
                 .build();
+    }
+
+    public static Map<String, Integer> parseAppDpisPayload(String raw) {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        if (raw == null || raw.isEmpty()) return out;
+        for (String line : raw.split("\r?\n")) {
+            int eq = line.indexOf('=');
+            if (eq <= 0) continue;
+            String pkg = line.substring(0, eq).trim();
+            try {
+                int dpi = Integer.parseInt(line.substring(eq + 1).trim());
+                if (dpi > 0) out.put(pkg, dpi);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return out;
+    }
+
+    public static Map<String, SavedWindowBounds> parseAppBoundsPayload(String raw) {
+        Map<String, SavedWindowBounds> out = new LinkedHashMap<>();
+        if (raw == null || raw.isEmpty()) return out;
+        for (String line : raw.split("\r?\n")) {
+            int eq = line.indexOf('=');
+            if (eq <= 0) continue;
+            String pkg = line.substring(0, eq).trim();
+            String[] parts = line.substring(eq + 1).trim().split(",");
+            if (parts.length < 4) continue;
+            try {
+                float l = Float.parseFloat(parts[0].trim());
+                float t = Float.parseFloat(parts[1].trim());
+                float r = Float.parseFloat(parts[2].trim());
+                float b = Float.parseFloat(parts[3].trim());
+                String pres = parts.length >= 5 ? parts[4].trim() : BridgeProtocol.PRES_FLOATING;
+                out.put(pkg, new SavedWindowBounds(l, t, r, b, pres));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return out;
     }
 }

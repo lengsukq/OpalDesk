@@ -1016,4 +1016,21 @@
     <string name="profile_badge_work">工作</string>
     <string name="profile_badge_private">隐私</string>
     <string name="profile_badge_secondary">用户 %1$d</string>
+
+    <!-- Frequently Asked Questions (FAQ) -->
+    <string name="faq_title">常见问题（FAQ）</string>
+    <string name="faq_subtitle">触控、外接键鼠、投屏与激活高频排查指南</string>
+    <string name="faq_search_placeholder">搜索 USB 调试、鼠标侧键、投屏、DPI…</string>
+    <string name="faq_result_count">%1$d 条</string>
+    <string name="faq_pinned_badge">置顶</string>
+    <string name="faq_empty_title">未找到匹配的常见问题</string>
+    <string name="faq_empty_hint">请尝试更换关键词或切换回「全部」分类</string>
+    <string name="faq_short_btn">常见问题</string>
+    <string name="faq_back_to_guide">返回指南</string>
+    <string name="settings_faq_row_title">常见问题（FAQ）</string>
+    <string name="settings_faq_row_sub">无法触控、外接键鼠、侧键录制、投屏与激活排障</string>
+    <string name="settings_faq_open_btn">查看 FAQ</string>
+    <string name="dash_faq_entry_title">常见问题（FAQ）</string>
+    <string name="dash_faq_entry_sub">无法触控、外接鼠标、无线投屏与激活快速排查</string>
+    <string name="dash_faq_entry_btn">查看 ›</string>
 </resources>

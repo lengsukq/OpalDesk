@@ -45,6 +45,7 @@ public final class BridgeProtocol {
     public static final String PROVIDER_METHOD_NOTIFICATION_ACTION = "notificationAction";
     public static final String PROVIDER_METHOD_MEDIA_ACTION = "mediaAction";
     public static final String PROVIDER_METHOD_CALL_ACTION = "callAction";
+    public static final String PROVIDER_METHOD_INPUT_ACTION = "inputAction";
 
     public static final String EXTRA_SYNC_SCENE_JSON = "sceneJson";
     public static final String EXTRA_SYNC_STATE_SEQ = "stateSeq";
@@ -63,6 +64,7 @@ public final class BridgeProtocol {
     public static final String EXTRA_CALL_ACTION_OP = "op";
     public static final String EXTRA_CALL_ACTION_NUMBER = "number";
     public static final String EXTRA_CALL_ACTION_SMS_TEXT = "smsText";
+    public static final String EXTRA_INPUT_ACTION_ID = "actionId";
 
     public static final String CTL_CMD_SHUTDOWN = "SHUTDOWN";
     public static final String CTL_CMD_NEED_BINDER = "NEED_BINDER";
@@ -115,7 +117,15 @@ public final class BridgeProtocol {
     public static final int TX_SYNC_CALL_STATE = 52;
     public static final int TX_TRIGGER_HOTSPOT = 53;
     public static final int TX_GET_SECONDARY_USER_APPS = 54;
+    public static final int TX_GET_INPUT_BINDINGS = 55;
+    public static final int TX_SET_INPUT_BINDINGS = 56;
+    public static final int TX_INPUT_BINDING_CAPTURE = 57;
     public static final int TX_SHUTDOWN = 99;
+
+    // ---- Input Binding Capture Mode Ops (TX_INPUT_BINDING_CAPTURE) ----
+    public static final int INPUT_CAPTURE_OP_STOP = 0;
+    public static final int INPUT_CAPTURE_OP_START = 1;
+    public static final int INPUT_CAPTURE_OP_POLL = 2;
 
     // ---- Built-in / Companion Plugin IME Event Codes (TX_NOTIFY_BRIDGE_IME_EVENT) ----
     public static final int BRIDGE_IME_EVT_START_INPUT = 1;

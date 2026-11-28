@@ -330,12 +330,7 @@ public final class DisplayCanvasNSView: NSView {
     }
 
     private func mapOtherMouseButton(_ buttonNumber: Int) -> OpalCastMouseButtons {
-        switch buttonNumber {
-        case 2: return .tertiary
-        case 3: return .back
-        case 4: return .forward
-        default: return .tertiary
-        }
+        OpalCastMouseButtons.fromOtherMouseButtonNumber(buttonNumber)
     }
 
     private func handleButton(event: NSEvent, button: OpalCastMouseButtons, isDown: Bool) {

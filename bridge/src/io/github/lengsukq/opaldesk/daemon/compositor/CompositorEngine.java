@@ -617,6 +617,33 @@ public final class CompositorEngine {
         }
     }
 
+    public boolean snapFocusedWindow(boolean leftHalf) {
+        synchronized (lock) {
+            boolean changed = layoutManager.snapFocusedWindowLocked(
+                    sessionsById.values(), leftHalf, System.currentTimeMillis());
+            if (changed) markDirtyAndNotifyLocked();
+            return changed;
+        }
+    }
+
+    public boolean applyQuickSplitTwo() {
+        synchronized (lock) {
+            boolean changed = layoutManager.applyQuickSplitTwoLocked(
+                    sessionsById.values(), System.currentTimeMillis());
+            if (changed) markDirtyAndNotifyLocked();
+            return changed;
+        }
+    }
+
+    public boolean switchNextWindow() {
+        synchronized (lock) {
+            boolean changed = layoutManager.switchNextWindowLocked(
+                    sessionsById.values(), System.currentTimeMillis());
+            if (changed) markDirtyAndNotifyLocked();
+            return changed;
+        }
+    }
+
     public void minimizeAllWindows() {
         List<Object> surfacesToRelease = new ArrayList<>();
         synchronized (lock) {

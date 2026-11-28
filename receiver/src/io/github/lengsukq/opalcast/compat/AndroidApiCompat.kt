@@ -493,6 +493,8 @@ object AndroidApiCompat {
         }
     }
 
+    fun supportsActionButtonEvents(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+
     fun isMouseButtonPress(ev: MotionEvent): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && ev.actionMasked == MotionEvent.ACTION_BUTTON_PRESS
 

@@ -387,6 +387,9 @@ class PeerFloatingAppService : Service() {
         AppPrefs.hydrateFlows(this)
         val theme = resolveFloatingOverlayTheme(this)
         val container = buildFloatingRootContainer(this, theme)
+        container.setOnGenericMotionListener { v, ev ->
+            client?.handleGenericMouseMotion(ev, v.width, v.height) == true
+        }
 
         // ---- Authentic macOS Liquid Frosted Glass Title Bar (40dp) ----
         val headerRefs = buildFloatingHeaderBar(

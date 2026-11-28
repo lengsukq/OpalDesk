@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Display
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.WindowManager
@@ -24,6 +25,7 @@ import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.DesktopActivity
 import io.github.lengsukq.opaldesk.MainActivity
 import io.github.lengsukq.opaldesk.R
+import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.prefs.OpalLocalePolicy
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.ui.OpalImeFocusTracker
@@ -203,6 +205,9 @@ class RemoteTrackpadActivity : ComponentActivity() {
 
     override fun onPause() {
         ExternalTrackpadBridge.setPhoneTrackpadVisible(false, trackpadCloser)
+        BridgeClient.updateRemoteTrackpadCursor(null)
+        ExternalTrackpadBridge.getDirectSink()?.hideCursor()
+        rebindExternalMouseIfNeeded()
         super.onPause()
     }
 
@@ -210,7 +215,18 @@ class RemoteTrackpadActivity : ComponentActivity() {
         ExternalTrackpadBridge.setPhoneTrackpadVisible(false, trackpadCloser)
         BridgeClient.updateRemoteTrackpadCursor(null)
         ExternalTrackpadBridge.getDirectSink()?.hideCursor()
+        rebindExternalMouseIfNeeded()
         super.onDestroy()
+    }
+
+    private fun rebindExternalMouseIfNeeded() {
+        val session = ExternalTrackpadBridge.sessionFlow.value
+        val activeExtId = session.displayId
+        if (activeExtId <= Display.DEFAULT_DISPLAY || session.isRemoteCastDisplay) return
+        val mode = AppPrefs.getMouseTarget(this)
+        if (mode == BridgeProtocol.MouseTarget.EXTERNAL) {
+            BridgeClient.setMouseTargetAsync(mode, activeExtId)
+        }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

@@ -75,6 +75,7 @@ fun ConsoleDashboardTab(
     onConnectPeerCast: (String, Int, String) -> Unit,
     onOpenFloatingAppPicker: (String, Int, String) -> Unit,
     onOpenActivation: () -> Unit,
+    onOpenFaq: () -> Unit = {},
     onRequestCompleteExit: () -> Unit,
     navController: ConsoleNavigationController? = null,
 ) {
@@ -555,6 +556,41 @@ fun ConsoleDashboardTab(
             connected = status.connected,
             onOpenActivation = onOpenActivation,
         )
+
+        // 5b. Compact Frequently Asked Questions (FAQ) Quick Entry
+        MacGlassSectionCard(
+            contentPadding = PaddingValues(horizontal = 15.dp, vertical = 11.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenFaq),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    OpalText(
+                        text = stringResource(R.string.dash_faq_entry_title),
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    OpalText(
+                        text = stringResource(R.string.dash_faq_entry_sub),
+                        fontSize = 11.sp,
+                        color = OpalPalette.TextSecondary,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                OpalButton(
+                    label = stringResource(R.string.dash_faq_entry_btn),
+                    compact = true,
+                    filled = false,
+                    accent = OpalPalette.AccentEmerald,
+                    onClick = onOpenFaq,
+                )
+            }
+        }
 
         // 6. Minimalist Footer Exit Action
         Column(

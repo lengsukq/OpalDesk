@@ -53,6 +53,7 @@ fun ConsoleEngineSettingsTab(
     onOpenActivation: () -> Unit,
     onOpenUpdateModal: () -> Unit,
     onOpenFeatureGuide: () -> Unit = {},
+    onOpenFaq: () -> Unit = {},
     onStopEngine: () -> Unit,
     navController: ConsoleNavigationController? = null,
 ) {
@@ -389,6 +390,37 @@ fun ConsoleEngineSettingsTab(
                     filled = false,
                     accent = OpalPalette.AccentBlue,
                     onClick = onOpenFeatureGuide,
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(0.7.dp)
+                    .background(OpalPalette.DividerColor),
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    OpalText(text = stringResource(R.string.settings_faq_row_title), fontSize = 13.5.sp, fontWeight = FontWeight.Medium)
+                    OpalText(
+                        text = stringResource(R.string.settings_faq_row_sub),
+                        fontSize = 11.sp,
+                        color = OpalPalette.TextSecondary,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                OpalButton(
+                    label = stringResource(R.string.settings_faq_open_btn),
+                    compact = true,
+                    filled = false,
+                    accent = OpalPalette.AccentEmerald,
+                    onClick = onOpenFaq,
                 )
             }
         }

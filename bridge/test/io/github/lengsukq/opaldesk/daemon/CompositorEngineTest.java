@@ -700,4 +700,67 @@ public class CompositorEngineTest {
         assertTrue(s1AfterFocus.focused);
         assertFalse(engine.getWindowSnapshot(w2).focused);
     }
+
+    @Test
+    public void testSnapFocusedWindowQuickSplitTwoAndSwitchNextWindow() {
+        File confF = new File(tmpDir.getRoot(), "snap_main.conf");
+        File profF = new File(tmpDir.getRoot(), "snap_prof.conf");
+        DaemonConfig cfg = new DaemonConfig(confF, profF);
+        cfg.updateRuntimeConfig(BridgeProtocol.INPUT_BACKEND_AUTO, 4, 1920, 1200, 240);
+
+        RecordingDriver driver = new RecordingDriver();
+        VirtualDisplayPool pool = new VirtualDisplayPool(driver, 4, false);
+        FakeRuntime runtime = new FakeRuntime();
+        CompositorEngine engine = new CompositorEngine(cfg, pool, runtime, null);
+
+        // Empty workspace returns false
+        assertFalse(engine.snapFocusedWindow(true));
+        assertFalse(engine.applyQuickSplitTwo());
+        assertFalse(engine.switchNextWindow());
+
+        // Single window: snap right, snap left, and quick split -> snaps left
+        int w1 = engine.openOrFocusWindow("com.example.alpha", "", BridgeProtocol.PROFILE_DESKTOP, 0, 0, 0, 0);
+        engine.attachWindowSurface(w1, new Object(), 1000, 700, 240, 60f);
+
+        DisplayGeometryUtil.IntRect expectedLeft =
+                WindowSnapGeometry.computeSnapFrame(BridgeProtocol.PRES_SNAP_LEFT, 1920, 1200, 240);
+        DisplayGeometryUtil.IntRect expectedRight =
+                WindowSnapGeometry.computeSnapFrame(BridgeProtocol.PRES_SNAP_RIGHT, 1920, 1200, 240);
+
+        assertTrue(engine.snapFocusedWindow(false));
+        WindowSession s1Right = engine.getWindowSnapshot(w1);
+        assertEquals(BridgeProtocol.PRES_SNAP_RIGHT, s1Right.presentation);
+        assertEquals(expectedRight.left, s1Right.frame.left);
+        assertEquals(expectedRight.right, s1Right.frame.right);
+
+        assertTrue(engine.snapFocusedWindow(true));
+        WindowSession s1Left = engine.getWindowSnapshot(w1);
+        assertEquals(BridgeProtocol.PRES_SNAP_LEFT, s1Left.presentation);
+        assertEquals(expectedLeft.left, s1Left.frame.left);
+        assertEquals(expectedLeft.right, s1Left.frame.right);
+
+        // Single window applyQuickSplitTwo snaps to left half
+        assertTrue(engine.snapFocusedWindow(false));
+        assertTrue(engine.applyQuickSplitTwo());
+        assertEquals(BridgeProtocol.PRES_SNAP_LEFT, engine.getWindowSnapshot(w1).presentation);
+
+        // Two windows applyQuickSplitTwo places focused window left and second window right
+        int w2 = engine.openOrFocusWindow("com.example.beta", "", BridgeProtocol.PROFILE_DESKTOP, 0, 0, 0, 0);
+        engine.attachWindowSurface(w2, new Object(), 1000, 700, 240, 60f);
+        assertTrue(engine.applyQuickSplitTwo());
+        WindowSession s2Split = engine.getWindowSnapshot(w2);
+        WindowSession s1Split = engine.getWindowSnapshot(w1);
+        assertEquals(BridgeProtocol.PRES_SNAP_LEFT, s2Split.presentation);
+        assertEquals(expectedLeft.left, s2Split.frame.left);
+        assertEquals(BridgeProtocol.PRES_SNAP_RIGHT, s1Split.presentation);
+        assertEquals(expectedRight.right, s1Split.frame.right);
+        assertTrue(s2Split.focused);
+
+        // switchNextWindow cycles focus cleanly between w2 -> w1 -> w2
+        assertTrue(engine.switchNextWindow());
+        assertTrue(engine.getWindowSnapshot(w1).focused);
+        assertFalse(engine.getWindowSnapshot(w2).focused);
+        assertTrue(engine.switchNextWindow());
+        assertTrue(engine.getWindowSnapshot(w2).focused);
+    }
 }

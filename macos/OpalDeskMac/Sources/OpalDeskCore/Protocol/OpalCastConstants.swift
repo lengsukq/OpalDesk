@@ -222,6 +222,25 @@ public struct OpalCastMouseButtons: OptionSet, Sendable, Hashable {
     public static let tertiary = OpalCastMouseButtons(rawValue: 4)
     public static let back = OpalCastMouseButtons(rawValue: 8)
     public static let forward = OpalCastMouseButtons(rawValue: 16)
+    public static let maxExtendedButtonNumber = 15
+
+    /// Maps an AppKit `NSEvent.buttonNumber` from `otherMouseDown` / `otherMouseUp`
+    /// onto the OpalCast / Android button bitmask without collapsing extended side buttons
+    /// (`buttonNumber` 5...15 -> `1 << buttonNumber`).
+    public static func fromOtherMouseButtonNumber(_ buttonNumber: Int) -> OpalCastMouseButtons {
+        switch buttonNumber {
+        case 2:
+            return .tertiary
+        case 3:
+            return .back
+        case 4:
+            return .forward
+        case 5...maxExtendedButtonNumber:
+            return OpalCastMouseButtons(rawValue: UInt32(1) << UInt32(buttonNumber))
+        default:
+            return .tertiary
+        }
+    }
 }
 
 public enum OpalCastTouchAction: UInt8, Sendable, CaseIterable {

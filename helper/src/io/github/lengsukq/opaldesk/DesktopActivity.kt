@@ -116,22 +116,10 @@ class DesktopActivity : ComponentActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    if (WorkstationKeyDispatcher.handleActiveSpotlightKeyEvent(
-                            KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE),
-                        )
-                    ) {
-                        return
-                    }
-                    if (io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.softKeyboardVisibleFlow.value) {
-                        io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.hideSoftKeyboard()
-                        return
-                    }
-                    val focused = BridgeClient.sceneFlow.value.focusedWindow
-                    if (focused != null && !focused.isMinimized) {
-                        BridgeClient.sendWindowActionAsync(focused.windowId, BridgeProtocol.WinAction.SEND_BACK)
-                    } else {
-                        openConsole()
-                    }
+                    WorkstationKeyDispatcher.handleDesktopBack(
+                        hostSoftImeVisible = imeVisible,
+                        onHideHostSoftIme = { activeImeController?.hideKeyboard() },
+                    )
                 }
             },
         )
@@ -148,6 +136,7 @@ class DesktopActivity : ComponentActivity() {
                 val localTextFieldFocused by OpalImeFocusTracker.localComposeTextFieldFocusedFlow.collectAsState()
                 val pluginState by io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.pluginStateFlow.collectAsState()
                 val pluginSoftKbdVisible by io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.softKeyboardVisibleFlow.collectAsState()
+                val inputBindings by BridgeClient.inputBindingsFlow.collectAsState()
                 var lastHandledImeSeq by remember {
                     mutableLongStateOf(BridgeClient.imeBridgeRequestFlow.value?.seq ?: 0L)
                 }
@@ -163,6 +152,7 @@ class DesktopActivity : ComponentActivity() {
                     localOverlayNeedsFocus = localOverlayNeedsFocus,
                     localTextFieldFocused = localTextFieldFocused,
                     hostSoftImeVisible = imeVisible,
+                    hasEnabledKeyBindings = io.github.lengsukq.opaldesk.input.hasEnabledKeyBinding(inputBindings),
                 )
                 LaunchedEffect(hostNotFocusable) {
                     setHostWindowNotFocusable(hostNotFocusable)
@@ -325,6 +315,7 @@ class DesktopActivity : ComponentActivity() {
         Thread({
             BridgeClient.refreshStatus()
             BridgeClient.refreshSceneSnapshot()
+            BridgeClient.fetchInputBindingsAsync()
             val r = BridgeClient.refreshRemoteStatus()
             if (r.connected) {
                 runOnUiThread {
@@ -345,6 +336,9 @@ class DesktopActivity : ComponentActivity() {
     override fun onDestroy() {
         BridgeClient.setLocalDesktopMousePinAsync(false)
         BridgeClient.setDexImeSessionActive("local_desktop", false)
+        if (BridgeClient.statusFlow.value.hostScreenOff) {
+            BridgeClient.setHostScreenPowerAsync(true)
+        }
         super.onDestroy()
     }
 
@@ -390,13 +384,40 @@ class DesktopActivity : ComponentActivity() {
             return true
         }
 
+        if (event.keyCode == KeyEvent.KEYCODE_BACK && WorkstationKeyDispatcher.hasActiveLocalOverlay()) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                WorkstationKeyDispatcher.dismissActiveLocalOverlay()
+            }
+            return true
+        }
+
         // Forward physical/external keyboard keystrokes directly to the focused VirtualDisplay session
         // BEFORE super.dispatchKeyEvent can swallow Space/Enter/Tab/Arrows for Compose focus traversal
         if (WorkstationKeyDispatcher.forwardToFocusedWindow(event, forwardImeSwitch = forwardImeSwitch)) {
             return true
         }
 
+        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                WorkstationKeyDispatcher.handleDesktopBack(
+                    hostSoftImeVisible = imeVisible,
+                    onHideHostSoftIme = { activeImeController?.hideKeyboard() },
+                )
+            }
+            return true
+        }
+
         return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent?): Boolean {
+        if (super.dispatchGenericMotionEvent(ev)) return true
+        return io.github.lengsukq.opaldesk.input.LocalInputBindingExecutor.dispatchDesktopFallbackMouseGenericMotion(ev)
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        if (super.dispatchTouchEvent(ev)) return true
+        return io.github.lengsukq.opaldesk.input.LocalInputBindingExecutor.shouldConsumeDesktopFallbackMouseTouch(ev)
     }
 
     private fun openConsole() {

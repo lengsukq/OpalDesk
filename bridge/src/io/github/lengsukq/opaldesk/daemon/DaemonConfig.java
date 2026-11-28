@@ -2,6 +2,7 @@ package io.github.lengsukq.opaldesk.daemon;
 
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil.IntRect;
 import io.github.lengsukq.opaldesk.daemon.compositor.WindowProfile;
+import io.github.lengsukq.opaldesk.daemon.input.InputBindingRule;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.util.AtomicFiles;
 
@@ -12,6 +13,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -32,6 +34,7 @@ public final class DaemonConfig {
     public static final String DEFAULT_APP_BOUNDS_PATH = "/data/local/tmp/opaldesk_app_bounds.conf";
     public static final String DEFAULT_IME_CONF_PATH = "/data/local/tmp/opaldesk_ime.conf";
     public static final String DEFAULT_IME_BACKUP_PATH = "/data/local/tmp/opaldesk_ime_backup.conf";
+    public static final String DEFAULT_INPUT_BINDINGS_PATH = "/data/local/tmp/opaldesk_input_bindings.json";
     public static final int DEFAULT_ROOTLESS_MAX_VD = 6;
     public static final int DEFAULT_ROOT_ENHANCED_MAX_VD = 10;
     public static final int MIN_MAX_VD = 2;
@@ -167,6 +170,7 @@ public final class DaemonConfig {
     private boolean muteHostImeOnCast = false;
     private int showImeWithHardKeyboard = BridgeProtocol.HARD_KBD_SOFT_IME_SYSTEM;
     private boolean autoBridgeImeOnCast = true;
+    private String inputBindingsJson = InputBindingRule.toJsonList(InputBindingRule.defaultRules());
 
     public DaemonConfig() {
         this(new File(DEFAULT_CONF_PATH), new File(DEFAULT_PROFILE_CONF_PATH), new File(DEFAULT_LAUNCH_COUNTS_PATH));
@@ -183,10 +187,12 @@ public final class DaemonConfig {
         File appDpisFile = deriveSiblingFile(this.confFile, "opaldesk_app_dpis.conf", DEFAULT_APP_DPIS_PATH);
         File appBoundsFile = deriveSiblingFile(this.confFile, "opaldesk_app_bounds.conf", DEFAULT_APP_BOUNDS_PATH);
         File imeConfFile = deriveSiblingFile(this.confFile, "opaldesk_ime.conf", DEFAULT_IME_CONF_PATH);
+        File inputBindingsFile = deriveSiblingFile(
+                this.confFile, "opaldesk_input_bindings.json", DEFAULT_INPUT_BINDINGS_PATH);
         this.imeBackupFile = deriveSiblingFile(this.confFile, "opaldesk_ime_backup.conf", DEFAULT_IME_BACKUP_PATH);
         this.profileStore = new WindowProfileStore(
                 lock, ioLock, resolvedProfileFile, resolvedCountsFile,
-                appDpisFile, appBoundsFile, imeConfFile);
+                appDpisFile, appBoundsFile, imeConfFile, inputBindingsFile);
     }
 
     private static File deriveSiblingFile(File confFile, String fileName, String defaultPath) {
@@ -212,6 +218,36 @@ public final class DaemonConfig {
                 autoBridgeImeOnCast = imeSnap.autoBridgeImeOnCast;
             }
         }
+        String loadedBindings = profileStore.loadInputBindingsJson();
+        if (loadedBindings != null && !loadedBindings.isEmpty()) {
+            try {
+                List<InputBindingRule> parsed = InputBindingRule.fromJsonList(loadedBindings);
+                synchronized (lock) {
+                    inputBindingsJson = InputBindingRule.toJsonList(parsed);
+                }
+            } catch (RuntimeException e) {
+                System.err.println("OPALDESK_INPUT_BINDINGS_PARSE_WARN: " + e.getMessage());
+            }
+        }
+    }
+
+    public String getInputBindingsJson() {
+        synchronized (lock) { return inputBindingsJson; }
+    }
+
+    public String setInputBindingsJson(String rawJson) {
+        String normalized;
+        if (rawJson == null || rawJson.trim().isEmpty()) {
+            normalized = InputBindingRule.toJsonList(InputBindingRule.defaultRules());
+        } else {
+            List<InputBindingRule> parsed = InputBindingRule.fromJsonList(rawJson);
+            normalized = InputBindingRule.toJsonList(parsed);
+        }
+        synchronized (lock) {
+            this.inputBindingsJson = normalized;
+        }
+        profileStore.saveInputBindingsJson(normalized);
+        return normalized;
     }
 
     public File getImeBackupFile() {

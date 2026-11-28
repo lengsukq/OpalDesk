@@ -6,28 +6,54 @@ import android.view.KeyEvent
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import io.github.lengsukq.opaldesk.external.DexTrackpadScreen
 import io.github.lengsukq.opaldesk.external.ExternalDesktopSession
 import io.github.lengsukq.opaldesk.external.ExternalDisplayPolicy
 import io.github.lengsukq.opaldesk.external.ExternalMonitorPresentation
+import io.github.lengsukq.opaldesk.external.ExternalTrackpadPolicy
+import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorScene
 import io.github.lengsukq.opaldesk.protocol.DaemonStatus
 import io.github.lengsukq.opaldesk.protocol.DexImeRuntimeState
 import io.github.lengsukq.opaldesk.ui.NativeImeHostController
+import io.github.lengsukq.opaldesk.ui.OpalAmbientBackdrop
+import io.github.lengsukq.opaldesk.ui.OpalButton
 import io.github.lengsukq.opaldesk.ui.OpalImeFocusTracker
 import io.github.lengsukq.opaldesk.ui.OpalPalette
+import io.github.lengsukq.opaldesk.ui.OpalStatusBadge
+import io.github.lengsukq.opaldesk.ui.OpalText
 import io.github.lengsukq.opaldesk.ui.OpalTheme
 import io.github.lengsukq.opaldesk.ui.WorkstationKeyDispatcher
+import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
 import kotlin.math.roundToInt
 
 internal fun dispatchExternalDesktopKeyEvent(
@@ -75,7 +101,24 @@ internal fun dispatchExternalDesktopKeyEvent(
         if (presentation?.dispatchKeyEventToPresentation(event) == true) return true
     }
 
+    if (event.keyCode == KeyEvent.KEYCODE_BACK && WorkstationKeyDispatcher.hasActiveLocalOverlay()) {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            WorkstationKeyDispatcher.dismissActiveLocalOverlay()
+        }
+        return true
+    }
+
     if (WorkstationKeyDispatcher.forwardToFocusedWindow(event, forwardImeSwitch = forwardImeSwitch)) {
+        return true
+    }
+
+    if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            WorkstationKeyDispatcher.handleDesktopBack(
+                hostSoftImeVisible = hostSoftImeVisible,
+                onHideHostSoftIme = { directImeController?.hideKeyboard() },
+            )
+        }
         return true
     }
 
@@ -120,6 +163,7 @@ internal fun DirectExtendedImeAndFocusEffects(
     getDirectComposeView: () -> ComposeView?,
     imeController: NativeImeHostController,
 ) {
+    val inputBindings by BridgeClient.inputBindingsFlow.collectAsState()
     val focusedLiveDisplayId = scene.focusedWindow
         ?.takeIf { !it.isMinimized && it.isLive }
         ?.displayId ?: -1
@@ -132,6 +176,7 @@ internal fun DirectExtendedImeAndFocusEffects(
             localOverlayNeedsFocus = directLocalOverlayNeedsFocus,
             localTextFieldFocused = localTextFieldFocused,
             hostSoftImeVisible = directImeVisible,
+            hasEnabledKeyBindings = io.github.lengsukq.opaldesk.input.hasEnabledKeyBinding(inputBindings),
         )
     LaunchedEffect(directNotFocusable) {
         setDirectWindowNotFocusable(activity.window, directNotFocusable)
@@ -192,12 +237,61 @@ internal fun DirectExtendedImeAndFocusEffects(
     }
 }
 
+@Composable
+internal fun DirectComposingTextPill(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    if (text.isEmpty()) return
+    Box(
+        modifier = modifier
+            .imePadding()
+            .padding(bottom = 12.dp)
+            .liquidGlassSurface(
+                shape = CircleShape,
+                fill = OpalPalette.LiquidPopoverFill,
+                rim = OpalPalette.LiquidGlassRim,
+                elevation = 16.dp,
+            )
+            .padding(horizontal = 16.dp, vertical = 7.dp),
+    ) {
+        OpalText(text = text, fontSize = 14.sp, color = OpalPalette.TextPrimary)
+    }
+}
+
+internal class PresentationTrackpadHostState {
+    var visible by mutableStateOf(false)
+        private set
+    private var manuallyOpened = false
+    private var manuallyClosed = false
+
+    fun syncForEntryOrResume(autoShowEnabled: Boolean): Boolean {
+        val shouldShow = ExternalTrackpadPolicy.shouldShowPresentationTrackpad(
+            autoShowEnabled = autoShowEnabled,
+            userManuallyOpened = manuallyOpened,
+            userManuallyClosed = manuallyClosed,
+        )
+        visible = shouldShow
+        return shouldShow
+    }
+
+    fun setManualVisibility(show: Boolean): Boolean {
+        val changed = visible != show
+        manuallyOpened = show
+        manuallyClosed = !show
+        visible = show
+        return changed
+    }
+}
+
 internal fun bindPresentationTrackpadContent(
     activity: ComponentActivity,
     pres: ExternalMonitorPresentation,
+    trackpadState: PresentationTrackpadHostState,
     getPresentationSummary: () -> String,
     getTargetDisplayId: () -> Int,
     getActiveIsWirelessDisplay: () -> Boolean,
+    onOpenTrackpad: () -> Unit,
     onDismissPresentation: () -> Unit,
 ) {
     activity.setContent {
@@ -208,35 +302,106 @@ internal fun bindPresentationTrackpadContent(
                 ctrl.isAppearanceLightStatusBars = !isDark
                 ctrl.isAppearanceLightNavigationBars = !isDark
             }
-            val cursor = pres.cursorPosState.value
             val isWireless = getActiveIsWirelessDisplay()
-            DexTrackpadScreen(
-                monitorSummary = getPresentationSummary(),
-                externalDisplayId = getTargetDisplayId(),
-                cursorX = cursor.x.roundToInt(),
-                cursorY = cursor.y.roundToInt(),
-                badgePrefix = if (isWireless) "无线电视" else "独立满屏",
-                showOverscanControl = true,
-                isWirelessDisplay = isWireless,
-                onMoveCursor = { dx, dy -> pres.moveCursorBy(dx, dy) },
-                onSetPrimaryButton = { down -> pres.setPrimaryButton(down) },
-                onTapPrimary = { pres.tapPrimary() },
-                onScroll = { h, v -> pres.scrollAtCursor(h, v) },
-                onSecondaryAction = ::sendBackToFocusedExternalWindow,
-                onSendKeyTap = ::sendKeyTapToFocusedExternalWindow,
-                onCommitTextToFocusedWindow = { commitTextToFocusedExternalWindow(activity, it) },
-                onSwitchToLocalDesktop = {
-                    onDismissPresentation()
-                    activity.startActivity(
-                        Intent(activity, DesktopActivity::class.java).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        },
+            if (trackpadState.visible) {
+                val cursor = pres.cursorPosState.value
+                DexTrackpadScreen(
+                    monitorSummary = getPresentationSummary(),
+                    externalDisplayId = getTargetDisplayId(),
+                    cursorX = cursor.x.roundToInt(),
+                    cursorY = cursor.y.roundToInt(),
+                    badgePrefix = if (isWireless) "无线电视" else "独立满屏",
+                    showOverscanControl = true,
+                    isWirelessDisplay = isWireless,
+                    onMoveCursor = { dx, dy -> pres.moveCursorBy(dx, dy) },
+                    onSetPrimaryButton = { down -> pres.setPrimaryButton(down) },
+                    onTapPrimary = { pres.tapPrimary() },
+                    onScroll = { h, v -> pres.scrollAtCursor(h, v) },
+                    onSecondaryAction = ::sendBackToFocusedExternalWindow,
+                    onSendKeyTap = ::sendKeyTapToFocusedExternalWindow,
+                    onCommitTextToFocusedWindow = { commitTextToFocusedExternalWindow(activity, it) },
+                    onSwitchToLocalDesktop = {
+                        onDismissPresentation()
+                        activity.startActivity(
+                            Intent(activity, DesktopActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            },
+                        )
+                        activity.finishAndRemoveTask()
+                    },
+                    onOpenConsole = { openConsoleOnPrimaryDisplay(activity) },
+                    onExitExternal = { activity.finishAndRemoveTask() },
+                )
+            } else {
+                PresentationStandbyScreen(
+                    monitorSummary = getPresentationSummary(),
+                    badgePrefix = if (isWireless) "无线电视" else "独立满屏",
+                    onOpenTrackpad = onOpenTrackpad,
+                    onOpenConsole = { openConsoleOnPrimaryDisplay(activity) },
+                    onExitExternal = { activity.finishAndRemoveTask() },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PresentationStandbyScreen(
+    monitorSummary: String,
+    badgePrefix: String,
+    onOpenTrackpad: () -> Unit,
+    onOpenConsole: () -> Unit,
+    onExitExternal: () -> Unit,
+) {
+    val wallpaperPreset by AppPrefs.wallpaperPresetFlow.collectAsState()
+    OpalAmbientBackdrop(
+        modifier = Modifier.fillMaxSize(),
+        wallpaperPreset = wallpaperPreset,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .padding(20.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 420.dp)
+                    .fillMaxWidth()
+                    .liquidGlassSurface(
+                        shape = RoundedCornerShape(24.dp),
+                        fill = OpalPalette.LiquidPopoverFill,
+                        rim = OpalPalette.LiquidGlassRim,
+                        elevation = 16.dp,
                     )
-                    activity.finishAndRemoveTask()
-                },
-                onOpenConsole = { openConsoleOnPrimaryDisplay(activity) },
-                onExitExternal = { activity.finishAndRemoveTask() },
-            )
+                    .padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                OpalStatusBadge(
+                    label = "$badgePrefix · ${monitorSummary.ifBlank { "外接屏运行中" }}",
+                    color = OpalPalette.AccentEmerald,
+                )
+                OpalText(
+                    text = "外接屏桌面运行中",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = OpalPalette.TextPrimary,
+                )
+                OpalText(
+                    text = "已关闭自动打开手机触控板，可直接使用外接键鼠操作，或随时点击下方按钮手动开启触控板。",
+                    fontSize = 13.sp,
+                    color = OpalPalette.TextSecondary,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OpalButton(label = "打开触控板", filled = true, onClick = onOpenTrackpad)
+                    OpalButton(label = "返回控制台", filled = false, onClick = onOpenConsole)
+                    OpalButton(label = "退出投屏", filled = false, accent = OpalPalette.AccentDanger, onClick = onExitExternal)
+                }
+            }
         }
     }
 }

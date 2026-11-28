@@ -37,6 +37,7 @@ object BridgeProtocol {
     const val PROVIDER_METHOD_NOTIFICATION_ACTION = "notificationAction"
     const val PROVIDER_METHOD_MEDIA_ACTION = "mediaAction"
     const val PROVIDER_METHOD_CALL_ACTION = "callAction"
+    const val PROVIDER_METHOD_INPUT_ACTION = "inputAction"
 
     const val EXTRA_CALLBACK_BINDER = "cb"
     const val EXTRA_PROC_TOKEN = "proc"
@@ -57,6 +58,7 @@ object BridgeProtocol {
     const val EXTRA_CALL_ACTION_OP = "op"
     const val EXTRA_CALL_ACTION_NUMBER = "number"
     const val EXTRA_CALL_ACTION_SMS_TEXT = "smsText"
+    const val EXTRA_INPUT_ACTION_ID = "actionId"
 
     object Tx {
         const val GET_DAEMON_STATUS = 10
@@ -104,8 +106,19 @@ object BridgeProtocol {
         const val SYNC_CALL_STATE = 52
         const val TRIGGER_HOTSPOT = 53
         const val GET_SECONDARY_USER_APPS = 54
+        const val GET_INPUT_BINDINGS = 55
+        const val SET_INPUT_BINDINGS = 56
+        const val INPUT_BINDING_CAPTURE = 57
         const val SHUTDOWN = 99
     }
+
+    const val TX_GET_INPUT_BINDINGS = Tx.GET_INPUT_BINDINGS
+    const val TX_SET_INPUT_BINDINGS = Tx.SET_INPUT_BINDINGS
+    const val TX_INPUT_BINDING_CAPTURE = Tx.INPUT_BINDING_CAPTURE
+
+    const val INPUT_CAPTURE_OP_STOP = 0
+    const val INPUT_CAPTURE_OP_START = 1
+    const val INPUT_CAPTURE_OP_POLL = 2
 
     object BridgeImeEvent {
         const val START_INPUT = 1

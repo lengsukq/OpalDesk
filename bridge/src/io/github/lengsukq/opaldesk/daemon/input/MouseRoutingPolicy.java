@@ -350,6 +350,36 @@ public final class MouseRoutingPolicy {
             int focusedWindowDisplayId,
             boolean hasFocusedWindowUniqueId,
             boolean bridgeImeActive) {
+        return shouldRoutePhysicalKeyboardToFocusedWindow(
+                workstationDisplayActive,
+                remoteDesktopActive,
+                localImeActive,
+                dexImeDisplayMode,
+                focusedWindowDisplayId,
+                hasFocusedWindowUniqueId,
+                bridgeImeActive,
+                false);
+    }
+
+    /**
+     * When {@code hasEnabledKeyBindings} is {@code true}, keeps physical keyboards routed to the
+     * outer compositor display instead of directly binding them to {@code OpalWin-*} so the
+     * compositor can intercept custom keyboard bindings first and forward all non-mapped typing
+     * keys into {@code OpalWin-*} via kernel {@code /dev/uhid} (allowing Yuyan IME typing and
+     * custom key remapping to work simultaneously without opening the control center).
+     */
+    public static boolean shouldRoutePhysicalKeyboardToFocusedWindow(
+            boolean workstationDisplayActive,
+            boolean remoteDesktopActive,
+            boolean localImeActive,
+            int dexImeDisplayMode,
+            int focusedWindowDisplayId,
+            boolean hasFocusedWindowUniqueId,
+            boolean bridgeImeActive,
+            boolean hasEnabledKeyBindings) {
+        if (hasEnabledKeyBindings) {
+            return false;
+        }
         if (!workstationDisplayActive || remoteDesktopActive || localImeActive) {
             return false;
         }
@@ -375,6 +405,20 @@ public final class MouseRoutingPolicy {
             boolean isExternal,
             int keyboardType,
             boolean bridgeImeActive) {
+        return shouldAssociateDeviceToOuterDisplay(
+                isMouse, isWindowKbd, isExternal, keyboardType, bridgeImeActive, false);
+    }
+
+    public static boolean shouldAssociateDeviceToOuterDisplay(
+            boolean isMouse,
+            boolean isWindowKbd,
+            boolean isExternal,
+            int keyboardType,
+            boolean bridgeImeActive,
+            boolean hasEnabledKeyBindings) {
+        if (hasEnabledKeyBindings) {
+            return isMouse || (isExternal && keyboardType == KEYBOARD_TYPE_ALPHABETIC);
+        }
         if (bridgeImeActive) {
             return isMouse && !isWindowKbd;
         }

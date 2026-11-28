@@ -6,6 +6,7 @@ import android.os.Build
 import android.view.Display
 import android.view.InputDevice
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.Window
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -36,6 +37,25 @@ internal fun hasConnectedPhysicalKeyboard(ctx: Context): Boolean {
     }
 }
 
+internal fun isSyntheticMouseNavigationKey(event: KeyEvent): Boolean {
+    if ((event.source and InputDevice.SOURCE_MOUSE) != InputDevice.SOURCE_MOUSE) return false
+    return event.keyCode == KeyEvent.KEYCODE_BACK || event.keyCode == KeyEvent.KEYCODE_FORWARD
+}
+
+internal fun dispatchPeerCastGenericMotion(
+    event: MotionEvent,
+    connected: Boolean,
+    showAppPicker: Boolean,
+    viewW: Int,
+    viewH: Int,
+    client: OpalCastPeerClient?,
+): Boolean {
+    if (!connected || showAppPicker || client == null || !client.isMouseMotion(event)) return false
+    val masked = event.actionMasked
+    if (masked != MotionEvent.ACTION_BUTTON_PRESS && masked != MotionEvent.ACTION_BUTTON_RELEASE) return false
+    return client.handleGenericMouseMotion(event, viewW, viewH)
+}
+
 internal fun dispatchPeerCastKeyEvent(
     event: KeyEvent,
     connected: Boolean,
@@ -44,6 +64,7 @@ internal fun dispatchPeerCastKeyEvent(
     superDispatch: (KeyEvent) -> Boolean,
 ): Boolean {
     if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
+    if (connected && isSyntheticMouseNavigationKey(event)) return true
     if (connected && (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP)) {
         if (!WorkstationKeyDispatcher.isForwardableKey(event.keyCode)) {
             return superDispatch(event)

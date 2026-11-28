@@ -19,9 +19,6 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -34,8 +31,6 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import io.github.lengsukq.opaldesk.compositor.OpalCompositorWorkspace
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
@@ -57,11 +52,8 @@ import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
 import io.github.lengsukq.opaldesk.ui.NativeImeBridgeHost
 import io.github.lengsukq.opaldesk.ui.NativeImeHostController
 import io.github.lengsukq.opaldesk.ui.OpalImeFocusTracker
-import io.github.lengsukq.opaldesk.ui.OpalPalette
-import io.github.lengsukq.opaldesk.ui.OpalText
 import io.github.lengsukq.opaldesk.ui.OpalTheme
 import io.github.lengsukq.opaldesk.ui.WorkstationKeyDispatcher
-import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
 import io.github.lengsukq.opaldesk.ui.rememberNativeImeHostController
 import kotlin.math.roundToInt
 
@@ -87,6 +79,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         const val EXTRA_PREFER_PRESENTATION = "preferPresentation"
         const val EXTRA_IS_WIRELESS_DISPLAY = "isWirelessDisplay"
         const val EXTRA_SHELL_LAUNCHED = "shellLaunched"
+        const val EXTRA_OPEN_TRACKPAD = "openTrackpad"
         private const val PRESENTATION_RETRY_DELAY_MS = 260L
 
         val isPresentationActive: Boolean
@@ -129,9 +122,16 @@ class ExternalDesktopActivity : ComponentActivity() {
     private var fallbackNoticeShown = false
     private var lastAutoNormalizedDisplayId: Int = -1
     private var activePresentationLabel: String = ""
+    private val presentationTrackpadState = PresentationTrackpadHostState()
 
     private val presentationTrackpadCloser: () -> Unit = {
-        runOnUiThread { openConsoleOnPrimaryDisplay(this) }
+        runOnUiThread {
+            presentationTrackpadState.setManualVisibility(false)
+            ExternalTrackpadBridge.setPhoneTrackpadVisible(false, presentationTrackpadCloser)
+            presentation?.hideCursor()
+            syncExternalMouseRouting(this, targetDisplayId)
+            openConsoleOnPrimaryDisplay(this)
+        }
     }
 
     private val displayListener = object : DisplayManager.DisplayListener {
@@ -202,13 +202,10 @@ class ExternalDesktopActivity : ComponentActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    if (WorkstationKeyDispatcher.handleActiveSpotlightKeyEvent(
-                            KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE),
-                        )
-                    ) {
-                        return
-                    }
-                    sendBackToFocusedExternalWindow()
+                    WorkstationKeyDispatcher.handleDesktopBack(
+                        hostSoftImeVisible = directImeVisible || (presentation?.isImeActive == true),
+                        onHideHostSoftIme = { directImeController?.hideKeyboard() },
+                    )
                 }
             },
         )
@@ -368,7 +365,10 @@ class ExternalDesktopActivity : ComponentActivity() {
                         isWirelessDisplay = isWireless,
                     ),
                 )
-                ExternalTrackpadBridge.setPhoneTrackpadVisible(true, presentationTrackpadCloser)
+                val showTrackpad = presentationTrackpadState.syncForEntryOrResume(
+                    AppPrefs.isAutoShowPhoneTrackpadEnabled(this),
+                )
+                ExternalTrackpadBridge.setPhoneTrackpadVisible(showTrackpad, presentationTrackpadCloser)
                 syncExternalMouseRouting(this, freshDisplay.displayId)
                 OpalLogStore.i(
                     TAG,
@@ -376,7 +376,19 @@ class ExternalDesktopActivity : ComponentActivity() {
                         "${pres.displayWidthPx}x${pres.displayHeightPx}@${pres.refreshRateHz}Hz " +
                         "wireless=$isWireless retry=$retryAttempt",
                 )
-                bindPresentationTrackpadUi(pres)
+                bindPresentationTrackpadContent(
+                    activity = this,
+                    pres = pres,
+                    trackpadState = presentationTrackpadState,
+                    getPresentationSummary = { presentationSummary },
+                    getTargetDisplayId = { targetDisplayId },
+                    getActiveIsWirelessDisplay = { activeIsWirelessDisplay },
+                    onOpenTrackpad = {
+                        presentationTrackpadState.setManualVisibility(true)
+                        ExternalTrackpadBridge.setPhoneTrackpadVisible(true, presentationTrackpadCloser)
+                    },
+                    onDismissPresentation = ::dismissPresentation,
+                )
                 return
             } catch (t: Throwable) {
                 runCatching { pres.dismiss() }
@@ -464,17 +476,6 @@ class ExternalDesktopActivity : ComponentActivity() {
     private fun cancelPendingRecovery() {
         pendingRecoveryRunnable?.let { handler.removeCallbacks(it) }
         pendingRecoveryRunnable = null
-    }
-
-    private fun bindPresentationTrackpadUi(pres: ExternalMonitorPresentation) {
-        bindPresentationTrackpadContent(
-            activity = this,
-            pres = pres,
-            getPresentationSummary = { presentationSummary },
-            getTargetDisplayId = { targetDisplayId },
-            getActiveIsWirelessDisplay = { activeIsWirelessDisplay },
-            onDismissPresentation = ::dismissPresentation,
-        )
     }
 
     private fun bindDirectExtendedWorkspaceUi(currentDisplayId: Int) {
@@ -603,23 +604,10 @@ class ExternalDesktopActivity : ComponentActivity() {
                                 },
                                 onExitDesktop = { finishAndRemoveTask() },
                             )
-                            if (directComposingText.isNotEmpty()) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .imePadding()
-                                        .padding(bottom = 12.dp)
-                                        .liquidGlassSurface(
-                                            shape = CircleShape,
-                                            fill = OpalPalette.LiquidPopoverFill,
-                                            rim = OpalPalette.LiquidGlassRim,
-                                            elevation = 16.dp,
-                                        )
-                                        .padding(horizontal = 16.dp, vertical = 7.dp),
-                                ) {
-                                    OpalText(text = directComposingText, fontSize = 14.sp, color = OpalPalette.TextPrimary)
-                                }
-                            }
+                            DirectComposingTextPill(
+                                text = directComposingText,
+                                modifier = Modifier.align(Alignment.BottomCenter),
+                            )
                         }
                     }
                 }
@@ -686,6 +674,11 @@ class ExternalDesktopActivity : ComponentActivity() {
         setIntent(intent)
         val currentDisplayId = display?.displayId
             ?: Display.DEFAULT_DISPLAY
+        if (runningInPresentationMode && intent.getBooleanExtra(EXTRA_OPEN_TRACKPAD, false)) {
+            presentationTrackpadState.setManualVisibility(true)
+            ExternalTrackpadBridge.setPhoneTrackpadVisible(true, presentationTrackpadCloser)
+            return
+        }
         if (!runningInPresentationMode && currentDisplayId > Display.DEFAULT_DISPLAY) {
             targetDisplayId = currentDisplayId
             refreshDirectSessionMetadata(currentDisplayId)
@@ -710,7 +703,10 @@ class ExternalDesktopActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (runningInPresentationMode) {
-            ExternalTrackpadBridge.setPhoneTrackpadVisible(true, presentationTrackpadCloser)
+            val showTrackpad = presentationTrackpadState.syncForEntryOrResume(
+                AppPrefs.isAutoShowPhoneTrackpadEnabled(this),
+            )
+            ExternalTrackpadBridge.setPhoneTrackpadVisible(showTrackpad, presentationTrackpadCloser)
         } else {
             applyImmersiveFullscreen(window)
         }
@@ -722,12 +718,15 @@ class ExternalDesktopActivity : ComponentActivity() {
         Thread({
             BridgeClient.refreshStatus()
             BridgeClient.refreshSceneSnapshot()
+            BridgeClient.fetchInputBindingsAsync()
         }, "OpalExtDesktopSync").start()
     }
 
     override fun onPause() {
         if (runningInPresentationMode) {
             ExternalTrackpadBridge.setPhoneTrackpadVisible(false, presentationTrackpadCloser)
+            presentation?.hideCursor()
+            syncExternalMouseRouting(this, targetDisplayId)
         }
         super.onPause()
     }
@@ -781,6 +780,9 @@ class ExternalDesktopActivity : ComponentActivity() {
                 p.dismiss()
             } catch (_: Throwable) {
             }
+        }
+        if (BridgeClient.statusFlow.value.hostScreenOff) {
+            BridgeClient.setHostScreenPowerAsync(true)
         }
     }
 }

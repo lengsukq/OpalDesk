@@ -34,6 +34,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.compositor.applyWindowTilingLayout
+import io.github.lengsukq.opaldesk.input.InputBindingRule
+import io.github.lengsukq.opaldesk.input.LocalInputBindingExecutor
+import io.github.lengsukq.opaldesk.input.findMatchingKeyBinding
+import io.github.lengsukq.opaldesk.input.normalizeAndroidMetaState
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,6 +68,13 @@ object OpalImeFocusTracker {
     }
 }
 
+enum class DesktopBackAction {
+    DISMISS_OVERLAY,
+    HIDE_SOFT_IME,
+    FORWARD_TO_WINDOW,
+    CONSUME_DESKTOP_NOOP,
+}
+
 /**
  * Shared physical/remote keyboard dispatcher across [io.github.lengsukq.opaldesk.DesktopActivity],
  * [io.github.lengsukq.opaldesk.ExternalDesktopActivity], and
@@ -74,12 +85,18 @@ object WorkstationKeyDispatcher {
     private val textCommitExec = Executors.newSingleThreadExecutor { r ->
         Thread(r, "OpalImeTextCommit").apply { isDaemon = true }
     }
-    private val consumedShortcutKeyCodes = HashSet<Int>()
+    private val consumedShortcutKeyCodes = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
     private val _spotlightTogglePulseFlow = MutableStateFlow(0L)
     val spotlightTogglePulseFlow: StateFlow<Long> = _spotlightTogglePulseFlow.asStateFlow()
 
     @Volatile
     private var activeSpotlightKeyHandler: ((KeyEvent) -> Boolean)? = null
+
+    @Volatile
+    private var activeOverlayBackHandler: (() -> Boolean)? = null
+
+    @Volatile
+    private var activeOverlayOpenChecker: (() -> Boolean)? = null
 
     fun setActiveSpotlightKeyHandler(handler: ((KeyEvent) -> Boolean)?) {
         activeSpotlightKeyHandler = handler
@@ -91,8 +108,75 @@ object WorkstationKeyDispatcher {
         }
     }
 
+    fun setActiveOverlayBackHandlers(
+        isOverlayOpen: (() -> Boolean)?,
+        dismissOverlay: (() -> Boolean)?,
+    ) {
+        activeOverlayOpenChecker = isOverlayOpen
+        activeOverlayBackHandler = dismissOverlay
+    }
+
+    fun clearActiveOverlayBackHandlers(expectedDismiss: (() -> Boolean)?) {
+        if (expectedDismiss == null || activeOverlayBackHandler === expectedDismiss) {
+            activeOverlayOpenChecker = null
+            activeOverlayBackHandler = null
+        }
+    }
+
+    fun hasActiveLocalOverlay(): Boolean =
+        activeSpotlightKeyHandler != null || activeOverlayOpenChecker?.invoke() == true
+
+    fun dismissActiveLocalOverlay(): Boolean {
+        if (activeSpotlightKeyHandler?.invoke(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE)) == true) {
+            return true
+        }
+        return activeOverlayBackHandler?.invoke() == true
+    }
+
     fun handleActiveSpotlightKeyEvent(event: KeyEvent): Boolean =
         activeSpotlightKeyHandler?.invoke(event) == true
+
+    /**
+     * Pure JVM-testable desktop back-button policy:
+     * 1) Dismiss any open local overlay/popover (Spotlight, Control Center, App Drawer, etc.),
+     * 2) Hide any active soft keyboard,
+     * 3) Forward Back to the focused live app window,
+     * 4) In pure desktop state, silently consume so external/local desktop never exits accidentally.
+     */
+    fun resolveDesktopBackAction(
+        hasLocalOverlay: Boolean,
+        hasSoftImeVisible: Boolean,
+        hasFocusedLiveWindow: Boolean,
+    ): DesktopBackAction = when {
+        hasLocalOverlay -> DesktopBackAction.DISMISS_OVERLAY
+        hasSoftImeVisible -> DesktopBackAction.HIDE_SOFT_IME
+        hasFocusedLiveWindow -> DesktopBackAction.FORWARD_TO_WINDOW
+        else -> DesktopBackAction.CONSUME_DESKTOP_NOOP
+    }
+
+    fun handleDesktopBack(
+        hostSoftImeVisible: Boolean = false,
+        onHideHostSoftIme: (() -> Unit)? = null,
+    ): Boolean {
+        val pluginSoftKbd = io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.softKeyboardVisibleFlow.value
+        val focusedLive = BridgeClient.sceneFlow.value.focusedWindow?.takeIf { !it.isMinimized && it.isLive }
+        when (resolveDesktopBackAction(
+            hasLocalOverlay = hasActiveLocalOverlay(),
+            hasSoftImeVisible = hostSoftImeVisible || pluginSoftKbd,
+            hasFocusedLiveWindow = focusedLive != null,
+        )) {
+            DesktopBackAction.DISMISS_OVERLAY -> dismissActiveLocalOverlay()
+            DesktopBackAction.HIDE_SOFT_IME -> {
+                if (pluginSoftKbd) io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.hideSoftKeyboard()
+                if (hostSoftImeVisible) onHideHostSoftIme?.invoke()
+            }
+            DesktopBackAction.FORWARD_TO_WINDOW -> focusedLive?.let {
+                BridgeClient.sendWindowActionAsync(it.windowId, BridgeProtocol.WinAction.SEND_BACK)
+            }
+            DesktopBackAction.CONSUME_DESKTOP_NOOP -> Unit
+        }
+        return true
+    }
 
     fun triggerSpotlightToggle() {
         _spotlightTogglePulseFlow.value = _spotlightTogglePulseFlow.value + 1L
@@ -105,6 +189,24 @@ object WorkstationKeyDispatcher {
         if (event.action != KeyEvent.ACTION_DOWN) return false
         val scene = BridgeClient.sceneFlow.value
         val focused = scene.focusedWindow
+        val customRule = findMatchingKeyBinding(
+            rules = BridgeClient.inputBindingsFlow.value,
+            keyCode = event.keyCode,
+            androidMetaState = event.metaState,
+        )
+        if (customRule != null) {
+            val executed = LocalInputBindingExecutor.execute(
+                actionId = customRule.actionId,
+                targetWindow = focused,
+                triggerType = InputBindingRule.TRIGGER_KEY,
+                code = event.keyCode,
+                metaMask = normalizeAndroidMetaState(event.metaState),
+            )
+            if (executed) {
+                consumedShortcutKeyCodes.add(event.keyCode)
+                return true
+            }
+        }
         val action = WorkstationShortcutCatalog.resolveGlobalShortcutAction(
             keyCode = event.keyCode,
             metaState = event.metaState,
@@ -236,8 +338,9 @@ object WorkstationKeyDispatcher {
         localOverlayNeedsFocus: Boolean,
         localTextFieldFocused: Boolean,
         hostSoftImeVisible: Boolean,
+        hasEnabledKeyBindings: Boolean = false,
     ): Boolean {
-        if (localOverlayNeedsFocus || localTextFieldFocused || hostSoftImeVisible) return false
+        if (hasEnabledKeyBindings || localOverlayNeedsFocus || localTextFieldFocused || hostSoftImeVisible) return false
         if (focusedWindowDisplayId <= 0) return false
         return bridgeImeActive || keyboardRoutedDisplayId > 0
     }

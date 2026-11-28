@@ -10,6 +10,11 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import io.github.lengsukq.opaldesk.BridgeClient
+import io.github.lengsukq.opaldesk.input.InputBindingRule
+import io.github.lengsukq.opaldesk.input.LocalInputBindingExecutor
+import io.github.lengsukq.opaldesk.input.extractMouseButtonCode
+import io.github.lengsukq.opaldesk.input.findMatchingMouseBinding
+import io.github.lengsukq.opaldesk.input.normalizeAndroidMetaState
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorGeometry
 import io.github.lengsukq.opaldesk.protocol.CompositorWindow
@@ -213,11 +218,23 @@ internal fun handleGenericMotionForWindow(
         }
         if (masked == MotionEvent.ACTION_BUTTON_PRESS) {
             if (!win.focused) onFocusRequested()
-            if (ev.actionButton == MotionEvent.BUTTON_BACK && win.isLive && win.displayId > 0) {
-                if (io.github.lengsukq.opaldesk.ui.WorkstationKeyDispatcher.tryClaimMouseSideBack()) {
-                    BridgeClient.sendWindowActionAsync(win.windowId, BridgeProtocol.WinAction.SEND_BACK)
+            val btnCode = extractMouseButtonCode(ev.actionButton, ev.buttonState)
+            if (btnCode > 0 && btnCode != MotionEvent.BUTTON_PRIMARY) {
+                val matched = findMatchingMouseBinding(
+                    rules = BridgeClient.inputBindingsFlow.value,
+                    buttonCode = btnCode,
+                    androidMetaState = ev.metaState,
+                )
+                if (matched != null) {
+                    LocalInputBindingExecutor.execute(
+                        actionId = matched.actionId,
+                        targetWindow = win,
+                        triggerType = InputBindingRule.TRIGGER_MOUSE,
+                        code = btnCode,
+                        metaMask = normalizeAndroidMetaState(ev.metaState),
+                    )
+                    return true
                 }
-                return true
             }
         }
         // Consume mouse button generic events locally without injecting invalid ACTION_BUTTON_PRESS/RELEASE
@@ -266,6 +283,22 @@ internal fun forwardMotionEventToWindow(
             )
         ) {
             return false
+        }
+    }
+    if (isMouseMotionEvent(ev)) {
+        val nonPrimaryButtons = ev.buttonState and MotionEvent.BUTTON_PRIMARY.inv()
+        if (nonPrimaryButtons != 0 &&
+            (masked == MotionEvent.ACTION_DOWN || masked == MotionEvent.ACTION_POINTER_DOWN)
+        ) {
+            val matched = findMatchingMouseBinding(
+                rules = BridgeClient.inputBindingsFlow.value,
+                buttonCode = nonPrimaryButtons,
+                androidMetaState = ev.metaState,
+            )
+            if (matched != null) {
+                // Suppress raw app injection; ACTION_BUTTON_PRESS dispatches the bound action cleanly.
+                return true
+            }
         }
     }
     if (masked == MotionEvent.ACTION_DOWN) {

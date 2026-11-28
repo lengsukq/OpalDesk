@@ -10,16 +10,21 @@ import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil;
 import io.github.lengsukq.opaldesk.daemon.compositor.CompositorEngine;
 import io.github.lengsukq.opaldesk.daemon.compositor.WindowSession;
 import io.github.lengsukq.opaldesk.daemon.input.ImmsDumpInspector;
+import io.github.lengsukq.opaldesk.daemon.input.InputBindingEngine;
+import io.github.lengsukq.opaldesk.daemon.input.InputBindingRule;
 import io.github.lengsukq.opaldesk.daemon.input.PerDisplayInputRouter;
+import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.platform.AndroidDisplayDriver;
 import io.github.lengsukq.opaldesk.daemon.platform.AndroidServices;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.IntSupplier;
+import java.util.function.Predicate;
 
 /**
  * Adapts remote OpalCast pointer, touch, keyboard, host-trackpad, IME, and system-action
@@ -30,6 +35,7 @@ final class OpalCastInputAdapter {
     private final CompositorEngine compositor;
     private final AndroidDisplayDriver displayDriver;
     private final PerDisplayInputRouter inputRouter;
+    private final InputBindingEngine inputBindingEngine;
     private final RemoteStreamServer server;
     private final RemoteMediaDevicesCoordinator mediaDevices;
     private final Map<Integer, OpalCastCompositorBridge.ActiveRemoteSession> sessions;
@@ -39,12 +45,14 @@ final class OpalCastInputAdapter {
     private final ExecutorService worker;
     private final Consumer<OpalCastCompositorBridge.ActiveRemoteSession> pushDeviceState;
     private final BiConsumer<OpalCastCompositorBridge.ActiveRemoteSession, Integer> switchDesktopDisplayMode;
+    private final Predicate<String> helperInputActionDispatcher;
 
     OpalCastInputAdapter(
             AndroidServices services,
             CompositorEngine compositor,
             AndroidDisplayDriver displayDriver,
             PerDisplayInputRouter inputRouter,
+            InputBindingEngine inputBindingEngine,
             RemoteStreamServer server,
             RemoteMediaDevicesCoordinator mediaDevices,
             Map<Integer, OpalCastCompositorBridge.ActiveRemoteSession> sessions,
@@ -53,11 +61,13 @@ final class OpalCastInputAdapter {
             BooleanSupplier bridgeImeActiveSupplier,
             ExecutorService worker,
             Consumer<OpalCastCompositorBridge.ActiveRemoteSession> pushDeviceState,
-            BiConsumer<OpalCastCompositorBridge.ActiveRemoteSession, Integer> switchDesktopDisplayMode) {
+            BiConsumer<OpalCastCompositorBridge.ActiveRemoteSession, Integer> switchDesktopDisplayMode,
+            Predicate<String> helperInputActionDispatcher) {
         this.services = services;
         this.compositor = compositor;
         this.displayDriver = displayDriver;
         this.inputRouter = inputRouter;
+        this.inputBindingEngine = inputBindingEngine;
         this.server = server;
         this.mediaDevices = mediaDevices;
         this.sessions = sessions;
@@ -67,6 +77,7 @@ final class OpalCastInputAdapter {
         this.worker = worker;
         this.pushDeviceState = pushDeviceState;
         this.switchDesktopDisplayMode = switchDesktopDisplayMode;
+        this.helperInputActionDispatcher = helperInputActionDispatcher != null ? helperInputActionDispatcher : action -> false;
     }
 
     void onBridgeImeShowRequested(int imeDisplayId, int rawInputType) {
@@ -197,6 +208,24 @@ final class OpalCastInputAdapter {
         if (s == null || s.companion || msg == null) return;
         int targetDisplayId = s.inputTargetDisplayId();
         if (targetDisplayId < 0) return;
+
+        if (inputBindingEngine != null
+                && (msg.action == OpalCastProtocol.MOUSE_BUTTON_DOWN
+                || msg.action == OpalCastProtocol.MOUSE_BUTTON_UP)) {
+            boolean isDown = (msg.action == OpalCastProtocol.MOUSE_BUTTON_DOWN);
+            int buttonMask = (msg.actionButton != 0)
+                    ? msg.actionButton
+                    : (isDown ? msg.buttons : (s.mouseButtons & ~msg.buttons));
+            InputBindingEngine.MatchResult match =
+                    inputBindingEngine.onMouseButtonEvent(isDown, buttonMask, s.lastKeyMetaState);
+            if (match.consumed) {
+                if (match.actionId != null) {
+                    executeInputBindingAction(match.actionId, s);
+                }
+                return;
+            }
+        }
+
         int targetW = s.inputTargetWidth();
         int targetH = s.inputTargetHeight();
         String targetUid = s.inputTargetUniqueId();
@@ -206,21 +235,13 @@ final class OpalCastInputAdapter {
         float y = mapped[1];
         long now = SystemClock.uptimeMillis();
 
-        if (msg.action == OpalCastProtocol.MOUSE_BUTTON_DOWN
-                && (msg.actionButton == OpalCastProtocol.BUTTON_SECONDARY
-                || msg.actionButton == OpalCastProtocol.BUTTON_BACK)) {
-            inputRouter.injectRawKeyToDisplay(targetDisplayId, targetUid, targetW, targetH,
-                    KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK, 0);
-            inputRouter.injectRawKeyToDisplay(targetDisplayId, targetUid, targetW, targetH,
-                    KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK, 0);
-            return;
-        }
-
         int androidAction;
         if (msg.action == OpalCastProtocol.MOUSE_SCROLL) {
             androidAction = MotionEvent.ACTION_SCROLL;
         } else if (msg.action == OpalCastProtocol.MOUSE_BUTTON_DOWN) {
-            s.mouseButtons = msg.buttons != 0 ? msg.buttons : MotionEvent.BUTTON_PRIMARY;
+            s.mouseButtons = msg.buttons != 0
+                    ? msg.buttons
+                    : (msg.actionButton != 0 ? msg.actionButton : MotionEvent.BUTTON_PRIMARY);
             s.mouseDownTimeMs = now;
             androidAction = MotionEvent.ACTION_DOWN;
             if ((s.standalone || s.isMirror()) && !localHostTextFieldFocusedSupplier.getAsBoolean() && services != null) {
@@ -316,7 +337,20 @@ final class OpalCastInputAdapter {
         if (s == null || s.companion || msg == null) return;
         int targetDisplayId = s.inputTargetDisplayId();
         if (targetDisplayId < 0) return;
+        s.lastKeyMetaState = msg.metaState;
         int action = (msg.action == OpalCastProtocol.KEY_DOWN) ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP;
+
+        if (inputBindingEngine != null) {
+            InputBindingEngine.MatchResult match =
+                    inputBindingEngine.onKeyEvent(action, msg.androidKeyCode, msg.metaState, msg.repeatCount);
+            if (match.consumed) {
+                if (match.actionId != null) {
+                    executeInputBindingAction(match.actionId, s);
+                }
+                return;
+            }
+        }
+
         if (!s.standalone && !s.isMirror() && !localHostTextFieldFocusedSupplier.getAsBoolean()
                 && !isWorkstationShortcut(msg.androidKeyCode, msg.metaState)) {
             WindowSession focused = compositor.getFocusedLiveWindow();
@@ -328,6 +362,81 @@ final class OpalCastInputAdapter {
         inputRouter.injectRawKeyToDisplay(
                 targetDisplayId, s.inputTargetUniqueId(), s.inputTargetWidth(), s.inputTargetHeight(),
                 action, msg.androidKeyCode, msg.metaState, true);
+    }
+
+    boolean executeInputBindingAction(
+            String actionId, OpalCastCompositorBridge.ActiveRemoteSession sourceSession) {
+        if (actionId == null || actionId.trim().isEmpty()) return false;
+        String act = actionId.trim().toLowerCase(Locale.ROOT);
+        OpalCastCompositorBridge.ActiveRemoteSession s = sourceSession;
+        if (s == null) {
+            int deskSid = desktopSessionIdSupplier.getAsInt();
+            s = (deskSid > 0) ? sessions.get(deskSid) : null;
+        }
+        switch (act) {
+            case InputBindingRule.ACTION_BACK:
+                if (s != null && !s.closed && (s.isMirror() || s.standalone)) {
+                    injectKeyClick(s.inputTargetDisplayId(), s.inputTargetUniqueId(),
+                            s.inputTargetWidth(), s.inputTargetHeight(), KeyEvent.KEYCODE_BACK);
+                    return true;
+                }
+                WindowSession focusedBack = compositor.getFocusedLiveWindow();
+                if (focusedBack != null && inputRouter.sendBackToWindow(focusedBack)) {
+                    compositor.notifyBackSent(focusedBack.windowId);
+                    return true;
+                }
+                if (s != null && !s.closed && s.inputTargetDisplayId() >= 0) {
+                    injectKeyClick(s.inputTargetDisplayId(), s.inputTargetUniqueId(),
+                            s.inputTargetWidth(), s.inputTargetHeight(), KeyEvent.KEYCODE_BACK);
+                    return true;
+                }
+                return false;
+            case InputBindingRule.ACTION_TOGGLE_MAXIMIZE: {
+                WindowSession focused = compositor.getFocusedLiveWindow();
+                return focused != null && compositor.performWindowAction(
+                        focused.windowId, BridgeProtocol.WIN_ACTION_TOGGLE_MAXIMIZE, null);
+            }
+            case InputBindingRule.ACTION_TOGGLE_FULLSCREEN: {
+                WindowSession focused = compositor.getFocusedLiveWindow();
+                return focused != null && compositor.performWindowAction(
+                        focused.windowId, BridgeProtocol.WIN_ACTION_TOGGLE_FULLSCREEN, null);
+            }
+            case InputBindingRule.ACTION_SNAP_LEFT:
+                return compositor.snapFocusedWindow(true);
+            case InputBindingRule.ACTION_SNAP_RIGHT:
+                return compositor.snapFocusedWindow(false);
+            case InputBindingRule.ACTION_TILE_2_SPLIT:
+                return compositor.applyQuickSplitTwo();
+            case InputBindingRule.ACTION_CLOSE_WINDOW: {
+                WindowSession focused = compositor.getFocusedLiveWindow();
+                if (focused == null) return false;
+                inputRouter.releaseAllHeldKeys();
+                return compositor.performWindowAction(
+                        focused.windowId, BridgeProtocol.WIN_ACTION_CLOSE, null);
+            }
+            case InputBindingRule.ACTION_MINIMIZE_WINDOW: {
+                WindowSession focused = compositor.getFocusedLiveWindow();
+                if (focused == null) return false;
+                inputRouter.releaseAllHeldKeys();
+                return compositor.performWindowAction(
+                        focused.windowId, BridgeProtocol.WIN_ACTION_MINIMIZE, null);
+            }
+            case InputBindingRule.ACTION_SWITCH_WINDOW:
+                inputRouter.releaseAllHeldKeys();
+                return compositor.switchNextWindow();
+            case InputBindingRule.ACTION_SPOTLIGHT:
+                if (helperInputActionDispatcher.test(InputBindingRule.ACTION_SPOTLIGHT)) {
+                    return true;
+                }
+                if (s != null && !s.closed && s.inputTargetDisplayId() >= 0) {
+                    injectKeyClick(s.inputTargetDisplayId(), s.inputTargetUniqueId(),
+                            s.inputTargetWidth(), s.inputTargetHeight(), KeyEvent.KEYCODE_SEARCH);
+                    return true;
+                }
+                return false;
+            default:
+                return false;
+        }
     }
 
     static boolean isWorkstationShortcut(int keyCode, int metaState) {

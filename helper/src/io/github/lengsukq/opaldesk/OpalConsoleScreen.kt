@@ -61,6 +61,7 @@ import io.github.lengsukq.opaldesk.ui.ExitSaveSlotModal
 import io.github.lengsukq.opaldesk.ui.OpalAmbientBackdrop
 import io.github.lengsukq.opaldesk.ui.OpalConsoleBottomBar
 import io.github.lengsukq.opaldesk.ui.OpalConsoleHeader
+import io.github.lengsukq.opaldesk.ui.OpalFaqModal
 import io.github.lengsukq.opaldesk.ui.OpalSpotlightController
 import io.github.lengsukq.opaldesk.ui.OpalSpotlightOverlay
 import io.github.lengsukq.opaldesk.ui.OpalText
@@ -122,6 +123,7 @@ internal fun OpalConsoleScreen(
     var showActivationModal by remember { mutableStateOf(false) }
     var showUpdateModal by remember { mutableStateOf(false) }
     var showGuideModal by remember { mutableStateOf(false) }
+    var showFaqModal by remember { mutableStateOf(false) }
     var showExitConfirmModal by remember { mutableStateOf(false) }
     var exitingApp by remember { mutableStateOf(false) }
     var floatingPickerTarget by remember { mutableStateOf<Triple<String, Int, String>?>(null) }
@@ -296,6 +298,10 @@ internal fun OpalConsoleScreen(
                                 onDisarmAutoEnterDex()
                                 showActivationModal = true
                             },
+                            onOpenFaq = {
+                                onDisarmAutoEnterDex()
+                                showFaqModal = true
+                            },
                             onRequestCompleteExit = {
                                 onDisarmAutoEnterDex()
                                 showExitConfirmModal = true
@@ -325,6 +331,10 @@ internal fun OpalConsoleScreen(
                             onOpenFeatureGuide = {
                                 onDisarmAutoEnterDex()
                                 showGuideModal = true
+                            },
+                            onOpenFaq = {
+                                onDisarmAutoEnterDex()
+                                showFaqModal = true
                             },
                             onStopEngine = onStopEngine,
                             navController = navController,
@@ -393,7 +403,17 @@ internal fun OpalConsoleScreen(
                         }
                     }
                 },
+                onOpenFaq = {
+                    showGuideModal = false
+                    showFaqModal = true
+                },
                 onDismiss = { showGuideModal = false },
+            )
+        }
+
+        if (showFaqModal) {
+            OpalFaqModal(
+                onDismiss = { showFaqModal = false },
             )
         }
 

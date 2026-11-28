@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import {
   clampImeBridgeCoords,
+  domButtonToAndroidMask,
+  domButtonsToAndroidMask,
   isImeCompositionOrNonAsciiKey,
   isImeToggleShortcut,
   isModifierDomCode,
@@ -329,6 +331,117 @@ test('OpalInputController coalesces high-frequency pointermove bursts and flushe
     assert.equal(mouseEvents[3].action, 1); // MOUSE_BUTTON_DOWN
     assert.equal(mouseEvents[3].x, 300);
     assert.ok(cancelCount >= 1);
+
+    ctrl.detach();
+  } finally {
+    delete globalThis.window;
+  }
+});
+
+test('domButtonToAndroidMask and domButtonsToAndroidMask preserve middle, side, and extended side buttons (5..15)', () => {
+  assert.equal(domButtonToAndroidMask(0), 1);
+  assert.equal(domButtonToAndroidMask(1), 4);
+  assert.equal(domButtonToAndroidMask(2), 2);
+  assert.equal(domButtonToAndroidMask(3), 8);
+  assert.equal(domButtonToAndroidMask(4), 16);
+  assert.equal(domButtonToAndroidMask(5), 32);
+  assert.equal(domButtonToAndroidMask(6), 64);
+  assert.equal(domButtonToAndroidMask(7), 128);
+  assert.equal(domButtonToAndroidMask(15), 1 << 15);
+  assert.equal(domButtonToAndroidMask(16), 1);
+  assert.equal(domButtonToAndroidMask(-1), 1);
+
+  assert.equal(domButtonsToAndroidMask(1 | 8 | 32), 1 | 8 | 32);
+  assert.equal(domButtonsToAndroidMask(4 | 16 | 64), 4 | 16 | 64);
+  assert.equal(domButtonsToAndroidMask((1 << 15) | (1 << 16)), 1 << 15);
+});
+
+test('OpalInputController prevents browser default for middle/side buttons and forwards extended actionButton masks', () => {
+  const listeners = new Map();
+  const canvasStub = {
+    addEventListener(type, fn) { listeners.set(type, fn); },
+    removeEventListener(type) { listeners.delete(type); },
+    setPointerCapture() {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1920, height: 1080 }),
+  };
+  const imeStub = {
+    value: '',
+    inputMode: '',
+    style: {},
+    setAttribute() {},
+    focus() {},
+    blur() {},
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const mouseEvents = [];
+
+  globalThis.window = {
+    innerWidth: 1920,
+    innerHeight: 1080,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  try {
+    const ctrl = new OpalInputController(canvasStub, imeStub, {
+      getRemoteSize: () => ({ width: 1920, height: 1080 }),
+      onMouse: (action, x, y, buttons, actionButton) => {
+        mouseEvents.push({ action, buttons, actionButton });
+      },
+      onTouch: () => {},
+      onKey: () => {},
+      onText: () => {},
+      virtualKeyboardDevice: true,
+    });
+    ctrl.attach();
+    ctrl.setEnabled(true);
+
+    const dispatch = (type, ev) => {
+      let prevented = false;
+      const fn = listeners.get(type);
+      assert.equal(typeof fn, 'function', `expected listener for ${type}`);
+      fn({
+        preventDefault() { prevented = true; },
+        ...ev,
+      });
+      return prevented;
+    };
+
+    const cases = [
+      { button: 1, buttons: 4, expectedMask: 4 },
+      { button: 3, buttons: 8, expectedMask: 8 },
+      { button: 4, buttons: 16, expectedMask: 16 },
+      { button: 5, buttons: 32, expectedMask: 32 },
+      { button: 6, buttons: 64, expectedMask: 64 },
+    ];
+
+    for (const c of cases) {
+      assert.equal(dispatch('mousedown', { button: c.button }), true);
+      assert.equal(dispatch('mouseup', { button: c.button }), true);
+      assert.equal(dispatch('auxclick', { button: c.button }), true);
+      assert.equal(
+        dispatch('pointerdown', {
+          pointerType: 'mouse', pointerId: 1, clientX: 500, clientY: 400, button: c.button, buttons: c.buttons,
+        }),
+        true
+      );
+      assert.equal(
+        dispatch('pointerup', {
+          pointerType: 'mouse', pointerId: 1, clientX: 500, clientY: 400, button: c.button, buttons: 0,
+        }),
+        true
+      );
+    }
+
+    // Left click on mousedown/mouseup should not be intercepted by aux button guard
+    assert.equal(dispatch('mousedown', { button: 0 }), false);
+    assert.equal(dispatch('mouseup', { button: 0 }), false);
+
+    assert.equal(mouseEvents.length, cases.length * 2);
+    cases.forEach((c, idx) => {
+      assert.deepEqual(mouseEvents[idx * 2], { action: 1, buttons: c.expectedMask, actionButton: c.expectedMask });
+      assert.deepEqual(mouseEvents[idx * 2 + 1], { action: 2, buttons: 0, actionButton: c.expectedMask });
+    });
 
     ctrl.detach();
   } finally {

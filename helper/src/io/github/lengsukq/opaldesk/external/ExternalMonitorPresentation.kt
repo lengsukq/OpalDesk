@@ -179,6 +179,7 @@ class ExternalMonitorPresentation(
                     val localTextFieldFocused by OpalImeFocusTracker.localComposeTextFieldFocusedFlow.collectAsState()
                     val pluginState by io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.pluginStateFlow.collectAsState()
                     val pluginSoftKbdVisible by io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel.softKeyboardVisibleFlow.collectAsState()
+                    val inputBindings by BridgeClient.inputBindingsFlow.collectAsState()
                     val controller = rememberNativeImeHostController()
                     imeController = controller
                     val focusedLiveDisplayId = scene.focusedWindow
@@ -192,6 +193,7 @@ class ExternalMonitorPresentation(
                         localOverlayNeedsFocus = localOverlayNeedsFocus,
                         localTextFieldFocused = localTextFieldFocused,
                         hostSoftImeVisible = imeVisible,
+                        hasEnabledKeyBindings = io.github.lengsukq.opaldesk.input.hasEnabledKeyBinding(inputBindings),
                     )
                     val showVirtualCursor = pointerDispatcher.showVirtualCursorState.value
                     LaunchedEffect(showVirtualCursor) {
@@ -376,6 +378,8 @@ class ExternalMonitorPresentation(
 
     fun scrollAtCursor(hScroll: Float, vScroll: Float) = pointerDispatcher.scrollAtCursor(hScroll, vScroll)
 
+    fun hideCursor() = pointerDispatcher.hideCursor()
+
     fun ensureImeHostActive() {
         setPresentationNotFocusable(false)
         if (!imeVisible) {
@@ -392,6 +396,15 @@ class ExternalMonitorPresentation(
         } else {
             win.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
         }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        // Shield pure desktop state so clicking mouse side-back or KEYCODE_BACK never dismisses Presentation.
+        WorkstationKeyDispatcher.handleDesktopBack(
+            hostSoftImeVisible = imeVisible,
+            onHideHostSoftIme = { imeController?.hideKeyboard() },
+        )
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -414,7 +427,22 @@ class ExternalMonitorPresentation(
             return super.dispatchKeyEvent(event)
         }
         if ((OpalImeFocusTracker.localComposeTextFieldFocused || imeVisible) && super.dispatchKeyEvent(event)) return true
+        if (event.keyCode == KeyEvent.KEYCODE_BACK && WorkstationKeyDispatcher.hasActiveLocalOverlay()) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                WorkstationKeyDispatcher.dismissActiveLocalOverlay()
+            }
+            return true
+        }
         if (WorkstationKeyDispatcher.forwardToFocusedWindow(event, forwardImeSwitch = forwardImeSwitch)) return true
+        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                WorkstationKeyDispatcher.handleDesktopBack(
+                    hostSoftImeVisible = imeVisible,
+                    onHideHostSoftIme = { imeController?.hideKeyboard() },
+                )
+            }
+            return true
+        }
         return super.dispatchKeyEvent(event)
     }
 

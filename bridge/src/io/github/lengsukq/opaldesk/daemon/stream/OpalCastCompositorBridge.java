@@ -8,6 +8,7 @@ import io.github.lengsukq.opaldesk.daemon.DaemonConfig;
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil;
 import io.github.lengsukq.opaldesk.daemon.compositor.CompositorEngine;
 import io.github.lengsukq.opaldesk.daemon.input.ExternalMouseRouter;
+import io.github.lengsukq.opaldesk.daemon.input.InputBindingEngine;
 import io.github.lengsukq.opaldesk.daemon.input.MouseRoutingPolicy;
 import io.github.lengsukq.opaldesk.daemon.input.PerDisplayInputRouter;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
@@ -148,6 +149,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         volatile long mouseDownTimeMs = 0L;
         volatile long touchDownTimeMs = 0L;
         volatile int mouseButtons = 0;
+        volatile int lastKeyMetaState = 0;
         volatile int lastImeShowSeq = -1;
         volatile long imeProbeGen = 0L;
         volatile String lastPushedFullscreenTitle = "";
@@ -178,6 +180,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     public interface NotificationActionConsumer { void accept(String op, String key, String replyText, int actionIndex); }
     public interface MediaActionConsumer { void accept(String op, long positionMs); }
     public interface CallActionConsumer { boolean dispatch(String op, String number, String smsText); }
+    public interface InputActionConsumer { boolean dispatch(String actionId); }
 
     private final AndroidServices services;
     private final DaemonConfig config;
@@ -214,6 +217,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     private final OpalCastWifiUpgradeCoordinator wifiCoordinator;
     private final OpalCastStandaloneSessionHandler sessionHandler;
     private final OpalCastDisplayModeCoordinator displayModeCoordinator;
+    private final InputBindingEngine inputBindingEngine;
     private final OpalCastInputAdapter inputAdapter;
 
     private volatile Runnable remoteStateChangeListener;
@@ -221,6 +225,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     private volatile NotificationActionConsumer notificationActionConsumer;
     private volatile MediaActionConsumer mediaActionConsumer;
     private volatile CallActionConsumer callActionConsumer;
+    private volatile InputActionConsumer inputActionConsumer;
     private volatile java.util.function.BooleanSupplier bridgeImeActiveSupplier = () -> false;
 
     public OpalCastCompositorBridge(
@@ -285,10 +290,20 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 services, config, mouseRouter, server, mediaDevices, sessions,
                 () -> desktopSessionId, this::isBridgeImeActive, worker,
                 this::pushDeviceState, this::notifyRemoteStateChanged, sessionHandler);
+        this.inputBindingEngine = new InputBindingEngine();
+        if (config != null) {
+            try {
+                this.inputBindingEngine.setRulesFromJson(config.getInputBindingsJson());
+            } catch (RuntimeException ignored) {}
+        }
         this.inputAdapter = new OpalCastInputAdapter(
-                services, compositor, displayDriver, inputRouter, server, mediaDevices, sessions,
+                services, compositor, displayDriver, inputRouter, inputBindingEngine, server, mediaDevices, sessions,
                 () -> desktopSessionId, () -> localHostTextFieldFocused, this::isBridgeImeActive,
-                worker, this::pushDeviceState, displayModeCoordinator::switchDesktopDisplayMode);
+                worker, this::pushDeviceState, displayModeCoordinator::switchDesktopDisplayMode,
+                actionId -> {
+                    InputActionConsumer consumer = this.inputActionConsumer;
+                    return consumer != null && consumer.dispatch(actionId);
+                });
         if (this.inputRouter != null) {
             this.inputRouter.setInjectStatusListener(newStatus -> worker.execute(() -> {
                 for (ActiveRemoteSession s : new ArrayList<>(sessions.values())) {
@@ -324,6 +339,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         this.callActionConsumer = consumer;
         this.callRelay.setActionDispatcher(consumer != null ? consumer::dispatch : null);
     }
+
+    public void setInputActionConsumer(InputActionConsumer consumer) { this.inputActionConsumer = consumer; }
 
     public void setBridgeImeActiveSupplier(java.util.function.BooleanSupplier supplier) {
         this.bridgeImeActiveSupplier = supplier != null ? supplier : () -> false;
@@ -501,6 +518,32 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         return inputAdapter.injectHostTrackpadEvent(action, x, y, hScroll, vScroll, buttonState);
     }
 
+    public InputBindingEngine getInputBindingEngine() {
+        return inputBindingEngine;
+    }
+
+    public void reloadInputBindings(String rulesJson) {
+        inputBindingEngine.setRulesFromJson(rulesJson);
+    }
+
+    public void setInputBindingCaptureMode(boolean active) {
+        inputBindingEngine.setCaptureMode(active);
+    }
+
+    public boolean isInputBindingCaptureMode() {
+        return inputBindingEngine.isCaptureMode();
+    }
+
+    public String pollLastCapturedInputEventJson() {
+        String captured = inputBindingEngine.pollLastCapturedEventJson();
+        return captured != null ? captured : "";
+    }
+
+    public boolean executeInputBindingAction(String actionId) {
+        int sid = desktopSessionId;
+        return inputAdapter.executeInputBindingAction(actionId, sid > 0 ? sessions.get(sid) : null);
+    }
+
     // ---- RemoteStreamServer.SessionListener ----
 
     @Override
@@ -531,6 +574,12 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                     if (wasStandalone) onCompositorWindowsChanged();
                 });
             }
+        }
+        if (sessions.isEmpty()) {
+            inputBindingEngine.clearActiveHeldState();
+        }
+        if (!hasAnyActiveSession() && services != null && services.isHostScreenOff()) {
+            services.setPrimaryPhysicalDisplayPower(true);
         }
         if (!wasCompanion) notifyRemoteStateChanged();
     }
@@ -607,6 +656,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             }
         } else if ("close_all".equals(act)) {
             compositor.closeAllWindows(true);
+        } else {
+            inputAdapter.executeInputBindingAction(act, sessions.get(sessionId));
         }
     }
 

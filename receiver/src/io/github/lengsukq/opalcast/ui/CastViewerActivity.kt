@@ -16,6 +16,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -146,6 +147,14 @@ class CastViewerActivity : Activity() {
     private fun registerBackHandlerApi33() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         val cb = OnBackInvokedCallback {
+            if (OpalCastClient.sharedSideBackDedup.shouldSuppressDuplicateBackKey(
+                    KeyEvent.KEYCODE_BACK,
+                    KeyEvent.ACTION_DOWN,
+                    SystemClock.uptimeMillis(),
+                )
+            ) {
+                return@OnBackInvokedCallback
+            }
             if (connected) {
                 client?.sendSystemAction(OpalCastClient.SYS_BACK)
             } else {
@@ -639,6 +648,18 @@ class CastViewerActivity : Activity() {
             REQ_MIC -> if (granted) enableRemoteMic() else Toast.makeText(this, getString(R.string.viewer_perm_mic_required), Toast.LENGTH_SHORT).show()
             REQ_CAM -> if (granted) enableRemoteCamera() else Toast.makeText(this, getString(R.string.viewer_perm_camera_required), Toast.LENGTH_SHORT).show()
         }
+    }
+
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        val c = client
+        if (connected && c != null && c.isMouseMotion(event) &&
+            (AndroidApiCompat.isMouseButtonPress(event) || AndroidApiCompat.isMouseButtonRelease(event))
+        ) {
+            val w = surfaceView.width.takeIf { it > 0 } ?: rootFrame.width
+            val h = surfaceView.height.takeIf { it > 0 } ?: rootFrame.height
+            return c.handleGenericMouseMotion(event, w, h)
+        }
+        return super.onGenericMotionEvent(event)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

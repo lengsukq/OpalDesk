@@ -1,8 +1,13 @@
 package io.github.lengsukq.opaldesk.daemon.input;
 
+import io.github.lengsukq.opaldesk.daemon.DaemonConfig;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 
 import org.junit.Test;
+
+import java.io.File;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -536,5 +541,75 @@ public class ExternalMouseRouterTest {
                 false, false, false, BridgeProtocol.MOUSE_TARGET_LOCAL));
         assertFalse(MouseRoutingPolicy.shouldPinPhysicalMiceToDisplay0(
                 false, false, false, BridgeProtocol.MOUSE_TARGET_EXTERNAL));
+    }
+
+    @Test
+    public void explicitSetMouseTargetForcesRebindEvenWhenSameTargetCached() throws Exception {
+        File tmpDir = java.nio.file.Files.createTempDirectory("opal_mouse_router_test").toFile();
+        DaemonConfig cfg = new DaemonConfig(new File(tmpDir, "v2.conf"), new File(tmpDir, "profiles.conf"));
+        final int[] bindCount = {0};
+        final int[] unbindCount = {0};
+
+        ExternalMouseEventSynthesizer fakeSynth = new ExternalMouseEventSynthesizer(null) {
+            @Override
+            boolean isReady() {
+                return true;
+            }
+
+            @Override
+            String getDisplayUniqueId(int displayId) {
+                return displayId == 2 ? "local:4630947134992368259" : null;
+            }
+
+            @Override
+            int getDisplayPhysicalPort(int displayId) {
+                return displayId == 2 ? 1 : -1;
+            }
+
+            @Override
+            int detectHardwareInputFlags() {
+                return 0;
+            }
+
+            @Override
+            CandidateScanResult scanCandidateDevices() {
+                Map<String, CandidateDevice> map = new LinkedHashMap<>();
+                map.put("desc-mouse-1", new CandidateDevice(
+                        "BT5.0 Mouse", "desc-mouse-1", "bluetooth:aa:bb:cc",
+                        MouseRoutingPolicy.SOURCE_MOUSE, 0, true, true, false));
+                return new CandidateScanResult(map, true);
+            }
+
+            @Override
+            int bindSingle(String descriptor, String location, String displayUniqueId, int displayPort) {
+                bindCount[0]++;
+                return 1;
+            }
+
+            @Override
+            void unbindSingle(BoundMouse bm) {
+                unbindCount[0]++;
+            }
+        };
+
+        ExternalMouseRouter router = new ExternalMouseRouter(null, cfg, null, fakeSynth);
+
+        // First explicit bind to external display 2
+        assertEquals(1, router.setMouseTarget(BridgeProtocol.MOUSE_TARGET_EXTERNAL, 2));
+        assertEquals(1, bindCount[0]);
+        assertEquals(0, unbindCount[0]);
+        assertEquals(1, router.getBoundMouseCount());
+
+        // Non-forced internal resync keeps cached sameTarget binding without churning
+        router.resyncExternalDisplayImePolicy();
+        assertEquals(1, bindCount[0]);
+        assertEquals(0, unbindCount[0]);
+
+        // Explicit setMouseTarget (e.g. exiting built-in trackpad or manual target re-select)
+        // forces unbind + bindSingle refresh even though targetDisplayId/uniqueId are unchanged
+        assertEquals(1, router.setMouseTarget(BridgeProtocol.MOUSE_TARGET_EXTERNAL, 2));
+        assertEquals(1, unbindCount[0]);
+        assertEquals(2, bindCount[0]);
+        assertEquals(1, router.getBoundMouseCount());
     }
 }

@@ -54,6 +54,31 @@ internal class WorkspaceUiState(initialSpotlightPulse: Long) {
             editingAppDpiTarget != null ||
             hasPendingPairing
 
+    fun hasAnyOpenOverlay(): Boolean =
+        showSpotlight ||
+            showAppDrawer ||
+            showExposeOverview ||
+            showControlCenter ||
+            showDpiPopover ||
+            showResolutionModal ||
+            showImePopover ||
+            showShortcutsPopover ||
+            showFeatureGuide ||
+            showNotificationCenter ||
+            showExitSlotModal ||
+            editingAppDpiTarget != null ||
+            contextMenuTarget != null ||
+            guideIconMenuPos != null ||
+            wallpaperMenuPos != null
+
+    fun dismissAnyOpenOverlay(): Boolean {
+        if (!hasAnyOpenOverlay()) return false
+        dismissAllPopovers()
+        showExitSlotModal = false
+        editingAppDpiTarget = null
+        return true
+    }
+
     fun dismissAllPopovers() {
         showSpotlight = false
         showAppDrawer = false

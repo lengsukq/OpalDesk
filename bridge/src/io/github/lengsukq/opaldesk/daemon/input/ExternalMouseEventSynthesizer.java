@@ -14,7 +14,7 @@ import java.util.Map;
  * Low-level AOSP {@code InputManager} / {@code IInputManager} peripheral discovery, composite
  * EventHub device merging, and display UniqueId/Port association helper for {@link ExternalMouseRouter}.
  */
-final class ExternalMouseEventSynthesizer {
+class ExternalMouseEventSynthesizer {
     static final class BoundMouse {
         final String descriptor;
         final String location;
@@ -75,6 +75,18 @@ final class ExternalMouseEventSynthesizer {
 
     ExternalMouseEventSynthesizer(AndroidServices services) {
         this.services = services;
+    }
+
+    boolean isReady() {
+        return services != null && services.inputManager != null;
+    }
+
+    String getDisplayUniqueId(int displayId) {
+        return (displayId >= 0 && services != null) ? services.getDisplayUniqueId(displayId) : null;
+    }
+
+    int getDisplayPhysicalPort(int displayId) {
+        return (displayId >= 0 && services != null) ? services.getDisplayPhysicalPort(displayId) : -1;
     }
 
     int getConnectedMouseCount() {

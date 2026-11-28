@@ -43,6 +43,8 @@ export {
   META_META_LEFT_ON,
   META_CAPS_LOCK_ON,
   DOM_CODE_TO_ANDROID_KEYCODE,
+  domButtonToAndroidMask,
+  domButtonsToAndroidMask,
   isModifierDomCode,
   isImeToggleShortcut,
   isImeCompositionOrNonAsciiKey,
@@ -186,6 +188,16 @@ export class OpalInputController {
       if (this.enabled) e.preventDefault();
     });
 
+    const preventAuxMouseDefault = (e) => {
+      if (!this.enabled) return;
+      if (e.button === 1 || e.button >= 3) {
+        e.preventDefault();
+      }
+    };
+    add(this.canvas, 'auxclick', preventAuxMouseDefault);
+    add(this.canvas, 'mousedown', preventAuxMouseDefault);
+    add(this.canvas, 'mouseup', preventAuxMouseDefault);
+
     add(this.canvas, 'pointerdown', (e) => {
       if (!this.enabled || e.pointerType === 'touch') return;
       this.onUserGesture();
@@ -200,12 +212,13 @@ export class OpalInputController {
         this.lastTouchPt = pt;
         this.onTouch(TOUCH_DOWN, 0, [{ pointerId: 0, x: pt.x, y: pt.y, pressure: 1.0 }]);
       } else {
+        const actionButton = domButtonToAndroidMask(e.button);
         this.onMouse(
           MOUSE_BUTTON_DOWN,
           pt.x,
           pt.y,
-          domButtonsToAndroidMask(e.buttons) || domButtonToAndroidMask(e.button),
-          domButtonToAndroidMask(e.button),
+          domButtonsToAndroidMask(e.buttons) | actionButton,
+          actionButton,
           0,
           0
         );

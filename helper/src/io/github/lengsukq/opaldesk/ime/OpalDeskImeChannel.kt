@@ -244,8 +244,14 @@ object OpalDeskImeChannel {
                     handled = BridgeClient.tryWakeHostScreenFromKeyEvent(ev) ||
                         WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(ev) ||
                         WorkstationKeyDispatcher.handleGlobalShortcut(ev)
-                    if (!handled && ev.keyCode == KeyEvent.KEYCODE_BACK && ev.action == KeyEvent.ACTION_DOWN && _softKeyboardVisibleFlow.value) {
-                        hideSoftKeyboard()
+                    val focusedLive = BridgeClient.sceneFlow.value.focusedWindow
+                        ?.takeIf { !it.isMinimized && it.isLive }
+                    if (!handled && ev.keyCode == KeyEvent.KEYCODE_BACK &&
+                        (WorkstationKeyDispatcher.hasActiveLocalOverlay() || _softKeyboardVisibleFlow.value || focusedLive == null)
+                    ) {
+                        if (ev.action == KeyEvent.ACTION_DOWN && ev.repeatCount == 0) {
+                            WorkstationKeyDispatcher.handleDesktopBack()
+                        }
                         handled = true
                     }
                 }

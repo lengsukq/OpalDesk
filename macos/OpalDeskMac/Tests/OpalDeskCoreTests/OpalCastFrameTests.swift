@@ -379,4 +379,47 @@ struct OpalCastFrameTests {
             _ = try chunk.encode()
         }
     }
+
+    @Test("OpalCastMouseButtons maps otherMouse buttonNumber 2..15 without collapsing and encodes high bits losslessly")
+    func extendedOtherMouseButtonMappingAndEncoding() throws {
+        let expectedCases: [(buttonNumber: Int, rawMask: UInt32)] = [
+            (2, 0x04),
+            (3, 0x08),
+            (4, 0x10),
+            (5, 0x20),
+            (6, 0x40),
+            (7, 0x80),
+            (15, 1 << 15)
+        ]
+
+        for item in expectedCases {
+            let mapped = OpalCastMouseButtons.fromOtherMouseButtonNumber(item.buttonNumber)
+            #expect(mapped.rawValue == item.rawMask)
+
+            let down = InputMousePayload(
+                action: .buttonDown,
+                x: 820.0,
+                y: 440.0,
+                buttons: mapped,
+                actionButton: mapped.rawValue
+            )
+            let decoded = try InputMousePayload.decode(from: down.encode())
+            #expect(decoded == down)
+            #expect(decoded.buttons.rawValue == item.rawMask)
+            #expect(decoded.actionButton == item.rawMask)
+        }
+
+        // Out-of-range button numbers safely fall back to tertiary
+        #expect(OpalCastMouseButtons.fromOtherMouseButtonNumber(16) == .tertiary)
+        #expect(OpalCastMouseButtons.fromOtherMouseButtonNumber(-1) == .tertiary)
+
+        // OptionSet preserves combined primary + multiple extended side button bits
+        let ext5 = OpalCastMouseButtons.fromOtherMouseButtonNumber(5)
+        let ext6 = OpalCastMouseButtons.fromOtherMouseButtonNumber(6)
+        let combined: OpalCastMouseButtons = [.primary, ext5, ext6]
+        let payload = InputMousePayload(action: .moveAbs, x: 100.0, y: 200.0, buttons: combined, actionButton: ext6.rawValue)
+        let decodedCombined = try InputMousePayload.decode(from: payload.encode())
+        #expect(decodedCombined.buttons.rawValue == (0x01 | 0x20 | 0x40))
+        #expect(decodedCombined.actionButton == 0x40)
+    }
 }

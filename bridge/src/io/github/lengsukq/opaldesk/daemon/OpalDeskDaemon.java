@@ -136,6 +136,9 @@ public final class OpalDeskDaemon implements Runnable {
                 this::pushSceneSnapshotAsync);
         this.compositor.setKeyboardRoutedDisplayIdSupplier(this.mouseRouter::getKeyboardRoutedDisplayId);
         this.compositor.setComboKeyboardOuterSupplier(this.mouseRouter::hasComboKeyboardBoundToOuterDisplay);
+        this.mouseRouter.setHasEnabledKeyBindings(
+                io.github.lengsukq.opaldesk.daemon.input.InputBindingEngine.hasEnabledKeyBindingJson(
+                        config.getInputBindingsJson()));
         this.mouseRouter.setFocusedWindowTargetProvider(() -> {
             WindowSession focused = this.compositor.getFocusedLiveWindow();
             if (focused != null && focused.displayId > 0 && focused.vdUniqueId != null && !focused.vdUniqueId.isEmpty()) {
@@ -170,6 +173,7 @@ public final class OpalDeskDaemon implements Runnable {
         this.remoteBridge.setNotificationActionConsumer(helperBridge::dispatchNotificationAction);
         this.remoteBridge.setMediaActionConsumer(helperBridge::pushMediaAction);
         this.remoteBridge.setCallActionConsumer(helperBridge::dispatchCallAction);
+        this.remoteBridge.setInputActionConsumer(helperBridge::dispatchInputBindingAction);
         this.remoteBridge.setDirectImeTextCommitter(helperBridge::commitTextViaBridgeIme);
         this.remoteBridge.setBridgeImeActiveSupplier(this.imeManager::isBridgeImeConfiguredOrActive);
         this.remoteBridge.setRemoteStateChangeListener(() -> {
@@ -180,13 +184,23 @@ public final class OpalDeskDaemon implements Runnable {
             });
         });
         this.mouseRouter.setPhysicalKeyboardListener(connected -> bgExec.execute(this::syncWindowImePolicy));
-        this.mouseRouter.setExternalImeContextListener(() -> bgExec.execute(this::syncWindowImePolicy));
+        this.mouseRouter.setExternalImeContextListener(() -> bgExec.execute(() -> {
+            syncWindowImePolicy();
+            if (services != null && services.isHostScreenOff()
+                    && !mouseRouter.hasPhysicalExternalDisplay()
+                    && !remoteBridge.hasAnyActiveSession()) {
+                services.setPrimaryPhysicalDisplayPower(true);
+            }
+        }));
         this.displayDriver.setAllSurfacesDetachedListener(() -> {
             if (services != null && MouseRoutingPolicy.shouldRestoreDefaultDisplayFocusOnLocalExit(
                     mouseRouter.isLocalDesktopPinned(),
                     mouseRouter.getBoundDisplayId(),
                     remoteBridge.hasActiveDesktopSession())) {
                 services.restoreDefaultDisplayTopFocus();
+            }
+            if (services != null && services.isHostScreenOff() && !remoteBridge.hasAnyActiveSession()) {
+                services.setPrimaryPhysicalDisplayPower(true);
             }
         });
         this.taskStackObserver = new TaskStackObserver(

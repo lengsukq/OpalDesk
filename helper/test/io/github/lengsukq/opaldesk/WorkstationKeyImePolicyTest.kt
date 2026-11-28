@@ -3,6 +3,7 @@ package io.github.lengsukq.opaldesk
 import android.view.InputDevice
 import android.view.KeyEvent
 import io.github.lengsukq.opaldesk.protocol.WindowTilingLayout
+import io.github.lengsukq.opaldesk.ui.DesktopBackAction
 import io.github.lengsukq.opaldesk.ui.GlobalShortcutAction
 import io.github.lengsukq.opaldesk.ui.WorkstationKeyDispatcher
 import io.github.lengsukq.opaldesk.ui.WorkstationShortcutCatalog
@@ -413,5 +414,56 @@ class WorkstationKeyImePolicyTest {
         val serialized = WorkstationShortcutCatalog.serializeDisabledIds(disabled + "unknown_id")
         assertEquals(disabled, WorkstationShortcutCatalog.parseDisabledIds(serialized))
         assertEquals(emptySet<String>(), WorkstationShortcutCatalog.parseDisabledIds(" , invalid "))
+    }
+
+    @Test
+    fun `desktop back policy shields pure desktop state and prioritizes overlays then ime then window`() {
+        assertEquals(
+            DesktopBackAction.DISMISS_OVERLAY,
+            WorkstationKeyDispatcher.resolveDesktopBackAction(
+                hasLocalOverlay = true,
+                hasSoftImeVisible = true,
+                hasFocusedLiveWindow = true,
+            ),
+        )
+        assertEquals(
+            DesktopBackAction.HIDE_SOFT_IME,
+            WorkstationKeyDispatcher.resolveDesktopBackAction(
+                hasLocalOverlay = false,
+                hasSoftImeVisible = true,
+                hasFocusedLiveWindow = true,
+            ),
+        )
+        assertEquals(
+            DesktopBackAction.FORWARD_TO_WINDOW,
+            WorkstationKeyDispatcher.resolveDesktopBackAction(
+                hasLocalOverlay = false,
+                hasSoftImeVisible = false,
+                hasFocusedLiveWindow = true,
+            ),
+        )
+        assertEquals(
+            DesktopBackAction.CONSUME_DESKTOP_NOOP,
+            WorkstationKeyDispatcher.resolveDesktopBackAction(
+                hasLocalOverlay = false,
+                hasSoftImeVisible = false,
+                hasFocusedLiveWindow = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `custom keyboard bindings keep compositor focusable alongside Yuyan IME without opening console`() {
+        assertFalse(
+            WorkstationKeyDispatcher.shouldSetCompositorWindowNotFocusable(
+                focusedWindowDisplayId = 85,
+                keyboardRoutedDisplayId = 85,
+                bridgeImeActive = true,
+                localOverlayNeedsFocus = false,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = false,
+                hasEnabledKeyBindings = true,
+            ),
+        )
     }
 }

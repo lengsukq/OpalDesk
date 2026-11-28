@@ -170,7 +170,9 @@ class OpalCastClient(
     private val textSeq = AtomicLong(1L)
     private val lastIdrRequestMs = AtomicLong(0L)
     private val lastRxActivityMs = AtomicLong(0L)
-    private val sideNavTouchFilter = InputGuardPolicy.SideNavigationTouchFilter()
+    private var lastGenericMouseButtons = 0
+    private var suppressNonPrimaryTouchUp = false
+    private var lastTouchDownButtons = MotionEvent.BUTTON_PRIMARY
     private val wireCodec = OpalCastWireCodec()
 
     @Volatile
@@ -320,14 +322,26 @@ class OpalCastClient(
     fun handleGenericMouseMotion(ev: MotionEvent?, viewW: Int, viewH: Int): Boolean {
         if (ev == null || !isMouseMotion(ev)) return false
         if (AndroidApiCompat.isMouseButtonPress(ev)) {
-            if (AndroidApiCompat.extractActionButton(ev) == MotionEvent.BUTTON_BACK) {
-                if (sharedSideBackDedup.tryClaimSideButtonBack(SystemClock.uptimeMillis())) {
-                    sendSystemAction(SYS_BACK)
-                }
+            val rawAct = AndroidApiCompat.extractActionButton(ev)
+            val resolvedAct = if (rawAct != 0) rawAct else (ev.buttonState and lastGenericMouseButtons.inv())
+            lastGenericMouseButtons = ev.buttonState
+            if (resolvedAct == MotionEvent.BUTTON_BACK) {
+                sharedSideBackDedup.tryClaimSideButtonBack(SystemClock.uptimeMillis())
+            }
+            if (resolvedAct != 0 && resolvedAct != MotionEvent.BUTTON_PRIMARY) {
+                sendMouseEvent(ev, viewW, viewH, overrideActionButton = resolvedAct)
             }
             return true
         }
-        if (AndroidApiCompat.isMouseButtonRelease(ev)) return true
+        if (AndroidApiCompat.isMouseButtonRelease(ev)) {
+            val rawAct = AndroidApiCompat.extractActionButton(ev)
+            val resolvedAct = if (rawAct != 0) rawAct else (lastGenericMouseButtons and ev.buttonState.inv())
+            lastGenericMouseButtons = ev.buttonState
+            if (resolvedAct != 0 && resolvedAct != MotionEvent.BUTTON_PRIMARY) {
+                sendMouseEvent(ev, viewW, viewH, overrideActionButton = resolvedAct)
+            }
+            return true
+        }
         return when (ev.actionMasked) {
             MotionEvent.ACTION_HOVER_ENTER,
             MotionEvent.ACTION_HOVER_MOVE,
@@ -341,16 +355,34 @@ class OpalCastClient(
         }
     }
 
-    fun sendMouseEvent(ev: MotionEvent, viewW: Int, viewH: Int) {
+    fun sendMouseEvent(ev: MotionEvent, viewW: Int, viewH: Int, overrideActionButton: Int = 0) {
         if (viewW <= 0 || viewH <= 0) return
         val masked = ev.actionMasked
-        if (sideNavTouchFilter.shouldSuppress(masked, isMouseMotion(ev), ev.buttonState)) return
+        val isBtnPress = AndroidApiCompat.isMouseButtonPress(ev)
+        val isBtnRelease = AndroidApiCompat.isMouseButtonRelease(ev)
+        if (!isBtnPress && !isBtnRelease) {
+            if (AndroidApiCompat.supportsActionButtonEvents()) {
+                if (masked == MotionEvent.ACTION_DOWN && ev.buttonState != 0 &&
+                    (ev.buttonState and MotionEvent.BUTTON_PRIMARY) == 0
+                ) {
+                    suppressNonPrimaryTouchUp = true
+                    return
+                }
+                if ((masked == MotionEvent.ACTION_UP || masked == MotionEvent.ACTION_CANCEL) && suppressNonPrimaryTouchUp) {
+                    suppressNonPrimaryTouchUp = false
+                    return
+                }
+            } else if (masked == MotionEvent.ACTION_DOWN) {
+                lastTouchDownButtons = if (ev.buttonState != 0) ev.buttonState else MotionEvent.BUTTON_PRIMARY
+                if ((lastTouchDownButtons and MotionEvent.BUTTON_BACK) != 0) {
+                    sharedSideBackDedup.tryClaimSideButtonBack(SystemClock.uptimeMillis())
+                }
+            }
+        }
         val rw = remoteWidth.coerceAtLeast(2).toFloat()
         val rh = remoteHeight.coerceAtLeast(2).toFloat()
         val rx = (ev.x * (rw / viewW)).coerceIn(0f, rw - 1f)
         val ry = (ev.y * (rh / viewH)).coerceIn(0f, rh - 1f)
-        val isBtnPress = AndroidApiCompat.isMouseButtonPress(ev)
-        val isBtnRelease = AndroidApiCompat.isMouseButtonRelease(ev)
         val mouseAction = when {
             masked == MotionEvent.ACTION_DOWN || isBtnPress -> 1
             masked == MotionEvent.ACTION_UP || isBtnRelease -> 2
@@ -358,19 +390,23 @@ class OpalCastClient(
             masked == MotionEvent.ACTION_HOVER_EXIT -> 4
             else -> 0
         }
-        val normButtons = if (
-            (masked == MotionEvent.ACTION_DOWN || masked == MotionEvent.ACTION_MOVE) &&
-            ev.buttonState == 0
-        ) {
-            MotionEvent.BUTTON_PRIMARY
-        } else {
-            ev.buttonState
-        }
         val actBtn = when {
+            overrideActionButton != 0 -> overrideActionButton
             isBtnPress || isBtnRelease -> AndroidApiCompat.extractActionButton(ev)
-            masked == MotionEvent.ACTION_DOWN || masked == MotionEvent.ACTION_UP ->
+            masked == MotionEvent.ACTION_DOWN ->
                 if (ev.buttonState != 0) ev.buttonState else MotionEvent.BUTTON_PRIMARY
+            masked == MotionEvent.ACTION_UP ->
+                if (ev.buttonState != 0) ev.buttonState else lastTouchDownButtons
             else -> 0
+        }
+        val normButtons = when {
+            isBtnPress && ev.buttonState == 0 && actBtn != 0 -> actBtn
+            (masked == MotionEvent.ACTION_DOWN || masked == MotionEvent.ACTION_MOVE) && ev.buttonState == 0 ->
+                MotionEvent.BUTTON_PRIMARY
+            else -> ev.buttonState
+        }
+        if (masked == MotionEvent.ACTION_UP || masked == MotionEvent.ACTION_CANCEL) {
+            lastTouchDownButtons = MotionEvent.BUTTON_PRIMARY
         }
         val hScroll = if (masked == MotionEvent.ACTION_SCROLL) ev.getAxisValue(MotionEvent.AXIS_HSCROLL) else 0f
         val vScroll = if (masked == MotionEvent.ACTION_SCROLL) ev.getAxisValue(MotionEvent.AXIS_VSCROLL) else 0f

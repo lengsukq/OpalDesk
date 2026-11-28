@@ -705,4 +705,19 @@ class PeerCastViewerActivity : ComponentActivity() {
             superDispatch = { super.dispatchKeyEvent(it) },
         )
     }
+
+    override fun onGenericMotionEvent(event: android.view.MotionEvent): Boolean {
+        if (dispatchPeerCastGenericMotion(
+                event = event,
+                connected = connected,
+                showAppPicker = showAppPicker,
+                viewW = window.decorView.width,
+                viewH = window.decorView.height,
+                client = client,
+            )
+        ) {
+            return true
+        }
+        return super.onGenericMotionEvent(event)
+    }
 }

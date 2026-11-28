@@ -33,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -225,6 +226,7 @@ private fun GuideMenuActionRow(
 fun DexFeatureGuideWindow(
     maxHeight: Dp,
     onAction: (action: String, url: String) -> Unit,
+    onOpenFaq: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -239,6 +241,7 @@ fun DexFeatureGuideWindow(
 
     val doc = guideState.document
     var selectedTab by remember(doc.sections.size) { mutableIntStateOf(0) }
+    var showInlineFaq by remember { mutableStateOf(false) }
     val safeTab = selectedTab.coerceIn(0, (doc.sections.size - 1).coerceAtLeast(0))
     val activeSection = doc.sections.getOrNull(safeTab)
     val shape = RoundedCornerShape(22.dp)
@@ -325,13 +328,28 @@ fun DexFeatureGuideWindow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 OpalButton(
-                    label = stringResource(if (guideState.refreshing) R.string.guide_syncing else R.string.common_refresh),
+                    label = stringResource(if (showInlineFaq) R.string.faq_back_to_guide else R.string.faq_short_btn),
                     compact = true,
-                    filled = false,
-                    enabled = !guideState.refreshing,
-                    accent = OpalPalette.AccentBlue,
-                    onClick = { OpalGuideStore.refreshIfStale(ctx, force = true) },
+                    filled = showInlineFaq,
+                    accent = OpalPalette.AccentEmerald,
+                    onClick = {
+                        if (onOpenFaq != null) {
+                            onOpenFaq()
+                        } else {
+                            showInlineFaq = !showInlineFaq
+                        }
+                    },
                 )
+                if (!showInlineFaq) {
+                    OpalButton(
+                        label = stringResource(if (guideState.refreshing) R.string.guide_syncing else R.string.common_refresh),
+                        compact = true,
+                        filled = false,
+                        enabled = !guideState.refreshing,
+                        accent = OpalPalette.AccentBlue,
+                        onClick = { OpalGuideStore.refreshIfStale(ctx, force = true) },
+                    )
+                }
                 OpalButton(
                     label = stringResource(R.string.common_close),
                     compact = true,
@@ -339,6 +357,16 @@ fun DexFeatureGuideWindow(
                     onClick = onDismiss,
                 )
             }
+        }
+
+        if (showInlineFaq) {
+            Spacer(Modifier.height(10.dp))
+            OpalFaqPanel(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false),
+            )
+            return@Column
         }
 
         if (guideState.lastError.isNotBlank()) {
@@ -505,6 +533,7 @@ fun DexFeatureGuideWindow(
 @Composable
 fun ConsoleFeatureGuideModal(
     onAction: (action: String, url: String) -> Unit,
+    onOpenFaq: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     BoxWithConstraints(
@@ -519,6 +548,7 @@ fun ConsoleFeatureGuideModal(
         DexFeatureGuideWindow(
             maxHeight = modalMaxH,
             onAction = onAction,
+            onOpenFaq = onOpenFaq,
             onDismiss = onDismiss,
         )
     }

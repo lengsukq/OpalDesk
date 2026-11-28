@@ -637,4 +637,40 @@ class ExternalTrackpadPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun presentationModeRespectsAutoShowTrackpadToggleAndManualState() {
+        // When auto-show trackpad is OFF, Presentation mode must NOT auto-open DexTrackpadScreen
+        assertFalse(
+            ExternalTrackpadPolicy.shouldShowPresentationTrackpad(
+                autoShowEnabled = false,
+                userManuallyOpened = false,
+                userManuallyClosed = false,
+            ),
+        )
+        // When auto-show trackpad is ON, Presentation mode opens DexTrackpadScreen by default
+        assertTrue(
+            ExternalTrackpadPolicy.shouldShowPresentationTrackpad(
+                autoShowEnabled = true,
+                userManuallyOpened = false,
+                userManuallyClosed = false,
+            ),
+        )
+        // Manual open overrides autoShowEnabled=false across onResume cycles
+        assertTrue(
+            ExternalTrackpadPolicy.shouldShowPresentationTrackpad(
+                autoShowEnabled = false,
+                userManuallyOpened = true,
+                userManuallyClosed = false,
+            ),
+        )
+        // Manual close keeps trackpad hidden even if autoShowEnabled=true
+        assertFalse(
+            ExternalTrackpadPolicy.shouldShowPresentationTrackpad(
+                autoShowEnabled = true,
+                userManuallyOpened = false,
+                userManuallyClosed = true,
+            ),
+        )
+    }
 }

@@ -3,9 +3,13 @@ package io.github.lengsukq.opaldesk.daemon.compositor;
 import io.github.lengsukq.opaldesk.daemon.DaemonConfig;
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil;
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil.IntRect;
+import io.github.lengsukq.opaldesk.daemon.WindowSnapGeometry;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
+import java.util.List;
 
 /**
  * Pure JVM window frame, snap/maximize/fullscreen/orientation layout, DPI spec, and Z-order
@@ -349,5 +353,88 @@ final class CompositorLayoutManager {
             ws.focused = (top != null && ws == top);
         }
         if (top != null) top.lastActiveAtMs = nowMs;
+    }
+
+    boolean snapFocusedWindowLocked(Collection<WindowSession> sessions, boolean leftHalf, long nowMs) {
+        WindowSession target = resolveFocusedOrTopVisibleLocked(sessions);
+        if (target == null) return false;
+        String pres = leftHalf ? BridgeProtocol.PRES_SNAP_LEFT : BridgeProtocol.PRES_SNAP_RIGHT;
+        applySnapPresetLocked(target, pres);
+        focusWindowLocked(sessions, target, nowMs);
+        return true;
+    }
+
+    boolean applyQuickSplitTwoLocked(Collection<WindowSession> sessions, long nowMs) {
+        List<WindowSession> visible = collectVisibleWindowsLocked(sessions);
+        if (visible.isEmpty()) return false;
+        visible.sort((a, b) -> {
+            if (a.focused != b.focused) return a.focused ? -1 : 1;
+            int zCmp = Integer.compare(b.zOrder, a.zOrder);
+            return (zCmp != 0) ? zCmp : Integer.compare(b.windowId, a.windowId);
+        });
+        WindowSession primary = visible.get(0);
+        applySnapPresetLocked(primary, BridgeProtocol.PRES_SNAP_LEFT);
+        if (visible.size() >= 2) {
+            WindowSession secondary = visible.get(1);
+            applySnapPresetLocked(secondary, BridgeProtocol.PRES_SNAP_RIGHT);
+            focusWindowLocked(sessions, secondary, nowMs);
+        }
+        focusWindowLocked(sessions, primary, nowMs);
+        return true;
+    }
+
+    boolean switchNextWindowLocked(Collection<WindowSession> sessions, long nowMs) {
+        List<WindowSession> visible = collectVisibleWindowsLocked(sessions);
+        if (visible.isEmpty()) return false;
+        visible.sort(Comparator.comparingInt(w -> w.windowId));
+        WindowSession current = resolveFocusedOrTopVisibleLocked(sessions);
+        int nextIdx = 0;
+        if (current != null && visible.size() > 1) {
+            int curIdx = visible.indexOf(current);
+            if (curIdx >= 0) {
+                nextIdx = (curIdx + 1) % visible.size();
+            }
+        }
+        WindowSession next = visible.get(nextIdx);
+        if (next.isHibernated()) {
+            next.state = BridgeProtocol.STATE_LIVE;
+        }
+        focusWindowLocked(sessions, next, nowMs);
+        return true;
+    }
+
+    private void applySnapPresetLocked(WindowSession ws, String snapPresentation) {
+        int canvasW = config.getCanvasWidth();
+        int canvasH = config.getCanvasHeight();
+        int canvasDpi = config.getCanvasDpi();
+        if (BridgeProtocol.PRES_FLOATING.equals(ws.presentation)) {
+            ws.restoreFrame = ws.frame;
+        }
+        ws.presentation = snapPresentation;
+        ws.frame = WindowSnapGeometry.computeSnapFrame(snapPresentation, canvasW, canvasH, canvasDpi);
+        int[] spec = computeWindowSpecLocked(ws.frame, false, ws.profile, ws.pkg);
+        ws.contentWidth = spec[0];
+        ws.contentHeight = spec[1];
+        ws.contentDpi = spec[2];
+        vdPool.resizeIfActive(ws.windowId, spec[0], spec[1], spec[2]);
+        rememberWindowBoundsLocked(ws);
+    }
+
+    private static List<WindowSession> collectVisibleWindowsLocked(Collection<WindowSession> sessions) {
+        List<WindowSession> visible = new ArrayList<>();
+        for (WindowSession ws : sessions) {
+            if (ws != null && !ws.isMinimized()) visible.add(ws);
+        }
+        return visible;
+    }
+
+    private static WindowSession resolveFocusedOrTopVisibleLocked(Collection<WindowSession> sessions) {
+        WindowSession top = null;
+        for (WindowSession ws : sessions) {
+            if (ws == null || ws.isMinimized()) continue;
+            if (ws.focused) return ws;
+            if (top == null || ws.zOrder > top.zOrder) top = ws;
+        }
+        return top;
     }
 }

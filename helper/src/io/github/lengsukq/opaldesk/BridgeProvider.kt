@@ -9,8 +9,10 @@ import android.os.Bundle
 import android.util.Log
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import io.github.lengsukq.opaldesk.ime.OpalDeskImeChannel
+import io.github.lengsukq.opaldesk.input.InputBindingAction
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.IpcTrustVerifier
+import io.github.lengsukq.opaldesk.ui.WorkstationKeyDispatcher
 
 /**
  * Receives daemon Binder handshakes (`setBinder`), zero-roundtrip compositor scene pushes (`syncScene`),
@@ -52,6 +54,7 @@ class BridgeProvider : ContentProvider() {
             BridgeProtocol.PROVIDER_METHOD_NOTIFICATION_ACTION -> handleNotificationAction(extras)
             BridgeProtocol.PROVIDER_METHOD_MEDIA_ACTION -> handleMediaAction(extras)
             BridgeProtocol.PROVIDER_METHOD_CALL_ACTION -> handleCallAction(extras)
+            BridgeProtocol.PROVIDER_METHOD_INPUT_ACTION -> handleInputAction(extras)
             else -> Bundle()
         }
     }
@@ -192,6 +195,21 @@ class BridgeProvider : ContentProvider() {
                     number = number,
                     smsText = smsText,
                 )
+            }
+        }
+        return Bundle().apply {
+            putBoolean("ok", true)
+            putBoolean("handled", handled)
+        }
+    }
+
+    private fun handleInputAction(extras: Bundle?): Bundle {
+        var handled = false
+        if (!BridgeService.sUserStopping && extras != null) {
+            val actionId = extras.getString(BridgeProtocol.EXTRA_INPUT_ACTION_ID).orEmpty().trim()
+            if (InputBindingAction.fromId(actionId) == InputBindingAction.SPOTLIGHT) {
+                WorkstationKeyDispatcher.triggerSpotlightToggle()
+                handled = true
             }
         }
         return Bundle().apply {

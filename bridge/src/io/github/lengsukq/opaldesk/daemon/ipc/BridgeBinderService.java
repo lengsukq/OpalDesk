@@ -10,6 +10,7 @@ import android.view.KeyEvent;
 import android.view.Surface;
 
 import io.github.lengsukq.opaldesk.daemon.DaemonConfig;
+import io.github.lengsukq.opaldesk.daemon.WindowProfileStore;
 import io.github.lengsukq.opaldesk.daemon.compositor.CompositorEngine;
 import io.github.lengsukq.opaldesk.daemon.compositor.WindowSession;
 import io.github.lengsukq.opaldesk.daemon.input.DexImeManager;
@@ -22,9 +23,6 @@ import io.github.lengsukq.opaldesk.daemon.platform.TaskApiAdapter;
 import io.github.lengsukq.opaldesk.daemon.stream.OpalCastCompositorBridge;
 import io.github.lengsukq.opaldesk.daemon.stream.RemoteStreamServer;
 import io.github.lengsukq.opaldesk.daemon.util.DaemonLogBuffer;
-
-import java.util.LinkedHashMap;
-import java.util.Map;
 
 /**
  * Binder IPC dispatcher for the OpalDesk Universal Compositor, External Display EDID controls,
@@ -528,7 +526,7 @@ public final class BridgeBinderService extends Binder {
                 String appDpisRaw = data.readString();
                 config.setGlobalCustomDpi(globalCustomDpi);
                 if (replaceAppDpis) {
-                    config.replaceAllAppCustomDpis(parseAppDpisPayload(appDpisRaw));
+                    config.replaceAllAppCustomDpis(WindowProfileStore.parseAppDpisPayload(appDpisRaw));
                 }
                 compositor.reapplyWindowDpiScale();
                 if (reply != null) reply.writeInt(1);
@@ -544,7 +542,7 @@ public final class BridgeBinderService extends Binder {
             }
             case BridgeProtocol.TX_SYNC_APP_WINDOW_BOUNDS: {
                 String boundsRaw = data.readString();
-                config.replaceAllWindowBounds(parseAppBoundsPayload(boundsRaw));
+                config.replaceAllWindowBounds(WindowProfileStore.parseAppBoundsPayload(boundsRaw));
                 if (reply != null) reply.writeInt(1);
                 return true;
             }
@@ -731,6 +729,42 @@ public final class BridgeBinderService extends Binder {
                 if (reply != null) reply.writeString(json);
                 return true;
             }
+            case BridgeProtocol.TX_GET_INPUT_BINDINGS: {
+                if (reply != null) reply.writeString(config.getInputBindingsJson());
+                return true;
+            }
+            case BridgeProtocol.TX_SET_INPUT_BINDINGS: {
+                String rulesJson = data.readString();
+                String normalized = config.setInputBindingsJson(rulesJson);
+                if (remoteBridge != null) {
+                    remoteBridge.reloadInputBindings(normalized);
+                }
+                if (mouseRouter != null) {
+                    mouseRouter.setHasEnabledKeyBindings(
+                            io.github.lengsukq.opaldesk.daemon.input.InputBindingEngine.hasEnabledKeyBindingJson(normalized));
+                }
+                if (reply != null) {
+                    reply.writeInt(1);
+                    reply.writeString(normalized);
+                }
+                return true;
+            }
+            case BridgeProtocol.TX_INPUT_BINDING_CAPTURE: {
+                int op = data.readInt();
+                String captured = "";
+                boolean active = false;
+                if (remoteBridge != null) {
+                    if (op == BridgeProtocol.INPUT_CAPTURE_OP_START) remoteBridge.setInputBindingCaptureMode(true);
+                    else if (op == BridgeProtocol.INPUT_CAPTURE_OP_STOP) remoteBridge.setInputBindingCaptureMode(false);
+                    else if (op == BridgeProtocol.INPUT_CAPTURE_OP_POLL) captured = remoteBridge.pollLastCapturedInputEventJson();
+                    active = remoteBridge.isInputBindingCaptureMode();
+                }
+                if (reply != null) {
+                    reply.writeInt(active ? 1 : 0);
+                    reply.writeString(captured);
+                }
+                return true;
+            }
             case BridgeProtocol.TX_SHUTDOWN: {
                 System.out.println("OPALDESK_SHUTDOWN_REQUESTED");
                 shutdownTrigger.run();
@@ -744,43 +778,5 @@ public final class BridgeBinderService extends Binder {
             default:
                 return super.onTransact(code, data, reply, flags);
         }
-    }
-
-    private static Map<String, Integer> parseAppDpisPayload(String raw) {
-        Map<String, Integer> out = new LinkedHashMap<>();
-        if (raw == null || raw.isEmpty()) return out;
-        for (String line : raw.split("\r?\n")) {
-            int eq = line.indexOf('=');
-            if (eq <= 0) continue;
-            String pkg = line.substring(0, eq).trim();
-            try {
-                int dpi = Integer.parseInt(line.substring(eq + 1).trim());
-                if (dpi > 0) out.put(pkg, dpi);
-            } catch (NumberFormatException ignored) {
-            }
-        }
-        return out;
-    }
-
-    private static Map<String, DaemonConfig.SavedWindowBounds> parseAppBoundsPayload(String raw) {
-        Map<String, DaemonConfig.SavedWindowBounds> out = new LinkedHashMap<>();
-        if (raw == null || raw.isEmpty()) return out;
-        for (String line : raw.split("\r?\n")) {
-            int eq = line.indexOf('=');
-            if (eq <= 0) continue;
-            String pkg = line.substring(0, eq).trim();
-            String[] parts = line.substring(eq + 1).trim().split(",");
-            if (parts.length < 4) continue;
-            try {
-                float l = Float.parseFloat(parts[0].trim());
-                float t = Float.parseFloat(parts[1].trim());
-                float r = Float.parseFloat(parts[2].trim());
-                float b = Float.parseFloat(parts[3].trim());
-                String pres = parts.length >= 5 ? parts[4].trim() : BridgeProtocol.PRES_FLOATING;
-                out.put(pkg, new DaemonConfig.SavedWindowBounds(l, t, r, b, pres));
-            } catch (NumberFormatException ignored) {
-            }
-        }
-        return out;
     }
 }

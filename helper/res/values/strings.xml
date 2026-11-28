@@ -1016,4 +1016,21 @@
     <string name="profile_badge_work">Work</string>
     <string name="profile_badge_private">Private</string>
     <string name="profile_badge_secondary">User %1$d</string>
+
+    <!-- Frequently Asked Questions (FAQ) -->
+    <string name="faq_title">Frequently Asked Questions</string>
+    <string name="faq_subtitle">Quick troubleshooting for touch, peripherals, casting &amp; activation</string>
+    <string name="faq_search_placeholder">Search USB debugging, mouse, cast, DPI…</string>
+    <string name="faq_result_count">%1$d items</string>
+    <string name="faq_pinned_badge">Top</string>
+    <string name="faq_empty_title">No matching FAQ entries</string>
+    <string name="faq_empty_hint">Try shorter keywords or switch back to the All category</string>
+    <string name="faq_short_btn">FAQ</string>
+    <string name="faq_back_to_guide">Guide</string>
+    <string name="settings_faq_row_title">Frequently Asked Questions (FAQ)</string>
+    <string name="settings_faq_row_sub">Troubleshooting for unresponsive touch, mouse cursor, side buttons &amp; casting</string>
+    <string name="settings_faq_open_btn">View FAQ</string>
+    <string name="dash_faq_entry_title">Frequently Asked Questions (FAQ)</string>
+    <string name="dash_faq_entry_sub">Unresponsive touch, external mouse, wireless cast &amp; activation fixes</string>
+    <string name="dash_faq_entry_btn">View ›</string>
 </resources>

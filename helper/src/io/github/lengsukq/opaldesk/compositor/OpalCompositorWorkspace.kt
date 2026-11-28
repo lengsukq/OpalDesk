@@ -114,7 +114,21 @@ fun OpalCompositorWorkspace(
         }
     }
 
+    DisposableEffect(ui) {
+        val dismissHandler: () -> Boolean = { ui.dismissAnyOpenOverlay() }
+        WorkstationKeyDispatcher.setActiveOverlayBackHandlers(
+            isOverlayOpen = { ui.hasAnyOpenOverlay() },
+            dismissOverlay = dismissHandler,
+        )
+        onDispose {
+            WorkstationKeyDispatcher.clearActiveOverlayBackHandlers(dismissHandler)
+        }
+    }
+
     LaunchedEffect(status.connected) {
+        if (status.connected) {
+            BridgeClient.fetchInputBindingsAsync()
+        }
         ui.allApps = AppCatalogRepository.loadLaunchableApps(ctx, forceReload = status.connected)
         scope.launch(Dispatchers.IO) { AppCatalogRepository.prewarmIcons(ctx, ui.allApps) }
     }

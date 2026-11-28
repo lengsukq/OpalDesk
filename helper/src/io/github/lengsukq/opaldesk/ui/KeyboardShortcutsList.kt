@@ -260,6 +260,9 @@ internal fun KeyboardShortcutsBody(
                 }
             }
         }
+
+        // Section 4: Unified Custom Key/Mouse Input Interception Rules
+        InputBindingsSection(compact = compact)
     }
 }
 

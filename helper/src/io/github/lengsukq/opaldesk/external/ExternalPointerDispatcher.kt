@@ -201,7 +201,8 @@ class HardwareMouseDetectingFrameLayout(
             onHardwareMouseSeen()
             syncSystemPointerIcon()
         }
-        return super.dispatchGenericMotionEvent(ev)
+        if (super.dispatchGenericMotionEvent(ev)) return true
+        return io.github.lengsukq.opaldesk.input.LocalInputBindingExecutor.dispatchDesktopFallbackMouseGenericMotion(ev)
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
@@ -209,7 +210,8 @@ class HardwareMouseDetectingFrameLayout(
             onHardwareMouseSeen()
             syncSystemPointerIcon()
         }
-        return super.dispatchTouchEvent(ev)
+        if (super.dispatchTouchEvent(ev)) return true
+        return io.github.lengsukq.opaldesk.input.LocalInputBindingExecutor.shouldConsumeDesktopFallbackMouseTouch(ev)
     }
 
     companion object {
@@ -245,6 +247,7 @@ object ExternalTrackpadLauncher {
                             Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
                     )
                     putExtra("targetDisplayId", ExternalTrackpadBridge.sessionFlow.value.displayId)
+                    putExtra(ExternalDesktopActivity.EXTRA_OPEN_TRACKPAD, true)
                 }
                 DisplayLaunchHelper.launchOnDisplay0(ctx, intent)
             }

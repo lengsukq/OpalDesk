@@ -91,6 +91,23 @@ object ExternalTrackpadPolicy {
     ): Boolean = session.isPhysicalDirectExtended && autoShowEnabled && !autoBlackoutEnabled && !alreadyVisible
 
     /**
+     * Decides whether Display 0 should display the built-in Presentation trackpad surface
+     * (`DexTrackpadScreen`) vs. the lightweight external-display standby card.
+     *
+     * Respects [autoShowEnabled] on initial entry and preserves explicit manual open/close actions
+     * across `onResume()` cycles without forcibly resetting visibility to `true`.
+     */
+    fun shouldShowPresentationTrackpad(
+        autoShowEnabled: Boolean,
+        userManuallyOpened: Boolean = false,
+        userManuallyClosed: Boolean = false,
+    ): Boolean = when {
+        userManuallyOpened -> true
+        userManuallyClosed -> false
+        else -> autoShowEnabled
+    }
+
+    /**
      * Decides whether the thermal-saving auto screen-off timer should trigger on entering an
      * external monitor or remote cast workstation.
      *

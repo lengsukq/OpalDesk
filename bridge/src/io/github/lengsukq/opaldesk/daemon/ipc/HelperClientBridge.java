@@ -382,6 +382,19 @@ public final class HelperClientBridge {
         return res.containsKey("handled") ? res.getBoolean("handled", false) : res.getBoolean("ok", false);
     }
 
+    public boolean dispatchInputBindingAction(String actionId) {
+        if (config.shuttingDown || !isHelperAlive() || actionId == null || actionId.trim().isEmpty()) {
+            return false;
+        }
+        Bundle extras = new Bundle();
+        extras.putString(BridgeProtocol.EXTRA_INPUT_ACTION_ID, actionId.trim());
+        Bundle res = callHelperProvider(BridgeProtocol.PROVIDER_METHOD_INPUT_ACTION, extras);
+        if (res == null) {
+            return false;
+        }
+        return res.containsKey("handled") ? res.getBoolean("handled", false) : res.getBoolean("ok", false);
+    }
+
     public void pushMediaAction(String op, long positionMs) {
         if (config.shuttingDown || op == null || op.isEmpty()) return;
         final String safeOp = op;

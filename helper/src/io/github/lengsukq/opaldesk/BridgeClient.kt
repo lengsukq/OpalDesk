@@ -17,6 +17,8 @@ import androidx.compose.ui.geometry.Offset
 import io.github.lengsukq.opaldesk.cast.OpalPeerCastMutex
 import io.github.lengsukq.opaldesk.diagnostics.DaemonPostmortemCollector
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
+import io.github.lengsukq.opaldesk.input.CapturedInputEvent
+import io.github.lengsukq.opaldesk.input.InputBindingRule
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorScene
@@ -93,6 +95,9 @@ object BridgeClient {
     internal val _imeStateFlow = MutableStateFlow(DexImeRuntimeState())
     val imeStateFlow: StateFlow<DexImeRuntimeState> = _imeStateFlow.asStateFlow()
 
+    internal val _inputBindingsFlow = MutableStateFlow(InputBindingRule.defaultRules())
+    val inputBindingsFlow: StateFlow<List<InputBindingRule>> = _inputBindingsFlow.asStateFlow()
+
     internal val activeDexSessionTags = CopyOnWriteArraySet<String>()
 
     data class ImeBridgeRequest(
@@ -127,6 +132,9 @@ object BridgeClient {
 
     @Volatile
     internal var localDesktopMousePinned: Boolean = false
+
+    @Volatile
+    internal var pendingExternalMouseTarget: PendingExternalMouseTarget? = null
 
     fun isLocalDesktopPinned(): Boolean = localDesktopMousePinned
 
@@ -209,19 +217,14 @@ object BridgeClient {
                     d.writeInt(1)
                 }) { it.readInt() }
             }
-            if (localDesktopMousePinned) {
-                val mode = BridgeProtocol.MouseTarget.PIN_LOCAL_DISPLAY0
-                transact(next, BridgeProtocol.Tx.SET_MOUSE_TARGET, oneway = false, writeArgs = { d ->
-                    d.writeInt(mode)
-                    d.writeInt(-1)
-                }) { it.readInt() }
-            }
+            replayPendingMouseTargetsSync(next)
             refreshStatus()
             refreshSceneSnapshot()
             refreshRemoteStatus()
             refreshTrustedPeers()
             refreshPendingPairing()
             refreshDexImeState()
+            fetchInputBindingsAsync()
             syncDaemonLogsThrottledLocked(minIntervalMs = 0L, maxLines = 400)
             io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.pushSnapshotToDaemon()
             io.github.lengsukq.opaldesk.notifications.OpalMediaSessionMonitor.pushCurrentStateToDaemon()
@@ -552,6 +555,12 @@ object BridgeClient {
         onYieldResult: ((String) -> Unit)? = null,
     ) = notifyBridgeImeEventAsyncImpl(eventType, imeDisplayId, inputType, pkg, onYieldResult)
 
+    // ---- Input Bindings Facade (BridgeClientInputBindings.kt) ----
+    fun fetchInputBindingsAsync(onDone: ((List<InputBindingRule>) -> Unit)? = null) = fetchInputBindingsAsyncImpl(onDone)
+    fun saveInputBindingsAsync(rules: List<InputBindingRule>, onDone: ((Boolean, List<InputBindingRule>) -> Unit)? = null) = saveInputBindingsAsyncImpl(rules, onDone)
+    fun resetInputBindingsAsync(onDone: ((Boolean, List<InputBindingRule>) -> Unit)? = null) = resetInputBindingsAsyncImpl(onDone)
+    fun controlInputBindingCaptureAsync(op: Int, onResult: (Boolean, CapturedInputEvent?) -> Unit) = controlInputBindingCaptureAsyncImpl(op, onResult)
+
     // ---- Window Operations & Logs Facade (BridgeClientWindowOps.kt) ----
     fun refreshSceneSnapshot(): CompositorScene = refreshSceneSnapshotImpl()
     fun fetchSecondaryUserAppsJson(): String = fetchSecondaryUserAppsJsonImpl()
@@ -653,6 +662,7 @@ object BridgeClient {
         waitForExitMs: Long = 0L,
     ) {
         localDesktopMousePinned = false
+        pendingExternalMouseTarget = null
         val svc = getService()
         var sentShutdownViaBinder = false
         if (svc != null) {

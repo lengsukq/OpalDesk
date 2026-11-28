@@ -215,6 +215,9 @@ export function mapDomKeyboardEvent(ev, mapMacCommandToCtrl = true) {
   return { androidKeyCode, metaState: meta };
 }
 
+export const MAX_EXTENDED_MOUSE_BUTTON = 15;
+const EXTENDED_MOUSE_BUTTONS_MASK = 0xffe0; // bits 5..15 for extended side buttons
+
 export function domButtonToAndroidMask(button) {
   switch (button) {
     case 0: return BUTTON_PRIMARY;
@@ -222,7 +225,11 @@ export function domButtonToAndroidMask(button) {
     case 1: return BUTTON_TERTIARY;
     case 3: return BUTTON_BACK;
     case 4: return BUTTON_FORWARD;
-    default: return BUTTON_PRIMARY;
+    default:
+      if (Number.isInteger(button) && button >= 5 && button <= MAX_EXTENDED_MOUSE_BUTTON) {
+        return 1 << button;
+      }
+      return BUTTON_PRIMARY;
   }
 }
 
@@ -233,6 +240,7 @@ export function domButtonsToAndroidMask(buttons) {
   if (buttons & 4) mask |= BUTTON_TERTIARY;
   if (buttons & 8) mask |= BUTTON_BACK;
   if (buttons & 16) mask |= BUTTON_FORWARD;
+  mask |= (buttons & EXTENDED_MOUSE_BUTTONS_MASK);
   return mask;
 }
 
