@@ -85,22 +85,41 @@ public enum OpalL10n {
     }
 
     /// Returns the `.lproj` bundle for `language` inside `baseBundle`, falling back to `en` and then `baseBundle`.
+    /// Handles both Xcode (`zh-Hans.lproj`) and SwiftPM `.process("Resources")` lowercased (`zh-hans.lproj`) folders.
     public static func localizationBundle(
         for language: ResolvedLanguage,
         in baseBundle: Bundle = resourceBundle
     ) -> Bundle {
-        if let path = baseBundle.path(forResource: language.lprojName, ofType: "lproj"),
-           let bundle = Bundle(path: path)
-        {
-            return bundle
+        if let matched = resolvedLprojBundle(for: language.lprojName, in: baseBundle) {
+            return matched
         }
         if language != .en,
-           let enPath = baseBundle.path(forResource: ResolvedLanguage.en.lprojName, ofType: "lproj"),
-           let enBundle = Bundle(path: enPath)
+           let enBundle = resolvedLprojBundle(for: ResolvedLanguage.en.lprojName, in: baseBundle)
         {
             return enBundle
         }
         return baseBundle
+    }
+
+    private static func resolvedLprojBundle(for lprojName: String, in baseBundle: Bundle) -> Bundle? {
+        let targetLower = lprojName.lowercased()
+        var candidates: [String] = [lprojName]
+        if targetLower != lprojName {
+            candidates.append(targetLower)
+        }
+        for localization in baseBundle.localizations where localization.lowercased() == targetLower {
+            if !candidates.contains(localization) {
+                candidates.append(localization)
+            }
+        }
+        for candidate in candidates {
+            if let path = baseBundle.path(forResource: candidate, ofType: "lproj"),
+               let bundle = Bundle(path: path)
+            {
+                return bundle
+            }
+        }
+        return nil
     }
 
     /// Looks up a localized string for `key` using the specified `language` override or `currentPreference`.

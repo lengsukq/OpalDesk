@@ -85,14 +85,21 @@ final class OpalLocalizationTests: XCTestCase {
     }
 
     func testEnglishAndSimplifiedChineseStringsHave100PercentKeyParity() throws {
-        let bundle = OpalL10n.resourceBundle
+        let enBundle = OpalL10n.localizationBundle(for: .en)
+        let zhBundle = OpalL10n.localizationBundle(for: .zhHans)
+        XCTAssertNotEqual(
+            enBundle.bundleURL.standardizedFileURL,
+            zhBundle.bundleURL.standardizedFileURL,
+            "Simplified Chinese localization bundle must resolve distinctly from English bundle"
+        )
+
         let enURL = try XCTUnwrap(
-            bundle.url(forResource: "Localizable", withExtension: "strings", subdirectory: "en.lproj"),
-            "Missing en.lproj/Localizable.strings in resource bundle"
+            enBundle.url(forResource: "Localizable", withExtension: "strings"),
+            "Missing Localizable.strings in en.lproj localization bundle"
         )
         let zhURL = try XCTUnwrap(
-            bundle.url(forResource: "Localizable", withExtension: "strings", subdirectory: "zh-Hans.lproj"),
-            "Missing zh-Hans.lproj/Localizable.strings in resource bundle"
+            zhBundle.url(forResource: "Localizable", withExtension: "strings"),
+            "Missing Localizable.strings in zh-Hans/zh-hans.lproj localization bundle"
         )
 
         let enDict = try XCTUnwrap(NSDictionary(contentsOf: enURL) as? [String: String])
