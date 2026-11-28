@@ -410,6 +410,7 @@ class ExternalMonitorPresentation(
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
+        if (WorkstationKeyDispatcher.handleActiveSpotlightKeyEvent(event)) return true
         val isPhysicalKey = WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)
         val forwardImeSwitch = WorkstationKeyDispatcher.shouldForwardImeSwitchToWindow(
             localComposeTextFieldFocused = OpalImeFocusTracker.localComposeTextFieldFocused,
@@ -426,7 +427,17 @@ class ExternalMonitorPresentation(
             }
             return super.dispatchKeyEvent(event)
         }
-        if ((OpalImeFocusTracker.localComposeTextFieldFocused || imeVisible) && super.dispatchKeyEvent(event)) return true
+        if (OpalImeFocusTracker.localComposeTextFieldFocused) {
+            if (super.dispatchKeyEvent(event)) return true
+            if (event.keyCode == KeyEvent.KEYCODE_BACK && WorkstationKeyDispatcher.hasActiveLocalOverlay()) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    WorkstationKeyDispatcher.dismissActiveLocalOverlay()
+                }
+                return true
+            }
+            return false
+        }
+        if (imeVisible && super.dispatchKeyEvent(event)) return true
         if (event.keyCode == KeyEvent.KEYCODE_BACK && WorkstationKeyDispatcher.hasActiveLocalOverlay()) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 WorkstationKeyDispatcher.dismissActiveLocalOverlay()

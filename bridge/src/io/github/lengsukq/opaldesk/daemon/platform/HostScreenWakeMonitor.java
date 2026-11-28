@@ -6,8 +6,12 @@ import io.github.lengsukq.opaldesk.daemon.input.DoubleTapWakeDetector;
 import io.github.lengsukq.opaldesk.daemon.input.VolumeKeyWakeDetector;
 import io.github.lengsukq.opaldesk.daemon.util.ShellCommand;
 
+import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.InputStreamReader;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -24,6 +28,44 @@ import java.util.function.BooleanSupplier;
  * simultaneously, then immediately wakes Display 0 and closes all file handles.
  */
 public final class HostScreenWakeMonitor {
+    private static final String SYSFS_INPUT_ROOT = "/sys/class/input";
+    private static final String BUS_USB = "0003";
+    private static final String BUS_BLUETOOTH = "0005";
+    private static final String BUS_VIRTUAL = "0006";
+
+    private static final String[] EXTERNAL_SYSFS_MARKERS = {
+            "/usb", "usb-", "uhid", "bluetooth"
+    };
+
+    private static final String[] EXTERNAL_TOUCH_NAME_TOKENS = {
+            "wacom", "hidtouch", "usb", "external", "pen", "stylus",
+            "touchpad", "trackpad", "mouse", "uhid", "opaldesk"
+    };
+
+    private static final String[] EXTERNAL_VOLUME_NAME_TOKENS = {
+            "usb", "external", "bluetooth", "uhid", "wacom", "hidtouch",
+            "keyboard", "mouse", "touchpad", "trackpad", "avrcp",
+            "consumer control", "opaldesk"
+    };
+
+    interface SysfsProbe {
+        SysfsDeviceInfo probe(String devPath);
+    }
+
+    static final class SysfsDeviceInfo {
+        static final SysfsDeviceInfo EMPTY = new SysfsDeviceInfo("", "", "");
+
+        final String busType;
+        final String phys;
+        final String canonicalDevicePath;
+
+        SysfsDeviceInfo(String busType, String phys, String canonicalDevicePath) {
+            this.busType = (busType != null) ? busType.trim() : "";
+            this.phys = (phys != null) ? phys.trim() : "";
+            this.canonicalDevicePath = (canonicalDevicePath != null) ? canonicalDevicePath.trim() : "";
+        }
+    }
+
     interface WakeLauncher {
         void launch(int gen, BooleanSupplier onWake);
     }
@@ -224,11 +266,18 @@ public final class HostScreenWakeMonitor {
     }
 
     static List<DeviceSpec> parseWakeDevicesFromDump(String dump) {
+        return parseWakeDevicesFromDump(dump, HostScreenWakeMonitor::probeSysfsDevice);
+    }
+
+    static List<DeviceSpec> parseWakeDevicesFromDump(String dump, SysfsProbe sysfsProbe) {
         List<DeviceSpec> out = new ArrayList<>();
         if (dump == null || dump.isEmpty()) return out;
+        SysfsProbe probe = (sysfsProbe != null) ? sysfsProbe : (p -> SysfsDeviceInfo.EMPTY);
 
         String curPath = null;
         String curName = "";
+        String curBusType = "";
+        String curLocation = "";
         boolean hasTouchCaps = false;
         boolean hasWakeKey = false;
         boolean hasVolumeKey = false;
@@ -238,16 +287,25 @@ public final class HostScreenWakeMonitor {
         for (String raw : lines) {
             String line = raw.trim();
             if (line.startsWith("add device ")) {
-                maybeAddDevice(out, curPath, curName, hasTouchCaps, hasWakeKey, hasVolumeKey);
+                maybeAddDevice(out, curPath, curName, curBusType, curLocation,
+                        hasTouchCaps, hasWakeKey, hasVolumeKey, probe);
                 int colon = line.indexOf(':');
                 curPath = (colon > 0) ? line.substring(colon + 1).trim() : null;
                 curName = "";
+                curBusType = "";
+                curLocation = "";
                 hasTouchCaps = false;
                 hasWakeKey = false;
                 hasVolumeKey = false;
                 inKeySection = false;
             } else if (line.startsWith("name:")) {
                 curName = line.substring(5).trim().replace("\"", "");
+                inKeySection = false;
+            } else if (line.startsWith("bus:")) {
+                curBusType = line.substring(4).trim();
+                inKeySection = false;
+            } else if (line.startsWith("location:")) {
+                curLocation = line.substring(9).trim().replace("\"", "");
                 inKeySection = false;
             } else if (line.startsWith("KEY (0001):")) {
                 inKeySection = true;
@@ -256,6 +314,11 @@ public final class HostScreenWakeMonitor {
                 if (containsHexCodeToken(keyLine, "008f")) hasWakeKey = true;
                 if (containsHexCodeToken(keyLine, "0073") || containsHexCodeToken(keyLine, "0072")) {
                     hasVolumeKey = true;
+                }
+            } else if (line.startsWith("ABS (0003):")) {
+                inKeySection = false;
+                if (line.contains("0035") && line.contains("min") && line.contains("max")) {
+                    hasTouchCaps = true;
                 }
             } else if (line.endsWith(":") || line.contains(" (00")) {
                 inKeySection = false;
@@ -276,7 +339,8 @@ public final class HostScreenWakeMonitor {
                 }
             }
         }
-        maybeAddDevice(out, curPath, curName, hasTouchCaps, hasWakeKey, hasVolumeKey);
+        maybeAddDevice(out, curPath, curName, curBusType, curLocation,
+                hasTouchCaps, hasWakeKey, hasVolumeKey, probe);
         return out;
     }
 
@@ -290,13 +354,145 @@ public final class HostScreenWakeMonitor {
     }
 
     private static void maybeAddDevice(
-            List<DeviceSpec> out, String path, String name, boolean hasTouchCaps, boolean hasWakeKey, boolean hasVolumeKey) {
+            List<DeviceSpec> out,
+            String path,
+            String name,
+            String dumpBusType,
+            String dumpLocation,
+            boolean hasTouchCaps,
+            boolean hasWakeKey,
+            boolean hasVolumeKey,
+            SysfsProbe sysfsProbe) {
         if (path == null || !path.startsWith("/dev/input/event")) return;
-        String lower = (name != null) ? name.toLowerCase(Locale.US) : "";
+        String safeName = (name != null) ? name : "";
+        String lower = safeName.toLowerCase(Locale.US);
         if (lower.contains("opaldesk") || lower.contains("virtual") || lower.contains("uinput")) return;
         boolean isTouch = hasTouchCaps || (hasWakeKey && lower.contains("touch"));
-        if (isTouch || hasVolumeKey) {
-            out.add(new DeviceSpec(path, name != null ? name : "", isTouch, hasVolumeKey));
+        boolean isVolume = hasVolumeKey;
+        if (!isTouch && !isVolume) return;
+
+        SysfsDeviceInfo sysfs = sysfsProbe.probe(path);
+        if (sysfs == null) sysfs = SysfsDeviceInfo.EMPTY;
+
+        String externalBusOrPathReason = detectExternalBusOrSysfsReason(dumpBusType, dumpLocation, sysfs);
+        if (externalBusOrPathReason != null) {
+            System.out.println("OPALDESK_WAKE_MONITOR_SKIP_EXTERNAL dev=" + path
+                    + " name=" + safeName + " reason=" + externalBusOrPathReason);
+            return;
+        }
+
+        if (isTouch) {
+            String touchToken = findMatchedToken(lower, EXTERNAL_TOUCH_NAME_TOKENS);
+            if (touchToken != null) {
+                System.out.println("OPALDESK_WAKE_MONITOR_SKIP_EXTERNAL dev=" + path
+                        + " name=" + safeName + " reason=touch_name:" + touchToken);
+                isTouch = false;
+            }
+        }
+        if (isVolume) {
+            String volToken = findMatchedToken(lower, EXTERNAL_VOLUME_NAME_TOKENS);
+            if (volToken != null) {
+                System.out.println("OPALDESK_WAKE_MONITOR_SKIP_EXTERNAL dev=" + path
+                        + " name=" + safeName + " reason=vol_name:" + volToken);
+                isVolume = false;
+            }
+        }
+
+        if (isTouch || isVolume) {
+            out.add(new DeviceSpec(path, safeName, isTouch, isVolume));
+        }
+    }
+
+    static String detectExternalBusOrSysfsReason(
+            String dumpBusType, String dumpLocation, SysfsDeviceInfo sysfs) {
+        String sysfsBus = normalizeBusType(sysfs != null ? sysfs.busType : "");
+        if (isExternalBusType(sysfsBus)) {
+            return "bustype=" + sysfsBus;
+        }
+        String dumpBus = normalizeBusType(dumpBusType);
+        if (isExternalBusType(dumpBus)) {
+            return "bus=" + dumpBus;
+        }
+        String canonical = (sysfs != null) ? sysfs.canonicalDevicePath.toLowerCase(Locale.US) : "";
+        String canonicalMarker = findMatchedToken(canonical, EXTERNAL_SYSFS_MARKERS);
+        if (canonicalMarker != null) {
+            return "sysfs_path:" + canonicalMarker;
+        }
+        String phys = (sysfs != null) ? sysfs.phys.toLowerCase(Locale.US) : "";
+        String physMarker = findMatchedToken(phys, EXTERNAL_SYSFS_MARKERS);
+        if (physMarker != null) {
+            return "phys:" + physMarker;
+        }
+        String location = (dumpLocation != null) ? dumpLocation.toLowerCase(Locale.US) : "";
+        String locMarker = findMatchedToken(location, EXTERNAL_SYSFS_MARKERS);
+        if (locMarker != null) {
+            return "location:" + locMarker;
+        }
+        return null;
+    }
+
+    static boolean isExternalBusType(String normalizedBusType) {
+        return BUS_USB.equals(normalizedBusType)
+                || BUS_BLUETOOTH.equals(normalizedBusType)
+                || BUS_VIRTUAL.equals(normalizedBusType);
+    }
+
+    static String normalizeBusType(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim().toLowerCase(Locale.US);
+        if (s.isEmpty()) return "";
+        if (s.startsWith("0x")) {
+            s = s.substring(2);
+        }
+        try {
+            int val = Integer.parseInt(s, 16);
+            return String.format(Locale.US, "%04x", val & 0xffff);
+        } catch (NumberFormatException ignored) {
+            return s;
+        }
+    }
+
+    private static String findMatchedToken(String lowerText, String[] tokens) {
+        if (lowerText == null || lowerText.isEmpty()) return null;
+        for (String token : tokens) {
+            if (lowerText.contains(token)) return token;
+        }
+        return null;
+    }
+
+    static SysfsDeviceInfo probeSysfsDevice(String devPath) {
+        return probeSysfsDevice(devPath, new File(SYSFS_INPUT_ROOT));
+    }
+
+    static SysfsDeviceInfo probeSysfsDevice(String devPath, File sysfsInputRoot) {
+        if (devPath == null || !devPath.startsWith("/dev/input/") || sysfsInputRoot == null) {
+            return SysfsDeviceInfo.EMPTY;
+        }
+        String eventName = devPath.substring("/dev/input/".length()).trim();
+        if (eventName.isEmpty() || eventName.contains("/") || eventName.contains("..")) {
+            return SysfsDeviceInfo.EMPTY;
+        }
+        File deviceDir = new File(new File(sysfsInputRoot, eventName), "device");
+        String busType = readFirstLineQuietly(new File(new File(deviceDir, "id"), "bustype"));
+        String phys = readFirstLineQuietly(new File(deviceDir, "phys"));
+        String canonicalPath = "";
+        if (deviceDir.exists()) {
+            try {
+                canonicalPath = deviceDir.getCanonicalPath();
+            } catch (IOException ignored) {
+            }
+        }
+        return new SysfsDeviceInfo(busType, phys, canonicalPath);
+    }
+
+    private static String readFirstLineQuietly(File file) {
+        if (file == null || !file.isFile()) return "";
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
+            String line = reader.readLine();
+            return (line != null) ? line.trim() : "";
+        } catch (IOException ignored) {
+            return "";
         }
     }
 }

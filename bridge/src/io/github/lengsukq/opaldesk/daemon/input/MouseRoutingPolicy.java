@@ -750,6 +750,25 @@ public final class MouseRoutingPolicy {
     }
 
     /**
+     * Returns {@code true} when a physical or remote keyboard injection ({@code deviceId > 0})
+     * targeting a background VirtualDisplay window must be dropped because a host-side local
+     * text field or local IME is currently active.
+     */
+    public static boolean shouldDropWindowKeyInjectionDuringLocalIme(
+            boolean localImeActive,
+            int deviceId) {
+        return localImeActive && deviceId > 0;
+    }
+
+    /**
+     * Returns {@code true} when injecting a key into a VirtualDisplay window may request top
+     * display focus. Never steal top focus from Display 0 while {@code localImeActive} is true.
+     */
+    public static boolean shouldFocusWindowDisplayOnKeyInjection(boolean localImeActive) {
+        return !localImeActive;
+    }
+
+    /**
      * Maps OpalDesk's continuous stepless pointer sensitivity ({@code 0.50f..3.00f}, default {@code 1.45f})
      * smoothly onto Android's hardware pointer speed integer scale ({@code -7..+7}, default {@code 0}).
      */

@@ -36,44 +36,7 @@ object DesktopWidgetStore {
 
     fun activeSlotId(): Int = currentSlotId
 
-    fun defaultInstances(): List<DesktopWidgetInstance> = listOf(
-        DesktopWidgetInstance(
-            id = "default_desktop_hub",
-            type = DesktopWidgetType.DESKTOP_HUB,
-            col = 1,
-            row = 0,
-            colSpan = 6,
-            rowSpan = 3,
-            configJson = "{}",
-        ),
-        DesktopWidgetInstance(
-            id = "default_clock_timer",
-            type = DesktopWidgetType.CLOCK_TIMER,
-            col = 7,
-            row = 0,
-            colSpan = 4,
-            rowSpan = 3,
-            configJson = "{}",
-        ),
-        DesktopWidgetInstance(
-            id = "default_media_player",
-            type = DesktopWidgetType.MEDIA_PLAYER,
-            col = 1,
-            row = 3,
-            colSpan = 6,
-            rowSpan = 2,
-            configJson = "{}",
-        ),
-        DesktopWidgetInstance(
-            id = "default_todo_checklist",
-            type = DesktopWidgetType.TODO_CHECKLIST,
-            col = 7,
-            row = 3,
-            colSpan = 4,
-            rowSpan = 2,
-            configJson = "{}",
-        ),
-    )
+    fun defaultInstances(): List<DesktopWidgetInstance> = emptyList()
 
     fun hydrate(context: Context, slotId: Int? = null) {
         val targetSlot = clampSlotId(slotId ?: ProfileConfigStore.stateFlow.value.activeSlotId)

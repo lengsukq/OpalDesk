@@ -466,4 +466,59 @@ class WorkstationKeyImePolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `local compose text field focus blocks both ACTION_DOWN and ACTION_UP forwarding to background window`() {
+        assertFalse(
+            WorkstationKeyDispatcher.shouldForwardKeyEventToFocusedWindow(
+                action = KeyEvent.ACTION_DOWN,
+                flags = 0,
+                keyCode = KeyEvent.KEYCODE_A,
+                metaState = 0,
+                forwardImeSwitch = false,
+                localComposeTextFieldFocused = true,
+            ),
+        )
+        assertFalse(
+            WorkstationKeyDispatcher.shouldForwardKeyEventToFocusedWindow(
+                action = KeyEvent.ACTION_UP,
+                flags = 0,
+                keyCode = KeyEvent.KEYCODE_A,
+                metaState = 0,
+                forwardImeSwitch = false,
+                localComposeTextFieldFocused = true,
+            ),
+        )
+        assertFalse(
+            WorkstationKeyDispatcher.shouldForwardKeyEventToFocusedWindow(
+                action = KeyEvent.ACTION_UP,
+                flags = 0,
+                keyCode = KeyEvent.KEYCODE_ENTER,
+                metaState = 0,
+                forwardImeSwitch = true,
+                localComposeTextFieldFocused = true,
+            ),
+        )
+        // Once the search box closes / loses focus, normal physical key forwarding resumes
+        assertTrue(
+            WorkstationKeyDispatcher.shouldForwardKeyEventToFocusedWindow(
+                action = KeyEvent.ACTION_DOWN,
+                flags = 0,
+                keyCode = KeyEvent.KEYCODE_A,
+                metaState = 0,
+                forwardImeSwitch = false,
+                localComposeTextFieldFocused = false,
+            ),
+        )
+        assertTrue(
+            WorkstationKeyDispatcher.shouldForwardKeyEventToFocusedWindow(
+                action = KeyEvent.ACTION_UP,
+                flags = 0,
+                keyCode = KeyEvent.KEYCODE_A,
+                metaState = 0,
+                forwardImeSwitch = false,
+                localComposeTextFieldFocused = false,
+            ),
+        )
+    }
 }

@@ -233,7 +233,9 @@ class RemoteTrackpadActivity : ComponentActivity() {
         if (BridgeClient.tryWakeHostScreenFromKeyEvent(event)) return true
         if (WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(event)) return true
         if (WorkstationKeyDispatcher.handleGlobalShortcut(event)) return true
-        if (OpalImeFocusTracker.localComposeTextFieldFocused && super.dispatchKeyEvent(event)) return true
+        if (OpalImeFocusTracker.localComposeTextFieldFocused) {
+            return super.dispatchKeyEvent(event)
+        }
         val forwardImeSwitch = WorkstationKeyDispatcher.shouldForwardImeSwitchToWindow(
             localComposeTextFieldFocused = OpalImeFocusTracker.localComposeTextFieldFocused,
             hostSoftImeVisible = false,

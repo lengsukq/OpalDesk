@@ -671,7 +671,7 @@ private fun WidgetEditActionPill(
             compact = true,
         )
         OpalButton(
-            label = if (isZh) "重置布局" else "Reset",
+            label = if (isZh) "清空组件" else "Clear All",
             onClick = onResetDefaults,
             accent = OpalPalette.AccentAmber,
             filled = false,

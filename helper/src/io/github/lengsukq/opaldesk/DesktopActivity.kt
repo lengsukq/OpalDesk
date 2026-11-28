@@ -379,8 +379,20 @@ class DesktopActivity : ComponentActivity() {
             return super.dispatchKeyEvent(event)
         }
 
-        // Let active Compose text boxes (e.g. App Drawer search) or active soft IME consume keystrokes first
-        if ((OpalImeFocusTracker.localComposeTextFieldFocused || imeVisible) && super.dispatchKeyEvent(event)) {
+        // Keep all keystrokes (both ACTION_DOWN and ACTION_UP) inside focused local Compose text boxes
+        // so unconsumed ACTION_UP events from BasicTextField never fall through to background windows.
+        if (OpalImeFocusTracker.localComposeTextFieldFocused) {
+            if (super.dispatchKeyEvent(event)) return true
+            if (event.keyCode == KeyEvent.KEYCODE_BACK && WorkstationKeyDispatcher.hasActiveLocalOverlay()) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    WorkstationKeyDispatcher.dismissActiveLocalOverlay()
+                }
+                return true
+            }
+            return false
+        }
+
+        if (imeVisible && super.dispatchKeyEvent(event)) {
             return true
         }
 

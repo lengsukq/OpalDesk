@@ -361,6 +361,9 @@ public final class PerDisplayInputRouter {
             int scanCode,
             int repeatCount) {
         if (ws == null || !ws.isLive() || ws.displayId <= 0) return false;
+        if (MouseRoutingPolicy.shouldDropWindowKeyInjectionDuringLocalIme(localImeActive, deviceId)) {
+            return false;
+        }
         ws.lastActiveAtMs = System.currentTimeMillis();
         if (action == KeyEvent.ACTION_DOWN) {
             notifyDexInteraction(ws.displayId, false);
@@ -370,9 +373,7 @@ public final class PerDisplayInputRouter {
             releaseHeldKeysOnDisplay(prevDisplay);
         }
         lastKeyTargetDisplayId = ws.displayId;
-        if (localImeActive) {
-            services.focusDisplayTaskOnly(ws.displayId);
-        } else {
+        if (MouseRoutingPolicy.shouldFocusWindowDisplayOnKeyInjection(localImeActive)) {
             services.focusDisplay(ws.displayId);
         }
         long now = SystemClock.uptimeMillis();

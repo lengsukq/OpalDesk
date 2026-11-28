@@ -185,6 +185,7 @@ fun DesktopWidgetStoreModal(
                             instances = instances,
                             onRemoveWidget = onRemoveWidget,
                             onResetDefaults = onResetDefaults,
+                            onBrowseStore = { selectedTab = StoreFilterTab.ALL },
                             onEnterEditMode = {
                                 onDismiss()
                                 onEnterEditMode()
@@ -478,6 +479,7 @@ private fun InstalledWidgetsSection(
     instances: List<DesktopWidgetInstance>,
     onRemoveWidget: (String) -> Unit,
     onResetDefaults: () -> Unit,
+    onBrowseStore: () -> Unit,
     onEnterEditMode: () -> Unit,
 ) {
     val colors = LocalOpalColors.current
@@ -499,10 +501,11 @@ private fun InstalledWidgetsSection(
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OpalButton(
-                label = if (isZh) "重置默认" else "Reset Defaults",
+                label = if (isZh) "清空组件" else "Clear All",
                 onClick = onResetDefaults,
                 accent = OpalPalette.AccentAmber,
                 filled = false,
+                enabled = instances.isNotEmpty(),
                 compact = true,
             )
             OpalButton(
@@ -524,13 +527,15 @@ private fun InstalledWidgetsSection(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             OpalText(
-                text = if (isZh) "桌面上还没有任何组件" else "No widgets on desktop yet",
+                text = if (isZh) "桌面上还没有任何组件，可从组件商店按需添加" else "No widgets on desktop yet. Add widgets from the store.",
                 fontSize = 14.sp,
                 color = OpalPalette.TextMuted,
             )
             OpalButton(
-                label = if (isZh) "恢复推荐默认布局" else "Restore Default Layout",
-                onClick = onResetDefaults,
+                label = if (isZh) "+ 组件商店" else "+ Widget Store",
+                onClick = onBrowseStore,
+                accent = OpalPalette.AccentCyan,
+                filled = true,
                 compact = true,
             )
         }

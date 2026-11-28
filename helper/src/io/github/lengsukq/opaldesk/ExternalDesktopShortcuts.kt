@@ -96,7 +96,19 @@ internal fun dispatchExternalDesktopKeyEvent(
         return false
     }
 
-    if (OpalImeFocusTracker.localComposeTextFieldFocused || hostSoftImeVisible) {
+    if (OpalImeFocusTracker.localComposeTextFieldFocused) {
+        if (superDispatch(event)) return true
+        if (presentation?.dispatchKeyEventToPresentation(event) == true) return true
+        if (event.keyCode == KeyEvent.KEYCODE_BACK && WorkstationKeyDispatcher.hasActiveLocalOverlay()) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                WorkstationKeyDispatcher.dismissActiveLocalOverlay()
+            }
+            return true
+        }
+        return false
+    }
+
+    if (hostSoftImeVisible) {
         if (superDispatch(event)) return true
         if (presentation?.dispatchKeyEventToPresentation(event) == true) return true
     }

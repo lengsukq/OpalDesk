@@ -206,4 +206,20 @@ public class PerDisplayInputRouterTest {
         assertEquals(2, systemCalls.get());
         assertEquals(1, uhidCalls.get());
     }
+
+    @Test
+    public void localImeActiveDropsPhysicalWindowKeysAndPreventsDisplayFocusSteal() {
+        // Physical/remote keyboard events (deviceId > 0) must never leak into a background window
+        // while a local host search box / text field is focused.
+        assertTrue(MouseRoutingPolicy.shouldDropWindowKeyInjectionDuringLocalIme(true, 1));
+        assertTrue(MouseRoutingPolicy.shouldDropWindowKeyInjectionDuringLocalIme(true, 12));
+        // Host soft-IME proxy keys use VIRTUAL_KEYBOARD (-1) and remain allowed without stealing focus.
+        assertFalse(MouseRoutingPolicy.shouldDropWindowKeyInjectionDuringLocalIme(true, -1));
+        assertFalse(MouseRoutingPolicy.shouldDropWindowKeyInjectionDuringLocalIme(false, 1));
+        assertFalse(MouseRoutingPolicy.shouldDropWindowKeyInjectionDuringLocalIme(false, -1));
+
+        // Never call focusDisplay / focusTopTask on a background window while localImeActive is true.
+        assertFalse(MouseRoutingPolicy.shouldFocusWindowDisplayOnKeyInjection(true));
+        assertTrue(MouseRoutingPolicy.shouldFocusWindowDisplayOnKeyInjection(false));
+    }
 }

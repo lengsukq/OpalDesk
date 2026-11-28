@@ -207,6 +207,9 @@ object WorkstationKeyDispatcher {
                 return true
             }
         }
+        if (event.keyCode == KeyEvent.KEYCODE_ESCAPE &&
+            (OpalImeFocusTracker.localComposeTextFieldFocused || hasActiveLocalOverlay())
+        ) return false
         val action = WorkstationShortcutCatalog.resolveGlobalShortcutAction(
             keyCode = event.keyCode,
             metaState = event.metaState,
@@ -394,11 +397,39 @@ object WorkstationKeyDispatcher {
         sideBackDeduplicator.recordBackKeyForwarded(uptimeMs)
     }
 
+    /**
+     * Pure JVM-testable guard deciding whether a host KeyEvent may be forwarded to a background
+     * VirtualDisplay window. While any local Compose text field (App Drawer / Spotlight / Widget
+     * search / Notes) holds focus, BOTH ACTION_DOWN and ACTION_UP MUST stay on the host display:
+     * Compose BasicTextField consumes ACTION_DOWN only, so letting ACTION_UP fall through would
+     * inject into the background app and trigger daemon focusDisplay/focusTopTask theft (<1s).
+     */
+    fun shouldForwardKeyEventToFocusedWindow(
+        action: Int,
+        flags: Int,
+        keyCode: Int,
+        metaState: Int,
+        forwardImeSwitch: Boolean,
+        localComposeTextFieldFocused: Boolean,
+    ): Boolean {
+        if (localComposeTextFieldFocused) return false
+        if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) return false
+        if ((flags and KeyEvent.FLAG_CANCELED) != 0) return false
+        if (!isForwardableKey(keyCode)) return false
+        if (!forwardImeSwitch && isImeSwitchShortcut(keyCode, metaState)) return false
+        return true
+    }
+
     fun forwardToFocusedWindow(event: KeyEvent, forwardImeSwitch: Boolean = false): Boolean {
-        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) return false
-        if ((event.flags and KeyEvent.FLAG_CANCELED) != 0) return false
-        if (!isForwardableKey(event.keyCode)) return false
-        if (!forwardImeSwitch && isImeSwitchShortcut(event.keyCode, event.metaState)) return false
+        if (!shouldForwardKeyEventToFocusedWindow(
+                action = event.action,
+                flags = event.flags,
+                keyCode = event.keyCode,
+                metaState = event.metaState,
+                forwardImeSwitch = forwardImeSwitch,
+                localComposeTextFieldFocused = OpalImeFocusTracker.localComposeTextFieldFocused,
+            )
+        ) return false
         val focused = BridgeClient.sceneFlow.value.focusedWindow ?: return false
         if (focused.isMinimized) return false
         if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN) {

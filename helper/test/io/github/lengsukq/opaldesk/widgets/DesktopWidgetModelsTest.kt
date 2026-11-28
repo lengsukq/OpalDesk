@@ -70,14 +70,38 @@ class DesktopWidgetModelsTest {
         assertEquals(4, hubSpec.maxRowSpan)
 
         val defaults = DesktopWidgetStore.defaultInstances()
-        assertTrue(defaults.any { it.type == DesktopWidgetType.DESKTOP_HUB })
-        for (i in defaults.indices) {
-            for (j in i + 1 until defaults.size) {
-                val a = defaults[i]
-                val b = defaults[j]
-                assertFalse("Default widgets ${a.id} and ${b.id} overlap", overlapsAny(listOf(a), b.col, b.row, b.colSpan, b.rowSpan))
-            }
-        }
+        assertTrue("Default desktop layout should start with 0 widgets", defaults.isEmpty())
+        assertTrue(DesktopWidgetGridMath.computePortraitLayout(defaults).isEmpty())
+    }
+
+    @Test
+    fun emptyDefaultDesktopPlacesShortcutsFromOriginInPortraitAndLandscape() {
+        val portraitSlots = DesktopWidgetGridMath.allocateShortcutSlots(
+            iconCount = 6,
+            occupiedWidgets = DesktopWidgetStore.defaultInstances(),
+            gridCols = DesktopWidgetGridMath.PORTRAIT_GRID_COLS,
+            gridRows = DesktopWidgetGridMath.PORTRAIT_DEFAULT_GRID_ROWS,
+            isPortrait = true,
+        )
+        assertEquals(
+            listOf(0 to 0, 1 to 0, 2 to 0, 3 to 0, 0 to 1, 1 to 1),
+            portraitSlots,
+        )
+
+        val landscapeSlots = DesktopWidgetGridMath.allocateShortcutSlots(
+            iconCount = 9,
+            occupiedWidgets = DesktopWidgetStore.defaultInstances(),
+            gridCols = DesktopWidgetGridMath.DEFAULT_GRID_COLS,
+            gridRows = DesktopWidgetGridMath.DEFAULT_GRID_ROWS,
+            isPortrait = false,
+        )
+        assertEquals(
+            listOf(
+                0 to 0, 0 to 1, 0 to 2, 0 to 3, 0 to 4, 0 to 5, 0 to 6,
+                1 to 0, 1 to 1,
+            ),
+            landscapeSlots,
+        )
     }
 
     @Test
@@ -385,7 +409,13 @@ class DesktopWidgetModelsTest {
 
     @Test
     fun allocateShortcutSlotsPortraitPlacesIconsBelowWidgetsFourPerRowWithZeroOverlap() {
-        val portraitWidgets = DesktopWidgetGridMath.computePortraitLayout(DesktopWidgetStore.defaultInstances())
+        val sampleWidgets = listOf(
+            DesktopWidgetInstance("hub", DesktopWidgetType.DESKTOP_HUB, col = 1, row = 0, colSpan = 6, rowSpan = 3),
+            DesktopWidgetInstance("clock", DesktopWidgetType.CLOCK_TIMER, col = 7, row = 0, colSpan = 4, rowSpan = 3),
+            DesktopWidgetInstance("media", DesktopWidgetType.MEDIA_PLAYER, col = 1, row = 3, colSpan = 6, rowSpan = 2),
+            DesktopWidgetInstance("todo", DesktopWidgetType.TODO_CHECKLIST, col = 7, row = 3, colSpan = 4, rowSpan = 2),
+        )
+        val portraitWidgets = DesktopWidgetGridMath.computePortraitLayout(sampleWidgets)
         val bottomWidgetRow = portraitWidgets.maxOf { it.row + it.rowSpan }
         val slots = DesktopWidgetGridMath.allocateShortcutSlots(
             iconCount = 6,
