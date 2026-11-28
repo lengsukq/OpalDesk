@@ -334,6 +334,7 @@ class FloatingCastService : Service() {
             audioEnabled = isMirrorMode,
             initialDisplayMode = if (isMirrorMode) OpalCastClient.DISPLAY_MODE_MIRROR else OpalCastClient.DISPLAY_MODE_DEX,
             preferredCodec = AndroidApiCompat.resolvePreferredCastCodec(ReceiverPrefs.getVideoCodecPref(this)),
+            preferredBitrateKbps = ReceiverPrefs.getPreferredBitrateKbps(this),
             defaultDisconnectReason = getString(R.string.client_disconnected),
             defaultRejectedMessage = getString(R.string.client_rejected),
             listener = object : OpalCastClient.Listener {

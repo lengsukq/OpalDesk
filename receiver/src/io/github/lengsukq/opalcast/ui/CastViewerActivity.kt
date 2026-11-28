@@ -80,6 +80,7 @@ class CastViewerActivity : Activity() {
     private var displayMode = OpalCastClient.DISPLAY_MODE_DEX
     private var remoteBlackout = false
     private var remoteFullscreenTitle = ""
+    private var selectedBitrateKbps = 0
     private var micEnabled = false
     private var cameraEnabled = false
     private var cameraFacing = "front"
@@ -137,6 +138,7 @@ class CastViewerActivity : Activity() {
         reqFps = spec.fps
         videoW = reqWidth
         videoH = reqHeight
+        selectedBitrateKbps = ReceiverPrefs.getPreferredBitrateKbps(this)
 
         buildUi()
         registerBackHandlerApi33()
@@ -242,6 +244,12 @@ class CastViewerActivity : Activity() {
                 onHome = { client?.sendSystemAction(OpalCastClient.SYS_HOME) },
                 onToggleDisplayMode = ::toggleDisplayMode,
                 onPopOutMirror = ::popOutMirrorToFloating,
+                onSelectBitrateKbps = { kbps ->
+                    selectedBitrateKbps = kbps
+                    ReceiverPrefs.setPreferredBitrateKbps(this, kbps)
+                    refreshToolbarStates(imeVis = imeBridgeView.isImeVisible)
+                    client?.sendResizeConfig(videoW, videoH, reqDpi, videoFps, kbps)
+                },
                 onToggleBlackout = ::toggleBlackout,
                 onToggleIme = { imeBridgeView.toggleIme() },
                 onToggleMic = ::toggleRemoteMic,
@@ -331,6 +339,7 @@ class CastViewerActivity : Activity() {
             initialDisplayMode = initialDisplayMode,
             targetNetwork = boundNet,
             preferredCodec = AndroidApiCompat.resolvePreferredCastCodec(ReceiverPrefs.getVideoCodecPref(this)),
+            preferredBitrateKbps = selectedBitrateKbps,
             defaultDisconnectReason = getString(R.string.client_disconnected),
             defaultRejectedMessage = getString(R.string.client_rejected),
             listener = object : OpalCastClient.Listener {
@@ -484,6 +493,7 @@ class CastViewerActivity : Activity() {
     private fun setToolbarExpanded(expanded: Boolean) {
         toolbarExpanded = expanded
         chrome.expandedToolbar.visibility = if (expanded) View.VISIBLE else View.GONE
+        if (!expanded) chrome.bitratePickerBar.visibility = View.GONE
         chrome.collapsedHandle.visibility = if (expanded) View.GONE else View.VISIBLE
         mainHandler.removeCallbacks(autoCollapseRunnable)
         if (expanded && connected) scheduleAutoCollapse(5_000L)
@@ -505,6 +515,7 @@ class CastViewerActivity : Activity() {
             imeVis = imeVis,
             micEnabled = micEnabled,
             cameraEnabled = cameraEnabled,
+            bitrateKbps = selectedBitrateKbps,
         )
     }
 

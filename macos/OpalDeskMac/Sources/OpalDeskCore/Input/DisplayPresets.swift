@@ -8,9 +8,10 @@ public enum DisplayPresets {
     public static let fpsOptions: [Int] = [60, 90, 120]
     public static let defaultFPS: Int = 60
 
-    public static let bitrateKbpsRange: ClosedRange<Int> = 4000...48000
+    public static let bitrateOptionsKbps: [Int] = [0, 8000, 16000, 24000, 36000, 50000, 80000, 100000]
+    public static let bitrateKbpsRange: ClosedRange<Int> = 4000...100000
     public static let bitrateStepKbps: Int = 2000
-    public static let defaultBitrateKbps: Int = 16000
+    public static let defaultBitrateKbps: Int = 0
 
     public static let singleWidthDpRange: ClosedRange<Int> = 320...1200
     public static let defaultSingleWidthDp: Int = 460
@@ -20,7 +21,8 @@ public enum DisplayPresets {
     public static let popoutOpacityRange: ClosedRange<Double> = 0.4...1.0
 
     public static func clampBitrateKbps(_ value: Int) -> Int {
-        min(max(value, bitrateKbpsRange.lowerBound), bitrateKbpsRange.upperBound)
+        guard value > 0 else { return 0 }
+        return min(max(value, bitrateKbpsRange.lowerBound), bitrateKbpsRange.upperBound)
     }
 
     public static func clampSingleWidthDp(_ value: Int) -> Int {

@@ -170,6 +170,11 @@ public final class RemoteStreamServer {
         if (s != null && !s.isClosed()) s.setTargetFps(targetFps);
     }
 
+    public void updateSessionTargetBitrateKbps(int sessionId, int bitrateKbps) {
+        ClientSession s = sessions.getSession(sessionId);
+        if (s != null && !s.isClosed()) s.updateTargetBitrateKbps(bitrateKbps);
+    }
+
     public void sendVideoConfig(int sessionId, OpalCastProtocol.VideoConfig config, long timestampUs) {
         ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && config != null) {
@@ -359,13 +364,15 @@ public final class RemoteStreamServer {
             int sinkType, boolean isAdbLocalSocket, boolean permanentTrust,
             String clientId, String clientName, OpalCastProtocol.HelloMsg hello,
             Closeable transport, OpalCastFrameTransport frameTransport) {
-        runAuthenticatedSession(sinkType, isAdbLocalSocket, permanentTrust, clientId, clientName, hello, transport, frameTransport);
+        runAuthenticatedSession(
+                sinkType, isAdbLocalSocket, permanentTrust, clientId, clientName, hello, transport, frameTransport, null);
     }
 
     private void runAuthenticatedSession(
             int sinkType, boolean isAdbLocalSocket, boolean permanentTrust,
             String clientId, String clientName, OpalCastProtocol.HelloMsg hello,
-            Closeable transport, OpalCastFrameTransport frameTransport) {
+            Closeable transport, OpalCastFrameTransport frameTransport,
+            OpalCastUdpMediaChannel udpMediaChannel) {
         int sessionId = sessions.nextSessionId();
         boolean isStandalone = hello.isStandaloneApp();
         boolean isCatalog = hello.isAppCatalog();
@@ -374,6 +381,7 @@ public final class RemoteStreamServer {
                 sessionId, sinkType, isAdbLocalSocket, permanentTrust, hello.sessionRole, hello.appPackage,
                 clientId, clientName, transport, frameTransport, listener);
         current.setTargetFps(hello.fps > 0 ? hello.fps : 60f);
+        current.attachUdpMediaChannel(udpMediaChannel);
         current.setCompanionEventsSubscribed(
                 isCompanion || (!isStandalone && !isCatalog && hello.companionEvents));
 

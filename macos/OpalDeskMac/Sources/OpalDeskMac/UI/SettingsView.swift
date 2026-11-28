@@ -153,29 +153,35 @@ struct OpalSettingsContentView: View {
 
             OpalSettingsRow(
                 title: OpalL10n.text("settings.bitrate.label"),
-                subtitle: OpalL10n.format("settings.bitrate.sub_fmt", prefs.bitrateKbps / 1000),
+                subtitle: prefs.bitrateKbps <= 0
+                    ? OpalL10n.text("settings.bitrate.auto_sub")
+                    : OpalL10n.format("settings.bitrate.sub_fmt", prefs.bitrateKbps / 1000),
                 icon: "waveform.path",
                 iconTint: OpalFluidPalette.brandIndigo
             ) {
-                HStack(spacing: 10) {
-                    Slider(
-                        value: Binding(
-                            get: { Double(prefs.bitrateKbps) },
-                            set: {
-                                let stepped = Int(($0 / Double(DisplayPresets.bitrateStepKbps)).rounded()) * DisplayPresets.bitrateStepKbps
-                                prefs.bitrateKbps = DisplayPresets.clampBitrateKbps(stepped)
-                            }
-                        ),
-                        in: Double(DisplayPresets.bitrateKbpsRange.lowerBound)...Double(DisplayPresets.bitrateKbpsRange.upperBound),
-                        step: Double(DisplayPresets.bitrateStepKbps)
-                    )
-                    .frame(width: 150)
-
-                    Text("\(prefs.bitrateKbps / 1000)M")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(OpalFluidPalette.secondaryText)
-                        .frame(width: 34, alignment: .trailing)
+                Picker("", selection: Binding(
+                    get: {
+                        if DisplayPresets.bitrateOptionsKbps.contains(prefs.bitrateKbps) {
+                            return prefs.bitrateKbps
+                        }
+                        return prefs.bitrateKbps <= 0 ? 0 : prefs.bitrateKbps
+                    },
+                    set: { newBitrate in
+                        model.applyBitrateKbps(newBitrate)
+                    }
+                )) {
+                    ForEach(DisplayPresets.bitrateOptionsKbps, id: \.self) { kbps in
+                        Text(kbps == 0 ? OpalL10n.text("settings.bitrate.auto_option") : "\(kbps / 1000) Mbps")
+                            .tag(kbps)
+                    }
+                    if prefs.bitrateKbps > 0 && !DisplayPresets.bitrateOptionsKbps.contains(prefs.bitrateKbps) {
+                        Text("\(prefs.bitrateKbps / 1000) Mbps")
+                            .tag(prefs.bitrateKbps)
+                    }
                 }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 132)
             }
 
             OpalSettingsRow(

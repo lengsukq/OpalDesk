@@ -136,28 +136,49 @@ public final class OpalCastSessionPayloads {
         public final String deviceName;
         public final String certFingerprint;
         public final boolean permanent;
+        public final int udpMediaPort;
+        public final int udpSessionId;
+        public final String udpKeyBase64;
+        public final int udpFecPct;
 
         protected AuthResultMsgBase(
                 boolean ok, String authToken, String message,
                 String deviceName, String certFingerprint, boolean permanent) {
+            this(ok, authToken, message, deviceName, certFingerprint, permanent, 0, 0, "", 0);
+        }
+
+        protected AuthResultMsgBase(
+                boolean ok, String authToken, String message,
+                String deviceName, String certFingerprint, boolean permanent,
+                int udpMediaPort, int udpSessionId, String udpKeyBase64, int udpFecPct) {
             this.ok = ok;
             this.authToken = (authToken != null) ? authToken : "";
             this.message = (message != null) ? message : "";
             this.deviceName = (deviceName != null) ? deviceName : "";
             this.certFingerprint = (certFingerprint != null) ? certFingerprint : "";
             this.permanent = permanent;
+            this.udpMediaPort = Math.max(0, udpMediaPort);
+            this.udpSessionId = udpSessionId;
+            this.udpKeyBase64 = (udpKeyBase64 != null) ? udpKeyBase64 : "";
+            this.udpFecPct = Math.max(0, Math.min(100, udpFecPct));
         }
     }
 
     public static byte[] encodeAuthResult(OpalCastProtocol.AuthResultMsg msg) {
-        String json = new SimpleJson.ObjectBuilder()
+        SimpleJson.ObjectBuilder builder = new SimpleJson.ObjectBuilder()
                 .put("ok", msg.ok)
                 .put("authToken", msg.authToken)
                 .put("permanent", msg.permanent)
                 .put("message", msg.message)
                 .put("deviceName", msg.deviceName)
-                .put("certFingerprint", msg.certFingerprint)
-                .build();
+                .put("certFingerprint", msg.certFingerprint);
+        if (msg.udpMediaPort > 0) {
+            builder.put("udpMediaPort", msg.udpMediaPort)
+                    .put("udpSessionId", msg.udpSessionId)
+                    .put("udpKeyBase64", msg.udpKeyBase64)
+                    .put("udpFecPct", msg.udpFecPct);
+        }
+        String json = builder.build();
         byte[] utf8 = json.getBytes(StandardCharsets.UTF_8);
         byte[] out = new byte[1 + utf8.length];
         out[0] = (byte) (msg.ok ? 1 : 0);
@@ -305,6 +326,8 @@ public final class OpalCastSessionPayloads {
         public final int appUserId;
         public final String clientPlatform;
         public final boolean companionEvents;
+        public final int udpMediaPort;
+        public final int udpFecPct;
 
         protected HelloMsgBase(
                 int protocolVersion, String clientName, String clientId, String preferredCodec,
@@ -312,6 +335,18 @@ public final class OpalCastSessionPayloads {
                 int displayMode, boolean audioEnabled, String authToken, String pinCode,
                 String transportHint, String sessionRole, String appPackage, String appActivity,
                 String clientPlatform, boolean companionEvents, int appUserId) {
+            this(protocolVersion, clientName, clientId, preferredCodec, width, height, dpi, fps, bitrateKbps,
+                    displayMode, audioEnabled, authToken, pinCode, transportHint, sessionRole, appPackage, appActivity,
+                    clientPlatform, companionEvents, appUserId, 0, OpalCastUdpMediaChannel.DEFAULT_FEC_PCT);
+        }
+
+        protected HelloMsgBase(
+                int protocolVersion, String clientName, String clientId, String preferredCodec,
+                int width, int height, int dpi, int fps, int bitrateKbps,
+                int displayMode, boolean audioEnabled, String authToken, String pinCode,
+                String transportHint, String sessionRole, String appPackage, String appActivity,
+                String clientPlatform, boolean companionEvents, int appUserId,
+                int udpMediaPort, int udpFecPct) {
             this.protocolVersion = protocolVersion;
             this.clientName = (clientName != null) ? clientName : "Mac";
             this.clientId = (clientId != null) ? clientId : "";
@@ -333,6 +368,8 @@ public final class OpalCastSessionPayloads {
             this.appUserId = Math.max(0, appUserId);
             this.clientPlatform = (clientPlatform != null) ? clientPlatform.trim().toLowerCase(Locale.ROOT) : "";
             this.companionEvents = companionEvents;
+            this.udpMediaPort = Math.max(0, Math.min(65535, udpMediaPort));
+            this.udpFecPct = OpalCastUdpMediaChannel.clampFecPct(udpFecPct);
         }
 
         public boolean isStandaloneApp() {
@@ -374,7 +411,9 @@ public final class OpalCastSessionPayloads {
                     obj.getString("appActivity", ""),
                     obj.getString("clientPlatform", ""),
                     obj.getBoolean("companionEvents", false),
-                    obj.getInt("appUserId", 0));
+                    obj.getInt("appUserId", 0),
+                    obj.getInt("udpMediaPort", 0),
+                    obj.getInt("udpFecPct", OpalCastUdpMediaChannel.DEFAULT_FEC_PCT));
         } catch (RuntimeException t) {
             throw new OpalCastProtocol.ProtocolException("Invalid HELLO JSON: " + t.getMessage(), t);
         }

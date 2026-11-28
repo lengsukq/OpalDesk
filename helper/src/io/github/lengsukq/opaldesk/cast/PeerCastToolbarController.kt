@@ -24,6 +24,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -34,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.lengsukq.opaldesk.R
+import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.ui.ChromeGlyph
 import io.github.lengsukq.opaldesk.ui.NativeImeBridgeHost
 import io.github.lengsukq.opaldesk.ui.NativeImeHostController
@@ -58,6 +63,7 @@ internal fun PeerCastViewerContent(
     isMirrorMode: Boolean,
     remoteBlackout: Boolean,
     remoteFullscreenTitle: String,
+    selectedBitrateKbps: Int,
     micEnabled: Boolean,
     cameraEnabled: Boolean,
     cameraFacing: String,
@@ -85,10 +91,12 @@ internal fun PeerCastViewerContent(
     onToggleDisplayMode: () -> Unit,
     onPopOutMirrorFloating: () -> Unit,
     onToggleBlackout: () -> Unit,
+    onSelectBitrateKbps: (Int) -> Unit,
     onRequestIdr: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
     val ratio = (videoW.toFloat() / videoH.coerceAtLeast(1).toFloat()).coerceIn(0.38f, 3.0f)
+    var bitrateMenuOpen by remember { mutableStateOf(false) }
 
     BoxWithConstraints(
         modifier = Modifier
@@ -202,79 +210,123 @@ internal fun PeerCastViewerContent(
 
         // Unified Top-Center Liquid Frosted Glass remote control pill
         if (toolbarExpanded) {
-            Row(
+            Column(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 8.dp, start = 12.dp, end = 12.dp)
-                    .liquidGlassSurface(
-                        shape = CircleShape,
-                        fill = OpalPalette.LiquidDockFill,
-                        rim = OpalPalette.LiquidGlassRim,
-                        elevation = 18.dp,
-                    )
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 11.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .padding(top = 8.dp, start = 12.dp, end = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                OpalTopPillIconButton(
-                    glyph = ChromeGlyph.KEYBOARD,
-                    contentDescription = stringResource(if (imeVisible) R.string.trackpad_hide_ime else R.string.taskbar_cc_ime),
-                    active = imeVisible,
-                    activeColor = OpalPalette.AccentBlue,
-                    onClick = onToggleIme,
-                )
-                OpalTopPillDivider()
-                if (remoteFullscreenTitle.isNotEmpty() && !isMirrorMode) {
-                    OpalTopPillChip(
-                        label = stringResource(R.string.taskbar_fs_exit),
-                        glyph = ChromeGlyph.EXIT_FULLSCREEN,
-                        filled = true,
+                Row(
+                    modifier = Modifier
+                        .liquidGlassSurface(
+                            shape = CircleShape,
+                            fill = OpalPalette.LiquidDockFill,
+                            rim = OpalPalette.LiquidGlassRim,
+                            elevation = 18.dp,
+                        )
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 11.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    OpalTopPillIconButton(
+                        glyph = ChromeGlyph.KEYBOARD,
+                        contentDescription = stringResource(if (imeVisible) R.string.trackpad_hide_ime else R.string.taskbar_cc_ime),
+                        active = imeVisible,
                         activeColor = OpalPalette.AccentBlue,
-                        onClick = onExitRemoteFullscreen,
+                        onClick = onToggleIme,
                     )
-                }
-                OpalTopPillChip(
-                    label = stringResource(R.string.peercast_floating_btn),
-                    tint = OpalPalette.AccentBlue,
-                    active = true,
-                    activeColor = OpalPalette.AccentBlue,
-                    onClick = onOpenFloatingPicker,
-                )
-                OpalTopPillChip(
-                    label = stringResource(if (isMirrorMode) R.string.peercast_switch_desktop else R.string.picker_mirror_btn),
-                    tint = if (isMirrorMode) OpalPalette.AccentCyan else OpalPalette.TextPrimary,
-                    active = isMirrorMode,
-                    activeColor = OpalPalette.AccentCyan,
-                    onClick = onToggleDisplayMode,
-                )
-                if (isMirrorMode) {
+                    OpalTopPillDivider()
+                    if (remoteFullscreenTitle.isNotEmpty() && !isMirrorMode) {
+                        OpalTopPillChip(
+                            label = stringResource(R.string.taskbar_fs_exit),
+                            glyph = ChromeGlyph.EXIT_FULLSCREEN,
+                            filled = true,
+                            activeColor = OpalPalette.AccentBlue,
+                            onClick = onExitRemoteFullscreen,
+                        )
+                    }
                     OpalTopPillChip(
-                        label = stringResource(R.string.peercast_float_mini),
+                        label = stringResource(R.string.peercast_floating_btn),
                         tint = OpalPalette.AccentBlue,
                         active = true,
                         activeColor = OpalPalette.AccentBlue,
-                        onClick = onPopOutMirrorFloating,
+                        onClick = onOpenFloatingPicker,
+                    )
+                    OpalTopPillChip(
+                        label = stringResource(if (isMirrorMode) R.string.peercast_switch_desktop else R.string.picker_mirror_btn),
+                        tint = if (isMirrorMode) OpalPalette.AccentCyan else OpalPalette.TextPrimary,
+                        active = isMirrorMode,
+                        activeColor = OpalPalette.AccentCyan,
+                        onClick = onToggleDisplayMode,
+                    )
+                    if (isMirrorMode) {
+                        OpalTopPillChip(
+                            label = stringResource(R.string.peercast_float_mini),
+                            tint = OpalPalette.AccentBlue,
+                            active = true,
+                            activeColor = OpalPalette.AccentBlue,
+                            onClick = onPopOutMirrorFloating,
+                        )
+                    }
+                    OpalTopPillChip(
+                        label = if (selectedBitrateKbps <= 0) "码率: 自动" else "码率: ${selectedBitrateKbps / 1000}M",
+                        active = bitrateMenuOpen || selectedBitrateKbps > 0,
+                        activeColor = OpalPalette.AccentBlue,
+                        onClick = { bitrateMenuOpen = !bitrateMenuOpen },
+                    )
+                    OpalTopPillChip(
+                        label = stringResource(if (remoteBlackout) R.string.peercast_screen_on else R.string.peercast_screen_off),
+                        active = remoteBlackout,
+                        activeColor = OpalPalette.AccentAmber,
+                        onClick = onToggleBlackout,
+                    )
+                    OpalTopPillDivider()
+                    OpalTopPillIconButton(
+                        glyph = ChromeGlyph.CHEVRON_UP,
+                        contentDescription = stringResource(R.string.taskbar_fs_collapse),
+                        tint = OpalPalette.TextSecondary,
+                        onClick = {
+                            bitrateMenuOpen = false
+                            onToggleToolbar()
+                        },
+                    )
+                    OpalTopPillChip(
+                        label = stringResource(R.string.peercast_disconnect),
+                        danger = true,
+                        onClick = onDisconnect,
                     )
                 }
-                OpalTopPillChip(
-                    label = stringResource(if (remoteBlackout) R.string.peercast_screen_on else R.string.peercast_screen_off),
-                    active = remoteBlackout,
-                    activeColor = OpalPalette.AccentAmber,
-                    onClick = onToggleBlackout,
-                )
-                OpalTopPillDivider()
-                OpalTopPillIconButton(
-                    glyph = ChromeGlyph.CHEVRON_UP,
-                    contentDescription = stringResource(R.string.taskbar_fs_collapse),
-                    tint = OpalPalette.TextSecondary,
-                    onClick = onToggleToolbar,
-                )
-                OpalTopPillChip(
-                    label = stringResource(R.string.peercast_disconnect),
-                    danger = true,
-                    onClick = onDisconnect,
-                )
+                if (bitrateMenuOpen) {
+                    Row(
+                        modifier = Modifier
+                            .liquidGlassSurface(
+                                shape = CircleShape,
+                                fill = OpalPalette.LiquidPopoverFill,
+                                rim = OpalPalette.LiquidGlassRim,
+                                elevation = 16.dp,
+                            )
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        AppPrefs.CAST_BITRATE_PRESETS_KBPS.forEach { kbps ->
+                            val active = selectedBitrateKbps == kbps
+                            OpalTopPillChip(
+                                label = if (kbps == 0) "自动" else "${kbps / 1000}M",
+                                filled = active,
+                                active = active,
+                                activeColor = OpalPalette.AccentBlue,
+                                onClick = {
+                                    onSelectBitrateKbps(kbps)
+                                    bitrateMenuOpen = false
+                                },
+                            )
+                        }
+                    }
+                }
             }
         } else {
             Row(

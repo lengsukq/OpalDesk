@@ -1,10 +1,12 @@
 package io.github.lengsukq.opaldesk.daemon.stream;
 
-import android.os.SystemClock;
+import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil;
 
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.Socket;
+import java.net.SocketException;
 import java.util.ArrayDeque;
 import java.util.Iterator;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -19,9 +21,20 @@ final class ClientSession {
     static final int MAX_QUEUED_VIDEO_FRAMES = 12;
     static final int MAX_QUEUED_AUDIO_FRAMES = 16;
     static final int MAX_TOTAL_QUEUED_FRAMES = 64;
+    static final int BULK_QUEUE_HIGH_WATER = 16;
+    static final int WIFI_TCP_SEND_BUF_MIN_BYTES = 64 * 1024;
+    static final int WIFI_TCP_SEND_BUF_MAX_BYTES = 256 * 1024;
+    static final int WIRED_SOCKET_SEND_BUF_BYTES = 512 * 1024;
     static final long SOFT_CONGESTION_NOTIFY_COOLDOWN_MS = 2_500L;
     static final long AWAITING_KEYFRAME_RETRY_MS = 450L;
     private static final long HEALTHY_NOTIFY_INTERVAL_MS = 2000L;
+
+    /** Dynamically tightens Wi-Fi TCP SO_SNDBUF to ~40ms of target bitrate to eliminate bufferbloat. */
+    static int computeWifiTcpSendBufferBytes(int bitrateKbps) {
+        int safeKbps = Math.max(1, bitrateKbps);
+        long bytes = ((long) safeKbps * 1000L * 40L) / 8_000L;
+        return (int) Math.max(WIFI_TCP_SEND_BUF_MIN_BYTES, Math.min(WIFI_TCP_SEND_BUF_MAX_BYTES, bytes));
+    }
 
     /** Scales soft congestion watermark (~100 ms of video frames) cleanly for 30–165 Hz streams. */
     static int resolveSoftCongestionWatermark(float targetFps) {
@@ -85,6 +98,7 @@ final class ClientSession {
     private final Object queueLock = new Object();
     private final ArrayDeque<QueuedFrame> priorityQueue = new ArrayDeque<>();
     private final ArrayDeque<QueuedFrame> videoQueue = new ArrayDeque<>();
+    private final ArrayDeque<QueuedFrame> bulkQueue = new ArrayDeque<>();
     private int queuedVideoFrames = 0;
     private int queuedAudioFrames = 0;
     private int softVideoWatermark = SOFT_CONGESTION_VIDEO_FRAMES;
@@ -97,6 +111,7 @@ final class ClientSession {
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private volatile boolean companionEventsSubscribed = false;
+    private volatile OpalCastUdpMediaChannel udpMediaChannel;
     volatile String closeReason = "";
     private Thread senderThread;
 
@@ -183,6 +198,27 @@ final class ClientSession {
         }
     }
 
+    void updateTargetBitrateKbps(int bitrateKbps) {
+        if (closed.get() || isAdbLocalSocket || DisplayGeometryUtil.isWiredSinkType(sinkType)) {
+            return;
+        }
+        int sendBufBytes = computeWifiTcpSendBufferBytes(bitrateKbps);
+        if (transport instanceof Socket) {
+            try { ((Socket) transport).setSendBufferSize(sendBufBytes); } catch (SocketException ignored) {}
+        }
+        OpalCastUdpMediaChannel udp = this.udpMediaChannel;
+        if (udp != null) {
+            udp.updateSendBufferBytes(sendBufBytes);
+        }
+    }
+
+    void attachUdpMediaChannel(OpalCastUdpMediaChannel channel) {
+        this.udpMediaChannel = channel;
+        if (channel != null && closed.get()) {
+            closeTransportQuietly(channel);
+        }
+    }
+
     void startSenderThread() {
         senderThread = new Thread(this::sendLoop, "ExtStreamSender-" + sessionId);
         senderThread.setDaemon(true);
@@ -206,9 +242,9 @@ final class ClientSession {
         int len = (payload != null) ? payload.length : 0;
         QueuedFrame qf = new QueuedFrame(type, flags, timestampUs, payload, len, null);
         long deadlineMs = monotonicClockMs.getAsLong() + Math.max(100L, timeoutMs);
-        int highWater = Math.max(8, MAX_TOTAL_QUEUED_FRAMES / 2);
         synchronized (queueLock) {
-            while (!closed.get() && totalQueuedLocked() >= highWater) {
+            while (!closed.get() && (bulkQueue.size() >= BULK_QUEUE_HIGH_WATER
+                    || totalQueuedLocked() >= MAX_TOTAL_QUEUED_FRAMES)) {
                 long remaining = deadlineMs - monotonicClockMs.getAsLong();
                 if (remaining <= 0L) {
                     return false;
@@ -220,8 +256,19 @@ final class ClientSession {
                     return false;
                 }
             }
+            if (!closed.get() && (!videoQueue.isEmpty() || !priorityQueue.isEmpty())) {
+                long remaining = deadlineMs - monotonicClockMs.getAsLong();
+                if (remaining > 0L) {
+                    try {
+                        queueLock.wait(Math.min(remaining, 8L));
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
+            }
             if (closed.get()) return false;
-            priorityQueue.addLast(qf);
+            bulkQueue.addLast(qf);
             queueLock.notifyAll();
             return true;
         }
@@ -344,7 +391,7 @@ final class ClientSession {
     }
 
     private int totalQueuedLocked() {
-        return priorityQueue.size() + videoQueue.size();
+        return priorityQueue.size() + videoQueue.size() + bulkQueue.size();
     }
 
     private void dropAllQueuedVideoLocked(boolean keepKeyFrames) {
@@ -381,22 +428,32 @@ final class ClientSession {
         try {
             while (!closed.get()) {
                 QueuedFrame next;
+                boolean fromBulk = false;
                 boolean shouldFlush;
                 synchronized (queueLock) {
-                    while (!closed.get() && priorityQueue.isEmpty() && videoQueue.isEmpty()) {
+                    while (!closed.get() && priorityQueue.isEmpty() && videoQueue.isEmpty() && bulkQueue.isEmpty()) {
                         queueLock.wait(250L);
                     }
                     if (closed.get()) break;
                     // Always drain audio & control frames ahead of queued video frames so large HEVC
-                    // frames never head-of-line block tiny ~350-byte AAC packets on Wi-Fi.
-                    next = !priorityQueue.isEmpty() ? priorityQueue.pollFirst() : videoQueue.pollFirst();
+                    // frames never head-of-line block tiny ~350-byte AAC packets on Wi-Fi, and only
+                    // dispatch at most 1 bulk file chunk when both real-time queues are empty.
+                    if (!priorityQueue.isEmpty()) {
+                        next = priorityQueue.pollFirst();
+                    } else if (!videoQueue.isEmpty()) {
+                        next = videoQueue.pollFirst();
+                    } else {
+                        next = bulkQueue.pollFirst();
+                        fromBulk = (next != null);
+                    }
                     if (next == null) continue;
                     if (next.isVideo) queuedVideoFrames = Math.max(0, queuedVideoFrames - 1);
                     if (next.isAudio) queuedAudioFrames = Math.max(0, queuedAudioFrames - 1);
                     queueLock.notifyAll();
-                    shouldFlush = (priorityQueue.isEmpty() && videoQueue.isEmpty())
+                    shouldFlush = (priorityQueue.isEmpty() && videoQueue.isEmpty() && bulkQueue.isEmpty())
                             || next.isVideo
                             || (next.isAudio && priorityQueue.isEmpty())
+                            || fromBulk
                             || next.type == OpalCastProtocol.TYPE_VIDEO_CONFIG
                             || next.type == OpalCastProtocol.TYPE_WIFI_UPGRADE_READY
                             || next.type == OpalCastProtocol.TYPE_APP_LIST
@@ -412,14 +469,24 @@ final class ClientSession {
                             || next.type == OpalCastProtocol.TYPE_PONG;
                 }
                 try {
-                    frameWriter.writeFrame(
-                            next.type, next.flags, next.timestampUs,
-                            next.payload, 0, next.payloadLength);
-                    if (shouldFlush) {
-                        frameWriter.flush();
+                    OpalCastUdpMediaChannel udp = this.udpMediaChannel;
+                    boolean sentOverUdp = (next.isVideo || next.isAudio)
+                            && udp != null
+                            && udp.trySendMediaFrame(
+                                    next.type, next.flags, next.timestampUs, next.payload, next.payloadLength);
+                    if (!sentOverUdp) {
+                        frameWriter.writeFrame(
+                                next.type, next.flags, next.timestampUs,
+                                next.payload, 0, next.payloadLength);
+                        if (shouldFlush) {
+                            frameWriter.flush();
+                        }
                     }
                 } finally {
                     next.releaseBufferOnce();
+                }
+                if (fromBulk) {
+                    Thread.yield();
                 }
             }
         } catch (InterruptedException ie) {
@@ -445,12 +512,19 @@ final class ClientSession {
             for (QueuedFrame item : videoQueue) {
                 item.releaseBufferOnce();
             }
+            for (QueuedFrame item : bulkQueue) {
+                item.releaseBufferOnce();
+            }
             priorityQueue.clear();
             videoQueue.clear();
+            bulkQueue.clear();
             queuedVideoFrames = 0;
             queuedAudioFrames = 0;
             queueLock.notifyAll();
         }
+        OpalCastUdpMediaChannel udp = this.udpMediaChannel;
+        this.udpMediaChannel = null;
+        closeTransportQuietly(udp);
         closeTransportQuietly(transport);
     }
 

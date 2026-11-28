@@ -11,6 +11,7 @@ import android.net.Uri
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -94,6 +95,39 @@ internal fun buildCastCodecSelectorRow(
         )
     }
     return row
+}
+
+internal fun buildCastBitrateSelectorRow(
+    context: Context,
+    pal: OpalCastPalette,
+    onChanged: () -> Unit,
+): HorizontalScrollView {
+    val dp = { v: Int -> OpalCastTheme.dp(context, v) }
+    val cur = ReceiverPrefs.getPreferredBitrateKbps(context)
+    val scroll = HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false }
+    val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+    ReceiverPrefs.BITRATE_PRESETS_KBPS.forEachIndexed { idx, kbps ->
+        val selected = (cur == kbps)
+        val label = if (kbps == 0) "自动" else "${kbps / 1000}M"
+        row.addView(
+            OpalCastTheme.buildPillButton(
+                context,
+                label,
+                if (selected) pal.accentSoft else pal.bgElevated,
+                if (selected) pal.accent else pal.inkSecondary,
+                if (selected) pal.accentBorder else pal.border,
+                bold = selected,
+            ) {
+                ReceiverPrefs.setPreferredBitrateKbps(context, kbps)
+                onChanged()
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                if (idx > 0) leftMargin = dp(7)
+            },
+        )
+    }
+    scroll.addView(row)
+    return scroll
 }
 
 internal fun buildCastThemeSelectorRow(

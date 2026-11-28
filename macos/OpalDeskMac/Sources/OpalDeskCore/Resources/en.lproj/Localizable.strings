@@ -949,7 +949,10 @@
 "settings.cat.devices" = "ADB & Trust";
 "settings.codec.sub" = "HEVC is sharper and lighter; H.264 offers broader legacy compatibility";
 "settings.fps.sub" = "90 or 120 fps recommended for high-refresh phones";
-"settings.bitrate.sub_fmt" = "Current %d Mbps · 12–20 Mbps recommended on Wi-Fi";
+"settings.bitrate.auto_option" = "Auto (Adaptive)";
+"settings.bitrate.auto_sub" = "Auto mode · dynamically adapts to network & resolution";
+"settings.bitrate.sub_fmt" = "Fixed %d Mbps · switchable anytime in display bar";
+"display.bitrate.help" = "Switch live stream bitrate (Auto / 8–100 Mbps)";
 "settings.display_mode.sub" = "Choose DeX Desktop or Fusion Mirror on connect";
 "settings.dpi.sub" = "Lower values show more content; higher values enlarge text";
 "settings.audio.sub" = "48 kHz low-latency stereo AAC-LC audio streaming";

@@ -392,6 +392,7 @@ final class OpalCastDisplayModeCoordinator {
             if (action == DisplayGeometryUtil.ReconfigureAction.BITRATE_ONLY) {
                 s.sink.updateBitrateKbps(nextBitrate);
                 s.bitrateKbps = nextBitrate;
+                server.updateSessionTargetBitrateKbps(s.sessionId, nextBitrate);
                 pushDeviceState.accept(s);
                 notifyRemoteStateChanged.run();
                 return;
@@ -407,6 +408,7 @@ final class OpalCastDisplayModeCoordinator {
                     if (nextBitrate != s.bitrateKbps) {
                         s.sink.updateBitrateKbps(nextBitrate);
                         s.bitrateKbps = nextBitrate;
+                        server.updateSessionTargetBitrateKbps(s.sessionId, nextBitrate);
                     }
                     pushDeviceState.accept(s);
                     notifyRemoteStateChanged.run();
@@ -441,6 +443,7 @@ final class OpalCastDisplayModeCoordinator {
                     });
             if (!ok) return;
             server.updateSessionTargetFps(s.sessionId, s.fps);
+            server.updateSessionTargetBitrateKbps(s.sessionId, s.bitrateKbps);
             pushDeviceState.accept(s);
             notifyRemoteStateChanged.run();
         }

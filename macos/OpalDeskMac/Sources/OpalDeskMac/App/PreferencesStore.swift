@@ -43,7 +43,14 @@ public final class PreferencesStore {
     }
 
     public var bitrateKbps: Int {
-        didSet { defaults.set(bitrateKbps, forKey: Key.bitrateKbps) }
+        didSet {
+            let clamped = DisplayPresets.clampBitrateKbps(bitrateKbps)
+            if clamped != bitrateKbps {
+                bitrateKbps = clamped
+                return
+            }
+            defaults.set(clamped, forKey: Key.bitrateKbps)
+        }
     }
 
     public var defaultDisplayMode: OpalCastDisplayMode {
@@ -177,10 +184,11 @@ public final class PreferencesStore {
         let codecRaw = defaults.object(forKey: Key.preferredCodec) as? Int
         self.preferredCodec = codecRaw.flatMap { OpalCastVideoCodec(rawValue: UInt8($0)) } ?? .hevc
 
-        let storedBitrate = defaults.integer(forKey: Key.bitrateKbps)
-        self.bitrateKbps = storedBitrate > 0
-            ? DisplayPresets.clampBitrateKbps(storedBitrate)
-            : DisplayPresets.defaultBitrateKbps
+        if let storedBitrate = defaults.object(forKey: Key.bitrateKbps) as? Int {
+            self.bitrateKbps = DisplayPresets.clampBitrateKbps(storedBitrate)
+        } else {
+            self.bitrateKbps = DisplayPresets.defaultBitrateKbps
+        }
 
         let modeRaw = defaults.object(forKey: Key.defaultDisplayMode) as? Int
         let parsedMode = modeRaw.flatMap { OpalCastDisplayMode(rawValue: UInt8($0)) }

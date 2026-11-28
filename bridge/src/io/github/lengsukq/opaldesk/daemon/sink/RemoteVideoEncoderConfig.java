@@ -21,6 +21,7 @@ final class RemoteVideoEncoderConfig {
     private static final String KEY_MAX_FPS_TO_ENCODER = "max-fps-to-encoder";
     static final int DEFAULT_ALIGNMENT = 8;
     private static final int GOP_INTERVAL_SECONDS = 15;
+    static final int INTRA_REFRESH_PERIOD_FRAMES = 30;
 
     enum ConfigTier {
         OPTIMAL,
@@ -172,7 +173,10 @@ final class RemoteVideoEncoderConfig {
         if (tier == ConfigTier.OPTIMAL) {
             fmt.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709);
             fmt.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
-            fmt.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED);
+            fmt.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_FULL);
+            if (Build.VERSION.SDK_INT >= 24) {
+                fmt.setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, INTRA_REFRESH_PERIOD_FRAMES);
+            }
             if (preferredProfile > 0 && preferredLevel > 0) {
                 fmt.setInteger(MediaFormat.KEY_PROFILE, preferredProfile);
                 fmt.setInteger(MediaFormat.KEY_LEVEL, preferredLevel);
@@ -180,6 +184,10 @@ final class RemoteVideoEncoderConfig {
             if (Build.VERSION.SDK_INT >= 29) {
                 fmt.setFloat(KEY_MAX_FPS_TO_ENCODER, (float) targetFps);
             }
+        } else if (tier == ConfigTier.LOW_LATENCY_COMPAT) {
+            fmt.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709);
+            fmt.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
+            fmt.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED);
         }
         if (tier != ConfigTier.MINIMAL) {
             fmt.setInteger(MediaFormat.KEY_PRIORITY, 0);

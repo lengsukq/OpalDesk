@@ -65,6 +65,13 @@ public struct DisplayWindowView: View {
 
     // MARK: - Canvas Stage
 
+    private var isModalOverlayPresented: Bool {
+        model.remoteAppPickerContext != nil
+            || model.pendingPopoutReloadPrompt != nil
+            || model.isShortcutManagerPresented
+            || model.apkInstallerContext != nil
+    }
+
     private var canvasStage: some View {
         ZStack {
             DeXTheme.canvasBackground
@@ -75,7 +82,9 @@ public struct DisplayWindowView: View {
                     videoWidth: model.currentVideoWidth,
                     videoHeight: model.currentVideoHeight,
                     mapCommandToCtrl: model.preferences.mapCommandToCtrl,
-                    isCanvasInteractive: model.isAuthenticated && model.videoMetrics.totalFramesDecoded > 0,
+                    isCanvasInteractive: model.isAuthenticated
+                        && model.videoMetrics.totalFramesDecoded > 0
+                        && !isModalOverlayPresented,
                     focusGeneration: canvasFocusGeneration,
                     hideLocalCursor: model.preferences.hideLocalCursor,
                     enableEdgeNavigationGestures: model.preferences.enableEdgeNavigationGestures
@@ -96,7 +105,14 @@ public struct DisplayWindowView: View {
                 if newStatus != .denied { isInjectWarningDismissed = false }
             }
             .onChange(of: isHoveringTopEdge) { wasHovering, isHovering in
-                if wasHovering && !isHovering {
+                if wasHovering && !isHovering && !isModalOverlayPresented {
+                    canvasFocusGeneration &+= 1
+                }
+            }
+            .onChange(of: isModalOverlayPresented) { wasPresented, isPresented in
+                if isPresented {
+                    isHoveringTopEdge = false
+                } else if wasPresented {
                     canvasFocusGeneration &+= 1
                 }
             }
@@ -302,6 +318,35 @@ public struct DisplayWindowView: View {
             tint: .cyan,
             help: OpalL10n.text("display.cursor.help")
         ) { model.preferences.hideLocalCursor.toggle() }
+
+        Menu {
+            ForEach(DisplayPresets.bitrateOptionsKbps, id: \.self) { kbps in
+                Button {
+                    model.applyBitrateKbps(kbps)
+                } label: {
+                    let label = kbps == 0 ? OpalL10n.text("settings.bitrate.auto_option") : "\(kbps / 1000) Mbps"
+                    if model.preferences.bitrateKbps == kbps {
+                        Label(label, systemImage: "checkmark")
+                    } else {
+                        Text(label)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "waveform.path")
+                    .font(.system(size: 11, weight: .medium))
+                Text(model.preferences.bitrateKbps <= 0 ? OpalL10n.text("common.auto") : "\(model.preferences.bitrateKbps / 1000)M")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .padding(.horizontal, 9)
+            .frame(height: OpalControlSize.iconButtonCompact)
+            .background(Color.white.opacity(0.10), in: Capsule())
+            .foregroundStyle(.white.opacity(0.92))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help(OpalL10n.text("display.bitrate.help"))
     }
 
     @ViewBuilder

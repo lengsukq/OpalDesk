@@ -9,6 +9,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,8 +20,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +45,7 @@ import io.github.lengsukq.opaldesk.cast.PeerFloatingAppService
 import io.github.lengsukq.opaldesk.cast.UsbTetherGatewayPolicy
 import io.github.lengsukq.opaldesk.cast.UsbTetherPeerDetector
 import io.github.lengsukq.opaldesk.external.ExternalDisplayTransport
+import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.DaemonStatus
 import io.github.lengsukq.opaldesk.protocol.RemoteStreamStatus
 import io.github.lengsukq.opaldesk.protocol.TrustedPeerEntry
@@ -321,6 +325,9 @@ private fun InterconnectConnectTab(
     }
 
     Spacer(Modifier.height(9.dp))
+    CastBitrateSelectorRow()
+
+    Spacer(Modifier.height(9.dp))
     ManualPeerConnectCollapsible(
         expanded = manualConnectExpanded,
         onToggle = onToggleManualConnect,
@@ -331,6 +338,54 @@ private fun InterconnectConnectTab(
         onConnectPeerCast = onConnectPeerCast,
         onOpenFloatingAppPicker = onOpenFloatingAppPicker,
     )
+}
+
+@Composable
+private fun CastBitrateSelectorRow() {
+    val ctx = LocalContext.current
+    val selectedKbps by AppPrefs.castBitrateKbpsFlow.collectAsState()
+    val shape = RoundedCornerShape(13.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(OpalPalette.ChipFill)
+            .border(0.75.dp, OpalPalette.BorderHairline, shape)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            OpalText(text = "视频码率", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            OpalText(
+                text = AppPrefs.formatCastBitrateLabel(selectedKbps),
+                fontSize = 11.sp,
+                color = OpalPalette.AccentBlue,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            AppPrefs.CAST_BITRATE_PRESETS_KBPS.forEach { kbps ->
+                val active = selectedKbps == kbps
+                val label = if (kbps == 0) "自动" else "${kbps / 1000}M"
+                OpalButton(
+                    label = label,
+                    accent = OpalPalette.AccentBlue,
+                    filled = active,
+                    compact = true,
+                    onClick = { AppPrefs.setCastBitrateKbps(ctx, kbps) },
+                )
+            }
+        }
+    }
 }
 
 @Composable

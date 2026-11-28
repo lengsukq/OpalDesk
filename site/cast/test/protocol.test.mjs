@@ -239,6 +239,13 @@ test('encodeHello and encodeResizeConfig support wired 45-50 Mbps bitrates and c
 
   const resize = encodeResizeConfig({ width: 3840, height: 2160, dpi: 240, fps: 60, bitrateKbps: 48000 });
   assert.equal(new DataView(resize.buffer).getInt32(8, false), 48000);
+
+  const autoHello = JSON.parse(new TextDecoder().decode(encodeHello({ bitrateKbps: 0 })));
+  assert.equal(autoHello.bitrateKbps, 0);
+  const autoResize = encodeResizeConfig({ width: 1920, height: 1080, dpi: 240, fps: 60, bitrateKbps: 0 });
+  assert.equal(new DataView(autoResize.buffer).getInt32(8, false), 0);
+  const maxResize = encodeResizeConfig({ width: 3840, height: 2160, dpi: 240, fps: 60, bitrateKbps: 100000 });
+  assert.equal(new DataView(maxResize.buffer).getInt32(8, false), 100000);
 });
 
 test('shouldRequestSessionAudio enables audio for both desktop and standalone app windows while keeping app_catalog silent', () => {

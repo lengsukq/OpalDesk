@@ -306,7 +306,12 @@ internal class OpalCastPeerMediaDecoder(
         }
         var lastErr: Throwable? = null
         for ((codecName, supportsLowLatency) in candidates) {
-            val plans = OpalPeerUplinkCoalescer.buildDecoderConfigPlans(remoteFps, supportsLowLatency)
+            val plans = VendorLowLatencyCodecPolicy.buildFallbackPlans(
+                codecName = codecName,
+                remoteFps = remoteFps,
+                supportsLowLatency = supportsLowLatency,
+                sdkInt = Build.VERSION.SDK_INT,
+            )
             for (plan in plans) {
                 var codec: MediaCodec? = null
                 try {
@@ -316,14 +321,8 @@ internal class OpalCastPeerMediaDecoder(
                         MediaCodec.createDecoderByType(mime)
                     }
                     val fmt = MediaFormat.createVideoFormat(mime, width, height)
-                    if (plan.priorityRealtime) {
-                        fmt.setInteger(MediaFormat.KEY_PRIORITY, 0)
-                    }
-                    if (plan.lowLatency && Build.VERSION.SDK_INT >= 30) {
-                        fmt.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-                    }
-                    if (plan.operatingRate > 0) {
-                        fmt.setInteger(MediaFormat.KEY_OPERATING_RATE, plan.operatingRate)
+                    for ((k, v) in plan.intKeys) {
+                        fmt.setInteger(k, v)
                     }
                     if (csd.isNotEmpty()) {
                         fmt.setByteBuffer("csd-0", ByteBuffer.wrap(csd))
@@ -339,7 +338,7 @@ internal class OpalCastPeerMediaDecoder(
                     startVideoDrainThreadLocked(codec)
                     OpalLogStore.i(
                         TAG,
-                        "Video decoder started codec=${codecName ?: "default"} mime=$mime ${width}x${height} lowLat=${plan.lowLatency} opRate=${plan.operatingRate}",
+                        "Video decoder started codec=${codecName ?: "default"} vendor=${plan.vendor} tier=${plan.tierName} mime=$mime ${width}x${height}",
                     )
                     return
                 } catch (t: Throwable) {

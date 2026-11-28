@@ -3,6 +3,7 @@ package io.github.lengsukq.opaldesk.daemon.stream;
 import android.net.LocalSocket;
 import android.os.SystemClock;
 
+import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
 import io.github.lengsukq.opaldesk.daemon.security.PairingApprovalCoordinator;
 import io.github.lengsukq.opaldesk.daemon.security.TrustStoreManager;
@@ -24,8 +25,8 @@ import javax.net.ssl.SSLSocket;
 final class RemoteAuthHandshakeHandler {
     private static final int HANDSHAKE_TIMEOUT_MS = 10_000;
     private static final int SOCKET_IO_BUFFER_BYTES = 131_072;
-    private static final int USB_SOCKET_SEND_BUF_BYTES = 512 * 1024;
-    private static final int WIFI_SOCKET_SEND_BUF_BYTES = 512 * 1024;
+    private static final int USB_SOCKET_SEND_BUF_BYTES = ClientSession.WIRED_SOCKET_SEND_BUF_BYTES;
+    private static final int WIFI_SOCKET_INITIAL_SEND_BUF_BYTES = ClientSession.computeWifiTcpSendBufferBytes(12_000);
     private static final int REALTIME_MEDIA_TRAFFIC_CLASS = 0xB8;
 
     interface TimeoutClearer {
@@ -41,7 +42,8 @@ final class RemoteAuthHandshakeHandler {
                 String clientName,
                 OpalCastProtocol.HelloMsg hello,
                 Closeable transport,
-                OpalCastFrameTransport frameTransport);
+                OpalCastFrameTransport frameTransport,
+                OpalCastUdpMediaChannel udpMediaChannel);
     }
 
     private final String deviceName;
@@ -120,7 +122,7 @@ final class RemoteAuthHandshakeHandler {
             sock.setTcpNoDelay(true);
             sock.setKeepAlive(true);
             try { sock.setTrafficClass(REALTIME_MEDIA_TRAFFIC_CLASS); } catch (SocketException ignored) {}
-            int sendBufBytes = isUsbTetherLink ? USB_SOCKET_SEND_BUF_BYTES : WIFI_SOCKET_SEND_BUF_BYTES;
+            int sendBufBytes = isUsbTetherLink ? USB_SOCKET_SEND_BUF_BYTES : WIFI_SOCKET_INITIAL_SEND_BUF_BYTES;
             try { sock.setSendBufferSize(sendBufBytes); } catch (SocketException ignored) {}
             try { sock.setReceiveBufferSize(SOCKET_IO_BUFFER_BYTES); } catch (SocketException ignored) {}
             sock.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
@@ -137,6 +139,10 @@ final class RemoteAuthHandshakeHandler {
             }
             OpalCastProtocol.HelloMsg hello = readAndValidateHello(frameTransport, sock);
             if (hello == null) return;
+            if (!isUsbTetherLink) {
+                int wifiBuf = ClientSession.computeWifiTcpSendBufferBytes(resolveHelloBitrateKbps(networkSinkType, hello));
+                try { sock.setSendBufferSize(wifiBuf); } catch (SocketException ignored) {}
+            }
 
             TrustStoreManager.TokenVerifyResult verify = trustStore.verifyTokenOrCheckRateLimit(
                     hello.clientId, hello.clientName, hello.authToken, peerIp);
@@ -284,11 +290,49 @@ final class RemoteAuthHandshakeHandler {
             sendAuthFailureAndClose(frameTransport, sock, errMsg);
             return;
         }
-        OpalCastProtocol.AuthResultMsg okMsg = new OpalCastProtocol.AuthResultMsg(
-                true, issuedToken, authMsg, deviceName, tlsAcceptor.getCertFingerprint(), permanentTokenFlag);
-        writeAuthResultImmediate(frameTransport, okMsg);
-        clearTimeout.clear();
-        sessionRunner.run(sinkType, isAdbLocalSocket, permanentTrust, clientId, clientName, hello, sock, frameTransport);
+        OpalCastUdpMediaChannel udpChannel = maybeCreateUdpMediaChannel(sinkType, isAdbLocalSocket, hello);
+        try {
+            OpalCastProtocol.AuthResultMsg okMsg = (udpChannel != null)
+                    ? new OpalCastProtocol.AuthResultMsg(
+                            true, issuedToken, authMsg, deviceName, tlsAcceptor.getCertFingerprint(),
+                            permanentTokenFlag, udpChannel.getLocalPort(), udpChannel.getSessionId(),
+                            udpChannel.getKeyBase64(), udpChannel.getFecPct())
+                    : new OpalCastProtocol.AuthResultMsg(
+                            true, issuedToken, authMsg, deviceName, tlsAcceptor.getCertFingerprint(), permanentTokenFlag);
+            writeAuthResultImmediate(frameTransport, okMsg);
+            clearTimeout.clear();
+        } catch (IOException | RuntimeException e) {
+            ClientSession.closeTransportQuietly(udpChannel);
+            throw e;
+        }
+        sessionRunner.run(
+                sinkType, isAdbLocalSocket, permanentTrust, clientId, clientName,
+                hello, sock, frameTransport, udpChannel);
+    }
+
+    private static int resolveHelloBitrateKbps(int sinkType, OpalCastProtocol.HelloMsg hello) {
+        boolean preferHevc = !"h264".equalsIgnoreCase(hello.preferredCodec);
+        float fps = (hello.fps > 0) ? hello.fps : 60f;
+        int maxKbps = DisplayGeometryUtil.resolveMaxBitrateKbpsForSink(sinkType);
+        return DisplayGeometryUtil.resolveSessionBitrateKbps(
+                hello.bitrateKbps, hello.width, hello.height, fps, preferHevc, maxKbps);
+    }
+
+    private static OpalCastUdpMediaChannel maybeCreateUdpMediaChannel(
+            int sinkType, boolean isAdbLocalSocket, OpalCastProtocol.HelloMsg hello) {
+        if (isAdbLocalSocket || !DisplaySink.isTlsNetworkSink(sinkType)) return null;
+        if (hello == null || hello.udpMediaPort <= 0 || hello.isAppCatalog() || hello.isCompanion()) return null;
+        int sendBuf = DisplayGeometryUtil.isWiredSinkType(sinkType)
+                ? USB_SOCKET_SEND_BUF_BYTES
+                : ClientSession.computeWifiTcpSendBufferBytes(resolveHelloBitrateKbps(sinkType, hello));
+        try {
+            OpalCastUdpMediaChannel ch = OpalCastUdpMediaChannel.create(hello.udpFecPct, sendBuf);
+            ch.startPunchListener();
+            return ch;
+        } catch (SocketException e) {
+            System.err.println("OPALDESK_UDP_MEDIA_INIT_WARN: " + e.getMessage());
+            return null;
+        }
     }
 
     private void sendAuthFailureAndClose(OpalCastFrameTransport frameTransport, Closeable sock, String msg) {

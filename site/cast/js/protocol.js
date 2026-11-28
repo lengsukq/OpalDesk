@@ -258,7 +258,7 @@ export function encodeHello({
   height = 1080,
   dpi = 220,
   fps = 60,
-  bitrateKbps = 12000,
+  bitrateKbps = 0,
   displayMode = DISPLAY_MODE_DEX,
   audioEnabled = true,
   authToken = '',
@@ -271,6 +271,8 @@ export function encodeHello({
   companionEvents = null,
 } = {}) {
   const normalizedAppUserId = Math.max(0, Math.round(Number(appUserId) || 0));
+  const rawBitrateKbps = Math.round(Number(bitrateKbps) || 0);
+  const wireBitrateKbps = rawBitrateKbps <= 0 ? 0 : Math.max(2500, Math.min(100000, rawBitrateKbps));
   const payloadObj = {
     protocolVersion: PROTOCOL_VERSION,
     clientName,
@@ -280,7 +282,7 @@ export function encodeHello({
     height: Math.max(320, Math.round(height)),
     dpi: Math.max(120, Math.min(560, Math.round(dpi))),
     fps: Math.max(30, Math.min(120, Math.round(fps))),
-    bitrateKbps: Math.max(2500, Math.min(50000, Math.round(bitrateKbps))),
+    bitrateKbps: wireBitrateKbps,
     displayMode,
     audioEnabled: Boolean(audioEnabled),
     authToken,
@@ -308,20 +310,22 @@ export function encodeResizeConfig({
   height,
   dpi = 0,
   fps = 60,
-  bitrateKbps = 12000,
+  bitrateKbps = 0,
   displayMode = DISPLAY_MODE_UNCHANGED,
   rotation = 0xff,
 }) {
   const alignedW = Math.max(320, Math.min(3840, Math.round(width) & ~7));
   const alignedH = Math.max(320, Math.min(2560, Math.round(height) & ~7));
   const wireDpi = dpi <= 0 ? 0 : Math.max(120, Math.min(560, Math.round(dpi)));
+  const rawBitrateKbps = Math.round(Number(bitrateKbps) || 0);
+  const wireBitrateKbps = rawBitrateKbps <= 0 ? 0 : Math.max(2000, Math.min(100000, rawBitrateKbps));
   const buf = new ArrayBuffer(14);
   const v = new DataView(buf);
   v.setUint16(0, alignedW, false);
   v.setUint16(2, alignedH, false);
   v.setUint16(4, wireDpi, false);
   v.setUint16(6, Math.round(Math.max(30, Math.min(120, fps)) * 100), false);
-  v.setInt32(8, Math.max(2000, Math.min(50000, Math.round(bitrateKbps))), false);
+  v.setInt32(8, wireBitrateKbps, false);
   v.setUint8(12, displayMode & 0xff);
   v.setUint8(13, rotation & 0xff);
   return new Uint8Array(buf);

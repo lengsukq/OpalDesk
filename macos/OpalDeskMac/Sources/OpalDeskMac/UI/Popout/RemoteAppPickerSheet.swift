@@ -10,6 +10,7 @@ public struct RemoteAppPickerSheet: View {
 
     @State private var searchQuery: String = ""
     @State private var sortByUsage: Bool = true
+    @FocusState private var isSearchFocused: Bool
 
     public init(model: AppModel, context: RemoteAppPickerContext, onDismiss: @escaping () -> Void) {
         self.model = model
@@ -109,7 +110,11 @@ public struct RemoteAppPickerSheet: View {
             }
 
             HStack(spacing: OpalSpacing.sm) {
-                OpalSearchField(placeholder: OpalL10n.format("picker.search_placeholder_fmt", context.deviceName), text: $searchQuery)
+                OpalSearchField(
+                    placeholder: OpalL10n.format("picker.search_placeholder_fmt", context.deviceName),
+                    text: $searchQuery,
+                    focus: $isSearchFocused
+                )
 
                 Button {
                     sortByUsage.toggle()
@@ -133,6 +138,11 @@ public struct RemoteAppPickerSheet: View {
         }
         .padding(OpalSpacing.xl)
         .opalModalSheetChrome(width: 580, height: 620)
+        .onAppear {
+            DispatchQueue.main.async {
+                isSearchFocused = true
+            }
+        }
     }
 
     private var quickHistoryStrip: some View {

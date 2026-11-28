@@ -134,6 +134,10 @@ public struct AuthResultPayload: Decodable, Sendable, Equatable {
     public var message: String
     public var deviceName: String
     public var certFingerprint: String
+    public var udpMediaPort: Int?
+    public var udpSessionId: UInt32?
+    public var udpKeyBase64: String?
+    public var udpFecPct: Int?
 
     public init(
         ok: Bool,
@@ -141,7 +145,11 @@ public struct AuthResultPayload: Decodable, Sendable, Equatable {
         permanent: Bool = false,
         message: String = "",
         deviceName: String = "",
-        certFingerprint: String = ""
+        certFingerprint: String = "",
+        udpMediaPort: Int? = nil,
+        udpSessionId: UInt32? = nil,
+        udpKeyBase64: String? = nil,
+        udpFecPct: Int? = nil
     ) {
         self.ok = ok
         self.authToken = authToken
@@ -149,10 +157,15 @@ public struct AuthResultPayload: Decodable, Sendable, Equatable {
         self.message = message
         self.deviceName = deviceName
         self.certFingerprint = certFingerprint
+        self.udpMediaPort = udpMediaPort
+        self.udpSessionId = udpSessionId
+        self.udpKeyBase64 = udpKeyBase64
+        self.udpFecPct = udpFecPct
     }
 
     private enum CodingKeys: String, CodingKey {
         case ok, authToken, permanent, message, deviceName, certFingerprint
+        case udpMediaPort, udpSessionId, udpKeyBase64, udpFecPct
     }
 
     public init(from decoder: Decoder) throws {
@@ -163,6 +176,12 @@ public struct AuthResultPayload: Decodable, Sendable, Equatable {
         message = try c.decodeIfPresent(String.self, forKey: .message) ?? ""
         deviceName = try c.decodeIfPresent(String.self, forKey: .deviceName) ?? ""
         certFingerprint = try c.decodeIfPresent(String.self, forKey: .certFingerprint) ?? ""
+        udpMediaPort = try c.decodeIfPresent(Int.self, forKey: .udpMediaPort)
+        if let rawSessionId = try c.decodeIfPresent(Int64.self, forKey: .udpSessionId) {
+            udpSessionId = UInt32(truncatingIfNeeded: rawSessionId)
+        }
+        udpKeyBase64 = try c.decodeIfPresent(String.self, forKey: .udpKeyBase64)
+        udpFecPct = try c.decodeIfPresent(Int.self, forKey: .udpFecPct)
     }
 
     public static func decode(from data: Data) throws -> AuthResultPayload {
@@ -274,6 +293,8 @@ public struct HelloPayload: Encodable, Sendable, Equatable {
     public var appActivity: String
     public var companionEvents: Bool
     public var appUserId: Int?
+    public var udpMediaPort: Int?
+    public var udpFecPct: Int?
 
     public init(
         protocolVersion: Int = OpalCastProtocol.version,
@@ -295,7 +316,9 @@ public struct HelloPayload: Encodable, Sendable, Equatable {
         appPackage: String = "",
         appActivity: String = "",
         companionEvents: Bool = false,
-        appUserId: Int? = nil
+        appUserId: Int? = nil,
+        udpMediaPort: Int? = nil,
+        udpFecPct: Int? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.clientName = clientName
@@ -317,6 +340,8 @@ public struct HelloPayload: Encodable, Sendable, Equatable {
         self.appActivity = appActivity
         self.companionEvents = companionEvents
         self.appUserId = (appUserId ?? 0) > 0 ? appUserId : nil
+        self.udpMediaPort = udpMediaPort
+        self.udpFecPct = udpFecPct
     }
 
     public func encode() throws -> Data {

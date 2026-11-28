@@ -371,8 +371,8 @@ public final class DisplayGeometryUtil {
     public static final int MIN_SESSION_BITRATE_KBPS = 2_500;
     public static final int WIRELESS_MAX_BITRATE_KBPS = 80_000;
     public static final int WIRED_MAX_BITRATE_KBPS = 100_000;
-    public static final int AUTO_RECOMMENDED_MAX_BITRATE_KBPS = 32_000;
-    public static final int HEVC_BITRATE_SCALE_PCT = 75;
+    public static final int AUTO_RECOMMENDED_MAX_BITRATE_KBPS = 60_000;
+    public static final int HEVC_BITRATE_SCALE_PCT = 85;
     public static final int MIN_STATUS_BAR_INSET_SDK = 34;
 
     public static final long AGGRESSIVE_REPEAT_FRAME_AFTER_US = 100_000L;

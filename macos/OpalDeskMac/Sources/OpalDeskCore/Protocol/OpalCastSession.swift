@@ -61,6 +61,7 @@ public final class OpalCastSession: Sendable {
         var isExplicitDisconnect: Bool = false
         var heartbeatTask: Task<Void, Never>?
         var reconnectTask: Task<Void, Never>?
+        var udpReceiver: OpalCastUdpMediaReceiver?
     }
 
     private let trustStore: TrustStore?
@@ -347,6 +348,7 @@ public final class OpalCastSession: Sendable {
                         $0.hasReceivedAuthResult = true
                         $0.lastInboundActivityNs = DispatchTime.now().uptimeNanoseconds
                     }
+                    configureUdpMediaIfNegotiated(from: frame.payload)
                 }
                 if frame.type == .pong {
                     handlePongFrame(frame)
@@ -357,6 +359,53 @@ public final class OpalCastSession: Sendable {
         case .failure(let error):
             OpalDeskLog.session.error("Protocol decode error: \(error.localizedDescription, privacy: .public)")
             abortWithFatalError(.protocolError(error.localizedDescription))
+        }
+    }
+
+    private func configureUdpMediaIfNegotiated(from authPayload: Data) {
+        guard let auth = try? AuthResultPayload.decode(from: authPayload),
+              auth.ok,
+              let rawPort = auth.udpMediaPort,
+              rawPort > 0, rawPort <= Int(UInt16.max),
+              let sessionId = auth.udpSessionId,
+              let keyB64 = auth.udpKeyBase64,
+              let keyData = Data(base64Encoded: keyB64),
+              keyData.count == OpalUdpProtocol.aes128KeySize
+        else {
+            return
+        }
+        let resolvedHost: String? = state.withLock { s in
+            guard let endpoint = s.endpoint, endpoint.security != .wiredLocalhostPlaintext else {
+                return nil
+            }
+            if case .hostPort(let host, _) = endpoint.target { return host }
+            if case .hostPort(let nwHost, _) = s.connection?.currentPath?.remoteEndpoint {
+                return "\(nwHost)"
+            }
+            return nil
+        }
+        guard let remoteHost = resolvedHost, !remoteHost.isEmpty else { return }
+        do {
+            let receiver = try OpalCastUdpMediaReceiver(
+                host: remoteHost,
+                port: UInt16(rawPort),
+                sessionId: sessionId,
+                keyData: keyData,
+                onFrame: { [weak self] frame in
+                    guard let self else { return }
+                    self.state.withLock { $0.lastInboundActivityNs = DispatchTime.now().uptimeNanoseconds }
+                    self.emit(.frame(frame))
+                }
+            )
+            let previous = state.withLock { s -> OpalCastUdpMediaReceiver? in
+                let old = s.udpReceiver
+                s.udpReceiver = receiver
+                return old
+            }
+            previous?.stop()
+            receiver.start()
+        } catch {
+            OpalDeskLog.session.warning("UDP media receiver init failed, falling back to TCP/TLS: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -543,6 +592,7 @@ public final class OpalCastSession: Sendable {
         struct TornDownResources {
             let connection: NWConnection?
             let heartbeat: Task<Void, Never>?
+            let udpReceiver: OpalCastUdpMediaReceiver?
             let reconnect: Task<Void, Never>?
             let handler: (@Sendable (OpalCastSessionEvent) -> Void)?
             let waiters: [CheckedContinuation<Void, Never>]
@@ -551,10 +601,12 @@ public final class OpalCastSession: Sendable {
         let resources: TornDownResources = state.withLock { s in
             let conn = s.connection
             let hb = s.heartbeatTask
+            let udp = s.udpReceiver
             let rc = explicitDisconnect ? s.reconnectTask : nil
             let ev = emitDisconnected ? s.eventHandler : nil
             s.connection = nil
             s.heartbeatTask = nil
+            s.udpReceiver = nil
             s.inFlightBytes = 0
             s.pendingPings.removeAll()
             s.hasReceivedAuthResult = false
@@ -568,6 +620,7 @@ public final class OpalCastSession: Sendable {
             return TornDownResources(
                 connection: conn,
                 heartbeat: hb,
+                udpReceiver: udp,
                 reconnect: rc,
                 handler: ev,
                 waiters: Self.popAllWaiters(from: &s)
@@ -577,6 +630,7 @@ public final class OpalCastSession: Sendable {
             continuation.resume()
         }
         resources.heartbeat?.cancel()
+        resources.udpReceiver?.stop()
         resources.reconnect?.cancel()
         resources.connection?.stateUpdateHandler = nil
         resources.connection?.cancel()

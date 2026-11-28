@@ -183,12 +183,14 @@
             <label class="field">
               <span data-i18n="cast.bitrateLabel">Quality / Bitrate</span>
               <select id="castBitrateSelect">
-                <option value="auto" data-i18n="cast.bitrateAuto">Auto (Real-time Adaptive)</option>
+                <option value="auto" selected data-i18n="cast.bitrateAuto">Auto (Real-time Adaptive)</option>
                 <option value="8000" data-i18n="cast.bitrate8">8 Mbps (Balanced)</option>
-                <option value="14000" selected data-i18n="cast.bitrate14">14 Mbps (HD Recommended)</option>
-                <option value="22000" data-i18n="cast.bitrate22">22 Mbps (2K Crisp)</option>
-                <option value="32000" data-i18n="cast.bitrate32">32 Mbps (Ultra High FPS)</option>
-                <option value="45000" data-i18n="cast.bitrate45">45 Mbps (Wired Lossless)</option>
+                <option value="16000" data-i18n="cast.bitrate16">16 Mbps (HD)</option>
+                <option value="24000" data-i18n="cast.bitrate24">24 Mbps (2K Crisp)</option>
+                <option value="36000" data-i18n="cast.bitrate36">36 Mbps (High FPS)</option>
+                <option value="50000" data-i18n="cast.bitrate50">50 Mbps (Ultra)</option>
+                <option value="80000" data-i18n="cast.bitrate80">80 Mbps (Lossless)</option>
+                <option value="100000" data-i18n="cast.bitrate100">100 Mbps (Max Wired)</option>
                 <option value="custom" data-i18n="cast.bitrateCustom">Custom (4–100 Mbps)</option>
               </select>
               <div id="castCustomBitrateWrap" class="custom-bitrate-row" hidden>
@@ -622,12 +624,14 @@
         </label>
         <label><span data-i18n="stage.bitrateLabel">Bitrate</span>
           <select id="liveBitrateSelect">
-            <option value="auto" data-i18n="stage.bitrateAutoLive">Auto (Adaptive)</option>
+            <option value="auto" selected data-i18n="stage.bitrateAutoLive">Auto (Adaptive)</option>
             <option value="8000">8 Mbps</option>
-            <option value="14000">14 Mbps</option>
-            <option value="22000">22 Mbps</option>
-            <option value="32000">32 Mbps</option>
-            <option value="45000">45 Mbps (USB)</option>
+            <option value="16000">16 Mbps</option>
+            <option value="24000">24 Mbps</option>
+            <option value="36000">36 Mbps</option>
+            <option value="50000">50 Mbps</option>
+            <option value="80000">80 Mbps</option>
+            <option value="100000">100 Mbps</option>
             <option value="custom" data-i18n="cast.bitrateCustom">Custom (4–100 Mbps)</option>
           </select>
           <div id="liveCustomBitrateWrap" class="custom-bitrate-row" hidden>

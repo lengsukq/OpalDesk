@@ -10,12 +10,12 @@ import android.util.Log
 import android.view.Surface
 import io.github.lengsukq.opalcast.compat.AndroidApiCompat
 import io.github.lengsukq.opalcast.policy.ReceiverPolicy
-import io.github.lengsukq.opalcast.policy.UplinkCoalescer
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.Locale
 
 /**
  * Hardware-accelerated video (`MediaCodec` HEVC/AVC → `Surface`) and low-latency audio
@@ -38,6 +38,65 @@ internal class OpalCastMediaDecoder(
         private const val DECODER_RETRY_COOLDOWN_MS = 1_000L
         private const val AUDIO_PREFILL_FRAMES = 1
         private const val AUDIO_IDLE_PAUSE_MS = 260L
+
+        private const val KEY_LOW_LATENCY = "low-latency"
+        private const val KEY_PRIORITY = "priority"
+        private const val KEY_OPERATING_RATE = "operating-rate"
+        private const val KEY_QTI_LOW_LATENCY = "vendor.qti-ext-dec-low-latency.enable"
+        private const val KEY_QTI_PICTURE_ORDER = "vendor.qti-ext-dec-picture-order.enable"
+        private const val KEY_MTK_LOW_LATENCY = "vdec-lowlatency"
+        private const val KEY_HISI_LOW_LATENCY = "vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req"
+        private const val KEY_EXYNOS_LOW_LATENCY = "vendor.rtc-ext-dec-low-latency.enable"
+        private const val KEY_AMLOGIC_LOW_LATENCY = "vendor.low-latency.enable"
+
+        private fun buildVendorFallbackPlans(
+            codecName: String?,
+            remoteFps: Int,
+            supportsLowLatency: Boolean,
+            sdkInt: Int,
+        ): List<Map<String, Int>> {
+            val lower = codecName?.trim()?.lowercase(Locale.ROOT).orEmpty()
+            val vendorKeys = LinkedHashMap<String, Int>()
+            when {
+                lower.startsWith("omx.qcom") || lower.startsWith("c2.qti") -> {
+                    vendorKeys[KEY_QTI_LOW_LATENCY] = 1
+                    vendorKeys[KEY_QTI_PICTURE_ORDER] = 1
+                    if (sdkInt >= 23) vendorKeys[KEY_OPERATING_RATE] = Short.MAX_VALUE.toInt()
+                }
+                lower.startsWith("omx.mtk") || lower.startsWith("c2.mtk") -> vendorKeys[KEY_MTK_LOW_LATENCY] = 1
+                lower.startsWith("omx.hisi") || lower.startsWith("c2.hisi") -> vendorKeys[KEY_HISI_LOW_LATENCY] = 1
+                lower.startsWith("omx.exynos") || lower.startsWith("c2.exynos") -> vendorKeys[KEY_EXYNOS_LOW_LATENCY] = 1
+                lower.startsWith("omx.amlogic") || lower.startsWith("c2.amlogic") -> vendorKeys[KEY_AMLOGIC_LOW_LATENCY] = 1
+            }
+            val clampedFps = remoteFps.coerceIn(60, 165)
+            val out = ArrayList<Map<String, Int>>(7)
+            val seen = HashSet<Map<String, Int>>()
+            fun add(m: Map<String, Int>) { if (seen.add(m)) out.add(m) }
+
+            if (vendorKeys.isNotEmpty()) {
+                val full = LinkedHashMap<String, Int>()
+                if (sdkInt >= 23) full[KEY_PRIORITY] = 0
+                if (sdkInt >= 30) full[KEY_LOW_LATENCY] = 1
+                full.putAll(vendorKeys)
+                if (sdkInt >= 23 && !full.containsKey(KEY_OPERATING_RATE)) full[KEY_OPERATING_RATE] = clampedFps
+                add(full)
+
+                val safe = LinkedHashMap<String, Int>()
+                if (sdkInt >= 23) safe[KEY_PRIORITY] = 0
+                for ((k, v) in vendorKeys) if (k != KEY_OPERATING_RATE) safe[k] = v
+                if (safe.isNotEmpty()) add(safe)
+            }
+            if (sdkInt >= 30 && (supportsLowLatency || vendorKeys.isNotEmpty())) {
+                add(linkedMapOf(KEY_PRIORITY to 0, KEY_LOW_LATENCY to 1, KEY_OPERATING_RATE to clampedFps))
+                add(linkedMapOf(KEY_PRIORITY to 0, KEY_LOW_LATENCY to 1))
+            }
+            if (sdkInt >= 23) {
+                add(linkedMapOf(KEY_PRIORITY to 0, KEY_OPERATING_RATE to maxOf(120, clampedFps)))
+                add(mapOf(KEY_PRIORITY to 0))
+            }
+            add(emptyMap())
+            return out
+        }
     }
 
     @Volatile
@@ -262,7 +321,7 @@ internal class OpalCastMediaDecoder(
         }
         var lastErr: Throwable? = null
         for ((codecName, supportsLowLatency) in candidates) {
-            val plans = UplinkCoalescer.buildDecoderConfigPlans(remoteFps, supportsLowLatency, Build.VERSION.SDK_INT)
+            val plans = buildVendorFallbackPlans(codecName, remoteFps, supportsLowLatency, Build.VERSION.SDK_INT)
             for (plan in plans) {
                 var codec: MediaCodec? = null
                 try {
@@ -272,7 +331,9 @@ internal class OpalCastMediaDecoder(
                         MediaCodec.createDecoderByType(mime)
                     }
                     val fmt = MediaFormat.createVideoFormat(mime, width, height)
-                    AndroidApiCompat.applyVideoDecoderPlan(fmt, plan)
+                    for ((k, v) in plan) {
+                        fmt.setInteger(k, v)
+                    }
                     if (csd.isNotEmpty()) fmt.setByteBuffer("csd-0", ByteBuffer.wrap(csd))
                     codec.configure(fmt, surf, null, 0)
                     codec.start()

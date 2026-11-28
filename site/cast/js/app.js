@@ -530,10 +530,14 @@ class OpalCastWebApp {
       this.syncBitrateInputsUi('both');
       this.persistCastPrefs({ bitrateMode: cfg.mode, bitrateKbps: cfg.bitrateKbps });
     });
-    $('liveBitrateSelect')?.addEventListener('change', () => this.syncBitrateInputsUi('live'));
+    $('liveBitrateSelect')?.addEventListener('change', () => {
+      this.syncBitrateInputsUi('live');
+      if (this.authenticated) this.applyLiveResizeConfig();
+    });
     $('liveCustomBitrateInput')?.addEventListener('change', () => {
       this.resolveSelectedBitrateConfig('liveBitrateSelect', 'liveCustomBitrateInput', { notifyOnClamp: true });
       this.syncBitrateInputsUi('both');
+      if (this.authenticated) this.applyLiveResizeConfig();
     });
     $('castAudioCheck')?.addEventListener('change', (e) => this.persistCastPrefs({ audioEnabled: Boolean(e.target.checked) }));
     $('connectCastBtn').addEventListener('click', () => this.startCastConnection());

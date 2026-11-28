@@ -135,6 +135,7 @@ internal class OpalCastPeerFrameCodec(
         sessionRole: String,
         peerFp: String,
         listener: OpalCastPeerClient.Listener,
+        onUdpNegotiated: (port: Int, sessionId: Int, keyBase64: String, fecPct: Int) -> Unit = { _, _, _, _ -> },
         onRejected: () -> Unit,
     ) {
         if (payload.isEmpty()) return
@@ -151,6 +152,13 @@ internal class OpalCastPeerFrameCodec(
             val permanent = obj.optBoolean("permanent", token.isNotEmpty())
             val fp = obj.optString("certFingerprint", peerFp)
             OpalLogStore.i(tag, "Authenticated role=$sessionRole peer=$peerName permanent=$permanent")
+            val udpPort = obj.optInt("udpMediaPort", 0)
+            val udpSid = obj.optInt("udpSessionId", 0)
+            val udpKey = obj.optString("udpKeyBase64", "")
+            val udpFec = obj.optInt("udpFecPct", OpalCastUdpReceiver.DEFAULT_FEC_PCT)
+            if (udpPort > 0 && udpKey.isNotBlank()) {
+                onUdpNegotiated(udpPort, udpSid, udpKey, udpFec)
+            }
             listener.onAuthenticated(peerName, token, permanent, fp)
         } else {
             val err = obj.optString("message", "对方拒绝了连接请求")

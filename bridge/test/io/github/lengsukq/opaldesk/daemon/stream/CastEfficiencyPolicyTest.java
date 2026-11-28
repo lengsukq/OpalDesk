@@ -47,7 +47,7 @@ public class CastEfficiencyPolicyTest {
                 0, 1920, 1080, 60f, true, MAX_KBPS);
 
         assertEquals(11_000, h264Fhd60);
-        assertEquals(8_250, hevcFhd60);
+        assertEquals(9_350, hevcFhd60);
         assertTrue(hevcFhd60 < h264Fhd60);
 
         int h264Uhd120 = DisplayGeometryUtil.resolveSessionBitrateKbps(
@@ -56,7 +56,15 @@ public class CastEfficiencyPolicyTest {
                 -1, 3840, 2160, 120f, true, MAX_KBPS);
 
         assertEquals(28_000, h264Uhd120);
-        assertEquals(21_000, hevcUhd120);
+        assertEquals(23_800, hevcUhd120);
+
+        // Auto ceiling lifted to 60_000 kbps with 85% HEVC scaling on high-capacity links.
+        int h264AutoCeiling = DisplayGeometryUtil.resolveSessionBitrateKbps(
+                0, 3840, 2160, 120f, false, DisplayGeometryUtil.WIRELESS_MAX_BITRATE_KBPS);
+        int hevcAutoCeiling = DisplayGeometryUtil.resolveSessionBitrateKbps(
+                0, 3840, 2160, 120f, true, DisplayGeometryUtil.WIRELESS_MAX_BITRATE_KBPS);
+        assertEquals(60_000, h264AutoCeiling);
+        assertEquals(51_000, hevcAutoCeiling);
     }
 
     @Test
@@ -236,11 +244,30 @@ public class CastEfficiencyPolicyTest {
 
         // HELLO parser extracts optional clientPlatform and usb_tether transportHint cleanly.
         byte[] helloJson = ("{\"protocolVersion\":1,\"clientName\":\"Pad\",\"clientId\":\"c1\","
-                + "\"transportHint\":\"usb_tether\",\"clientPlatform\":\"Android\"}")
+                + "\"transportHint\":\"usb_tether\",\"clientPlatform\":\"Android\","
+                + "\"udpMediaPort\":51234,\"udpFecPct\":25}")
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8);
         OpalCastProtocol.HelloMsg parsed = OpalCastProtocol.decodeHello(helloJson);
         assertEquals("usb_tether", parsed.transportHint);
         assertEquals("android", parsed.clientPlatform);
+        assertEquals(51234, parsed.udpMediaPort);
+        assertEquals(25, parsed.udpFecPct);
+
+        // AUTH_RESULT serializes optional UDP media fields only when enabled.
+        OpalCastProtocol.AuthResultMsg withUdp = new OpalCastProtocol.AuthResultMsg(
+                true, "tok", "OK", "Phone", "fp", true, 49152, 998877, "AAAAAAAAAAAAAAAAAAAAAA==", 20);
+        byte[] withUdpBytes = OpalCastProtocol.encodeAuthResult(withUdp);
+        String withUdpJson = new String(withUdpBytes, 1, withUdpBytes.length - 1, java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(withUdpJson.contains("\"udpMediaPort\":49152"));
+        assertTrue(withUdpJson.contains("\"udpSessionId\":998877"));
+        assertTrue(withUdpJson.contains("\"udpKeyBase64\":\"AAAAAAAAAAAAAAAAAAAAAA==\""));
+        assertTrue(withUdpJson.contains("\"udpFecPct\":20"));
+
+        OpalCastProtocol.AuthResultMsg noUdp = new OpalCastProtocol.AuthResultMsg(
+                true, "tok", "OK", "Phone", "fp", true);
+        byte[] noUdpBytes = OpalCastProtocol.encodeAuthResult(noUdp);
+        String noUdpJson = new String(noUdpBytes, 1, noUdpBytes.length - 1, java.nio.charset.StandardCharsets.UTF_8);
+        assertFalse(noUdpJson.contains("udpMediaPort"));
     }
 
     @Test

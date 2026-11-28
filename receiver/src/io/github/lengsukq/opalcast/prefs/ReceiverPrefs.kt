@@ -14,6 +14,7 @@ object ReceiverPrefs {
     private const val KEY_THEME_MODE = "theme_mode"
     private const val KEY_LANGUAGE_PREF = "language_pref"
     private const val KEY_VIDEO_CODEC = "video_codec_pref"
+    private const val KEY_PREFERRED_BITRATE_KBPS = "preferred_bitrate_kbps"
     private const val KEY_USB_TETHER_BETA = "usb_tether_beta"
     private const val KEY_CLIENT_ID = "receiver_client_id"
     private const val KEY_RECENT_PEERS = "recent_peers"
@@ -24,6 +25,8 @@ object ReceiverPrefs {
     const val THEME_SYSTEM = 0
     const val THEME_LIGHT = 1
     const val THEME_DARK = 2
+
+    val BITRATE_PRESETS_KBPS: IntArray = intArrayOf(0, 8_000, 16_000, 24_000, 36_000, 50_000, 80_000, 100_000)
 
     data class RecentPeer(
         val host: String,
@@ -55,6 +58,19 @@ object ReceiverPrefs {
 
     fun setVideoCodecPref(ctx: Context, pref: Int) {
         prefs(ctx).edit().putInt(KEY_VIDEO_CODEC, ReceiverPolicy.normalizeCodecPreference(pref)).apply()
+    }
+
+    fun normalizeBitrateKbps(raw: Int): Int =
+        if (raw <= 0) 0 else BITRATE_PRESETS_KBPS.firstOrNull { it == raw } ?: raw.coerceIn(2_500, 100_000)
+
+    fun formatBitrateLabel(kbps: Int): String =
+        if (kbps <= 0) "自动" else "${kbps / 1000} Mbps"
+
+    fun getPreferredBitrateKbps(ctx: Context): Int =
+        normalizeBitrateKbps(prefs(ctx).getInt(KEY_PREFERRED_BITRATE_KBPS, 0))
+
+    fun setPreferredBitrateKbps(ctx: Context, kbps: Int) {
+        prefs(ctx).edit().putInt(KEY_PREFERRED_BITRATE_KBPS, normalizeBitrateKbps(kbps)).apply()
     }
 
     fun isUsbTetherEnabled(ctx: Context): Boolean =

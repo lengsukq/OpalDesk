@@ -266,16 +266,18 @@ struct OpalSearchField: View {
     let placeholder: String
     @Binding var text: String
     var accessibilityClearLabel: String = OpalL10n.text("common.clear_search")
+    var focus: FocusState<Bool>.Binding? = nil
 
     var body: some View {
         HStack(spacing: OpalSpacing.xs) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
+                .onTapGesture {
+                    focus?.wrappedValue = true
+                }
 
-            TextField(placeholder, text: $text)
-                .textFieldStyle(.plain)
-                .font(.callout)
+            searchTextField
 
             if !text.isEmpty {
                 Button {
@@ -292,6 +294,20 @@ struct OpalSearchField: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .opalGlassSurface(.inset, cornerRadius: OpalRadius.control)
+    }
+
+    @ViewBuilder
+    private var searchTextField: some View {
+        if let focus {
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.callout)
+                .focused(focus)
+        } else {
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.callout)
+        }
     }
 }
 

@@ -266,7 +266,8 @@ export function restoreSavedCastPrefsUi(app) {
       app.bitrateMode = 'preset';
       brEl.value = String(saved.bitrateKbps);
     } else {
-      app.bitrateMode = 'preset';
+      app.bitrateMode = 'auto';
+      brEl.value = 'auto';
     }
   }
   app.resizeMode = SUPPORTED_RESIZE_MODES.includes(saved.resizeMode) ? saved.resizeMode : 'auto';
@@ -313,7 +314,7 @@ export function syncBitrateInputsUi(app, scope = 'both') {
 
 export function resolveSelectedBitrateConfig(app, selectId, inputId, { notifyOnClamp = false } = {}) {
   const sel = $(selectId);
-  const val = sel ? sel.value : '14000';
+  const val = sel ? sel.value : 'auto';
   if (val === 'auto') {
     return { mode: 'auto', bitrateKbps: 0, mbps: 0 };
   }
@@ -333,6 +334,9 @@ export function resolveSelectedBitrateConfig(app, selectId, inputId, { notifyOnC
     }
     return { mode: 'custom', bitrateKbps: res.kbps, mbps: res.mbps };
   }
-  const presetKbps = Number(val) || 14000;
+  const presetKbps = Number(val) || 0;
+  if (presetKbps <= 0) {
+    return { mode: 'auto', bitrateKbps: 0, mbps: 0 };
+  }
   return { mode: 'preset', bitrateKbps: presetKbps, mbps: Math.round(presetKbps / 1000) };
 }

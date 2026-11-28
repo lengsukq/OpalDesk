@@ -109,6 +109,7 @@ internal fun createAndStartFloatingPeerClient(
         } else {
             OpalCastPeerClient.DISPLAY_MODE_DEX
         },
+        preferredBitrateKbps = AppPrefs.getCastBitrateKbps(ctx),
         listener = object : OpalCastPeerClient.Listener {
             override fun onWaitingForApproval() {
                 mainHandler.post { callbacks.onWaitingForApproval() }

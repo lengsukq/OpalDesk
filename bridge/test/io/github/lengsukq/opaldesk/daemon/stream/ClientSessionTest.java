@@ -249,4 +249,45 @@ public class ClientSessionTest {
         assertEquals("Audio frame must bypass queued video frames to avoid HoL blocking",
                 OpalCastProtocol.TYPE_AUDIO_FRAME, firstType);
     }
+
+    @Test
+    public void testWifiTcpSendBufferDynamicClampingAndBulkQueueYieldsToRealtimeMedia() throws Exception {
+        // P0: clamp(bitrateBps * 40ms, 64 KiB, 256 KiB)
+        assertEquals(64 * 1024, ClientSession.computeWifiTcpSendBufferBytes(8_000));
+        assertEquals(64 * 1024, ClientSession.computeWifiTcpSendBufferBytes(12_000));
+        assertEquals(100_000, ClientSession.computeWifiTcpSendBufferBytes(20_000));
+        assertEquals(200_000, ClientSession.computeWifiTcpSendBufferBytes(40_000));
+        assertEquals(256 * 1024, ClientSession.computeWifiTcpSendBufferBytes(60_000));
+        assertEquals(16, ClientSession.BULK_QUEUE_HIGH_WATER);
+
+        // P2: Bulk file pull chunks must yield to queued video and audio frames.
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ClientSession session = new ClientSession(
+                21, DisplaySink.SINK_REMOTE_WIFI, false, true, OpalCastProtocol.SESSION_ROLE_DESKTOP,
+                "", "cid", "Mac", () -> {}, OpalCastFrameTransport.raw(null, out), null);
+
+        assertTrue(session.enqueueBackpressured(OpalCastProtocol.TYPE_FILE_PULL_CHUNK, 0, 1_000L, new byte[]{9, 9}, 500L));
+        assertTrue(session.enqueueBackpressured(OpalCastProtocol.TYPE_FILE_PULL_CHUNK, 0, 2_000L, new byte[]{8, 8}, 500L));
+        session.enqueue(OpalCastProtocol.TYPE_VIDEO_FRAME, 0, 3_000L, new byte[]{1, 2, 3, 4});
+        session.enqueue(OpalCastProtocol.TYPE_AUDIO_FRAME, 0, 4_000L, new byte[]{5, 6});
+        session.startSenderThread();
+
+        int expectedBytes = (OpalCastProtocol.HEADER_SIZE + 2) * 3 + (OpalCastProtocol.HEADER_SIZE + 4);
+        long deadline = System.currentTimeMillis() + 1_500L;
+        while (out.size() < expectedBytes && System.currentTimeMillis() < deadline) {
+            Thread.sleep(10L);
+        }
+        session.close("test done");
+
+        OpalCastFrameTransport reader = OpalCastFrameTransport.raw(
+                new java.io.ByteArrayInputStream(out.toByteArray()), null);
+        OpalCastProtocol.Frame f1 = reader.readFrame();
+        OpalCastProtocol.Frame f2 = reader.readFrame();
+        OpalCastProtocol.Frame f3 = reader.readFrame();
+        OpalCastProtocol.Frame f4 = reader.readFrame();
+        assertEquals(OpalCastProtocol.TYPE_AUDIO_FRAME, f1.type);
+        assertEquals(OpalCastProtocol.TYPE_VIDEO_FRAME, f2.type);
+        assertEquals(OpalCastProtocol.TYPE_FILE_PULL_CHUNK, f3.type);
+        assertEquals(OpalCastProtocol.TYPE_FILE_PULL_CHUNK, f4.type);
+    }
 }

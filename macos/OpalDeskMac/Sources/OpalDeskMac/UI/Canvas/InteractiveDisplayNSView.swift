@@ -117,7 +117,9 @@ public struct InteractiveDisplayNSView: NSViewRepresentable {
     }
 
     public func updateNSView(_ nsView: DisplayCanvasNSView, context: Context) {
-        let becameInteractive = !nsView.config.isCanvasInteractive && config.isCanvasInteractive
+        let wasInteractive = nsView.config.isCanvasInteractive
+        let becameInteractive = !wasInteractive && config.isCanvasInteractive
+        let becameNonInteractive = wasInteractive && !config.isCanvasInteractive
         let focusRequested = nsView.config.focusGeneration != config.focusGeneration
         let cursorChanged = nsView.config.hideLocalCursor != config.hideLocalCursor
         nsView.config = config
@@ -125,7 +127,9 @@ public struct InteractiveDisplayNSView: NSViewRepresentable {
         if cursorChanged {
             nsView.window?.invalidateCursorRects(for: nsView)
         }
-        if becameInteractive || focusRequested {
+        if becameNonInteractive {
+            nsView.relinquishFirstResponderForModal()
+        } else if becameInteractive || focusRequested {
             DispatchQueue.main.async { [weak nsView] in
                 nsView?.claimFirstResponderIfNeeded()
             }

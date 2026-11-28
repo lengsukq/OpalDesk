@@ -13,6 +13,10 @@ extension DisplayCanvasNSView: @preconcurrency NSTextInputClient {
     }
 
     public override func keyDown(with event: NSEvent) {
+        guard canHandleCanvasKeyboardInput else {
+            super.keyDown(with: event)
+            return
+        }
         if handleLocalShortcutIfNeeded(event) {
             return
         }
@@ -57,6 +61,10 @@ extension DisplayCanvasNSView: @preconcurrency NSTextInputClient {
     }
 
     public override func keyUp(with event: NSEvent) {
+        guard canHandleCanvasKeyboardInput else {
+            super.keyUp(with: event)
+            return
+        }
         if consumedShortcutKeyCodes.remove(event.keyCode) != nil {
             return
         }
@@ -68,6 +76,10 @@ extension DisplayCanvasNSView: @preconcurrency NSTextInputClient {
     }
 
     public override func flagsChanged(with event: NSEvent) {
+        guard canHandleCanvasKeyboardInput else {
+            super.flagsChanged(with: event)
+            return
+        }
         let previousFlags = lastModifierFlags
         let current = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let sourceBefore = currentInputSourceID()

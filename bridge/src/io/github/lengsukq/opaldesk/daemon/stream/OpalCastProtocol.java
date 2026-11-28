@@ -384,6 +384,12 @@ public final class OpalCastProtocol {
         public AuthResultMsg(boolean ok, String authToken, String message, String deviceName, String certFingerprint, boolean permanent) {
             super(ok, authToken, message, deviceName, certFingerprint, permanent);
         }
+        public AuthResultMsg(
+                boolean ok, String authToken, String message, String deviceName, String certFingerprint,
+                boolean permanent, int udpMediaPort, int udpSessionId, String udpKeyBase64, int udpFecPct) {
+            super(ok, authToken, message, deviceName, certFingerprint, permanent,
+                    udpMediaPort, udpSessionId, udpKeyBase64, udpFecPct);
+        }
     }
 
     public static final class WifiUpgradeReadyMsg extends OpalCastSessionPayloads.WifiUpgradeReadyMsgBase {
@@ -448,6 +454,15 @@ public final class OpalCastProtocol {
             super(protocolVersion, clientName, clientId, preferredCodec, width, height, dpi, fps, bitrateKbps,
                     displayMode, audioEnabled, authToken, pinCode, transportHint, sessionRole, appPackage, appActivity,
                     clientPlatform, companionEvents, appUserId);
+        }
+        public HelloMsg(int protocolVersion, String clientName, String clientId, String preferredCodec,
+                int width, int height, int dpi, int fps, int bitrateKbps, int displayMode,
+                boolean audioEnabled, String authToken, String pinCode, String transportHint, String sessionRole,
+                String appPackage, String appActivity, String clientPlatform, boolean companionEvents, int appUserId,
+                int udpMediaPort, int udpFecPct) {
+            super(protocolVersion, clientName, clientId, preferredCodec, width, height, dpi, fps, bitrateKbps,
+                    displayMode, audioEnabled, authToken, pinCode, transportHint, sessionRole, appPackage, appActivity,
+                    clientPlatform, companionEvents, appUserId, udpMediaPort, udpFecPct);
         }
     }
 

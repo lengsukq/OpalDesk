@@ -399,6 +399,17 @@ class CastHomeActivity : Activity() {
         })
 
         settingsCard.addView(TextView(this).apply {
+            text = "视频码率（当前：${ReceiverPrefs.formatBitrateLabel(ReceiverPrefs.getPreferredBitrateKbps(this@CastHomeActivity))}）"
+            setTextColor(pal.inkSecondary)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(14)
+        })
+        settingsCard.addView(buildCastBitrateSelectorRow(this, pal) { rebuildUi() }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(8)
+        })
+
+        settingsCard.addView(TextView(this).apply {
             text = getString(R.string.home_theme_label)
             setTextColor(pal.inkSecondary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)

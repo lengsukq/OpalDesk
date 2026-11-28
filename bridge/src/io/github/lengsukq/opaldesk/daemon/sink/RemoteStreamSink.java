@@ -33,8 +33,8 @@ public final class RemoteStreamSink implements DisplaySink {
     private static final long ABR_SOFT_CONGESTION_COOLDOWN_MS = 2_500L;
     private static final long ABR_CONGESTION_COOLDOWN_MS = 2_000L;
     private static final long ABR_IDR_COOLDOWN_MS = 350L;
-    private static final long ABR_RECOVERY_INTERVAL_MS = 6_000L;
-    private static final long ABR_SOFT_RECOVERY_HOLD_MS = 8_000L;
+    private static final long ABR_RECOVERY_INTERVAL_MS = 3_500L;
+    private static final long ABR_SOFT_RECOVERY_HOLD_MS = 5_000L;
 
     public interface FrameListener {
         void onVideoConfig(OpalCastProtocol.VideoConfig config, long timestampUs);
@@ -99,7 +99,7 @@ public final class RemoteStreamSink implements DisplaySink {
     private volatile EncoderSession session;
     private volatile int currentBitrateKbps = 12_000;
     private volatile int targetBitrateKbps = 12_000;
-    private volatile int maxBitrateKbps = 32_000;
+    private volatile int maxBitrateKbps = DisplayGeometryUtil.AUTO_RECOMMENDED_MAX_BITRATE_KBPS;
     private volatile long repeatPreviousFrameAfterUs = DEFAULT_REPEAT_FRAME_AFTER_US;
     private volatile int actualFpsX100 = 0;
     private volatile long lastSoftCongestionMs = 0L;
@@ -418,7 +418,7 @@ public final class RemoteStreamSink implements DisplaySink {
             return;
         }
         lastRecoveryMs = now;
-        int next = Math.min(target, currentBitrateKbps + Math.max(500, (target - currentBitrateKbps) / 6));
+        int next = Math.min(target, currentBitrateKbps + Math.max(500, (target - currentBitrateKbps) / 4));
         applyBitrateToCodec(next);
     }
 

@@ -132,7 +132,7 @@ test('normalizeCastPrefs validates codec, fps, bitrate, cursor, and ADB path; br
   const norm = normalizeCastPrefs({
     preferredCodec: 'hevc',
     targetFps: 144,
-    bitrateKbps: 22000,
+    bitrateKbps: 24000,
     resizeMode: '2560x1440',
     liveDpi: 240,
     audioEnabled: false,
@@ -142,7 +142,7 @@ test('normalizeCastPrefs validates codec, fps, bitrate, cursor, and ADB path; br
   assert.deepEqual(norm, {
     preferredCodec: 'hevc',
     targetFps: 144,
-    bitrateKbps: 22000,
+    bitrateKbps: 24000,
     bitrateMode: '',
     resizeMode: '2560x1440',
     liveDpi: 240,

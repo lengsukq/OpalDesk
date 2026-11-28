@@ -19,6 +19,7 @@ import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.OutputStream
+import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
@@ -60,6 +61,7 @@ class OpalCastClient(
     private val targetNetwork: Network? = null,
     private val isUsbTether: Boolean = (targetNetwork != null),
     private val preferredCodec: String = "",
+    private val preferredBitrateKbps: Int = 0,
     private val defaultDisconnectReason: String = "Disconnected",
     private val defaultRejectedMessage: String = "Connection rejected by host",
     private val listener: Listener,
@@ -122,6 +124,7 @@ class OpalCastClient(
         private const val SOCKET_SEND_BUF_BYTES = 256 * 1024
         private const val REALTIME_MEDIA_TRAFFIC_CLASS = 0xB8
         private const val CLIENT_PLATFORM_ANDROID = "android"
+        private const val MAX_MANUAL_BITRATE_KBPS = 100_000
 
         val sharedSideBackDedup = InputGuardPolicy.SideBackKeyDeduplicator()
 
@@ -178,6 +181,12 @@ class OpalCastClient(
     @Volatile
     private var socket: SSLSocket? = null
 
+    @Volatile
+    private var pendingUdpSocket: DatagramSocket? = null
+
+    @Volatile
+    private var udpReceiver: OpalCastUdpReceiver? = null
+
     private val mediaDecoder = OpalCastMediaDecoder(
         initialWidth = reqWidth,
         initialHeight = reqHeight,
@@ -209,7 +218,9 @@ class OpalCastClient(
         if (!closed.compareAndSet(false, true)) return
         running.set(false)
         try { enqueue(OpalCastWireCodec.TYPE_SYSTEM_ACTION, 0, OpalCastWireCodec.encodeSystemAction(SYS_DISCONNECT, 0)) } catch (_: Throwable) {}
-        try { socket?.close() } catch (_: Throwable) {}
+        runCatching { udpReceiver?.stop() }
+        runCatching { pendingUdpSocket?.close() }
+        runCatching { socket?.close() }
         mediaDecoder.releaseAll()
     }
 
@@ -267,17 +278,10 @@ class OpalCastClient(
         val alignedW = (width.coerceIn(320, 3840) and 7.inv()).coerceAtLeast(320)
         val alignedH = (height.coerceIn(320, 3840) and 7.inv()).coerceAtLeast(320)
         val wireDpi = if (dpi <= 0) 0 else dpi.coerceIn(120, 560)
-        val maxCap = if (isUsbTether) ReceiverPolicy.MAX_USB_TETHER_BITRATE_KBPS else ReceiverPolicy.MAX_WIFI_BITRATE_KBPS
         val resolvedBitrate = if (bitrateKbps > 0) {
-            bitrateKbps.coerceIn(ReceiverPolicy.MIN_BITRATE_KBPS, maxCap)
+            bitrateKbps.coerceIn(ReceiverPolicy.MIN_BITRATE_KBPS, MAX_MANUAL_BITRATE_KBPS)
         } else {
-            ReceiverPolicy.computeTargetBitrateKbps(
-                width = alignedW,
-                height = alignedH,
-                fps = fps,
-                isStandalone = (sessionRole == SESSION_ROLE_STANDALONE_APP),
-                isUsbTether = isUsbTether,
-            )
+            0
         }
         enqueue(
             OpalCastWireCodec.TYPE_RESIZE_CONFIG,
@@ -473,13 +477,11 @@ class OpalCastClient(
             val input = BufferedInputStream(ssl.inputStream, 131_072)
             val output = BufferedOutputStream(ssl.outputStream, 65_536)
 
-            val initialBitrateKbps = ReceiverPolicy.computeTargetBitrateKbps(
-                width = reqWidth,
-                height = reqHeight,
-                fps = reqFps,
-                isStandalone = (sessionRole == SESSION_ROLE_STANDALONE_APP),
-                isUsbTether = isUsbTether,
-            )
+            val initialBitrateKbps = if (preferredBitrateKbps > 0) {
+                preferredBitrateKbps.coerceIn(ReceiverPolicy.MIN_BITRATE_KBPS, MAX_MANUAL_BITRATE_KBPS)
+            } else 0
+            val localUdp = if (sessionRole != SESSION_ROLE_APP_CATALOG) OpalCastUdpReceiver.openLocalSocket(targetNetwork) else null
+            pendingUdpSocket = localUdp
             val helloJson = JSONObject().apply {
                 put("protocolVersion", 1)
                 put("clientName", Build.MODEL ?: "Android")
@@ -497,6 +499,10 @@ class OpalCastClient(
                 put("transportHint", ReceiverPolicy.resolveTransportHint(isUsbTether))
                 put("clientPlatform", CLIENT_PLATFORM_ANDROID)
                 put("sessionRole", sessionRole)
+                if (localUdp != null && localUdp.localPort > 0) {
+                    put("udpMediaPort", localUdp.localPort)
+                    put("udpFecPct", OpalCastUdpReceiver.DEFAULT_FEC_PCT)
+                }
                 if (appPackage.isNotEmpty()) put("appPackage", appPackage)
                 if (appActivity.isNotEmpty()) put("appActivity", appActivity)
                 if (appUserId > 0) put("appUserId", appUserId)
@@ -546,7 +552,9 @@ class OpalCastClient(
         } finally {
             running.set(false)
             closed.set(true)
-            try { socket?.close() } catch (_: Throwable) {}
+            runCatching { udpReceiver?.stop() }
+            runCatching { pendingUdpSocket?.close() }
+            runCatching { socket?.close() }
             mediaDecoder.releaseAll()
             listener.onDisconnected(disconnectReason)
         }
@@ -608,6 +616,23 @@ class OpalCastClient(
                     val token = obj.optString("authToken", "")
                     val permanent = obj.optBoolean("permanent", token.isNotEmpty())
                     val fp = obj.optString("certFingerprint", peerFp)
+                    val udpPort = obj.optInt("udpMediaPort", 0)
+                    val udpSid = obj.optInt("udpSessionId", 0)
+                    val udpKeyB64 = obj.optString("udpKeyBase64", "")
+                    if (udpPort > 0 && udpKeyB64.isNotBlank()) {
+                        val sock = pendingUdpSocket
+                        val key = OpalCastUdpReceiver.decodeBase64(udpKeyB64)
+                        if (sock != null && key != null && key.size == 16) {
+                            pendingUdpSocket = null
+                            val rx = OpalCastUdpReceiver(
+                                sock, host, udpPort, udpSid, key,
+                                onVideoFrame = { p, l, f, ts -> mediaDecoder.handleVideoFrame(p, l, f, ts) },
+                                onAudioFrame = { p, ts -> mediaDecoder.enqueueAudioFrame(p, ts) },
+                            )
+                            udpReceiver = rx
+                            rx.start()
+                        }
+                    }
                     listener.onAuthenticated(peerName, token, permanent, fp)
                 } else {
                     val err = obj.optString("message", defaultRejectedMessage)

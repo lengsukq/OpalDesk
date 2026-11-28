@@ -15,6 +15,7 @@ import android.widget.TextView
 import io.github.lengsukq.opalcast.R
 import io.github.lengsukq.opalcast.compat.AndroidApiCompat
 import io.github.lengsukq.opalcast.net.OpalCastClient
+import io.github.lengsukq.opalcast.prefs.ReceiverPrefs
 
 internal data class CastViewerChromeViews(
     val collapsedHandle: TextView,
@@ -22,6 +23,8 @@ internal data class CastViewerChromeViews(
     val statusLabel: TextView,
     val modeBtn: TextView,
     val floatMirrorBtn: TextView,
+    val bitrateBtn: TextView,
+    val bitratePickerBar: HorizontalScrollView,
     val blackoutBtn: TextView,
     val imeBtn: TextView,
     val micBtn: TextView,
@@ -43,6 +46,7 @@ internal data class CastViewerToolbarCallbacks(
     val onHome: () -> Unit,
     val onToggleDisplayMode: () -> Unit,
     val onPopOutMirror: () -> Unit,
+    val onSelectBitrateKbps: (Int) -> Unit,
     val onToggleBlackout: () -> Unit,
     val onToggleIme: () -> Unit,
     val onToggleMic: () -> Unit,
@@ -138,6 +142,10 @@ internal object CastViewerToolbarHelper {
         addToolChip(activity.getString(R.string.common_home), onClick = callbacks.onHome)
         val modeBtn = addToolChip(activity.getString(R.string.viewer_chip_to_mirror), onClick = callbacks.onToggleDisplayMode)
         val floatMirrorBtn = addToolChip(activity.getString(R.string.viewer_chip_float_window), onClick = callbacks.onPopOutMirror)
+        lateinit var bitratePickerBar: HorizontalScrollView
+        val bitrateBtn = addToolChip("码率: 自动") {
+            bitratePickerBar.visibility = if (bitratePickerBar.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
         val blackoutBtn = addToolChip(activity.getString(R.string.viewer_chip_screen_off), onClick = callbacks.onToggleBlackout)
         val imeBtn = addToolChip(activity.getString(R.string.viewer_chip_keyboard), onClick = callbacks.onToggleIme)
         val micBtn = addToolChip(activity.getString(R.string.viewer_chip_mic), onClick = callbacks.onToggleMic)
@@ -169,6 +177,48 @@ internal object CastViewerToolbarHelper {
                 leftMargin = dp(12)
                 rightMargin = dp(12)
             },
+        )
+
+        val bitrateRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = OpalCastTheme.roundedDrawable(activity, 0xE60B1D26.toInt(), 16, 0x552DD4BF, 1f)
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+        }
+        ReceiverPrefs.BITRATE_PRESETS_KBPS.forEachIndexed { idx, kbps ->
+            val tv = TextView(activity).apply {
+                text = if (kbps == 0) "自动" else "${kbps / 1000}M"
+                setTextColor(0xFFE6FFFA.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                gravity = Gravity.CENTER
+                background = OpalCastTheme.roundedDrawable(activity, 0x1FFFFFFF, 10, 0x2EFFFFFF, 0.8f)
+                setPadding(dp(10), dp(5), dp(10), dp(5))
+                setOnClickListener {
+                    callbacks.onScheduleAutoCollapse(5_000L)
+                    bitratePickerBar.visibility = View.GONE
+                    callbacks.onSelectBitrateKbps(kbps)
+                }
+            }
+            bitrateRow.addView(
+                tv,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    if (idx > 0) leftMargin = dp(6)
+                },
+            )
+        }
+        bitratePickerBar = HorizontalScrollView(activity).apply {
+            isHorizontalScrollBarEnabled = false
+            visibility = View.GONE
+            addView(bitrateRow)
+        }
+        rootFrame.addView(
+            bitratePickerBar,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+            ).apply { topMargin = dp(56); leftMargin = dp(12); rightMargin = dp(12) },
         )
 
         val fullscreenExitChip = TextView(activity).apply {
@@ -281,6 +331,13 @@ internal object CastViewerToolbarHelper {
                     expandedToolbar.layoutParams = lp
                 }
             }
+            (bitratePickerBar.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+                val pickerTop = topMargin + dp(46)
+                if (lp.topMargin != pickerTop) {
+                    lp.topMargin = pickerTop
+                    bitratePickerBar.layoutParams = lp
+                }
+            }
             (fullscreenExitChip.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
                 val chipTop = topMargin + dp(48)
                 if (lp.topMargin != chipTop) {
@@ -296,6 +353,8 @@ internal object CastViewerToolbarHelper {
             statusLabel = statusLabel,
             modeBtn = modeBtn,
             floatMirrorBtn = floatMirrorBtn,
+            bitrateBtn = bitrateBtn,
+            bitratePickerBar = bitratePickerBar,
             blackoutBtn = blackoutBtn,
             imeBtn = imeBtn,
             micBtn = micBtn,
@@ -318,10 +377,19 @@ internal object CastViewerToolbarHelper {
         imeVis: Boolean,
         micEnabled: Boolean,
         cameraEnabled: Boolean,
+        bitrateKbps: Int = 0,
     ) {
         val isMirror = (displayMode == OpalCastClient.DISPLAY_MODE_MIRROR)
         chrome.modeBtn.text = activity.getString(if (isMirror) R.string.viewer_chip_to_desktop else R.string.viewer_chip_to_mirror)
         chrome.floatMirrorBtn.visibility = if (isMirror) View.VISIBLE else View.GONE
+        chrome.bitrateBtn.text = if (bitrateKbps <= 0) "码率: 自动" else "码率: ${bitrateKbps / 1000}M"
+        chrome.bitrateBtn.background = OpalCastTheme.roundedDrawable(
+            activity,
+            if (bitrateKbps > 0) 0x4514B8A6 else 0x1FFFFFFF,
+            10,
+            if (bitrateKbps > 0) 0x882DD4BF.toInt() else 0x2EFFFFFF,
+            0.8f,
+        )
         chrome.blackoutBtn.text = activity.getString(if (remoteBlackout) R.string.viewer_chip_screen_on else R.string.viewer_chip_screen_off)
         chrome.blackoutBtn.background = OpalCastTheme.roundedDrawable(
             activity,

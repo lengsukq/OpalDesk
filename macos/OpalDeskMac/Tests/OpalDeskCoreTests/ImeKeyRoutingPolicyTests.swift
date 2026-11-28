@@ -195,4 +195,62 @@ struct ImeKeyRoutingPolicyTests {
         #expect(clampedEdge.maxX <= bounds.width - 24)
         #expect(clampedEdge.maxY <= bounds.height - 24)
     }
+
+    @Test("shouldClaimCanvasFirstResponder never steals focus when modal sheet is attached or window is not key")
+    func canvasFirstResponderPolicy() {
+        #expect(ImeKeyRoutingPolicy.shouldClaimCanvasFirstResponder(
+            isCanvasInteractive: true,
+            isWindowKey: true,
+            hasAttachedSheet: false,
+            isFirstResponderTextInput: false
+        ))
+
+        // Host window behind RemoteAppPickerSheet is still visible, not key, and has an attached sheet.
+        #expect(!ImeKeyRoutingPolicy.shouldClaimCanvasFirstResponder(
+            isCanvasInteractive: true,
+            isWindowKey: false,
+            hasAttachedSheet: true,
+            isFirstResponderTextInput: false
+        ))
+
+        // Even if window momentarily reports key while sheet is attached, do not steal focus.
+        #expect(!ImeKeyRoutingPolicy.shouldClaimCanvasFirstResponder(
+            isCanvasInteractive: true,
+            isWindowKey: true,
+            hasAttachedSheet: true,
+            isFirstResponderTextInput: false
+        ))
+
+        // Non-key visible window must not steal TSM inputContext.
+        #expect(!ImeKeyRoutingPolicy.shouldClaimCanvasFirstResponder(
+            isCanvasInteractive: true,
+            isWindowKey: false,
+            hasAttachedSheet: false,
+            isFirstResponderTextInput: false
+        ))
+
+        // Non-interactive canvas (e.g., modal overlay presented) must not claim focus.
+        #expect(!ImeKeyRoutingPolicy.shouldClaimCanvasFirstResponder(
+            isCanvasInteractive: false,
+            isWindowKey: true,
+            hasAttachedSheet: false,
+            isFirstResponderTextInput: false
+        ))
+
+        // Native text editor owning first responder must not be preempted.
+        #expect(!ImeKeyRoutingPolicy.shouldClaimCanvasFirstResponder(
+            isCanvasInteractive: true,
+            isWindowKey: true,
+            hasAttachedSheet: false,
+            isFirstResponderTextInput: true
+        ))
+    }
+
+    @Test("shouldRelinquishCanvasFocus triggers when canvas leaves interactive state or sheet attaches")
+    func canvasRelinquishFocusPolicy() {
+        #expect(ImeKeyRoutingPolicy.shouldRelinquishCanvasFocus(wasCanvasInteractive: true, isCanvasInteractive: false, hasAttachedSheet: false))
+        #expect(ImeKeyRoutingPolicy.shouldRelinquishCanvasFocus(wasCanvasInteractive: true, isCanvasInteractive: true, hasAttachedSheet: true))
+        #expect(!ImeKeyRoutingPolicy.shouldRelinquishCanvasFocus(wasCanvasInteractive: true, isCanvasInteractive: true, hasAttachedSheet: false))
+        #expect(!ImeKeyRoutingPolicy.shouldRelinquishCanvasFocus(wasCanvasInteractive: false, isCanvasInteractive: true, hasAttachedSheet: false))
+    }
 }

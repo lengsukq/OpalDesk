@@ -87,6 +87,7 @@ extension AppModel {
     private func sendHelloHandshake() {
         let initialSize = resolveCurrentTargetDimensions()
         lastRequestedConfig = (initialSize.width, initialSize.height, selectedDPI, preferences.targetFPS)
+        let isWifiDirect = activeConnection?.transport.transportHint == .wifiTls
         streamBridge.sendHello(HelloPayload(
             clientName: StreamSessionBridge.localClientName,
             clientId: discovery.trustStore.clientId,
@@ -102,7 +103,9 @@ extension AppModel {
             pinCode: "",
             transportHint: (activeConnection?.transport.transportHint ?? .usb).rawValue,
             sessionRole: OpalCastSessionRole.desktop.rawValue,
-            companionEvents: true
+            companionEvents: true,
+            udpMediaPort: isWifiDirect ? 0 : nil,
+            udpFecPct: isWifiDirect ? OpalUdpProtocol.defaultFecPct : nil
         ))
     }
 

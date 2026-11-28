@@ -114,4 +114,28 @@ public enum ImeKeyRoutingPolicy {
         let y = max(0, bounds.height - AnchorMetrics.fallbackBottomOffset)
         return CGRect(x: x, y: y, width: AnchorMetrics.fallbackWidth, height: AnchorMetrics.fallbackHeight)
     }
+
+    /// Determines whether `DisplayCanvasNSView` may claim window first responder and activate
+    /// its `NSTextInputContext`. Never steal focus or TSM input context when the host window is
+    /// not key, when a modal sheet is attached, when the canvas is non-interactive, or while a
+    /// native text view / field editor already owns first responder.
+    public static func shouldClaimCanvasFirstResponder(
+        isCanvasInteractive: Bool,
+        isWindowKey: Bool,
+        hasAttachedSheet: Bool,
+        isFirstResponderTextInput: Bool
+    ) -> Bool {
+        isCanvasInteractive && isWindowKey && !hasAttachedSheet && !isFirstResponderTextInput
+    }
+
+    /// Determines whether `DisplayCanvasNSView` should immediately relinquish first responder and
+    /// deactivate its `NSTextInputContext` so modal sheets (such as `RemoteAppPickerSheet`) can
+    /// cleanly receive keyboard and CJK IME input.
+    public static func shouldRelinquishCanvasFocus(
+        wasCanvasInteractive: Bool,
+        isCanvasInteractive: Bool,
+        hasAttachedSheet: Bool
+    ) -> Bool {
+        (wasCanvasInteractive && !isCanvasInteractive) || hasAttachedSheet
+    }
 }

@@ -71,7 +71,7 @@ public final class DisplayCanvasNSView: NSView {
     var consumedShortcutKeyCodes: Set<UInt16> = []
     var imeConsumedKeyCodes: Set<UInt16> = []
     var lastClickLocalPoint: CGPoint?
-    nonisolated(unsafe) private var windowKeyObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var windowObservers: [NSObjectProtocol] = []
 
     public init(
         displayLayer: AVSampleBufferDisplayLayer,
@@ -104,35 +104,73 @@ public final class DisplayCanvasNSView: NSView {
     }
 
     deinit {
-        if let observer = windowKeyObserver {
+        for observer in windowObservers {
             NotificationCenter.default.removeObserver(observer)
         }
     }
 
     public override var isFlipped: Bool { true }
-    public override var acceptsFirstResponder: Bool { true }
+    public override var acceptsFirstResponder: Bool {
+        config.isCanvasInteractive && !hasAttachedSheet
+    }
+
+    private var hasAttachedSheet: Bool {
+        guard let window else { return false }
+        return window.attachedSheet != nil || !window.sheets.isEmpty
+    }
+
+    var canHandleCanvasKeyboardInput: Bool {
+        guard let window else { return false }
+        return config.isCanvasInteractive && window.isKeyWindow && !hasAttachedSheet
+    }
 
     public override func becomeFirstResponder() -> Bool {
+        guard config.isCanvasInteractive, !hasAttachedSheet else {
+            return false
+        }
         let accepted = super.becomeFirstResponder()
         if accepted {
             lastModifierFlags = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            inputContext?.activate()
+            if window?.isKeyWindow == true {
+                inputContext?.activate()
+            }
         }
         return accepted
     }
 
     public override func resignFirstResponder() -> Bool {
+        deactivateInputContextIfNeeded()
+        return super.resignFirstResponder()
+    }
+
+    public func deactivateInputContextIfNeeded() {
         if hasMarkedText() {
             inputContext?.discardMarkedText()
             unmarkText()
         }
         imeConsumedKeyCodes.removeAll()
-        return super.resignFirstResponder()
+        inputContext?.deactivate()
+    }
+
+    public func relinquishFirstResponderForModal() {
+        deactivateInputContextIfNeeded()
+        if let window, window.firstResponder === self {
+            window.makeFirstResponder(nil)
+        }
     }
 
     public func claimFirstResponderIfNeeded() {
-        guard let window, window.isKeyWindow || window.isVisible else { return }
-        if window.firstResponder is NSTextView {
+        guard let window else { return }
+        let canClaim = ImeKeyRoutingPolicy.shouldClaimCanvasFirstResponder(
+            isCanvasInteractive: config.isCanvasInteractive,
+            isWindowKey: window.isKeyWindow,
+            hasAttachedSheet: hasAttachedSheet,
+            isFirstResponderTextInput: window.firstResponder is NSText
+        )
+        guard canClaim else {
+            if !config.isCanvasInteractive || hasAttachedSheet {
+                relinquishFirstResponderForModal()
+            }
             return
         }
         if window.firstResponder !== self {
@@ -141,27 +179,37 @@ public final class DisplayCanvasNSView: NSView {
         inputContext?.activate()
     }
 
+    private func removeWindowObservers() {
+        for observer in windowObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        windowObservers.removeAll()
+    }
+
     public override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
-        if let observer = windowKeyObserver {
-            NotificationCenter.default.removeObserver(observer)
-            windowKeyObserver = nil
-        }
+        removeWindowObservers()
     }
 
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window else { return }
         window.acceptsMouseMovedEvents = true
-        windowKeyObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didBecomeKeyNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.claimFirstResponderIfNeeded()
-            }
-        }
+        let center = NotificationCenter.default
+        windowObservers = [
+            center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.claimFirstResponderIfNeeded() }
+            },
+            center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.deactivateInputContextIfNeeded() }
+            },
+            center.addObserver(forName: NSWindow.willBeginSheetNotification, object: window, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.relinquishFirstResponderForModal() }
+            },
+            center.addObserver(forName: NSWindow.didEndSheetNotification, object: window, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.claimFirstResponderIfNeeded() }
+            },
+        ]
         claimFirstResponderIfNeeded()
         DispatchQueue.main.async { [weak self] in
             self?.claimFirstResponderIfNeeded()
@@ -240,6 +288,7 @@ public final class DisplayCanvasNSView: NSView {
     }
 
     public override func mouseMoved(with event: NSEvent) {
+        guard !hasAttachedSheet else { return }
         let pt = mapEventPoint(event)
         let nowNs = DispatchTime.now().uptimeNanoseconds
         if nowNs >= lastMouseMoveSentNs && (nowNs - lastMouseMoveSentNs) < Metrics.mouseMoveMinIntervalNs {

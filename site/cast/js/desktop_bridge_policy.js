@@ -233,7 +233,7 @@ export function sanitizeCustomAdbPath(raw) {
 export const MIN_CUSTOM_BITRATE_MBPS = 4;
 export const MAX_CUSTOM_BITRATE_MBPS = 100;
 export const DEFAULT_CUSTOM_BITRATE_MBPS = 50;
-export const PRESET_BITRATE_KBPS = [8000, 14000, 22000, 32000, 45000];
+export const PRESET_BITRATE_KBPS = [8000, 16000, 24000, 36000, 50000, 80000, 100000];
 export const SUPPORTED_FPS_OPTIONS = [60, 90, 120, 144, 165];
 export const SUPPORTED_RESIZE_MODES = ['auto', '1920x1080', '2560x1440', '1280x800'];
 export const SUPPORTED_DPI_OPTIONS = [0, 160, 200, 240, 280, 320, 360, 420];

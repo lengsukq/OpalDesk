@@ -73,6 +73,7 @@ class PeerCastViewerActivity : ComponentActivity() {
     private var displayMode by mutableIntStateOf(OpalCastPeerClient.DISPLAY_MODE_DEX)
     private var remoteBlackout by mutableStateOf(false)
     private var remoteFullscreenTitle by mutableStateOf("")
+    private var selectedBitrateKbps by mutableIntStateOf(0)
     private var toolbarInteractTick by mutableIntStateOf(0)
     private var micEnabled by mutableStateOf(false)
     private var cameraEnabled by mutableStateOf(false)
@@ -167,6 +168,7 @@ class PeerCastViewerActivity : ComponentActivity() {
         reqFps = peerSpec.fps
         videoW = reqWidth
         videoH = reqHeight
+        selectedBitrateKbps = AppPrefs.getCastBitrateKbps(this)
 
         startPeerSession()
 
@@ -222,6 +224,7 @@ class PeerCastViewerActivity : ComponentActivity() {
                         isMirrorMode = (displayMode == OpalCastPeerClient.DISPLAY_MODE_MIRROR),
                         remoteBlackout = remoteBlackout,
                         remoteFullscreenTitle = remoteFullscreenTitle,
+                        selectedBitrateKbps = selectedBitrateKbps,
                         micEnabled = micEnabled,
                         cameraEnabled = cameraEnabled,
                         cameraFacing = cameraFacing,
@@ -322,6 +325,12 @@ class PeerCastViewerActivity : ComponentActivity() {
                                 if (nextBlackout) 1 else 0,
                             )
                         },
+                        onSelectBitrateKbps = { kbps ->
+                            toolbarInteractTick += 1
+                            selectedBitrateKbps = kbps
+                            AppPrefs.setCastBitrateKbps(this@PeerCastViewerActivity, kbps)
+                            client?.sendResizeConfig(videoW, videoH, reqDpi, videoFps, kbps)
+                        },
                         onRequestIdr = {
                             toolbarInteractTick += 1
                             client?.requestKeyFrame()
@@ -380,6 +389,7 @@ class PeerCastViewerActivity : ComponentActivity() {
             audioEnabled = true,
             initialDisplayMode = initialDisplayMode,
             targetNetwork = boundNet,
+            preferredBitrateKbps = selectedBitrateKbps,
             listener = object : OpalCastPeerClient.Listener {
                 override fun onWaitingForApproval() {
                     runOnUiThread {

@@ -949,7 +949,10 @@
 "settings.cat.devices" = "连接与信任";
 "settings.codec.sub" = "HEVC 画质更细腻且省带宽，H.264 兼容性更广";
 "settings.fps.sub" = "高刷机型推荐 90 或 120 fps";
-"settings.bitrate.sub_fmt" = "当前 %d Mbps · 无线局域网推荐 12–20 Mbps";
+"settings.bitrate.auto_option" = "自动 (自适应)";
+"settings.bitrate.auto_sub" = "当前自动 · 根据网络与分辨率实时自适应调整";
+"settings.bitrate.sub_fmt" = "当前固定 %d Mbps · 随时可在投屏顶栏切换";
+"display.bitrate.help" = "实时切换投屏视频码率（自动 / 8–100 Mbps）";
 "settings.display_mode.sub" = "选择连接后优先进入独立电脑桌面或镜像模式";
 "settings.dpi.sub" = "数值越低视野越宽广，数值越高字体越清晰";
 "settings.audio.sub" = "48kHz 立体声低延迟 AAC-LC 音频同步";

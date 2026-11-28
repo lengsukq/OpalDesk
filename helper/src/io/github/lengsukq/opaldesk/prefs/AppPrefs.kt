@@ -84,6 +84,9 @@ object AppPrefs {
     val callControlSyncEnabledFlow: StateFlow<Boolean> = CastAndCompanionPrefs.callControlSyncEnabledFlow
     val bleNearbyEnabledFlow: StateFlow<Boolean> = CastAndCompanionPrefs.bleNearbyEnabledFlow
     val languagePrefFlow: StateFlow<String> = CastAndCompanionPrefs.languagePrefFlow
+    val castBitrateKbpsFlow: StateFlow<Int> = CastAndCompanionPrefs.castBitrateKbpsFlow
+
+    val CAST_BITRATE_PRESETS_KBPS: IntArray get() = CastAndCompanionPrefs.CAST_BITRATE_PRESETS_KBPS
 
     internal fun sharedPrefs(ctx: Context?): SharedPreferences? =
         (ctx?.applicationContext ?: ctx)?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -410,6 +413,15 @@ object AppPrefs {
 
     fun setLanguagePref(ctx: Context?, pref: String) =
         CastAndCompanionPrefs.setLanguagePref(ctx, pref)
+
+    fun getCastBitrateKbps(ctx: Context?): Int =
+        CastAndCompanionPrefs.getCastBitrateKbps(ctx)
+
+    fun setCastBitrateKbps(ctx: Context?, kbps: Int) =
+        CastAndCompanionPrefs.setCastBitrateKbps(ctx, kbps)
+
+    fun formatCastBitrateLabel(kbps: Int): String =
+        CastAndCompanionPrefs.formatBitrateLabel(kbps)
 
     fun getSpotlightRecents(ctx: Context?): List<String> =
         DisplayAndInputPrefs.getSpotlightRecents(ctx)

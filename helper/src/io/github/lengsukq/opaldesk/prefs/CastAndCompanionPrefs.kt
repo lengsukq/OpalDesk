@@ -35,6 +35,9 @@ internal object CastAndCompanionPrefs {
     private const val KEY_CALL_CONTROL_SYNC_ENABLED = "call_control_sync_enabled_v1"
     private const val KEY_BLE_NEARBY_ENABLED = "ble_nearby_enabled_v1"
     private const val KEY_LANGUAGE_PREF = "app_language_pref_v1"
+    private const val KEY_CAST_BITRATE_KBPS = "cast_bitrate_kbps_v1"
+
+    val CAST_BITRATE_PRESETS_KBPS: IntArray = intArrayOf(0, 8_000, 16_000, 24_000, 36_000, 50_000, 80_000, 100_000)
 
     private val _sortAppsByUsageFlow = MutableStateFlow(true)
     val sortAppsByUsageFlow: StateFlow<Boolean> = _sortAppsByUsageFlow.asStateFlow()
@@ -72,6 +75,9 @@ internal object CastAndCompanionPrefs {
     private val _languagePrefFlow = MutableStateFlow(OpalLocalePolicy.LANG_SYSTEM)
     val languagePrefFlow: StateFlow<String> = _languagePrefFlow.asStateFlow()
 
+    private val _castBitrateKbpsFlow = MutableStateFlow(0)
+    val castBitrateKbpsFlow: StateFlow<Int> = _castBitrateKbpsFlow.asStateFlow()
+
     fun hydrate(p: SharedPreferences) {
         _sortAppsByUsageFlow.value = p.getBoolean(KEY_SORT_APPS_BY_USAGE, true)
         _appLaunchCountsFlow.value = parseLaunchCounts(p.getString(KEY_APP_LAUNCH_COUNTS, null))
@@ -94,6 +100,24 @@ internal object CastAndCompanionPrefs {
         _languagePrefFlow.value = OpalLocalePolicy.normalizeLanguagePref(
             p.getString(KEY_LANGUAGE_PREF, OpalLocalePolicy.LANG_SYSTEM),
         )
+        _castBitrateKbpsFlow.value = normalizeCastBitrateKbps(p.getInt(KEY_CAST_BITRATE_KBPS, 0))
+    }
+
+    fun normalizeCastBitrateKbps(raw: Int): Int =
+        if (raw <= 0) 0 else CAST_BITRATE_PRESETS_KBPS.firstOrNull { it == raw } ?: raw.coerceIn(2_500, 100_000)
+
+    fun formatBitrateLabel(kbps: Int): String =
+        if (kbps <= 0) "自动" else "${kbps / 1000} Mbps"
+
+    fun getCastBitrateKbps(ctx: Context?): Int {
+        AppPrefs.hydrateFlows(ctx)
+        return _castBitrateKbpsFlow.value
+    }
+
+    fun setCastBitrateKbps(ctx: Context?, kbps: Int) {
+        val normalized = normalizeCastBitrateKbps(kbps)
+        AppPrefs.sharedPrefs(ctx)?.edit()?.putInt(KEY_CAST_BITRATE_KBPS, normalized)?.apply()
+        _castBitrateKbpsFlow.value = normalized
     }
 
     fun isAutoRootEnabled(ctx: Context?): Boolean =

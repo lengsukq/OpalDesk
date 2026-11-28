@@ -99,6 +99,13 @@ extension AppModel {
         sendResizeIfNeeded(width: target.width, height: target.height, dpi: selectedDPI, force: false)
     }
 
+    public func applyBitrateKbps(_ bitrateKbps: Int) {
+        preferences.bitrateKbps = DisplayPresets.clampBitrateKbps(bitrateKbps)
+        guard isAuthenticated else { return }
+        let target = resolveCurrentTargetDimensions()
+        sendResizeIfNeeded(width: target.width, height: target.height, dpi: selectedDPI, force: true)
+    }
+
     public func toggleDisplayMode() {
         let nextMode: OpalCastDisplayMode = (displayMode == .dex) ? .mirror : .dex
         displayMode = nextMode
@@ -371,14 +378,7 @@ extension AppModel {
     }
 
     func effectiveBitrateKbps() -> Int {
-        switch activeConnection?.transport {
-        case .wiredUSB:
-            return preferences.bitrateKbps
-        case .wirelessADB:
-            return min(preferences.bitrateKbps, Tuning.wirelessAdbMaxBitrateKbps)
-        case .wirelessWiFi, nil:
-            return min(preferences.bitrateKbps, Tuning.wifiMaxBitrateKbps)
-        }
+        DisplayPresets.clampBitrateKbps(preferences.bitrateKbps)
     }
 
     func resolveCurrentTargetDimensions() -> (width: Int, height: Int) {
