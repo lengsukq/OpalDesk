@@ -49,3 +49,6 @@ scripts/retag-v1.0.20.sh
 scripts/update-release-notes.sh
 scripts/v1.0.20-notes.md
 scripts/watch-ci.sh
+
+# Local project-level skills
+.agents/skills/
