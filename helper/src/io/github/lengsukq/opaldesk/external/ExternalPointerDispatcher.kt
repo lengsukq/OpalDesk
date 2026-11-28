@@ -19,24 +19,42 @@ import io.github.lengsukq.opaldesk.service.DisplayLaunchHelper
  * ([ExternalMonitorPresentation] and Direct Extended [ExternalDesktopActivity]).
  */
 class ExternalPointerDispatcher(
-    private val defaultWidthPx: Int,
-    private val defaultHeightPx: Int,
+    defaultWidthPx: Int,
+    defaultHeightPx: Int,
     private val targetViewProvider: () -> View?,
     private val onCursorChanged: ((Float, Float) -> Unit)? = null,
 ) {
+    private var fallbackWidthPx: Int = defaultWidthPx.coerceAtLeast(640)
+    private var fallbackHeightPx: Int = defaultHeightPx.coerceAtLeast(480)
+
     val cursorPosState = mutableStateOf(
-        Offset(defaultWidthPx.coerceAtLeast(640) * 0.5f, defaultHeightPx.coerceAtLeast(480) * 0.5f),
+        Offset(fallbackWidthPx * 0.5f, fallbackHeightPx * 0.5f),
     )
     val showVirtualCursorState = mutableStateOf(false)
 
     private var primaryDownTimeMs: Long = 0L
     private var isPrimaryPressed: Boolean = false
 
+    fun updateDefaultBounds(widthPx: Int, heightPx: Int) {
+        if (widthPx >= 320 && heightPx >= 320) {
+            fallbackWidthPx = widthPx
+            fallbackHeightPx = heightPx
+            val cur = cursorPosState.value
+            val (cx, cy) = ExternalTrackpadPolicy.clampCursorPosition(
+                x = cur.x,
+                y = cur.y,
+                widthPx = currentSurfaceWidthPx(),
+                heightPx = currentSurfaceHeightPx(),
+            )
+            cursorPosState.value = Offset(cx, cy)
+        }
+    }
+
     fun currentSurfaceWidthPx(): Int =
-        targetViewProvider()?.width?.takeIf { it > 1 } ?: defaultWidthPx.coerceAtLeast(640)
+        targetViewProvider()?.width?.takeIf { it > 1 } ?: fallbackWidthPx
 
     fun currentSurfaceHeightPx(): Int =
-        targetViewProvider()?.height?.takeIf { it > 1 } ?: defaultHeightPx.coerceAtLeast(480)
+        targetViewProvider()?.height?.takeIf { it > 1 } ?: fallbackHeightPx
 
     fun hideCursor() {
         if (isPrimaryPressed) {

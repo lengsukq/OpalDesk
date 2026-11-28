@@ -36,12 +36,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.diagnostics.DaemonPostmortemCollector
 import io.github.lengsukq.opaldesk.diagnostics.DiagnosticSanitizer
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackKind
@@ -218,15 +220,15 @@ fun ReportIssueModal(
     fun submitReport(forceOutdated: Boolean = false) {
         if (!submitAllowed) return
         if (reporterName.trim().isEmpty()) {
-            validationError = "请先填写你的用户名或称呼，便于后续定位回复"
+            validationError = ctx.getString(R.string.report_err_name)
             return
         }
         val trimmedDesc = problemDescription.trim()
         if (trimmedDesc.isEmpty()) {
             validationError = if (isFeature) {
-                "请简单描述希望新增的功能或使用场景"
+                ctx.getString(R.string.report_err_desc_feature)
             } else {
-                "请简单描述遇到的问题或复现步骤"
+                ctx.getString(R.string.report_err_desc_bug)
             }
             return
         }
@@ -299,7 +301,7 @@ fun ReportIssueModal(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     OpalText(
-                        text = if (isFeature) "提交功能建议" else "上报日志与问题",
+                        text = stringResource(if (isFeature) R.string.report_title_feature else R.string.report_title_bug),
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                     )
@@ -310,7 +312,7 @@ fun ReportIssueModal(
                 }
 
                 OpalSegmentedRow(
-                    options = listOf("问题反馈", "功能建议"),
+                    options = listOf(stringResource(R.string.report_tab_bug), stringResource(R.string.report_tab_feature)),
                     selectedIndex = if (isFeature) 1 else 0,
                     onSelect = { idx ->
                         val nextKind = if (idx == 1) FeedbackKind.FEATURE else FeedbackKind.BUG
@@ -330,14 +332,14 @@ fun ReportIssueModal(
                     )
                 } else if (!sentryConfigured) {
                     StatusNoticeBox(
-                        text = "当前构建未配置 Sentry DSN，提交前请先在构建配置中注入 SENTRY_DSN。",
+                        text = stringResource(R.string.report_no_sentry),
                         accent = OpalPalette.AccentAmber,
                     )
                 }
 
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     OpalText(
-                        text = "用户名 / 称呼",
+                        text = stringResource(R.string.report_name_label),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = OpalPalette.TextSecondary,
@@ -348,7 +350,7 @@ fun ReportIssueModal(
                             reporterName = it.take(64)
                             if (validationError.isNotEmpty()) validationError = ""
                         },
-                        placeholder = "例如：张三 / GitHub ID（便于定位联系）",
+                        placeholder = stringResource(R.string.report_name_placeholder),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -356,7 +358,7 @@ fun ReportIssueModal(
 
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     OpalText(
-                        text = if (isFeature) "需求描述" else "问题描述",
+                        text = stringResource(if (isFeature) R.string.report_desc_feature_label else R.string.report_desc_bug_label),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = OpalPalette.TextSecondary,
@@ -367,11 +369,7 @@ fun ReportIssueModal(
                             problemDescription = it.take(2000)
                             if (validationError.isNotEmpty()) validationError = ""
                         },
-                        placeholder = if (isFeature) {
-                            "请描述希望新增的功能、适用场景或交互建议…"
-                        } else {
-                            "请描述遇到的问题、触发操作或报错现象…"
-                        },
+                        placeholder = stringResource(if (isFeature) R.string.report_desc_feature_placeholder else R.string.report_desc_bug_placeholder),
                         singleLine = false,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -380,12 +378,8 @@ fun ReportIssueModal(
                 }
 
                 OpalSwitchRow(
-                    title = "附带设备运行日志",
-                    subtitle = if (includeLogs) {
-                        "包含已脱敏的客户端与守护进程日志（不含截图）"
-                    } else {
-                        "仅附带版本号与机型信息，不上传运行日志"
-                    },
+                    title = stringResource(R.string.report_include_logs_title),
+                    subtitle = stringResource(if (includeLogs) R.string.report_include_logs_on else R.string.report_include_logs_off),
                     checked = includeLogs,
                     onCheckedChange = { includeLogs = it },
                 )
@@ -401,25 +395,21 @@ fun ReportIssueModal(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     OpalText(
-                        text = if (includeLogs) {
-                            "本次随附诊断信息（不含屏幕截图）"
-                        } else {
-                            "本次随附基础信息（不含运行日志与截图）"
-                        },
+                        text = stringResource(if (includeLogs) R.string.report_meta_with_logs else R.string.report_meta_no_logs),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = OpalPalette.TextPrimary,
                     )
                     OpalText(
-                        text = "设备：${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+                        text = stringResource(R.string.report_meta_device, Build.MANUFACTURER, Build.MODEL, Build.VERSION.RELEASE, Build.VERSION.SDK_INT),
                         fontSize = 11.5.sp,
                         color = OpalPalette.TextSecondary,
                     )
                     OpalText(
                         text = if (includeLogs) {
-                            "版本：v$appVersion · 日志：客户端 $helperCount 条 + 守护进程 $daemonCount 行（已自动脱敏路径/Token 并 GZIP 压缩）"
+                            stringResource(R.string.report_meta_logs_summary, appVersion, helperCount, daemonCount)
                         } else {
-                            "版本：v$appVersion · 类型：功能建议（不会清空当前本地日志）"
+                            stringResource(R.string.report_meta_feature_summary, appVersion)
                         },
                         fontSize = 11.5.sp,
                         color = OpalPalette.TextSecondary,
@@ -446,13 +436,13 @@ fun ReportIssueModal(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         OpalText(
-                            text = "检测到新版本 ${availableRelease.tagName}（当前 v$appVersion）",
+                            text = stringResource(R.string.report_outdated_title, availableRelease.tagName, appVersion),
                             fontSize = 12.5.sp,
                             fontWeight = FontWeight.Bold,
                             color = accent,
                         )
                         OpalText(
-                            text = "最新版本可能已修复你遇到的问题，建议先更新体验；如果不方便更新，也可以直接上传当前版本日志。",
+                            text = stringResource(R.string.report_outdated_body),
                             fontSize = 11.5.sp,
                             color = OpalPalette.TextPrimary,
                             lineHeight = 16.5.sp,
@@ -463,9 +453,9 @@ fun ReportIssueModal(
                         ) {
                             OpalButton(
                                 label = when {
-                                    isReady -> "立即安装 ${availableRelease.tagName}"
-                                    isDownloading -> "查看下载进度"
-                                    else -> "更新到 ${availableRelease.tagName}"
+                                    isReady -> stringResource(R.string.settings_btn_install_ver, availableRelease.tagName)
+                                    isDownloading -> stringResource(R.string.settings_btn_view_download)
+                                    else -> stringResource(R.string.settings_btn_update_to, availableRelease.tagName)
                                 },
                                 compact = true,
                                 filled = true,
@@ -476,7 +466,7 @@ fun ReportIssueModal(
                             )
                             if (showOutdatedConfirm) {
                                 OpalButton(
-                                    label = "仍要上传日志",
+                                    label = stringResource(R.string.report_upload_anyway),
                                     compact = true,
                                     filled = false,
                                     accent = OpalPalette.AccentAmber,
@@ -489,7 +479,7 @@ fun ReportIssueModal(
                     }
                 } else if (!isFeature && isCheckingVersion && lastOutcome?.success != true) {
                     OpalText(
-                        text = "正在自动检查客户端是否为最新版本…",
+                        text = stringResource(R.string.report_checking_ver),
                         fontSize = 11.sp,
                         color = OpalPalette.TextSecondary,
                     )
@@ -515,11 +505,7 @@ fun ReportIssueModal(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             OpalText(
-                                text = if (lastSubmittedKind == FeedbackKind.FEATURE) {
-                                    "提交成功！已自动保存至「日志 → 我的反馈追踪」，后续可在 APP 内查看评估进度、回复与上线版本："
-                                } else {
-                                    "上传成功！已自动保存至「日志 → 我的反馈追踪」，后续可在 APP 内查看是否修复及对应版本："
-                                },
+                                text = stringResource(if (lastSubmittedKind == FeedbackKind.FEATURE) R.string.report_success_feature else R.string.report_success_bug),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = OpalPalette.AccentEmerald,
@@ -532,7 +518,7 @@ fun ReportIssueModal(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     OpalText(
-                                        text = "反馈码：${outcome.shortCode}",
+                                        text = stringResource(R.string.report_code_label, outcome.shortCode),
                                         fontSize = 15.sp,
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = FontFamily.Monospace,
@@ -547,7 +533,7 @@ fun ReportIssueModal(
                                 }
                                 Spacer(Modifier.width(8.dp))
                                 OpalButton(
-                                    label = "复制反馈码",
+                                    label = stringResource(R.string.report_copy_code),
                                     compact = true,
                                     filled = false,
                                     accent = OpalPalette.AccentEmerald,
@@ -568,7 +554,7 @@ fun ReportIssueModal(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     OpalButton(
-                        label = if (lastOutcome?.success == true) "完成" else "取消",
+                        label = stringResource(if (lastOutcome?.success == true) R.string.common_done else R.string.common_cancel),
                         filled = alreadySubmittedSameReport,
                         accent = if (alreadySubmittedSameReport) OpalPalette.AccentEmerald else OpalPalette.AccentBlue,
                         enabled = !isBusy,
@@ -577,13 +563,13 @@ fun ReportIssueModal(
                     )
                     OpalButton(
                         label = when {
-                            awaitingVersionCheck -> "检查版本中…"
-                            submitting -> "提交中…"
-                            alreadySubmittedSameReport -> "已提交"
-                            quota.isExhausted -> "今日已达上限"
-                            !isFeature && showOutdatedConfirm && availableRelease != null -> "仍要上传"
-                            isFeature -> "确认提交需求"
-                            else -> "确认上传"
+                            awaitingVersionCheck -> stringResource(R.string.report_btn_checking)
+                            submitting -> stringResource(R.string.report_btn_submitting)
+                            alreadySubmittedSameReport -> stringResource(R.string.report_btn_submitted)
+                            quota.isExhausted -> stringResource(R.string.diag_btn_quota_reached)
+                            !isFeature && showOutdatedConfirm && availableRelease != null -> stringResource(R.string.report_upload_anyway)
+                            isFeature -> stringResource(R.string.report_btn_submit_feature)
+                            else -> stringResource(R.string.report_btn_submit_bug)
                         },
                         enabled = submitAllowed,
                         accent = if (!isFeature && showOutdatedConfirm && availableRelease != null) {
@@ -629,8 +615,8 @@ private fun copyEventIdToClipboard(ctx: Context, eventId: String, shortCode: Str
     try {
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         cm?.setPrimaryClip(ClipData.newPlainText("OpalDesk Sentry Event ID", eventId))
-        Toast.makeText(ctx, "已复制反馈码 $shortCode", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, ctx.getString(R.string.feedback_copied_code, shortCode), Toast.LENGTH_SHORT).show()
     } catch (_: Throwable) {
-        Toast.makeText(ctx, "复制失败", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, ctx.getString(R.string.common_copy_failed), Toast.LENGTH_SHORT).show()
     }
 }

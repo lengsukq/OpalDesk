@@ -35,6 +35,7 @@ import io.github.lengsukq.opaldesk.external.WirelessDisplayHelper
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.PendingPairingRequest
+import io.github.lengsukq.opaldesk.service.BridgeServiceLifecyclePolicy
 import io.github.lengsukq.opaldesk.service.DisplayLaunchHelper
 import io.github.lengsukq.opaldesk.web.WebActivationService
 import kotlinx.coroutines.CoroutineScope
@@ -211,14 +212,38 @@ class BridgeService : Service() {
             }
         }
 
-        fun ensureStarted(ctx: Context?) {
+        fun ensureStarted(ctx: Context?, requireForegroundProcess: Boolean = false) {
             val appCtx = ctx?.applicationContext ?: return
-            if (sUserStopping) return
+            val running = activeInstance
+            val alreadyFg = running?.foregroundPromoted == true
+            if (BridgeServiceLifecyclePolicy.shouldRefreshRunningServiceOnly(sUserStopping, alreadyFg)) {
+                running?.refreshActiveSessionFromHost()
+                return
+            }
+            val importance = if (requireForegroundProcess) currentProcessImportance() else BridgeServiceLifecyclePolicy.IMPORTANCE_FOREGROUND
+            if (!BridgeServiceLifecyclePolicy.shouldStartForegroundService(
+                    userStopping = sUserStopping,
+                    alreadyForegroundActive = alreadyFg,
+                    requireForegroundProcess = requireForegroundProcess,
+                    processImportance = importance,
+                )
+            ) {
+                Log.d(TAG, "Skipping startForegroundService (requireFg=$requireForegroundProcess, importance=$importance)")
+                return
+            }
             try {
                 appCtx.startForegroundService(Intent(appCtx, BridgeService::class.java))
             } catch (t: Throwable) {
                 Log.d(TAG, "startForegroundService deferred: ${t.message}")
             }
+        }
+
+        private fun currentProcessImportance(): Int = try {
+            val info = ActivityManager.RunningAppProcessInfo()
+            ActivityManager.getMyMemoryState(info)
+            info.importance
+        } catch (_: Throwable) {
+            BridgeServiceLifecyclePolicy.IMPORTANCE_GONE
         }
 
         fun stopAllAndExit(ctx: Context) {
@@ -299,6 +324,8 @@ class BridgeService : Service() {
         val width: Int,
         val height: Int,
         val refreshRateHz: Int,
+        val isNativePhysical: Boolean = false,
+        val isAnisotropySynthetic: Boolean = false,
     )
 
     data class ExternalDisplayInfo(
@@ -312,6 +339,8 @@ class BridgeService : Service() {
         val isPresentationCapable: Boolean = true,
         val nativeWidth: Int = width,
         val nativeHeight: Int = height,
+        val hasAnisotropyDistortion: Boolean = false,
+        val logicalMirrorCollapsed: Boolean = false,
     ) {
         val isWirelessDisplay: Boolean
             get() = transport == ExternalDisplayTransport.WIRELESS_TV
@@ -329,6 +358,18 @@ class BridgeService : Service() {
     private var lastProjectedDisplayId = -1
     private var screenWakeReceiverRegistered = false
     private var imePackageReceiverRegistered = false
+
+    @Volatile
+    private var foregroundPromoted = false
+
+    internal fun refreshActiveSessionFromHost() {
+        handler.post {
+            if (sUserStopping || activeInstance !== this) return@post
+            io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge.syncEnabledState(this)
+            io.github.lengsukq.opaldesk.cast.BleNearbyService.syncEnabledState(this)
+            scanExternalDisplays(autoLaunchNew = false)
+        }
+    }
 
     @Suppress("DEPRECATION")
     private val mediaRouterCallback = object : MediaRouter.SimpleCallback() {
@@ -399,7 +440,13 @@ class BridgeService : Service() {
     override fun onCreate() {
         super.onCreate()
         activeInstance = this
-        startSessionForeground()
+        val promoted = startSessionForeground()
+        foregroundPromoted = promoted
+        if (!promoted) {
+            OpalLogStore.w("Service", "Foreground promotion denied in onCreate -> stopping cleanly to avoid Background ANR")
+            stopSelf()
+            return
+        }
         displayManager = (getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)?.also { dm ->
             dm.registerDisplayListener(displayListener, handler)
         }
@@ -443,8 +490,6 @@ class BridgeService : Service() {
         }
         senderWifiLowLatencyLock = WifiLowLatencyLock(this, "OpalDesk:WifiCastTx")
         AppPrefs.hydrateFlows(this)
-        io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge.syncEnabledState(this)
-        io.github.lengsukq.opaldesk.cast.BleNearbyService.syncEnabledState(this)
         serviceScope.launch {
             BridgeClient.remoteStatusFlow.collect { remote ->
                 val needLowLatency = remote.connected && BridgeProtocol.RemoteSink.isWireless(remote.sinkType)
@@ -456,30 +501,48 @@ class BridgeService : Service() {
                 io.github.lengsukq.opaldesk.cast.BleNearbyService.onRemoteStatusUpdated(remote)
             }
         }
-        scanExternalDisplays(autoLaunchNew = true)
+        // Defer display/telephony/BLE scans past onCreate so FGS startup returns immediately.
+        handler.post {
+            if (sUserStopping || activeInstance !== this) return@post
+            io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge.syncEnabledState(this)
+            io.github.lengsukq.opaldesk.cast.BleNearbyService.syncEnabledState(this)
+            scanExternalDisplays(autoLaunchNew = true)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!startSessionForeground()) {
-            OpalLogStore.w("Service", "Foreground promotion denied by OS -> stopping cleanly to avoid Background ANR")
-            stopSelf(startId)
-            return START_NOT_STICKY
+        if (!foregroundPromoted) {
+            val promoted = startSessionForeground()
+            foregroundPromoted = promoted
+            if (!promoted) {
+                OpalLogStore.w("Service", "Foreground promotion denied by OS -> stopping cleanly to avoid Background ANR")
+                stopSelf(startId)
+                return START_NOT_STICKY
+            }
         }
-        io.github.lengsukq.opaldesk.notifications.OpalCallControlBridge.syncEnabledState(this)
-        io.github.lengsukq.opaldesk.cast.BleNearbyService.syncEnabledState(this)
-        scanExternalDisplays(autoLaunchNew = false)
-        return START_STICKY
+        refreshActiveSessionFromHost()
+        // Use START_NOT_STICKY so Android 14-17 never cold-restarts BridgeService with a null
+        // Intent in the background after Recents swipe/kill (which cannot promote to FGS).
+        return START_NOT_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        OpalLogStore.i("Service", "App task swiped from Recents -> restoring Display 0 mouse focus")
-        BridgeClient.onHostTaskRemoved(
-            hasPhysicalExternal = ExternalTrackpadBridge.sessionFlow.value.isPhysicalActive,
+        val hasPhysicalExternal = ExternalTrackpadBridge.sessionFlow.value.isPhysicalActive
+        val hasRemoteCast = BridgeClient.remoteStatusFlow.value.connected
+        OpalLogStore.i(
+            "Service",
+            "App task swiped from Recents -> restoring Display 0 mouse focus (ext=$hasPhysicalExternal, cast=$hasRemoteCast)",
         )
+        BridgeClient.onHostTaskRemoved(hasPhysicalExternal = hasPhysicalExternal)
+        if (BridgeServiceLifecyclePolicy.shouldStopSelfOnTaskRemoved(hasPhysicalExternal, hasRemoteCast)) {
+            OpalLogStore.i("Service", "No active external/cast session on task removal -> stopping BridgeService cleanly")
+            stopSelf()
+        }
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
+        foregroundPromoted = false
         if (activeInstance === this) activeInstance = null
         serviceScope.cancel()
         runCatching { io.github.lengsukq.opaldesk.cast.BleNearbyService.stop() }
@@ -518,20 +581,61 @@ class BridgeService : Service() {
     private fun scanExternalDisplays(autoLaunchNew: Boolean) {
         val dm = displayManager ?: return
         val remoteDesktopId = BridgeClient.remoteStatusFlow.value.desktopDisplayId
+        val (primaryW, primaryH) = WirelessDisplayHelper.queryPrimaryDisplaySizePx(dm)
         val inspected = WirelessDisplayHelper.inspectExternalDisplays(this, dm, remoteDesktopId)
         val allInfos = inspected.map { item ->
             val d = item.display
             val mode = d.mode
-            val rawModes = d.supportedModes
-                .orEmpty()
-                .map { Triple(it.physicalWidth, it.physicalHeight, it.refreshRate) }
-            val modes = ExternalDisplayPolicy.curateExternalDisplayModes(rawModes, maxCount = 18)
-                .map { ExternalDisplayMode(it.width, it.height, it.refreshRateHz) }
             val modeW = mode?.physicalWidth ?: 0
             val modeH = mode?.physicalHeight ?: 0
+            val modeHz = mode?.refreshRate ?: 60f
+            val (extXDpi, extYDpi) = WirelessDisplayHelper.queryDisplayRealDpi(d)
+            val rawModes = d.supportedModes
+                .orEmpty()
+                .map {
+                    ExternalDisplayPolicy.RawExternalMode(
+                        width = it.physicalWidth,
+                        height = it.physicalHeight,
+                        refreshRate = it.refreshRate,
+                        isSynthetic = WirelessDisplayHelper.isModeSyntheticOrAnisotropy(it),
+                    )
+                }
+            val curated = ExternalDisplayPolicy.curateExternalDisplayModesWithNative(
+                rawModes = rawModes,
+                nativeW = modeW,
+                nativeH = modeH,
+                nativeRefreshRate = modeHz,
+                xDpi = extXDpi,
+                yDpi = extYDpi,
+                maxCount = 18,
+            )
+            val modes = curated.modes.map {
+                ExternalDisplayMode(
+                    width = it.width,
+                    height = it.height,
+                    refreshRateHz = it.refreshRateHz,
+                    isNativePhysical = it.isNativePhysical,
+                    isAnisotropySynthetic = it.isAnisotropySynthetic,
+                )
+            }
             val realPt = Point()
             runCatching { d.getRealSize(realPt) }
-            val (effW, effH) = ExternalDisplayPolicy.resolveEffectiveDisplaySize(modeW, modeH, realPt.x, realPt.y)
+            val mirrorCollapsed = ExternalDisplayPolicy.isMirroredPrimaryDisplayCollapse(
+                nativeW = modeW,
+                nativeH = modeH,
+                logicalW = realPt.x,
+                logicalH = realPt.y,
+                primaryW = primaryW,
+                primaryH = primaryH,
+            )
+            val (effW, effH) = ExternalDisplayPolicy.resolveEffectiveDisplaySize(
+                modeW = modeW,
+                modeH = modeH,
+                realW = realPt.x,
+                realH = realPt.y,
+                primaryW = primaryW,
+                primaryH = primaryH,
+            )
             val nativeW = if (modeW >= 320) modeW else effW
             val nativeH = if (modeH >= 320) modeH else effH
             ExternalDisplayInfo(
@@ -539,12 +643,14 @@ class BridgeService : Service() {
                 name = item.displayName,
                 width = effW,
                 height = effH,
-                refreshRateHz = (mode?.refreshRate ?: 60f).roundToInt().coerceAtLeast(24),
+                refreshRateHz = modeHz.roundToInt().coerceAtLeast(24),
                 supportedModes = modes,
                 transport = item.transport,
                 isPresentationCapable = item.isPresentationCapable,
                 nativeWidth = nativeW,
                 nativeHeight = nativeH,
+                hasAnisotropyDistortion = curated.hasAnisotropyDistortion,
+                logicalMirrorCollapsed = mirrorCollapsed,
             )
         }
         _detectedExternalDisplaysFlow.value = allInfos
@@ -559,14 +665,40 @@ class BridgeService : Service() {
 
         val isNewPrimary = autoLaunchNew && primary.displayId != lastProjectedDisplayId
         if (isNewPrimary && BridgeClient.statusFlow.value.connected) {
-            if (AppPrefs.isAutoCustomResolutionEnabled(this)) {
-                val pref = AppPrefs.getDefaultCustomResolution(this)
-                if (pref.width != primary.width || pref.height != primary.height) {
+            when {
+                AppPrefs.isAutoCustomResolutionEnabled(this) -> {
+                    val pref = AppPrefs.getDefaultCustomResolution(this)
+                    if (pref.width != primary.width || pref.height != primary.height) {
+                        BridgeClient.setExternalDisplayModeAsync(
+                            primary.displayId,
+                            pref.width,
+                            pref.height,
+                            pref.fps.toFloat(),
+                        )
+                    }
+                }
+                AppPrefs.isExternalNative1To1Enabled(this) -> {
                     BridgeClient.setExternalDisplayModeAsync(
                         primary.displayId,
-                        pref.width,
-                        pref.height,
-                        pref.fps.toFloat(),
+                        primary.nativeWidth,
+                        primary.nativeHeight,
+                        0f,
+                        scalingMode = BridgeProtocol.ExternalScaling.NATIVE_1TO1,
+                    )
+                }
+                primary.hasAnisotropyDistortion || primary.logicalMirrorCollapsed -> {
+                    OpalLogStore.i(
+                        "OpalExtDesktop",
+                        "Auto-normalizing external displayId=${primary.displayId} to native " +
+                            "${primary.nativeWidth}x${primary.nativeHeight} " +
+                            "(anisotropy=${primary.hasAnisotropyDistortion}, mirrorCollapsed=${primary.logicalMirrorCollapsed})",
+                    )
+                    BridgeClient.setExternalDisplayModeAsync(
+                        primary.displayId,
+                        primary.nativeWidth,
+                        primary.nativeHeight,
+                        0f,
+                        scalingMode = BridgeProtocol.ExternalScaling.SMART_AUTO,
                     )
                 }
             }

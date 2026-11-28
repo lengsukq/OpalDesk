@@ -30,10 +30,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackHistoryLogic
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackHistoryStore
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackKind
@@ -86,7 +88,7 @@ fun FeedbackTrackingSection(
     fun triggerManualRefresh() {
         if (!syncConfigured || syncing) return
         if (!hasSyncableRecords) {
-            syncNotice = "当前暂无可批量同步的本地上报记录，可用「查反馈码」查询" to false
+            syncNotice = ctx.getString(R.string.feedback_no_syncable) to false
             return
         }
         syncing = true
@@ -95,12 +97,12 @@ fun FeedbackTrackingSection(
             syncing = false
             syncNotice = if (outcome.success) {
                 if (outcome.updatedCount > 0) {
-                    "已同步 ${outcome.updatedCount} 条反馈最新进度" to false
+                    ctx.getString(R.string.feedback_synced_count, outcome.updatedCount) to false
                 } else {
-                    "暂未查询到状态变更" to false
+                    ctx.getString(R.string.feedback_no_changes) to false
                 }
             } else {
-                outcome.message.ifBlank { "刷新失败，请稍后再试" } to true
+                outcome.message.ifBlank { ctx.getString(R.string.feedback_refresh_failed) } to true
             }
         }
     }
@@ -109,7 +111,7 @@ fun FeedbackTrackingSection(
         if (!syncConfigured || lookingUp) return
         val normalized = FeedbackHistoryLogic.normalizeShortCode(lookupCodeInput)
         if (normalized.isEmpty()) {
-            syncNotice = "请输入有效的 8 位反馈码（如 A1B2C3D4）" to true
+            syncNotice = ctx.getString(R.string.feedback_invalid_code) to true
             return
         }
         lookingUp = true
@@ -125,20 +127,20 @@ fun FeedbackTrackingSection(
                     val detail = when {
                         item.status == FeedbackResolutionStatus.FIXED_IN_VERSION && item.fixedVersion.isNotEmpty() ->
                             if (item.kind == FeedbackKind.FEATURE) {
-                                "已查到 #$normalized：已在 v${item.fixedVersion} 实现"
+                                ctx.getString(R.string.feedback_found_feature_ver, normalized, item.fixedVersion)
                             } else {
-                                "已查到 #$normalized：已在 v${item.fixedVersion} 修复"
+                                ctx.getString(R.string.feedback_found_bug_ver, normalized, item.fixedVersion)
                             }
-                        else -> "已查到 #$normalized：${statusLabelFor(item.kind, item.status)}"
+                        else -> ctx.getString(R.string.feedback_found_status, normalized, statusLabelFor(ctx, item.kind, item.status))
                     }
                     syncNotice = detail to false
                 }
-                else -> syncNotice = outcome.message.ifBlank { "未查到 #$normalized 对应的记录" } to true
+                else -> syncNotice = outcome.message.ifBlank { ctx.getString(R.string.feedback_not_found, normalized) } to true
             }
         }
     }
 
-    ConsoleSectionTitle("我的反馈追踪")
+    ConsoleSectionTitle(stringResource(R.string.feedback_section_title))
     MacGlassSectionCard(modifier = cardModifier) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -147,16 +149,16 @@ fun FeedbackTrackingSection(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 OpalText(
-                    text = if (records.isEmpty()) "反馈处理进度" else "反馈处理进度 (${records.size})",
+                    text = if (records.isEmpty()) stringResource(R.string.feedback_progress_title) else stringResource(R.string.feedback_progress_title_count, records.size),
                     fontSize = 15.5.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(2.dp))
                 OpalText(
                     text = when {
-                        !syncConfigured -> "当前构建未配置状态查询服务，仅保存本地提交记录"
-                        lastSyncAtMs > 0L -> "最近同步：${formatFeedbackTime(lastSyncAtMs)}"
-                        else -> "可查看问题是否修复及对应发布版本"
+                        !syncConfigured -> stringResource(R.string.feedback_sync_unconfigured)
+                        lastSyncAtMs > 0L -> stringResource(R.string.feedback_last_sync, formatFeedbackTime(ctx, lastSyncAtMs))
+                        else -> stringResource(R.string.feedback_sync_hint)
                     },
                     fontSize = 11.5.sp,
                     color = OpalPalette.TextSecondary,
@@ -186,7 +188,7 @@ fun FeedbackTrackingSection(
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 ) {
                     OpalText(
-                        text = if (lookupOpen) "收起查询" else "查反馈码",
+                        text = stringResource(if (lookupOpen) R.string.feedback_hide_lookup else R.string.feedback_lookup_code),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = if (lookupOpen) OpalPalette.AccentCyan else OpalPalette.TextSecondary,
@@ -194,7 +196,7 @@ fun FeedbackTrackingSection(
                     )
                 }
                 OpalButton(
-                    label = if (syncing) "同步中…" else "刷新状态",
+                    label = stringResource(if (syncing) R.string.feedback_syncing else R.string.feedback_refresh_status),
                     compact = true,
                     filled = false,
                     enabled = syncConfigured && !syncing && hasSyncableRecords,
@@ -218,13 +220,13 @@ fun FeedbackTrackingSection(
                             lookupCodeInput = it.take(12)
                             if (syncNotice != null) syncNotice = null
                         },
-                        placeholder = "输入 8 位反馈码（如 A1B2C3D4）",
+                        placeholder = stringResource(R.string.feedback_lookup_placeholder),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
                 OpalButton(
-                    label = if (lookingUp) "查询中…" else "查询",
+                    label = stringResource(if (lookingUp) R.string.feedback_looking_up else R.string.feedback_search_btn),
                     compact = true,
                     filled = true,
                     enabled = syncConfigured && !lookingUp && lookupCodeInput.isNotBlank(),
@@ -265,7 +267,7 @@ fun FeedbackTrackingSection(
                     .padding(12.dp),
             ) {
                 OpalText(
-                    text = "暂无本地反馈记录。提交问题或功能建议后，会自动在这里追踪处理进度与对应版本；重装或换机可用「查反馈码」找回。",
+                    text = stringResource(R.string.feedback_empty_hint),
                     fontSize = 12.sp,
                     color = OpalPalette.TextMuted,
                     lineHeight = 17.5.sp,
@@ -296,7 +298,7 @@ fun FeedbackTrackingSection(
             if (records.size > DEFAULT_COLLAPSED_RECORDS) {
                 Spacer(Modifier.height(8.dp))
                 OpalButton(
-                    label = if (showAllRecords) "收起历史记录" else "展开全部 ${records.size} 条反馈",
+                    label = if (showAllRecords) stringResource(R.string.feedback_collapse_history) else stringResource(R.string.feedback_expand_all, records.size),
                     compact = true,
                     filled = false,
                     onClick = { showAllRecords = !showAllRecords },
@@ -315,6 +317,7 @@ private fun FeedbackRecordCard(
     onOpenUpdate: () -> Unit,
     onRemove: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     val relation = remember(currentAppVersion, record) {
         FeedbackStatusParser.evaluateVersionRelation(currentAppVersion, record)
     }
@@ -367,7 +370,7 @@ private fun FeedbackRecordCard(
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 ) {
                     OpalText(
-                        text = if (isFeature) "需求" else "问题",
+                        text = stringResource(if (isFeature) R.string.feedback_kind_feature else R.string.feedback_kind_bug),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = kindColor,
@@ -380,7 +383,7 @@ private fun FeedbackRecordCard(
                         append(record.reportedVersion)
                         append(" · ")
                     }
-                    append(formatFeedbackTime(record.createdAtMs))
+                    append(formatFeedbackTime(ctx, record.createdAtMs))
                 }
                 OpalText(
                     text = meta,
@@ -412,7 +415,7 @@ private fun FeedbackRecordCard(
                     .padding(horizontal = 10.dp, vertical = 7.dp),
             ) {
                 OpalText(
-                    text = "开发者回复：${record.replyNote}",
+                    text = stringResource(R.string.feedback_dev_reply, record.replyNote),
                     fontSize = 11.5.sp,
                     color = OpalPalette.TextPrimary,
                     lineHeight = 16.sp,
@@ -427,7 +430,7 @@ private fun FeedbackRecordCard(
         ) {
             if (relation == FeedbackVersionRelation.FIXED_IN_NEWER_VERSION && record.fixedVersion.isNotBlank()) {
                 OpalButton(
-                    label = "检查更新至 v${record.fixedVersion}",
+                    label = stringResource(R.string.feedback_check_update_ver, record.fixedVersion),
                     compact = true,
                     filled = true,
                     accent = OpalPalette.AccentBlue,
@@ -437,13 +440,13 @@ private fun FeedbackRecordCard(
                 val hint = when {
                     relation == FeedbackVersionRelation.FIXED_IN_CURRENT_OR_OLDER && record.fixedVersion.isNotBlank() ->
                         if (record.kind == FeedbackKind.FEATURE) {
-                            "当前运行版本已包含 v${record.fixedVersion} 的功能更新"
+                            stringResource(R.string.feedback_included_feature, record.fixedVersion)
                         } else {
-                            "当前运行版本已包含 v${record.fixedVersion} 的修复"
+                            stringResource(R.string.feedback_included_fix, record.fixedVersion)
                         }
                     record.lastCheckedAtMs > 0L ->
-                        "核验于 ${formatFeedbackTime(record.lastCheckedAtMs)}"
-                    else -> "点击右上角「刷新状态」获取最新进度"
+                        stringResource(R.string.feedback_checked_at, formatFeedbackTime(ctx, record.lastCheckedAtMs))
+                    else -> stringResource(R.string.feedback_tap_refresh_hint)
                 }
                 OpalText(
                     text = hint,
@@ -455,7 +458,7 @@ private fun FeedbackRecordCard(
             }
             Spacer(Modifier.width(8.dp))
             OpalText(
-                text = "移除",
+                text = stringResource(R.string.common_remove),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
                 color = OpalPalette.TextMuted,
@@ -469,18 +472,25 @@ private fun FeedbackRecordCard(
 }
 
 private fun statusLabelFor(
+    ctx: Context,
     kind: FeedbackKind,
     status: FeedbackResolutionStatus,
 ): String = if (kind == FeedbackKind.FEATURE) {
     when (status) {
-        FeedbackResolutionStatus.OPEN -> "评估中"
-        FeedbackResolutionStatus.FIXED_PENDING_RELEASE -> "已规划 · 待下版"
-        FeedbackResolutionStatus.FIXED_IN_VERSION -> "已实现"
-        FeedbackResolutionStatus.RESOLVED_OTHER -> "已采纳"
-        FeedbackResolutionStatus.IGNORED -> "暂不考虑"
+        FeedbackResolutionStatus.OPEN -> ctx.getString(R.string.feedback_status_eval)
+        FeedbackResolutionStatus.FIXED_PENDING_RELEASE -> ctx.getString(R.string.feedback_status_planned)
+        FeedbackResolutionStatus.FIXED_IN_VERSION -> ctx.getString(R.string.feedback_status_implemented)
+        FeedbackResolutionStatus.RESOLVED_OTHER -> ctx.getString(R.string.feedback_status_adopted)
+        FeedbackResolutionStatus.IGNORED -> ctx.getString(R.string.feedback_status_declined)
     }
 } else {
-    status.label
+    when (status) {
+        FeedbackResolutionStatus.OPEN -> ctx.getString(R.string.feedback_status_triaging)
+        FeedbackResolutionStatus.FIXED_PENDING_RELEASE -> ctx.getString(R.string.feedback_status_fixed_pending)
+        FeedbackResolutionStatus.FIXED_IN_VERSION -> ctx.getString(R.string.feedback_status_fixed)
+        FeedbackResolutionStatus.RESOLVED_OTHER -> ctx.getString(R.string.feedback_status_resolved)
+        FeedbackResolutionStatus.IGNORED -> ctx.getString(R.string.feedback_status_archived)
+    }
 }
 
 @Composable
@@ -491,30 +501,30 @@ private fun resolveStatusBadge(
     val isFeature = record.kind == FeedbackKind.FEATURE
     return when (record.status) {
         FeedbackResolutionStatus.OPEN ->
-            (if (isFeature) "评估中" else "排查中") to OpalPalette.AccentAmber
+            stringResource(if (isFeature) R.string.feedback_status_eval else R.string.feedback_status_triaging) to OpalPalette.AccentAmber
         FeedbackResolutionStatus.FIXED_PENDING_RELEASE ->
-            (if (isFeature) "已规划 · 待下版" else "已修复 · 待下版") to OpalPalette.AccentCyan
+            stringResource(if (isFeature) R.string.feedback_status_planned else R.string.feedback_status_fixed_pending) to OpalPalette.AccentCyan
         FeedbackResolutionStatus.IGNORED ->
-            (if (isFeature) "暂不考虑" else "已归档") to OpalPalette.TextMuted
+            stringResource(if (isFeature) R.string.feedback_status_declined else R.string.feedback_status_archived) to OpalPalette.TextMuted
         FeedbackResolutionStatus.RESOLVED_OTHER ->
-            (if (isFeature) "已采纳" else "已处理") to OpalPalette.AccentEmerald
+            stringResource(if (isFeature) R.string.feedback_status_adopted else R.string.feedback_status_resolved) to OpalPalette.AccentEmerald
         FeedbackResolutionStatus.FIXED_IN_VERSION -> when (relation) {
             FeedbackVersionRelation.FIXED_IN_CURRENT_OR_OLDER ->
-                (if (isFeature) "当前版已上线 (v${record.fixedVersion})" else "当前版已修复 (v${record.fixedVersion})") to OpalPalette.AccentEmerald
+                stringResource(if (isFeature) R.string.feedback_status_live_feature else R.string.feedback_status_live_fix, record.fixedVersion) to OpalPalette.AccentEmerald
             FeedbackVersionRelation.FIXED_IN_NEWER_VERSION ->
-                (if (isFeature) "v${record.fixedVersion} 已实现 · 可更新" else "v${record.fixedVersion} 已修复 · 可更新") to OpalPalette.AccentBlue
+                stringResource(if (isFeature) R.string.feedback_status_update_feature else R.string.feedback_status_update_fix, record.fixedVersion) to OpalPalette.AccentBlue
             else ->
                 if (record.fixedVersion.isNotBlank()) {
-                    (if (isFeature) "已在 v${record.fixedVersion} 实现" else "已在 v${record.fixedVersion} 修复") to OpalPalette.AccentEmerald
+                    stringResource(if (isFeature) R.string.feedback_status_ver_feature else R.string.feedback_status_ver_fix, record.fixedVersion) to OpalPalette.AccentEmerald
                 } else {
-                    (if (isFeature) "已实现" else "已修复") to OpalPalette.AccentEmerald
+                    stringResource(if (isFeature) R.string.feedback_status_implemented else R.string.feedback_status_fixed) to OpalPalette.AccentEmerald
                 }
         }
     }
 }
 
-private fun formatFeedbackTime(timestampMs: Long): String {
-    if (timestampMs <= 0L) return "未知时间"
+private fun formatFeedbackTime(ctx: Context, timestampMs: Long): String {
+    if (timestampMs <= 0L) return ctx.getString(R.string.common_unknown_time)
     return SimpleDateFormat("MM-dd HH:mm", Locale.US).format(Date(timestampMs))
 }
 
@@ -527,8 +537,8 @@ private fun copyCodeToClipboard(ctx: Context, record: FeedbackRecord) {
             record.shortCode
         }
         cm?.setPrimaryClip(ClipData.newPlainText("OpalDesk Feedback Code", clipValue))
-        Toast.makeText(ctx, "已复制反馈码 #${record.shortCode}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, ctx.getString(R.string.feedback_copied_code, record.shortCode), Toast.LENGTH_SHORT).show()
     } catch (_: Throwable) {
-        Toast.makeText(ctx, "复制失败", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, ctx.getString(R.string.common_copy_failed), Toast.LENGTH_SHORT).show()
     }
 }

@@ -80,6 +80,7 @@ object AppPrefs {
     private const val KEY_SHOW_DESKTOP_GUIDE_ICON = "show_desktop_guide_icon_v1"
     private const val KEY_CUSTOM_RES_PRESETS = "custom_resolution_presets_v1"
     private const val KEY_AUTO_CUSTOM_RES_ENABLED = "auto_custom_resolution_enabled_v1"
+    private const val KEY_EXTERNAL_NATIVE_1TO1_NO_SCALING = "external_native_1to1_no_scaling_v1"
     private const val KEY_DEFAULT_CUSTOM_RES_W = "default_custom_resolution_w_v1"
     private const val KEY_DEFAULT_CUSTOM_RES_H = "default_custom_resolution_h_v1"
     private const val KEY_DEFAULT_CUSTOM_RES_FPS = "default_custom_resolution_fps_v1"
@@ -92,6 +93,7 @@ object AppPrefs {
     private const val KEY_SPOTLIGHT_RECENTS = "spotlight_recent_ids_v1"
     private const val KEY_CALL_CONTROL_SYNC_ENABLED = "call_control_sync_enabled_v1"
     private const val KEY_BLE_NEARBY_ENABLED = "ble_nearby_enabled_v1"
+    private const val KEY_LANGUAGE_PREF = "app_language_pref_v1"
 
     private val DEFAULT_PINNED = listOf(
         "com.android.chrome",
@@ -191,6 +193,9 @@ object AppPrefs {
     private val _autoCustomResolutionEnabledFlow = MutableStateFlow(false)
     val autoCustomResolutionEnabledFlow: StateFlow<Boolean> = _autoCustomResolutionEnabledFlow.asStateFlow()
 
+    private val _externalNative1To1Flow = MutableStateFlow(false)
+    val externalNative1To1Flow: StateFlow<Boolean> = _externalNative1To1Flow.asStateFlow()
+
     private val _defaultCustomResolutionFlow = MutableStateFlow(CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC)
     val defaultCustomResolutionFlow: StateFlow<CustomResolutionSpec> = _defaultCustomResolutionFlow.asStateFlow()
 
@@ -225,8 +230,11 @@ object AppPrefs {
     private val _bleNearbyEnabledFlow = MutableStateFlow(false)
     val bleNearbyEnabledFlow: StateFlow<Boolean> = _bleNearbyEnabledFlow.asStateFlow()
 
+    private val _languagePrefFlow = MutableStateFlow(OpalLocalePolicy.LANG_SYSTEM)
+    val languagePrefFlow: StateFlow<String> = _languagePrefFlow.asStateFlow()
+
     private fun prefs(ctx: Context?) =
-        ctx?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        (ctx?.applicationContext ?: ctx)?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun hydrateFlows(ctx: Context?) {
         if (flowsHydrated || ctx == null) return
@@ -279,6 +287,7 @@ object AppPrefs {
             p.getString(KEY_CUSTOM_RES_PRESETS, null),
         )
         _autoCustomResolutionEnabledFlow.value = p.getBoolean(KEY_AUTO_CUSTOM_RES_ENABLED, false)
+        _externalNative1To1Flow.value = p.getBoolean(KEY_EXTERNAL_NATIVE_1TO1_NO_SCALING, false)
         val savedW = p.getInt(KEY_DEFAULT_CUSTOM_RES_W, CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC.width)
         val savedH = p.getInt(KEY_DEFAULT_CUSTOM_RES_H, CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC.height)
         val savedFps = p.getInt(KEY_DEFAULT_CUSTOM_RES_FPS, CustomResolutionPolicy.DEFAULT_CUSTOM_SPEC.fps)
@@ -308,6 +317,9 @@ object AppPrefs {
         _spotlightRecentsFlow.value = parseSpotlightRecents(p.getString(KEY_SPOTLIGHT_RECENTS, null))
         _callControlSyncEnabledFlow.value = p.getBoolean(KEY_CALL_CONTROL_SYNC_ENABLED, false)
         _bleNearbyEnabledFlow.value = p.getBoolean(KEY_BLE_NEARBY_ENABLED, false)
+        _languagePrefFlow.value = OpalLocalePolicy.normalizeLanguagePref(
+            p.getString(KEY_LANGUAGE_PREF, OpalLocalePolicy.LANG_SYSTEM),
+        )
     }
 
     private fun loadPkgList(p: android.content.SharedPreferences, key: String, fallbackKey: String): List<String> {
@@ -795,6 +807,16 @@ object AppPrefs {
         _autoCustomResolutionEnabledFlow.value = enabled
     }
 
+    fun isExternalNative1To1Enabled(ctx: Context?): Boolean {
+        hydrateFlows(ctx)
+        return _externalNative1To1Flow.value
+    }
+
+    fun setExternalNative1To1Enabled(ctx: Context?, enabled: Boolean) {
+        prefs(ctx)?.edit()?.putBoolean(KEY_EXTERNAL_NATIVE_1TO1_NO_SCALING, enabled)?.apply()
+        _externalNative1To1Flow.value = enabled
+    }
+
     fun getDefaultCustomResolution(ctx: Context?): CustomResolutionSpec {
         hydrateFlows(ctx)
         return _defaultCustomResolutionFlow.value
@@ -899,6 +921,19 @@ object AppPrefs {
     fun setBleNearbyEnabled(ctx: Context?, enabled: Boolean) {
         prefs(ctx)?.edit()?.putBoolean(KEY_BLE_NEARBY_ENABLED, enabled)?.apply()
         _bleNearbyEnabledFlow.value = enabled
+    }
+
+    fun getLanguagePref(ctx: Context?): String {
+        val raw = prefs(ctx)?.getString(KEY_LANGUAGE_PREF, OpalLocalePolicy.LANG_SYSTEM)
+        val normalized = OpalLocalePolicy.normalizeLanguagePref(raw)
+        _languagePrefFlow.value = normalized
+        return normalized
+    }
+
+    fun setLanguagePref(ctx: Context?, pref: String) {
+        val normalized = OpalLocalePolicy.normalizeLanguagePref(pref)
+        prefs(ctx)?.edit()?.putString(KEY_LANGUAGE_PREF, normalized)?.apply()
+        _languagePrefFlow.value = normalized
     }
 
     fun getSpotlightRecents(ctx: Context?): List<String> {

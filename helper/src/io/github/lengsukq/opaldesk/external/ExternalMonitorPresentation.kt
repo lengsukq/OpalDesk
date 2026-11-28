@@ -20,10 +20,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
@@ -74,16 +76,22 @@ class ExternalMonitorPresentation(
     hostActivity: ComponentActivity,
     private val targetDisplay: Display,
     private val displayLabelOverride: String? = null,
+    private val primaryWidthPx: Int = 0,
+    private val primaryHeightPx: Int = 0,
     private val onPickCustomWallpaper: () -> Unit,
     private val onOpenConsole: () -> Unit,
     private val onExitDesktop: () -> Unit,
 ) : Presentation(hostActivity, targetDisplay, android.R.style.Theme_DeviceDefault_NoActionBar_Fullscreen) {
 
-    private val logicalBoundsPx: Pair<Int, Int> = resolveLogicalDisplaySizePx(targetDisplay)
-    val displayWidthPx: Int = logicalBoundsPx.first
-    val displayHeightPx: Int = logicalBoundsPx.second
-    val refreshRateHz: Int = (resolvePeakRefreshRateMode(targetDisplay)?.refreshRate?.toInt()
-        ?: (targetDisplay.mode?.refreshRate ?: 60f).toInt()).coerceAtLeast(24)
+    private var activeDisplay: Display = targetDisplay
+    private val initialBoundsPx: Pair<Int, Int> = resolveLogicalDisplaySizePx(targetDisplay, primaryWidthPx, primaryHeightPx)
+    private var displayWidthPxState by mutableIntStateOf(initialBoundsPx.first)
+    private var displayHeightPxState by mutableIntStateOf(initialBoundsPx.second)
+    private var refreshRateHzState by mutableIntStateOf(resolveDisplayRefreshHz(targetDisplay))
+
+    val displayWidthPx: Int get() = displayWidthPxState
+    val displayHeightPx: Int get() = displayHeightPxState
+    val refreshRateHz: Int get() = refreshRateHzState
 
     private val ownLifecycle = PresentationLifecycleOwner()
     private var rootContainer: HardwareMouseDetectingFrameLayout? = null
@@ -94,8 +102,8 @@ class ExternalMonitorPresentation(
     private var imeController: NativeImeHostController? = null
     val isImeActive: Boolean get() = imeVisible
     private val pointerDispatcher = ExternalPointerDispatcher(
-        defaultWidthPx = displayWidthPx,
-        defaultHeightPx = displayHeightPx,
+        defaultWidthPx = initialBoundsPx.first,
+        defaultHeightPx = initialBoundsPx.second,
         targetViewProvider = { composeView },
     )
 
@@ -104,10 +112,25 @@ class ExternalMonitorPresentation(
     val monitorSummary: String
         get() {
             val label = displayLabelOverride?.takeIf { it.isNotBlank() }
-                ?: targetDisplay.name?.takeIf { it.isNotBlank() }
+                ?: activeDisplay.name?.takeIf { it.isNotBlank() }
                 ?: "外接屏"
             return "$label · ${displayWidthPx}×${displayHeightPx} @ ${refreshRateHz}Hz"
         }
+
+    fun refreshDisplayGeometry(
+        freshDisplay: Display,
+        primaryW: Int = primaryWidthPx,
+        primaryH: Int = primaryHeightPx,
+    ) {
+        activeDisplay = freshDisplay
+        val (w, h) = resolveLogicalDisplaySizePx(freshDisplay, primaryW, primaryH)
+        val hz = resolveDisplayRefreshHz(freshDisplay)
+        displayWidthPxState = w
+        displayHeightPxState = h
+        refreshRateHzState = hz
+        pointerDispatcher.updateDefaultBounds(w, h)
+        applyPreferredRefreshRate(BridgeClient.statusFlow.value.targetFps)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -401,22 +424,39 @@ class ExternalMonitorPresentation(
     }
 
     @Suppress("DEPRECATION")
-    private fun resolveLogicalDisplaySizePx(display: Display): Pair<Int, Int> {
+    private fun resolveLogicalDisplaySizePx(
+        display: Display,
+        primaryW: Int = 0,
+        primaryH: Int = 0,
+    ): Pair<Int, Int> {
         val realPt = android.graphics.Point()
         runCatching { display.getRealSize(realPt) }
-        if (realPt.x >= 320 && realPt.y >= 320) {
-            return realPt.x to realPt.y
-        }
-        val physW = display.mode?.physicalWidth?.coerceAtLeast(480) ?: 1920
-        val physH = display.mode?.physicalHeight?.coerceAtLeast(480) ?: 1080
+        val mode = display.mode
+        val physW = mode?.physicalWidth ?: 0
+        val physH = mode?.physicalHeight ?: 0
         val rotated = display.rotation == Surface.ROTATION_90 || display.rotation == Surface.ROTATION_270
-        return if (rotated) (physH to physW) else (physW to physH)
+        val modeW = if (rotated && physW >= 320 && physH >= 320) physH else physW
+        val modeH = if (rotated && physW >= 320 && physH >= 320) physW else physH
+        return ExternalDisplayPolicy.resolveEffectiveDisplaySize(
+            modeW = modeW,
+            modeH = modeH,
+            realW = realPt.x,
+            realH = realPt.y,
+            primaryW = primaryW,
+            primaryH = primaryH,
+        )
     }
+
+    private fun resolveDisplayRefreshHz(display: Display): Int =
+        (resolvePeakRefreshRateMode(display)?.refreshRate
+            ?: display.mode?.refreshRate
+            ?: 60f).roundToInt().coerceAtLeast(24)
 
     private fun applyPreferredRefreshRate(targetFps: Int) {
         val win = window ?: return
-        val cur = targetDisplay.mode ?: return
-        val supported = targetDisplay.supportedModes ?: return
+        val disp = activeDisplay
+        val cur = disp.mode ?: return
+        val supported = disp.supportedModes ?: return
         val candidates = supported.map {
             ExternalDisplayPolicy.DisplayModeCandidate(
                 modeId = it.modeId,
@@ -430,8 +470,16 @@ class ExternalMonitorPresentation(
             currentWidth = cur.physicalWidth,
             currentHeight = cur.physicalHeight,
             targetFps = targetFps,
-        ) ?: return
+        )
         val lp = win.attributes
+        if (chosen == null) {
+            if (lp.preferredDisplayModeId != 0 || lp.preferredRefreshRate != 0f) {
+                lp.preferredDisplayModeId = 0
+                lp.preferredRefreshRate = 0f
+                win.attributes = lp
+            }
+            return
+        }
         if (lp.preferredDisplayModeId != chosen.modeId || kotlin.math.abs(lp.preferredRefreshRate - chosen.refreshRate) > 0.5f) {
             lp.preferredDisplayModeId = chosen.modeId
             lp.preferredRefreshRate = chosen.refreshRate

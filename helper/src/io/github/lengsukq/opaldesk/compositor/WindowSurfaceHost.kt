@@ -5,12 +5,15 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.LruCache
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
+import android.widget.FrameLayout
+import android.widget.ImageView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,6 +31,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -57,6 +61,7 @@ import io.github.lengsukq.opaldesk.protocol.CompositorWindow
 import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.OpalText
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
@@ -70,7 +75,9 @@ import kotlin.math.roundToInt
  */
 object LiveWindowPreviewRegistry {
     private const val MAX_PREVIEW_CACHE_KB = 12 * 1024 // 12 MiB cap for Android 17 MemoryLimiter safety
+    const val RESIZE_BRIDGE_MAX_LONG_EDGE = 768
     private val liveViews = ConcurrentHashMap<Int, WeakReference<TextureView>>()
+    private val liveContainers = ConcurrentHashMap<Int, WeakReference<WindowSurfaceContainerView>>()
     private val cachedPreviews = object : LruCache<Int, Bitmap>(MAX_PREVIEW_CACHE_KB) {
         override fun sizeOf(key: Int, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
     }
@@ -84,6 +91,42 @@ object LiveWindowPreviewRegistry {
         if (current == null || current === view) {
             liveViews.remove(windowId)
         }
+    }
+
+    internal fun registerContainer(windowId: Int, container: WindowSurfaceContainerView) {
+        liveContainers[windowId] = WeakReference(container)
+    }
+
+    internal fun unregisterContainer(windowId: Int, container: WindowSurfaceContainerView) {
+        val current = liveContainers[windowId]?.get()
+        if (current == null || current === container) {
+            liveContainers.remove(windowId)
+        }
+    }
+
+    /**
+     * Synchronously captures the currently settled TextureView frame and covers it with the
+     * in-hierarchy sibling `bridgeOverlayView` (`ImageView` strictly above `TextureView` inside
+     * the same `FrameLayout`) BEFORE `BridgeClient` dispatches `VirtualDisplay.resize()`.
+     * If a bridge is already active (rapid back-to-back resizes), preserves the pristine bitmap
+     * instead of snapshotting an intermediate SurfaceFlinger transition frame.
+     */
+    fun armResizeBridgeSync(windowId: Int, maxLongEdge: Int = RESIZE_BRIDGE_MAX_LONG_EDGE): Boolean {
+        val container = liveContainers[windowId]?.get() ?: return false
+        val bmp = if (container.isResizeBridgeShowing) {
+            getCachedPreview(windowId)
+        } else {
+            captureLivePreview(windowId, maxLongEdge)
+        }
+        if (bmp != null && !bmp.isRecycled) {
+            container.showResizeBridgeSync(bmp)
+            OpalLogStore.i(
+                "ResizeBridge",
+                "showSync wid=$windowId view=${container.width}x${container.height} bmp=${bmp.width}x${bmp.height}",
+            )
+            return true
+        }
+        return false
     }
 
     /** Must be called on the Android main thread (uses [TextureView.getBitmap]). */
@@ -103,6 +146,7 @@ object LiveWindowPreviewRegistry {
 
     fun evict(windowId: Int) {
         liveViews.remove(windowId)
+        liveContainers.remove(windowId)
         cachedPreviews.remove(windowId)
     }
 
@@ -133,6 +177,44 @@ object LiveWindowPreviewRegistry {
 }
 
 /**
+ * Pure JVM-testable timing policy for masking Android `VirtualDisplay.resize()` intermediate
+ * frames (`BLASTSyncEngine` + `CompositionEngine.setProjection` old-bounds/new-content top-left
+ * shrink + `ShellTransitions` `CHANGE` animation) behind the window's crisp pre-resize frame.
+ */
+internal object ResizeBridgePolicy {
+    const val SHRINK_MIN_SETTLE_MS = 380L
+    const val EXPAND_MIN_SETTLE_MS = 320L
+    const val NO_ANIM_MIN_SETTLE_MS = 160L
+    const val MAX_MIN_SETTLE_MS = 560L
+    const val POST_SETTLE_FRAME_WAIT_MS = 160L
+    const val FADE_OUT_MS = 85L
+
+    fun computeMinSettleDelayMs(
+        oldW: Int,
+        oldH: Int,
+        newW: Int,
+        newH: Int,
+        transitionAnimScale: Float,
+    ): Long {
+        if (oldW <= 0 || oldH <= 0 || newW <= 0 || newH <= 0) return 0L
+        if (oldW == newW && oldH == newH) return 0L
+        if (transitionAnimScale <= 0.01f) {
+            return NO_ANIM_MIN_SETTLE_MS
+        }
+        val shrinking = newW < oldW || newH < oldH
+        val base = if (shrinking) SHRINK_MIN_SETTLE_MS else EXPAND_MIN_SETTLE_MS
+        val scaled = (base * transitionAnimScale.coerceIn(0.5f, 1.5f)).roundToInt().toLong()
+        return scaled.coerceIn(NO_ANIM_MIN_SETTLE_MS, MAX_MIN_SETTLE_MS)
+    }
+}
+
+private fun readTransitionAnimationScale(ctx: android.content.Context): Float = try {
+    Settings.Global.getFloat(ctx.contentResolver, Settings.Global.TRANSITION_ANIMATION_SCALE, 1f)
+} catch (_: Throwable) {
+    1f
+}
+
+/**
  * Hardware-accelerated `TextureView` (`GL_TEXTURE_EXTERNAL_OES`) client surface host for a single
  * isolated VirtualDisplay window, paired with seamless LRU hibernation snapshot fallback.
  *
@@ -147,8 +229,11 @@ fun WindowSurfaceHost(
     headerHeightPx: Int,
     onTouchFocusRequested: () -> Unit,
     occludedByFullscreen: Boolean = false,
+    resizeCommitToken: Long = 0L,
+    resizeCommitShrink: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    val hostCtx = LocalContext.current
     val profileState by ProfileConfigStore.stateFlow.collectAsState()
     val cropDp = profileState.workingConfig.appTopCropDps[window.pkg] ?: 0
     val cropTopDisplayPx = if (cropDp > 0) {
@@ -166,6 +251,14 @@ fun WindowSurfaceHost(
 
     var hibernateBitmap by remember(window.windowId) { mutableStateOf<Bitmap?>(null) }
     var hasRenderedLiveFrame by remember(window.windowId) { mutableStateOf(false) }
+    var surfaceContainer by remember(window.windowId) { mutableStateOf<WindowSurfaceContainerView?>(null) }
+    var resizeBridgeGen by remember(window.windowId) { mutableLongStateOf(0L) }
+    var resizeBridgeSettleMs by remember(window.windowId) { mutableLongStateOf(ResizeBridgePolicy.SHRINK_MIN_SETTLE_MS) }
+    var lastHandledCommitToken by remember(window.windowId) { mutableLongStateOf(resizeCommitToken) }
+    var lastCommittedContentSize by remember(window.windowId) {
+        mutableStateOf(window.contentWidth to window.contentHeight)
+    }
+    val liveFrameCounter = remember(window.windowId) { AtomicLong(0L) }
     val lastHoverEventTime = remember(window.windowId) { AtomicLong(-1L) }
 
     LaunchedEffect(window.windowId, window.isHibernated, window.snapshotVersion, occludedByFullscreen) {
@@ -179,6 +272,30 @@ fun WindowSurfaceHost(
         }
         if (window.isHibernated || occludedByFullscreen) {
             hasRenderedLiveFrame = false
+            surfaceContainer?.clearResizeBridgeImmediately()
+        }
+    }
+
+    // Schedule settle/fade-out whenever CompositorWindowNode synchronously armed the native bridge overlay
+    LaunchedEffect(resizeCommitToken) {
+        if (resizeCommitToken != lastHandledCommitToken) {
+            lastHandledCommitToken = resizeCommitToken
+            if (hasRenderedLiveFrame && !window.isHibernated && !occludedByFullscreen) {
+                val container = surfaceContainer
+                if (container != null && container.isResizeBridgeShowing) {
+                    val animScale = readTransitionAnimationScale(hostCtx)
+                    val settleMs = ResizeBridgePolicy.computeMinSettleDelayMs(
+                        oldW = if (resizeCommitShrink) 1000 else 800,
+                        oldH = if (resizeCommitShrink) 1000 else 800,
+                        newW = if (resizeCommitShrink) 800 else 1000,
+                        newH = if (resizeCommitShrink) 800 else 1000,
+                        transitionAnimScale = animScale,
+                    )
+                    resizeBridgeSettleMs = settleMs
+                    resizeBridgeGen += 1L
+                    OpalLogStore.i("ResizeBridge", "armedCommit wid=${window.windowId} shrink=$resizeCommitShrink settleMs=$settleMs")
+                }
+            }
         }
     }
 
@@ -311,39 +428,96 @@ fun WindowSurfaceHost(
 
             DisposableEffect(window.windowId) {
                 onDispose {
+                    surfaceContainer?.let { container ->
+                        container.clearResizeBridgeImmediately()
+                        LiveWindowPreviewRegistry.unregisterContainer(window.windowId, container)
+                    }
+                    surfaceContainer = null
                     holderState.releaseAll(notifyDaemon = true)
                 }
             }
 
-            // Keep SurfaceTexture buffer size synchronized with daemon VirtualDisplay resolution
+            // Keep SurfaceTexture buffer size synchronized with daemon VirtualDisplay resolution and
+            // arm/re-arm the in-hierarchy freeze-frame bridge across VirtualDisplay.resize() settle.
             LaunchedEffect(window.contentWidth, window.contentHeight) {
-                holderState.updateBufferSize(
-                    window.contentWidth.coerceAtLeast(240),
-                    window.contentHeight.coerceAtLeast(200),
+                val cw = window.contentWidth.coerceAtLeast(240)
+                val ch = window.contentHeight.coerceAtLeast(200)
+                val (prevW, prevH) = lastCommittedContentSize
+                lastCommittedContentSize = window.contentWidth to window.contentHeight
+                if (hasRenderedLiveFrame && prevW > 0 && prevH > 0 &&
+                    (prevW != window.contentWidth || prevH != window.contentHeight)
+                ) {
+                    val animScale = readTransitionAnimationScale(hostCtx)
+                    val settleMs = ResizeBridgePolicy.computeMinSettleDelayMs(
+                        oldW = prevW,
+                        oldH = prevH,
+                        newW = window.contentWidth,
+                        newH = window.contentHeight,
+                        transitionAnimScale = animScale,
+                    )
+                    if (settleMs > 0L) {
+                        val armed = LiveWindowPreviewRegistry.armResizeBridgeSync(window.windowId)
+                        if (armed) {
+                            resizeBridgeSettleMs = settleMs
+                            resizeBridgeGen += 1L
+                            OpalLogStore.i(
+                                "ResizeBridge",
+                                "armedScene wid=${window.windowId} ${prevW}x${prevH}->${window.contentWidth}x${window.contentHeight} settleMs=$settleMs",
+                            )
+                        }
+                    }
+                }
+                holderState.updateBufferSize(cw, ch)
+            }
+
+            // Hold the pre-resize freeze frame across BLASTSync + SurfaceFlinger setDisplaySize + ShellTransition,
+            // then fade out cleanly on the first settled live frame (with a bounded timeout for static apps).
+            LaunchedEffect(resizeBridgeGen) {
+                if (resizeBridgeGen <= 0L) return@LaunchedEffect
+                val container = surfaceContainer ?: return@LaunchedEffect
+                if (!container.isResizeBridgeShowing) return@LaunchedEffect
+                delay(resizeBridgeSettleMs)
+                val cw = currentWin.contentWidth.coerceAtLeast(240)
+                val ch = currentWin.contentHeight.coerceAtLeast(200)
+                container.textureView.forceSyncBufferSize(cw, ch)
+                holderState.updateBufferSize(cw, ch)
+                applyTopCropTransform(container.textureView, currentCropTopPx, ch)
+                val framesAtSettle = liveFrameCounter.get()
+                val deadlineMs = SystemClock.uptimeMillis() + ResizeBridgePolicy.POST_SETTLE_FRAME_WAIT_MS
+                while (liveFrameCounter.get() <= framesAtSettle && SystemClock.uptimeMillis() < deadlineMs) {
+                    delay(16L)
+                }
+                OpalLogStore.i(
+                    "ResizeBridge",
+                    "release wid=${window.windowId} postFrames=${liveFrameCounter.get() - framesAtSettle}",
                 )
+                container.fadeOutResizeBridge(ResizeBridgePolicy.FADE_OUT_MS)
             }
 
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
-                    FixedBufferTextureView(ctx).apply {
+                    WindowSurfaceContainerView(ctx).apply {
+                        surfaceContainer = this
+                        LiveWindowPreviewRegistry.registerContainer(window.windowId, this)
+                        val tv = textureView
                         if (io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge.sessionFlow.value.isRemoteCastDisplay) {
-                            pointerIcon = android.view.PointerIcon.getSystemIcon(ctx, android.view.PointerIcon.TYPE_NULL)
+                            tv.pointerIcon = android.view.PointerIcon.getSystemIcon(ctx, android.view.PointerIcon.TYPE_NULL)
                         }
                         // Opaque app surfaces skip per-pixel GPU alpha blending against the desktop backdrop.
-                        isOpaque = true
-                        LiveWindowPreviewRegistry.register(window.windowId, this)
-                        surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        tv.isOpaque = true
+                        LiveWindowPreviewRegistry.register(window.windowId, tv)
+                        tv.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                             override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
-                                LiveWindowPreviewRegistry.register(currentWin.windowId, this@apply)
+                                LiveWindowPreviewRegistry.register(currentWin.windowId, tv)
                                 val w = currentWin.contentWidth.coerceAtLeast(240)
                                 val h = currentWin.contentHeight.coerceAtLeast(200)
                                 val dpi = currentWin.contentDpi.coerceAtLeast(120)
-                                val activeFps = resolveHostDisplayRefreshRate(this@apply)
-                                syncBufferSize(w, h)
-                                post {
-                                    syncBufferSize(w, h)
-                                    applyTopCropTransform(this@apply, currentCropTopPx, h)
+                                val activeFps = resolveHostDisplayRefreshRate(tv)
+                                tv.forceSyncBufferSize(w, h)
+                                tv.post {
+                                    tv.forceSyncBufferSize(w, h)
+                                    applyTopCropTransform(tv, currentCropTopPx, h)
                                 }
                                 holderState.attachAsync(st, w, h, dpi, activeFps)
                             }
@@ -354,16 +528,16 @@ fun WindowSurfaceHost(
                                 // SurfaceFlinger's BufferQueue back to view bounds (which clips/zooms content).
                                 val cw = currentWin.contentWidth.coerceAtLeast(240)
                                 val ch = currentWin.contentHeight.coerceAtLeast(200)
-                                syncBufferSize(cw, ch)
-                                post {
-                                    syncBufferSize(cw, ch)
-                                    applyTopCropTransform(this@apply, currentCropTopPx, ch)
+                                tv.forceSyncBufferSize(cw, ch)
+                                tv.post {
+                                    tv.forceSyncBufferSize(cw, ch)
+                                    applyTopCropTransform(tv, currentCropTopPx, ch)
                                 }
                                 holderState.updateBufferSize(cw, ch)
                             }
 
                             override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                                LiveWindowPreviewRegistry.unregister(currentWin.windowId, this@apply)
+                                LiveWindowPreviewRegistry.unregister(currentWin.windowId, tv)
                                 OpalLogStore.i("Surface", "TextureView destroyed wid=${currentWin.windowId} hadFrame=$hasRenderedLiveFrame")
                                 hasRenderedLiveFrame = false
                                 holderState.onTextureDestroyed(st)
@@ -373,10 +547,11 @@ fun WindowSurfaceHost(
                             }
 
                             override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
+                                liveFrameCounter.incrementAndGet()
                                 if (!hasRenderedLiveFrame) {
                                     val cw = currentWin.contentWidth.coerceAtLeast(240)
                                     val ch = currentWin.contentHeight.coerceAtLeast(200)
-                                    syncBufferSize(cw, ch)
+                                    tv.forceSyncBufferSize(cw, ch)
                                     hasRenderedLiveFrame = true
                                     OpalLogStore.i("Surface", "First live frame rendered wid=${currentWin.windowId} pkg=${currentWin.pkg}")
                                 }
@@ -384,7 +559,7 @@ fun WindowSurfaceHost(
                         }
 
                         val sideNavTouchFilter = CompositorGeometry.SideNavigationTouchFilter()
-                        setOnTouchListener { v, ev ->
+                        tv.setOnTouchListener { v, ev ->
                             if (ev?.actionMasked == MotionEvent.ACTION_DOWN) {
                                 v.parent?.requestDisallowInterceptTouchEvent(true)
                             }
@@ -417,25 +592,26 @@ fun WindowSurfaceHost(
                                 v.width, v.height, ev, currentWin, currentHeaderPx, currentCropTopPx, currentFocusCb,
                             )
                         }
-                        setOnGenericMotionListener { v, ev ->
+                        tv.setOnGenericMotionListener { v, ev ->
                             handleGenericMotionForWindow(
                                 v.width, v.height, ev, currentWin, currentHeaderPx, currentCropTopPx, lastHoverEventTime, currentFocusCb,
                             )
                         }
                     }
                 },
-                update = { textureView ->
+                update = { container ->
+                    surfaceContainer = container
                     val cw = window.contentWidth.coerceAtLeast(240)
                     val ch = window.contentHeight.coerceAtLeast(200)
-                    textureView.syncBufferSize(cw, ch)
-                    applyTopCropTransform(textureView, cropTopDisplayPx, ch)
-                    // Keep native Android View Z-order strictly aligned with Compose zIndex via translationZ
-                    // (never call bringToFront() here: mutating AndroidViewsHandler child array mid-click
-                    // aborts the active touch target and requires a double-click on unfocused windows!).
-                    val zVal = window.zOrder.toFloat()
-                    textureView.translationZ = zVal
-                    (textureView.parent as? View)?.let { holderView ->
-                        holderView.translationZ = zVal
+                    container.textureView.syncBufferSize(cw, ch)
+                    applyTopCropTransform(container.textureView, cropTopDisplayPx, ch)
+                    // Draw order and touch hit-testing across overlapping AndroidViews are driven
+                    // strictly by Compose Modifier.zIndex (AndroidViewsHandler.dispatchDraw is a
+                    // no-op and dispatchTouchEvent returns true) plus geometric occlusion guards.
+                    // Keeping translationZ at 0f avoids HWUI RenderNode Z-barrier churn on release.
+                    if (container.translationZ != 0f) container.translationZ = 0f
+                    (container.parent as? View)?.let { holderView ->
+                        if (holderView.translationZ != 0f) holderView.translationZ = 0f
                     }
                 },
             )
@@ -504,24 +680,128 @@ fun WindowSurfaceHost(
 }
 
 /**
+ * Native View container pairing [FixedBufferTextureView] (child 0) with a non-interactive sibling
+ * [ImageView] freeze overlay (child 1) inside the same `AndroidView` host.
+ *
+ * `bridgeOverlayView` stays permanently at [View.INVISIBLE] (never [View.GONE], never `bringToFront()`)
+ * so its laid-out `(0, 0, w, h)` bounds ALWAYS match `textureView` on Frame 0 of finger release
+ * without triggering a `requestLayout()` pass on `AndroidViewHolder`.
+ */
+internal class WindowSurfaceContainerView(context: android.content.Context) : FrameLayout(context) {
+    val textureView = FixedBufferTextureView(context)
+    private val bridgeOverlayView = ImageView(context).apply {
+        scaleType = ImageView.ScaleType.FIT_XY
+        setBackgroundColor(0xFF0E1118.toInt())
+        visibility = View.INVISIBLE
+        isClickable = false
+        isFocusable = false
+        isFocusableInTouchMode = false
+    }
+
+    @Volatile
+    var isResizeBridgeShowing: Boolean = false
+        private set
+
+    init {
+        addView(
+            textureView,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+        )
+        addView(
+            bridgeOverlayView,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+        )
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val w = (right - left).coerceAtLeast(0)
+        val h = (bottom - top).coerceAtLeast(0)
+        textureView.layout(0, 0, w, h)
+        bridgeOverlayView.layout(0, 0, w, h)
+    }
+
+    fun showResizeBridgeSync(bitmap: Bitmap) {
+        if (bitmap.isRecycled) return
+        bridgeOverlayView.animate().cancel()
+        val w = width
+        val h = height
+        if (w > 0 && h > 0 && (bridgeOverlayView.width != w || bridgeOverlayView.height != h)) {
+            bridgeOverlayView.measure(
+                MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY),
+            )
+            bridgeOverlayView.layout(0, 0, w, h)
+        }
+        bridgeOverlayView.setImageBitmap(bitmap)
+        bridgeOverlayView.alpha = 1f
+        bridgeOverlayView.visibility = View.VISIBLE
+        isResizeBridgeShowing = true
+        invalidate()
+    }
+
+    fun fadeOutResizeBridge(durationMs: Long) {
+        if (!isResizeBridgeShowing) return
+        isResizeBridgeShowing = false
+        if (bridgeOverlayView.visibility != View.VISIBLE) {
+            bridgeOverlayView.setImageDrawable(null)
+            return
+        }
+        bridgeOverlayView.animate().cancel()
+        bridgeOverlayView.animate()
+            .alpha(0f)
+            .setDuration(durationMs)
+            .withEndAction {
+                if (!isResizeBridgeShowing) {
+                    bridgeOverlayView.visibility = View.INVISIBLE
+                    bridgeOverlayView.alpha = 1f
+                    bridgeOverlayView.setImageDrawable(null)
+                }
+            }
+            .start()
+    }
+
+    fun clearResizeBridgeImmediately() {
+        isResizeBridgeShowing = false
+        bridgeOverlayView.animate().cancel()
+        bridgeOverlayView.visibility = View.INVISIBLE
+        bridgeOverlayView.alpha = 1f
+        bridgeOverlayView.setImageDrawable(null)
+    }
+}
+
+/**
  * `TextureView` subclass that preserves the committed VirtualDisplay `SurfaceTexture` buffer size
  * across Android visibility/layout/resume transitions (preventing Android/OEM `TextureView`
  * internals from silently resetting `defaultBufferSize` back to view pixel dimensions and zooming
  * or clipping VirtualDisplay content).
  */
-private class FixedBufferTextureView(context: android.content.Context) : TextureView(context) {
+internal class FixedBufferTextureView(context: android.content.Context) : TextureView(context) {
     @Volatile
     private var targetBufferWidth: Int = 0
 
     @Volatile
     private var targetBufferHeight: Int = 0
 
+    internal var hasCustomTopCropTransform: Boolean = false
+    internal var lastAppliedCropPx: Int = 0
+    internal var lastAppliedCropContentH: Int = 0
+    internal var lastAppliedCropViewH: Int = 0
+
     fun syncBufferSize(w: Int, h: Int) {
+        if (w <= 0 || h <= 0) return
+        val changed = (targetBufferWidth != w || targetBufferHeight != h)
         targetBufferWidth = w
         targetBufferHeight = h
-        if (w > 0 && h > 0) {
+        if (changed) {
             surfaceTexture?.setDefaultBufferSize(w, h)
         }
+    }
+
+    fun forceSyncBufferSize(w: Int, h: Int) {
+        if (w <= 0 || h <= 0) return
+        targetBufferWidth = w
+        targetBufferHeight = h
+        surfaceTexture?.setDefaultBufferSize(w, h)
     }
 
     private fun reapplyBufferSize() {
@@ -732,10 +1012,23 @@ private fun isMouseMotionEvent(ev: MotionEvent): Boolean =
     (ev.source and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE ||
         (ev.pointerCount > 0 && ev.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE)
 
-private fun applyTopCropTransform(view: TextureView, cropTopDisplayPx: Int, contentH: Int) {
+private fun applyTopCropTransform(view: FixedBufferTextureView, cropTopDisplayPx: Int, contentH: Int) {
     val viewH = view.height
     if (cropTopDisplayPx <= 0 || contentH <= 2 || viewH <= 0 || cropTopDisplayPx >= contentH - 2) {
-        view.setTransform(null)
+        if (view.hasCustomTopCropTransform) {
+            view.hasCustomTopCropTransform = false
+            view.lastAppliedCropPx = 0
+            view.lastAppliedCropContentH = 0
+            view.lastAppliedCropViewH = 0
+            view.setTransform(null)
+        }
+        return
+    }
+    if (view.hasCustomTopCropTransform &&
+        view.lastAppliedCropPx == cropTopDisplayPx &&
+        view.lastAppliedCropContentH == contentH &&
+        view.lastAppliedCropViewH == viewH
+    ) {
         return
     }
     val cropRatio = cropTopDisplayPx.toFloat() / contentH.toFloat()
@@ -744,6 +1037,10 @@ private fun applyTopCropTransform(view: TextureView, cropTopDisplayPx: Int, cont
         setScale(1f, scaleY)
         postTranslate(0f, -cropRatio * viewH * scaleY)
     }
+    view.hasCustomTopCropTransform = true
+    view.lastAppliedCropPx = cropTopDisplayPx
+    view.lastAppliedCropContentH = contentH
+    view.lastAppliedCropViewH = viewH
     view.setTransform(matrix)
 }
 

@@ -93,6 +93,7 @@ class PeerFloatingAppService : Service() {
         const val EXTRA_APP_PACKAGE = "app_pkg"
         const val EXTRA_APP_ACTIVITY = "app_cls"
         const val EXTRA_APP_LABEL = "app_label"
+        const val EXTRA_APP_USER_ID = "app_user_id"
         const val EXTRA_HANDOVER_TOKEN = "handover_token"
         const val EXTRA_IS_MIRROR = "is_mirror"
 
@@ -107,6 +108,7 @@ class PeerFloatingAppService : Service() {
             appPackage: String,
             appActivity: String,
             appLabel: String,
+            appUserId: Int = 0,
             handoverToken: String = "",
         ): Boolean {
             if (!Settings.canDrawOverlays(ctx)) return false
@@ -118,6 +120,7 @@ class PeerFloatingAppService : Service() {
                 putExtra(EXTRA_APP_PACKAGE, appPackage)
                 putExtra(EXTRA_APP_ACTIVITY, appActivity)
                 putExtra(EXTRA_APP_LABEL, appLabel)
+                putExtra(EXTRA_APP_USER_ID, appUserId.coerceAtLeast(0))
                 putExtra(EXTRA_HANDOVER_TOKEN, handoverToken)
                 putExtra(EXTRA_IS_MIRROR, false)
             }
@@ -194,6 +197,7 @@ class PeerFloatingAppService : Service() {
     private var appPackage: String = ""
     private var appActivity: String = ""
     private var appLabel: String = ""
+    private var appUserId: Int = 0
     private var handoverToken: String = ""
     private var isMirrorMode = false
     private var attachedMirrorMode: Boolean? = null
@@ -210,6 +214,10 @@ class PeerFloatingAppService : Service() {
     private var expandedH = 0
     private var savedX = 48
     private var savedY = 140
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(io.github.lengsukq.opaldesk.prefs.OpalLocalePolicy.wrapContext(newBase))
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -230,22 +238,23 @@ class PeerFloatingAppService : Service() {
         val nextPkg = intent?.getStringExtra(EXTRA_APP_PACKAGE).orEmpty().trim()
             .ifBlank { if (nextIsMirror) MIRROR_SENTINEL_PKG else "" }
         val nextCls = if (nextIsMirror) "" else intent?.getStringExtra(EXTRA_APP_ACTIVITY).orEmpty().trim()
+        val nextUserId = if (nextIsMirror) 0 else (intent?.getIntExtra(EXTRA_APP_USER_ID, 0) ?: 0).coerceAtLeast(0)
         val nextPeerLabel = intent?.getStringExtra(EXTRA_PEER_LABEL).orEmpty().ifBlank { nextHost }
         val nextAppLabel = intent?.getStringExtra(EXTRA_APP_LABEL).orEmpty().ifBlank {
-            if (nextIsMirror) "$nextPeerLabel · 主屏镜像" else nextPkg
+            if (nextIsMirror) getString(R.string.floating_mirror_title, nextPeerLabel) else nextPkg
         }
         val nextHandover = intent?.getStringExtra(EXTRA_HANDOVER_TOKEN).orEmpty().trim()
 
         // Always satisfy startForegroundService() contract before any early validation stopSelf().
         startForegroundNotification(
-            nextAppLabel.ifBlank { if (nextIsMirror) "主屏镜像" else "远程应用" },
-            nextPeerLabel.ifBlank { "远端设备" },
+            nextAppLabel.ifBlank { getString(if (nextIsMirror) R.string.picker_mirror_btn else R.string.floating_remote_app) },
+            nextPeerLabel.ifBlank { getString(R.string.common_peer_device) },
             nextIsMirror,
         )
 
         if (!Settings.canDrawOverlays(this)) {
             OpalLogStore.w(TAG, "Aborting start: SYSTEM_ALERT_WINDOW permission not granted")
-            Toast.makeText(this, "请先授予 OpalDesk 悬浮窗权限", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.floating_need_overlay), Toast.LENGTH_SHORT).show()
             stopForegroundAndSelf()
             return START_NOT_STICKY
         }
@@ -266,7 +275,7 @@ class PeerFloatingAppService : Service() {
         )
         if (!check.allowed || !OpalPeerCastMutex.beginReceiving(nextHost, nextPort, nextPeerLabel, MUTEX_TAG)) {
             OpalLogStore.w(TAG, "Aborting start: cast mutex rejected (${check.reason.ifBlank { "busy" }})")
-            Toast.makeText(this, check.reason.ifBlank { "当前不可启动远程悬浮窗" }, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, check.reason.ifBlank { getString(R.string.floating_start_blocked) }, Toast.LENGTH_LONG).show()
             stopForegroundAndSelf()
             return START_NOT_STICKY
         }
@@ -283,6 +292,7 @@ class PeerFloatingAppService : Service() {
         appPackage = nextPkg
         appActivity = nextCls
         appLabel = nextAppLabel
+        appUserId = nextUserId
         handoverToken = nextHandover
         isMirrorMode = nextIsMirror
         remoteBlackout = false
@@ -361,6 +371,7 @@ class PeerFloatingAppService : Service() {
             },
             appPackage = if (isMirrorMode) "" else appPackage,
             appActivity = if (isMirrorMode) "" else appActivity,
+            appUserId = if (isMirrorMode) 0 else appUserId,
             targetNetwork = boundNet,
             audioEnabled = isMirrorMode,
             initialDisplayMode = if (isMirrorMode) {
@@ -601,7 +612,7 @@ class PeerFloatingAppService : Service() {
         if (isMirrorMode) {
             val (blackoutBtn, blackoutGlyph) = buildChromeIconButton(
                 glyph = MirrorGlyph.SCREEN_OFF,
-                contentDesc = if (remoteBlackout) "亮屏" else "熄屏",
+                contentDesc = getString(if (remoteBlackout) R.string.peercast_screen_on else R.string.peercast_screen_off),
                 iconSizeDp = 13.5f,
                 isDark = isDark,
             ) {
@@ -622,7 +633,7 @@ class PeerFloatingAppService : Service() {
 
             val (imeBtn, imeGlyph) = buildChromeIconButton(
                 glyph = MirrorGlyph.KEYBOARD,
-                contentDesc = "键盘",
+                contentDesc = getString(R.string.taskbar_fs_ime),
                 iconSizeDp = 14f,
                 isDark = isDark,
             ) {
@@ -638,7 +649,7 @@ class PeerFloatingAppService : Service() {
             imeBtnContainer = null
             imeIconView = null
             header.addView(
-                buildHeaderPill("返回", pillBg, pillBorder, pillInk) {
+                buildHeaderPill(getString(R.string.common_back), pillBg, pillBorder, pillInk) {
                     client?.sendSystemAction(OpalCastPeerClient.SYS_BACK)
                 },
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -646,7 +657,7 @@ class PeerFloatingAppService : Service() {
                 },
             )
             header.addView(
-                buildHeaderPill("键盘", pillBg, pillBorder, pillInk) {
+                buildHeaderPill(getString(R.string.taskbar_fs_ime), pillBg, pillBorder, pillInk) {
                     toggleImeBar()
                 },
             )
@@ -670,7 +681,7 @@ class PeerFloatingAppService : Service() {
             visibility = View.GONE
         }
         val edit = EditText(this).apply {
-            hint = "输入文字发送到 $appLabel…"
+            hint = getString(R.string.floating_ime_hint, appLabel)
             setHintTextColor(if (isDark) 0x88CBD5E1.toInt() else 0x8864748B.toInt())
             setTextColor(titleInk)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
@@ -690,7 +701,7 @@ class PeerFloatingAppService : Service() {
         }
         imeEditText = edit
         val sendBtn = TextView(this).apply {
-            text = "发送"
+            text = getString(R.string.common_send)
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = Typeface.DEFAULT_BOLD
@@ -949,14 +960,7 @@ class PeerFloatingAppService : Service() {
     }
 
     private fun buildTrafficLightDot(fillColor: Int, borderColor: Int, onClick: () -> Unit): View =
-        View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(fillColor)
-                setStroke(max(1, (0.8f * resources.displayMetrics.density).roundToInt()), borderColor)
-            }
-            setOnClickListener { onClick() }
-        }
+        buildFloatingTrafficLightDot(this, fillColor, borderColor, onClick)
 
     private fun buildHeaderPill(
         label: String,
@@ -964,20 +968,7 @@ class PeerFloatingAppService : Service() {
         borderColor: Int,
         textColor: Int,
         onClick: () -> Unit,
-    ): TextView = TextView(this).apply {
-        text = label
-        setTextColor(textColor)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        gravity = Gravity.CENTER
-        background = GradientDrawable().apply {
-            setColor(bgColor)
-            cornerRadius = dp(10).toFloat()
-            setStroke(max(1, (0.7f * resources.displayMetrics.density).roundToInt()), borderColor)
-        }
-        setPadding(dp(9), dp(4), dp(9), dp(4))
-        setOnClickListener { onClick() }
-    }
+    ): TextView = buildFloatingHeaderPill(this, label, bgColor, borderColor, textColor, onClick)
 
     @SuppressLint("ClickableViewAccessibility")
     private fun installDragMoveListener(handle: View) {
@@ -1147,244 +1138,31 @@ class PeerFloatingAppService : Service() {
     private fun refreshBlackoutPillAppearance() {
         val btn = blackoutBtnContainer ?: return
         val glyph = blackoutIconView ?: return
-        val isDark = resolveFloatingDarkTheme()
-        btn.contentDescription = if (remoteBlackout) "亮屏" else "熄屏"
-        if (remoteBlackout) {
-            val activeInk = if (isDark) 0xFFFBBF24.toInt() else 0xFFD97706.toInt()
-            glyph.setIconTint(activeInk)
-            btn.background = GradientDrawable().apply {
-                setColor(if (isDark) 0x30F59E0B else 0x24F59E0B)
-                cornerRadius = dp(13).toFloat()
-                setStroke(max(1, (0.85f * resources.displayMetrics.density).roundToInt()), 0x7AF59E0B)
-            }
-        } else {
-            val idleBg = if (isDark) 0x18FFFFFF else 0x0F0F172A
-            val idleRim = if (isDark) 0x26FFFFFF else 0x1A0F172A
-            val idleInk = if (isDark) 0xFFD8E1F0.toInt() else 0xFF334155.toInt()
-            glyph.setIconTint(idleInk)
-            btn.background = GradientDrawable().apply {
-                setColor(idleBg)
-                cornerRadius = dp(13).toFloat()
-                setStroke(max(1, (0.7f * resources.displayMetrics.density).roundToInt()), idleRim)
-            }
-        }
+        applyFloatingBlackoutPillStyle(btn, glyph, remoteBlackout, resolveFloatingDarkTheme())
     }
 
     private fun refreshImeButtonAppearance() {
         val btn = imeBtnContainer ?: return
         val glyph = imeIconView ?: return
-        val isDark = resolveFloatingDarkTheme()
-        btn.contentDescription = if (isImeBarVisible) "收起键盘" else "键盘"
-        if (isImeBarVisible) {
-            val activeInk = if (isDark) 0xFF60A5FA.toInt() else 0xFF007AFF.toInt()
-            glyph.setIconTint(activeInk)
-            btn.background = GradientDrawable().apply {
-                setColor(if (isDark) 0x303B82F6 else 0x1E007AFF)
-                cornerRadius = dp(13).toFloat()
-                setStroke(max(1, (0.85f * resources.displayMetrics.density).roundToInt()), 0x6E007AFF)
-            }
-        } else {
-            val idleBg = if (isDark) 0x18FFFFFF else 0x0F0F172A
-            val idleRim = if (isDark) 0x26FFFFFF else 0x1A0F172A
-            val idleInk = if (isDark) 0xFFD8E1F0.toInt() else 0xFF334155.toInt()
-            glyph.setIconTint(idleInk)
-            btn.background = GradientDrawable().apply {
-                setColor(idleBg)
-                cornerRadius = dp(13).toFloat()
-                setStroke(max(1, (0.7f * resources.displayMetrics.density).roundToInt()), idleRim)
-            }
-        }
+        applyFloatingImeButtonStyle(btn, glyph, isImeBarVisible, resolveFloatingDarkTheme())
     }
 
-    private enum class MirrorGlyph { BACK, HOME, RECENTS, SCREEN_OFF, KEYBOARD }
-
-    private inner class MirrorGlyphIconView(
-        context: Context,
-        private val glyph: MirrorGlyph,
-        initialTint: Int,
-    ) : View(context) {
-        private var tintColor: Int = initialTint
-        private val density = resources.displayMetrics.density
-        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-            color = initialTint
-        }
-        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            color = initialTint
-        }
-        private val tmpPath = Path()
-        private val tmpRect = RectF()
-
-        fun setIconTint(color: Int) {
-            if (tintColor != color) {
-                tintColor = color
-                strokePaint.color = color
-                fillPaint.color = color
-                invalidate()
-            }
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            val w = width.toFloat()
-            val h = height.toFloat()
-            if (w <= 0f || h <= 0f) return
-            val sw = (1.65f * density).coerceAtLeast(1.8f)
-            strokePaint.color = tintColor
-            strokePaint.strokeWidth = sw
-            fillPaint.color = tintColor
-
-            when (glyph) {
-                MirrorGlyph.BACK -> {
-                    // Optically centered SF-style chevron (<)
-                    tmpPath.reset()
-                    tmpPath.moveTo(w * 0.63f, h * 0.17f)
-                    tmpPath.lineTo(w * 0.30f, h * 0.50f)
-                    tmpPath.lineTo(w * 0.63f, h * 0.83f)
-                    canvas.drawPath(tmpPath, strokePaint)
-                }
-                MirrorGlyph.HOME -> {
-                    // Refined minimal house silhouette matching OpalPrimitives ChromeGlyph.HOME_HOUSE
-                    tmpPath.reset()
-                    tmpPath.moveTo(w * 0.13f, h * 0.48f)
-                    tmpPath.lineTo(w * 0.50f, h * 0.15f)
-                    tmpPath.lineTo(w * 0.87f, h * 0.48f)
-                    canvas.drawPath(tmpPath, strokePaint)
-
-                    val r = 1.8f * density
-                    tmpPath.reset()
-                    tmpPath.moveTo(w * 0.24f, h * 0.44f)
-                    tmpPath.lineTo(w * 0.24f, h * 0.84f - r)
-                    tmpPath.quadTo(w * 0.24f, h * 0.84f, w * 0.24f + r, h * 0.84f)
-                    tmpPath.lineTo(w * 0.76f - r, h * 0.84f)
-                    tmpPath.quadTo(w * 0.76f, h * 0.84f, w * 0.76f, h * 0.84f - r)
-                    tmpPath.lineTo(w * 0.76f, h * 0.44f)
-                    canvas.drawPath(tmpPath, strokePaint)
-                }
-                MirrorGlyph.RECENTS -> {
-                    // Layered app-switcher cards (inspired by iPadOS Stage Manager / SF square.on.square)
-                    val cr = 2.4f * density
-                    // Trailing background card peek at muted alpha for depth
-                    val backAlpha = ((Color.alpha(tintColor) * 0.62f).roundToInt()).coerceIn(0, 255)
-                    strokePaint.color = Color.argb(backAlpha, Color.red(tintColor), Color.green(tintColor), Color.blue(tintColor))
-                    strokePaint.strokeWidth = sw * 0.90f
-                    tmpPath.reset()
-                    tmpPath.moveTo(w * 0.33f, h * 0.27f)
-                    tmpPath.lineTo(w * 0.33f, h * 0.14f + cr)
-                    tmpPath.quadTo(w * 0.33f, h * 0.14f, w * 0.33f + cr, h * 0.14f)
-                    tmpPath.lineTo(w * 0.86f - cr, h * 0.14f)
-                    tmpPath.quadTo(w * 0.86f, h * 0.14f, w * 0.86f, h * 0.14f + cr)
-                    tmpPath.lineTo(w * 0.86f, h * 0.67f - cr)
-                    tmpPath.quadTo(w * 0.86f, h * 0.67f, w * 0.86f - cr, h * 0.67f)
-                    tmpPath.lineTo(w * 0.72f, h * 0.67f)
-                    canvas.drawPath(tmpPath, strokePaint)
-
-                    // Foreground crisp card
-                    strokePaint.color = tintColor
-                    strokePaint.strokeWidth = sw
-                    tmpRect.set(w * 0.14f, h * 0.31f, w * 0.69f, h * 0.86f)
-                    canvas.drawRoundRect(tmpRect, cr, cr, strokePaint)
-                }
-                MirrorGlyph.SCREEN_OFF -> {
-                    // Universal power / screen-sleep glyph (open top arc + stem)
-                    tmpRect.set(w * 0.16f, h * 0.18f, w * 0.84f, h * 0.86f)
-                    canvas.drawArc(tmpRect, -52f, 284f, false, strokePaint)
-                    canvas.drawLine(w * 0.50f, h * 0.10f, w * 0.50f, h * 0.47f, strokePaint)
-                }
-                MirrorGlyph.KEYBOARD -> {
-                    val cr = 2.0f * density
-                    strokePaint.strokeWidth = sw * 0.90f
-                    tmpRect.set(w * 0.08f, h * 0.22f, w * 0.92f, h * 0.78f)
-                    canvas.drawRoundRect(tmpRect, cr, cr, strokePaint)
-                    canvas.drawLine(w * 0.28f, h * 0.62f, w * 0.72f, h * 0.62f, strokePaint)
-                    val dotR = (w * 0.052f).coerceAtLeast(1.1f * density)
-                    for (gx in floatArrayOf(0.26f, 0.42f, 0.58f, 0.74f)) {
-                        canvas.drawCircle(w * gx, h * 0.42f, dotR, fillPaint)
-                    }
-                }
-            }
-        }
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
     private fun buildChromeIconButton(
         glyph: MirrorGlyph,
         contentDesc: String,
         iconSizeDp: Float,
         isDark: Boolean,
         onClick: () -> Unit,
-    ): Pair<FrameLayout, MirrorGlyphIconView> {
-        val idleInk = if (isDark) 0xFFD8E1F0.toInt() else 0xFF334155.toInt()
-        val iconPx = (iconSizeDp * resources.displayMetrics.density).roundToInt()
-        val icon = MirrorGlyphIconView(this, glyph, idleInk)
-        val btn = FrameLayout(this).apply {
-            contentDescription = contentDesc
-            isClickable = true
-            isFocusable = false
-            addView(icon, FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER))
-            setOnTouchListener { v, ev ->
-                when (ev.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        v.animate().scaleX(0.88f).scaleY(0.88f).setDuration(75L).start()
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        v.animate().scaleX(1f).scaleY(1f).setDuration(120L).start()
-                    }
-                }
-                false
-            }
-            setOnClickListener {
-                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                onClick()
-            }
-        }
-        return btn to icon
-    }
+    ): Pair<FrameLayout, MirrorGlyphIconView> =
+        buildFloatingChromeIconButton(this, glyph, contentDesc, iconSizeDp, isDark, onClick)
 
-    @SuppressLint("ClickableViewAccessibility")
     private fun buildDockNavIconButton(
         glyph: MirrorGlyph,
         contentDesc: String,
         isDark: Boolean,
         onClick: () -> Unit,
-    ): FrameLayout {
-        val idleInk = if (isDark) 0xFFE2E8F0.toInt() else 0xFF1E293B.toInt()
-        val pressedInk = if (isDark) 0xFF60A5FA.toInt() else 0xFF007AFF.toInt()
-        val pressedBg = GradientDrawable().apply {
-            setColor(if (isDark) 0x2660A5FA else 0x1C007AFF)
-            cornerRadius = dp(12).toFloat()
-        }
-        val iconPx = (15.5f * resources.displayMetrics.density).roundToInt()
-        val icon = MirrorGlyphIconView(this, glyph, idleInk)
-        return FrameLayout(this).apply {
-            contentDescription = contentDesc
-            isClickable = true
-            isFocusable = false
-            addView(icon, FrameLayout.LayoutParams(iconPx, iconPx, Gravity.CENTER))
-            setOnTouchListener { v, ev ->
-                when (ev.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        v.background = pressedBg
-                        icon.setIconTint(pressedInk)
-                        icon.animate().scaleX(0.86f).scaleY(0.86f).setDuration(70L).start()
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        v.background = null
-                        icon.setIconTint(idleInk)
-                        icon.animate().scaleX(1f).scaleY(1f).setDuration(130L).start()
-                    }
-                }
-                false
-            }
-            setOnClickListener {
-                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                onClick()
-            }
-        }
-    }
+    ): FrameLayout =
+        buildFloatingDockNavIconButton(this, glyph, contentDesc, isDark, onClick)
 
     private fun toggleOrientation() {
         val lp = layoutParams ?: return
@@ -1637,11 +1415,7 @@ class PeerFloatingAppService : Service() {
         }
     }
 
-    private fun circleDrawable(color: Int): GradientDrawable =
-        GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(color)
-        }
+    private fun circleDrawable(color: Int): GradientDrawable = floatingCircleDrawable(color)
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).roundToInt()
 
@@ -1654,10 +1428,10 @@ class PeerFloatingAppService : Service() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         val ch = NotificationChannel(
             CHANNEL_ID,
-            "远程应用悬浮窗",
+            getString(R.string.floating_notif_channel_name),
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "保持远程单应用与主屏镜像悬浮窗在应用外运行"
+            description = getString(R.string.floating_notif_channel_desc)
         }
         nm.createNotificationChannel(ch)
 
@@ -1677,16 +1451,16 @@ class PeerFloatingAppService : Service() {
         )
 
         val contentText = if (mirror) {
-            "正在以悬浮窗镜像显示 $hostName 主屏"
+            getString(R.string.floating_notif_mirror_text, hostName)
         } else {
-            "正在流式运行来自 $hostName 的应用"
+            getString(R.string.floating_notif_app_text, hostName)
         }
         val notif = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_opaldesk)
-            .setContentTitle("悬浮窗：$appTitle")
+            .setContentTitle(getString(R.string.floating_notif_title, appTitle))
             .setContentText(contentText)
             .setContentIntent(openPi)
-            .addAction(Notification.Action.Builder(null, "关闭悬浮窗", stopPi).build())
+            .addAction(Notification.Action.Builder(null, getString(R.string.floating_notif_close), stopPi).build())
             .setOngoing(true)
             .build()
 

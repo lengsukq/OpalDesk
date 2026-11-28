@@ -39,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -46,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.AdbBootstrap
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.BridgeService
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.adb.ShizukuBootstrap
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.web.WebActivationService
@@ -193,10 +195,10 @@ fun ActivationModal(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    OpalText(text = "激活 OpalDesk 通用多窗引擎", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    OpalText(text = stringResource(R.string.activation_title), fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(3.dp))
                     OpalText(
-                        text = "95%+ 核心能力完全免 Root（运行于标准 ADB Shell uid=2000），适配全品牌 Android 11–17 设备",
+                        text = stringResource(R.string.activation_subtitle),
                         fontSize = 12.sp,
                         color = OpalPalette.TextSecondary,
                     )
@@ -209,7 +211,13 @@ fun ActivationModal(
 
             Spacer(Modifier.height(14.dp))
             OpalSegmentedRow(
-                options = listOf("无线调试", "Web激活", "Shizuku", "电脑ADB", "Root"),
+                options = listOf(
+                    stringResource(R.string.activation_tab_wireless),
+                    stringResource(R.string.activation_tab_web),
+                    stringResource(R.string.activation_tab_shizuku),
+                    stringResource(R.string.activation_tab_pc),
+                    stringResource(R.string.activation_tab_root),
+                ),
                 selectedIndex = tabIndex,
                 onSelect = { if (!isBusy) tabIndex = it },
             )
@@ -265,7 +273,7 @@ fun ActivationModal(
                             val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             cm?.setPrimaryClip(ClipData.newPlainText("OpalDesk Web Activation", url))
                             feedbackError = false
-                            feedbackText = "已复制 Web 局域网激活链接，在电脑/平板浏览器打开即可。"
+                            feedbackText = ctx.getString(R.string.activation_web_copied)
                         },
                     )
 
@@ -294,7 +302,7 @@ fun ActivationModal(
                             cm?.setPrimaryClip(ClipData.newPlainText("OpalDesk ADB", cmd))
                             copiedPcCmd = true
                             feedbackError = false
-                            feedbackText = "已复制跨平台单行 ADB 激活命令，在电脑终端粘贴回车即可。"
+                            feedbackText = ctx.getString(R.string.activation_pc_copied)
                         },
                     )
 
@@ -362,7 +370,7 @@ private fun WirelessAdbActivationPane(
     onDirectConnect: () -> Unit,
 ) {
     OpalText(
-        text = "免电脑 · 内置本机无线调试激活：点击下方按钮打开「开发者选项 → 无线调试」，在通知栏直接输入 6 位配对码即可完成激活。",
+        text = stringResource(R.string.activation_wireless_desc),
         fontSize = 12.5.sp,
         color = OpalPalette.TextSecondary,
         lineHeight = 18.sp,
@@ -379,13 +387,13 @@ private fun WirelessAdbActivationPane(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OpalText(
-                    text = "Android 17 需要「本地网络」权限才能自动发现本机无线调试端口（未授权时仍可手动输入端口）。",
+                    text = stringResource(R.string.activation_local_net_desc),
                     fontSize = 12.sp,
                     color = OpalPalette.TextPrimary,
                     lineHeight = 17.sp,
                 )
                 OpalButton(
-                    label = "立即授权本地网络权限",
+                    label = stringResource(R.string.activation_grant_local_net),
                     enabled = !isBusy,
                     accent = OpalPalette.AccentAmber,
                     onClick = onRequestLocalNetworkPerm,
@@ -396,12 +404,12 @@ private fun WirelessAdbActivationPane(
     Spacer(Modifier.height(12.dp))
 
     OpalButton(
-        label = "① 发送配对通知并打开「开发者选项」",
+        label = stringResource(R.string.activation_step1_btn),
         enabled = !isBusy,
         accent = OpalPalette.AccentCyan,
         modifier = Modifier.fillMaxWidth(),
         onClick = {
-            AdbBootstrap.showPairingNotification(ctx, "请开启「无线调试 → 使用配对码配对设备」，直接在通知中输入 6 位配对码")
+            AdbBootstrap.showPairingNotification(ctx, ctx.getString(R.string.activation_notif_hint))
             try {
                 ctx.startActivity(
                     Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
@@ -422,13 +430,13 @@ private fun WirelessAdbActivationPane(
         OpalTextInput(
             value = pairPortText,
             onValueChange = onPairPortChange,
-            placeholder = "配对端口 (mDNS 自动发现)",
+            placeholder = stringResource(R.string.activation_pair_port_hint),
             modifier = Modifier.weight(1f),
         )
         OpalTextInput(
             value = pairCodeText,
             onValueChange = onPairCodeChange,
-            placeholder = "6 位配对码",
+            placeholder = stringResource(R.string.activation_pair_code_hint),
             modifier = Modifier.weight(1f),
         )
     }
@@ -437,11 +445,11 @@ private fun WirelessAdbActivationPane(
         OpalTextInput(
             value = connectPortText,
             onValueChange = onConnectPortChange,
-            placeholder = "连接端口 (无线调试主页端口)",
+            placeholder = stringResource(R.string.activation_connect_port_hint),
             modifier = Modifier.weight(1f),
         )
         OpalButton(
-            label = "已配对·直连",
+            label = stringResource(R.string.activation_direct_connect),
             enabled = !isBusy && connectPortText.isNotBlank(),
             filled = false,
             onClick = onDirectConnect,
@@ -449,14 +457,14 @@ private fun WirelessAdbActivationPane(
     }
     Spacer(Modifier.height(10.dp))
     OpalButton(
-        label = if (isBusy) "正在执行无线调试激活…" else "② 配对并启动守护进程",
+        label = stringResource(if (isBusy) R.string.activation_working else R.string.activation_step2_btn),
         enabled = !isBusy && pairCodeText.length >= 6,
         onClick = onPairAndStart,
         modifier = Modifier.fillMaxWidth(),
     )
     Spacer(Modifier.height(10.dp))
     OpalText(
-        text = "提示：若未连接电脑 USB 调试，激活成功后请保持系统「无线调试」开启（部分机型关闭无线调试会连带终止后台守护进程）。",
+        text = stringResource(R.string.activation_wireless_tip),
         fontSize = 11.5.sp,
         color = OpalPalette.TextMuted,
         lineHeight = 16.5.sp,
@@ -476,13 +484,13 @@ private fun ShizukuActivationPane(
     Spacer(Modifier.height(12.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
         OpalButton(
-            label = if (ShizukuBootstrap.isReadyAndGranted()) "Shizuku 一键秒激活" else "授权并激活 Shizuku",
+            label = stringResource(if (ShizukuBootstrap.isReadyAndGranted()) R.string.activation_shizuku_go else R.string.activation_shizuku_auth),
             enabled = !isBusy,
             onClick = onActivate,
             modifier = Modifier.weight(1f),
         )
         OpalButton(
-            label = "打开 Shizuku",
+            label = stringResource(R.string.activation_shizuku_open),
             enabled = !isBusy,
             filled = false,
             onClick = { ShizukuBootstrap.openShizukuAppOrWebsite(ctx) },
@@ -490,8 +498,8 @@ private fun ShizukuActivationPane(
     }
     Spacer(Modifier.height(8.dp))
     OpalSwitchRow(
-        title = "打开应用时自动通过 Shizuku 静默重连",
-        subtitle = "设备重启且 Shizuku 已就绪时自动拉起守护进程",
+        title = stringResource(R.string.activation_shizuku_auto_title),
+        subtitle = stringResource(R.string.activation_shizuku_auto_sub),
         checked = autoShizuku,
         onCheckedChange = onAutoShizukuChange,
     )
@@ -504,7 +512,7 @@ private fun PcAdbActivationPane(
 ) {
     val cmd = remember { AdbBootstrap.buildPcAdbCommand() }
     OpalText(
-        text = "将手机通过数据线连接电脑（开启 USB 调试），在 macOS / Linux / Windows 终端执行以下单行命令即可：",
+        text = stringResource(R.string.activation_pc_desc),
         fontSize = 12.5.sp,
         color = OpalPalette.TextSecondary,
         lineHeight = 18.sp,
@@ -529,7 +537,7 @@ private fun PcAdbActivationPane(
     }
     Spacer(Modifier.height(12.dp))
     OpalButton(
-        label = if (copied) "已复制到剪贴板 ✓" else "复制单行 ADB 激活命令",
+        label = stringResource(if (copied) R.string.activation_pc_copied_btn else R.string.activation_pc_copy_btn),
         onClick = { onCopy(cmd) },
         modifier = Modifier.fillMaxWidth(),
     )
@@ -545,27 +553,27 @@ private fun OptionalRootActivationPane(
     onActivateRoot: () -> Unit,
 ) {
     OpalText(
-        text = "遵循最小权限安全设计：Root (Magisk / KernelSU / APatch) 仅用于校验 JAR 哈希与可选全局增强，随后立即强制降权至标准 Shell (uid=2000, u:r:shell:s0) 运行。",
+        text = stringResource(R.string.activation_root_desc),
         fontSize = 12.5.sp,
         color = OpalPalette.TextSecondary,
         lineHeight = 18.sp,
     )
     Spacer(Modifier.height(10.dp))
     OpalSwitchRow(
-        title = "启用可选 Root 增强 (~5% 顽固应用解锁)",
-        subtitle = "预置 AOSP 全局可调尺寸开关 (force_resizable_activities)，解决极少数死锁方向的老旧应用",
+        title = stringResource(R.string.activation_root_enhance_title),
+        subtitle = stringResource(R.string.activation_root_enhance_sub),
         checked = rootEnhance,
         onCheckedChange = onRootEnhanceChange,
     )
     OpalSwitchRow(
-        title = "打开应用时自动静默激活",
-        subtitle = "已授予 Root 权限后免手动点击",
+        title = stringResource(R.string.activation_root_auto_title),
+        subtitle = stringResource(R.string.activation_root_auto_sub),
         checked = autoRoot,
         onCheckedChange = onAutoRootChange,
     )
     Spacer(Modifier.height(12.dp))
     OpalButton(
-        label = if (isBusy) "正在请求 Root 并降权启动…" else "Root 一键授权并降权激活",
+        label = stringResource(if (isBusy) R.string.activation_root_busy else R.string.activation_root_go),
         enabled = !isBusy,
         accent = OpalPalette.AccentEmerald,
         onClick = onActivateRoot,
@@ -582,7 +590,7 @@ private fun WebLanActivationPane(
     onCopyUrl: (String) -> Unit,
 ) {
     OpalText(
-        text = "免数据线 · 免电脑装 ADB：开启下方临时局域网激活服务后，用电脑或平板浏览器扫码打开 GitHub Pages，再把手机停留在系统「无线调试 → 配对码」弹窗即可在电脑上远程输入配对码完成激活并自动进入 Web 投屏。",
+        text = stringResource(R.string.activation_web_desc),
         fontSize = 12.5.sp,
         color = OpalPalette.TextSecondary,
         lineHeight = 18.sp,
@@ -599,13 +607,13 @@ private fun WebLanActivationPane(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OpalText(
-                    text = "Android 17 需要「本地网络」权限，才能开启局域网 Web 激活服务并接收电脑/平板浏览器连接。",
+                    text = stringResource(R.string.activation_web_local_net),
                     fontSize = 12.sp,
                     color = OpalPalette.TextPrimary,
                     lineHeight = 17.sp,
                 )
                 OpalButton(
-                    label = "立即授权本地网络权限",
+                    label = stringResource(R.string.activation_grant_local_net),
                     accent = OpalPalette.AccentAmber,
                     onClick = onRequestLocalNetworkPerm,
                 )
@@ -616,7 +624,7 @@ private fun WebLanActivationPane(
 
     if (!state.running) {
         OpalButton(
-            label = "开启 Web 局域网激活服务（5 分钟自动关闭）",
+            label = stringResource(R.string.activation_web_start),
             enabled = !needsLocalNetworkPerm,
             accent = OpalPalette.AccentBlue,
             modifier = Modifier.fillMaxWidth(),
@@ -654,22 +662,21 @@ private fun WebLanActivationPane(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 OpalText(
-                    text = "局域网服务 ${state.lanIp}:${state.port}",
+                    text = stringResource(R.string.activation_web_service_addr, state.lanIp, state.port),
                     fontSize = 12.5.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.SemiBold,
                 )
-                val portHint = buildString {
-                    append("配对端口: ")
-                    append(if (state.pairingPort > 0) state.pairingPort.toString() else "等待发现")
-                    append(" · 连接端口: ")
-                    append(if (state.connectPort > 0) state.connectPort.toString() else "等待发现")
-                }
+                val portHint = stringResource(
+                    R.string.activation_web_ports,
+                    if (state.pairingPort > 0) state.pairingPort.toString() else stringResource(R.string.activation_web_port_waiting),
+                    if (state.connectPort > 0) state.connectPort.toString() else stringResource(R.string.activation_web_port_waiting),
+                )
                 OpalText(text = portHint, fontSize = 11.sp, color = OpalPalette.TextSecondary)
             }
             Spacer(Modifier.width(8.dp))
             OpalStatusBadge(
-                label = "访问码 ${state.sessionCode}",
+                label = stringResource(R.string.activation_web_code, state.sessionCode),
                 color = OpalPalette.AccentEmerald,
             )
         }
@@ -683,7 +690,7 @@ private fun WebLanActivationPane(
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             OpalButton(
-                label = "复制 Web 链接",
+                label = stringResource(R.string.activation_web_copy_url),
                 compact = true,
                 filled = false,
                 enabled = actUrl.isNotEmpty(),
@@ -691,7 +698,7 @@ private fun WebLanActivationPane(
                 modifier = Modifier.weight(1f),
             )
             OpalButton(
-                label = "停止服务",
+                label = stringResource(R.string.activation_web_stop),
                 compact = true,
                 filled = false,
                 accent = OpalPalette.AccentDanger,
@@ -703,7 +710,7 @@ private fun WebLanActivationPane(
 
     Spacer(Modifier.height(10.dp))
     OpalButton(
-        label = "打开系统「开发者选项 → 无线调试」（后台保持服务运行）",
+        label = stringResource(R.string.activation_web_open_dev),
         accent = OpalPalette.AccentCyan,
         modifier = Modifier.fillMaxWidth(),
         onClick = {

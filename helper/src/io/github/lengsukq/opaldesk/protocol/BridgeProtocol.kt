@@ -103,6 +103,7 @@ object BridgeProtocol {
         const val SYNC_MEDIA_STATE = 51
         const val SYNC_CALL_STATE = 52
         const val TRIGGER_HOTSPOT = 53
+        const val GET_SECONDARY_USER_APPS = 54
         const val SHUTDOWN = 99
     }
 
@@ -149,6 +150,12 @@ object BridgeProtocol {
         const val COMPAT = 0
         const val BALANCED = 1
         const val NATIVE_1X = 2
+    }
+
+    object ExternalScaling {
+        const val SMART_AUTO = 0
+        const val NATIVE_1TO1 = 1
+        const val FORCE_SYSTEM_AUTO = 2
     }
 
     object HardKbdSoftIme {

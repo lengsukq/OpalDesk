@@ -34,12 +34,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.BridgeService
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 
 /**
@@ -96,10 +98,10 @@ internal fun CopyableInfoLine(ctx: Context, label: String, value: String) {
             modifier = Modifier
                 .clip(CircleShape)
                 .background(OpalPalette.ChipFill)
-                .clickable { copyTextWithToast(ctx, value, "已复制 $label") }
+                .clickable { copyTextWithToast(ctx, value, ctx.getString(R.string.common_copied, label)) }
                 .padding(horizontal = 10.dp, vertical = 5.dp),
         ) {
-            OpalText(text = "复制", fontSize = 11.sp, color = OpalPalette.AccentCyan, fontWeight = FontWeight.Medium)
+            OpalText(text = stringResource(R.string.common_copy), fontSize = 11.sp, color = OpalPalette.AccentCyan, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -130,7 +132,7 @@ internal fun openDeveloperSettings(ctx: Context) {
         try {
             ctx.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (_: Throwable) {
-            Toast.makeText(ctx, "请手动打开系统「设置 → 开发者选项」", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, ctx.getString(R.string.toast_open_dev_settings_manual), Toast.LENGTH_SHORT).show()
         }
     }
 }
@@ -148,7 +150,7 @@ internal fun openTetherSettings(ctx: Context) {
         } catch (_: Throwable) {
         }
     }
-    Toast.makeText(ctx, "请手动前往系统「设置 → 便携式热点 / USB 网络共享」开启", Toast.LENGTH_SHORT).show()
+    Toast.makeText(ctx, ctx.getString(R.string.toast_open_tether_settings_manual), Toast.LENGTH_SHORT).show()
 }
 
 @Composable
@@ -301,14 +303,14 @@ internal fun UpgradeReactivateTipCard(
     ) {
         OpalText(text = "↻", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = accent)
         OpalText(
-            text = "升级版本后建议重新激活一次引擎以生效最新修复",
+            text = stringResource(R.string.dash_upgrade_tip),
             fontSize = 11.5.sp,
             color = OpalPalette.TextSecondary,
             maxLines = 1,
             modifier = Modifier.weight(1f),
         )
         OpalText(
-            text = if (connected) "重新激活 ›" else "去激活 ›",
+            text = stringResource(if (connected) R.string.dash_upgrade_reactivate else R.string.dash_upgrade_activate),
             fontSize = 11.5.sp,
             fontWeight = FontWeight.SemiBold,
             color = accent,
@@ -344,7 +346,7 @@ internal fun TouchInputTroubleshootingTipCard(
         }
         Column(modifier = Modifier.weight(1f)) {
             OpalText(
-                text = if (inputBlocked) "检测到触摸输入受限" else "触摸无反应排查",
+                text = stringResource(if (inputBlocked) R.string.dash_touch_blocked_title else R.string.dash_touch_troubleshoot_title),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = if (inputBlocked) OpalPalette.AccentAmber else OpalPalette.TextPrimary,
@@ -352,9 +354,9 @@ internal fun TouchInputTroubleshootingTipCard(
             Spacer(Modifier.height(2.dp))
             OpalText(
                 text = if (inputBlocked) {
-                    "当前系统已拦截跨屏触控（含 UHID 虚拟屏绑定），请在手机「开发者选项」开启「USB 调试（安全设置）」后重新连接。"
+                    stringResource(R.string.dash_touch_blocked_desc)
                 } else {
-                    "若桌面无法点击，请在开发者选项开启「USB 调试（安全设置）」，或在「设置」切至 /dev/uhid。"
+                    stringResource(R.string.dash_touch_troubleshoot_desc)
                 },
                 fontSize = 11.5.sp,
                 color = OpalPalette.TextSecondary,
@@ -362,7 +364,7 @@ internal fun TouchInputTroubleshootingTipCard(
             )
         }
         OpalButton(
-            label = "去设置",
+            label = stringResource(R.string.dash_touch_open_settings),
             compact = true,
             filled = inputBlocked,
             accent = accent,
@@ -374,9 +376,9 @@ internal fun TouchInputTroubleshootingTipCard(
 internal fun toggleHostScreenPowerWithToast(ctx: Context, screenOn: Boolean) {
     BridgeClient.setHostScreenPowerAsync(screenOn) { ok ->
         val msg = when {
-            !ok -> "当前设备暂不支持物理息屏控制"
-            screenOn -> "已点亮本机屏幕"
-            else -> "已物理熄灭本机屏幕（双击屏幕或按音量键/电源键可随时亮屏，断开投屏也会自动亮屏）"
+            !ok -> ctx.getString(R.string.toast_host_screen_unsupported)
+            screenOn -> ctx.getString(R.string.toast_host_screen_on)
+            else -> ctx.getString(R.string.toast_host_screen_off_hint)
         }
         Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
     }

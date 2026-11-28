@@ -23,6 +23,8 @@ import androidx.core.view.WindowCompat
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.DesktopActivity
 import io.github.lengsukq.opaldesk.MainActivity
+import io.github.lengsukq.opaldesk.R
+import io.github.lengsukq.opaldesk.prefs.OpalLocalePolicy
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.ui.OpalImeFocusTracker
 import io.github.lengsukq.opaldesk.ui.OpalPalette
@@ -40,6 +42,10 @@ import kotlin.math.roundToInt
  * [io.github.lengsukq.opaldesk.ExternalDesktopActivity] on the external or remote display.
  */
 class RemoteTrackpadActivity : ComponentActivity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(OpalLocalePolicy.wrapContext(newBase))
+    }
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val remoteCursorPosState = mutableStateOf(Offset(960f, 540f))
     private var isRemotePrimaryPressed = false
@@ -59,7 +65,7 @@ class RemoteTrackpadActivity : ComponentActivity() {
         )
         when (initialTarget) {
             TrackpadTargetMode.NONE -> {
-                Toast.makeText(this, "当前未处于外接屏或桌面投屏状态", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.toast_not_in_external_or_cast), Toast.LENGTH_SHORT).show()
                 finish()
                 return
             }

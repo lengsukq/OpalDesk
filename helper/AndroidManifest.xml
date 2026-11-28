@@ -87,7 +87,7 @@
         <activity
             android:name=".DesktopActivity"
             android:exported="true"
-            android:label="OpalDesk 桌面工作站"
+            android:label="@string/activity_desktop_label"
             android:launchMode="singleTask"
             android:taskAffinity="io.github.lengsukq.opaldesk.workstation"
             android:screenOrientation="unspecified"
@@ -99,7 +99,7 @@
         <activity
             android:name=".ExternalDesktopActivity"
             android:exported="true"
-            android:label="OpalDesk 外接屏工作站"
+            android:label="@string/activity_external_desktop_label"
             android:launchMode="singleInstance"
             android:taskAffinity="io.github.lengsukq.opaldesk.external"
             android:resizeableActivity="true"
@@ -110,7 +110,7 @@
         <activity
             android:name=".external.RemoteTrackpadActivity"
             android:exported="false"
-            android:label="OpalDesk 投屏触控板"
+            android:label="@string/activity_remote_trackpad_label"
             android:launchMode="singleTask"
             android:taskAffinity="io.github.lengsukq.opaldesk.trackpad"
             android:resizeableActivity="true"
@@ -130,7 +130,7 @@
         <activity
             android:name=".cast.PeerCastViewerActivity"
             android:exported="false"
-            android:label="OpalDesk 设备互投接收端"
+            android:label="@string/activity_peer_cast_viewer_label"
             android:launchMode="singleTask"
             android:screenOrientation="unspecified"
             android:resizeableActivity="true"
@@ -168,7 +168,7 @@
         <service
             android:name=".notifications.OpalNotificationListenerService"
             android:exported="true"
-            android:label="OpalDesk 桌面通知桥接"
+            android:label="@string/service_notification_listener_label"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />

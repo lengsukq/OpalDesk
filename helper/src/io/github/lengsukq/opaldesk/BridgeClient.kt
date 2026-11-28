@@ -576,7 +576,14 @@ object BridgeClient {
         }
     }
 
-    fun setExternalDisplayModeAsync(displayId: Int, width: Int, height: Int, fps: Float, onDone: ((Boolean) -> Unit)? = null) {
+    fun setExternalDisplayModeAsync(
+        displayId: Int,
+        width: Int,
+        height: Int,
+        fps: Float,
+        scalingMode: Int = BridgeProtocol.ExternalScaling.SMART_AUTO,
+        onDone: ((Boolean) -> Unit)? = null,
+    ) {
         ioExec.execute {
             val svc = getService()
             val ok = if (svc != null) {
@@ -589,6 +596,7 @@ object BridgeClient {
                         d.writeInt(width)
                         d.writeInt(height)
                         d.writeInt((fps * 100f).toInt())
+                        d.writeInt(scalingMode)
                     },
                 ) { it.readInt() != 0 } ?: false
             } else {
@@ -919,7 +927,7 @@ object BridgeClient {
                 val t = (entry.topRatio * h).toInt()
                 val r = (entry.rightRatio * w).toInt()
                 val b = (entry.bottomRatio * h).toInt()
-                val winId = openWindow(entry.pkg, entry.activityClass, entry.profileCode, l, t, r, b)
+                val winId = openWindow(entry.pkg, entry.activityClass, entry.profileCode, l, t, r, b, entry.userId)
                 if (winId > 0) {
                     restored++
                     if (entry.presentation != BridgeProtocol.Presentation.FLOATING) {
@@ -1064,6 +1072,13 @@ object BridgeClient {
         return _sceneFlow.value
     }
 
+    fun fetchSecondaryUserAppsJson(): String {
+        val svc = getService() ?: return "[]"
+        return transact(svc, BridgeProtocol.Tx.GET_SECONDARY_USER_APPS, oneway = false, writeArgs = {}) { reply ->
+            reply.readString().orEmpty()
+        }?.takeIf { it.isNotBlank() } ?: "[]"
+    }
+
     fun openWindow(
         pkg: String,
         activityClass: String = "",
@@ -1072,9 +1087,11 @@ object BridgeClient {
         top: Int = 0,
         right: Int = 0,
         bottom: Int = 0,
+        userId: Int = 0,
     ): Int {
+        val safeUserId = userId.coerceAtLeast(0)
         val svc = getService() ?: run {
-            OpalLogStore.w("IPC", "openWindow($pkg) aborted: daemon not connected")
+            OpalLogStore.w("IPC", "openWindow($pkg, u=$safeUserId) aborted: daemon not connected")
             return -1
         }
         val winId = transact(
@@ -1089,13 +1106,16 @@ object BridgeClient {
                 d.writeInt(top)
                 d.writeInt(right)
                 d.writeInt(bottom)
+                if (safeUserId > 0) {
+                    d.writeInt(safeUserId)
+                }
             },
         ) { it.readInt() } ?: -1
         if (winId > 0) {
-            OpalLogStore.i("Window", "openWindow($pkg) -> wid=$winId")
+            OpalLogStore.i("Window", "openWindow($pkg, u=$safeUserId) -> wid=$winId")
             scheduleWindowLifecycleLogSync(delaysMs = longArrayOf(400L), minIntervalMs = 2000L)
         } else {
-            OpalLogStore.w("Window", "openWindow($pkg) failed (wid=$winId)")
+            OpalLogStore.w("Window", "openWindow($pkg, u=$safeUserId) failed (wid=$winId)")
         }
         return winId
     }

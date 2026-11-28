@@ -34,15 +34,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.BridgeService
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.external.CustomResolutionPolicy
 import io.github.lengsukq.opaldesk.external.CustomResolutionSpec
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
+import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.RemoteStreamStatus
 import kotlinx.coroutines.delay
 import kotlin.math.abs
@@ -53,6 +56,8 @@ private data class PendingExternalRevert(
     val appliedWidth: Int,
     val appliedHeight: Int,
     val token: Long,
+    val revertScalingMode: Int = BridgeProtocol.ExternalScaling.SMART_AUTO,
+    val revertNative1To1Pref: Boolean = false,
 )
 
 /**
@@ -69,6 +74,7 @@ fun OutputResolutionSectionContent(
     val ctx = LocalContext.current
     val savedPresets by AppPrefs.customResolutionPresetsFlow.collectAsState()
     val autoCustomEnabled by AppPrefs.autoCustomResolutionEnabledFlow.collectAsState()
+    val native1To1Enabled by AppPrefs.externalNative1To1Flow.collectAsState()
     val defaultCustom by AppPrefs.defaultCustomResolutionFlow.collectAsState()
 
     val isConnected = extDisplay != null || remote.connected
@@ -124,8 +130,17 @@ fun OutputResolutionSectionContent(
         if (pendingRevert?.token == guard.token) {
             pendingRevert = null
             revertSecondsLeft = 0
-            BridgeClient.setExternalDisplayModeAsync(guard.displayId, 0, 0, 0f) { _ ->
-                Toast.makeText(ctx, "15 秒未确认，已自动恢复外接屏原生分辨率", Toast.LENGTH_LONG).show()
+            if (guard.revertNative1To1Pref) {
+                AppPrefs.setExternalNative1To1Enabled(ctx, false)
+            }
+            BridgeClient.setExternalDisplayModeAsync(
+                guard.displayId,
+                0,
+                0,
+                0f,
+                scalingMode = guard.revertScalingMode,
+            ) { _ ->
+                Toast.makeText(ctx, ctx.getString(R.string.res_auto_reverted_toast), Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -147,11 +162,19 @@ fun OutputResolutionSectionContent(
                 val matchesEdid = isKnownEdidMode || extDisplay.supportedModes.any {
                     it.width == spec.width && it.height == spec.height
                 }
+                val isNativeTarget = (spec.width == extDisplay.nativeWidth && spec.height == extDisplay.nativeHeight) ||
+                    (spec.width == extDisplay.nativeHeight && spec.height == extDisplay.nativeWidth)
+                val scalingMode = if (native1To1Enabled && isNativeTarget) {
+                    BridgeProtocol.ExternalScaling.NATIVE_1TO1
+                } else {
+                    BridgeProtocol.ExternalScaling.SMART_AUTO
+                }
                 BridgeClient.setExternalDisplayModeAsync(
                     targetId,
                     spec.width,
                     spec.height,
                     spec.fps.toFloat(),
+                    scalingMode = scalingMode,
                 ) { ok ->
                     if (ok) {
                         if (!matchesEdid) {
@@ -163,21 +186,21 @@ fun OutputResolutionSectionContent(
                             )
                             Toast.makeText(
                                 ctx,
-                                "已强制应用自定义分辨率 ${spec.width}×${spec.height}，请在 15 秒内确认",
+                                ctx.getString(R.string.res_forced_confirm_toast, spec.width, spec.height),
                                 Toast.LENGTH_SHORT,
                             ).show()
                         } else {
                             pendingRevert = null
                             Toast.makeText(
                                 ctx,
-                                "已切换外接屏至 ${spec.displayText}",
+                                ctx.getString(R.string.res_switched_ext_toast, spec.displayText),
                                 Toast.LENGTH_SHORT,
                             ).show()
                         }
                     } else {
                         Toast.makeText(
                             ctx,
-                            "外接屏拒绝了该分辨率（请确认多窗引擎已激活）",
+                            ctx.getString(R.string.res_rejected_ext_toast),
                             Toast.LENGTH_SHORT,
                         ).show()
                     }
@@ -191,7 +214,7 @@ fun OutputResolutionSectionContent(
                     spec.height,
                     spec.fps.toFloat(),
                 ) { ok ->
-                    val msg = if (ok) "已动态切换投屏至 ${spec.displayText}" else "切换投屏分辨率失败"
+                    val msg = if (ok) ctx.getString(R.string.res_switched_cast_toast, spec.displayText) else ctx.getString(R.string.res_switch_cast_failed)
                     Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
                 }
             }
@@ -199,21 +222,38 @@ fun OutputResolutionSectionContent(
                 AppPrefs.setDefaultCustomResolution(ctx, spec)
                 Toast.makeText(
                     ctx,
-                    "已设为默认目标 ${spec.displayText}（连接投屏或外接屏后生效）",
+                    ctx.getString(R.string.res_set_default_toast, spec.displayText),
                     Toast.LENGTH_SHORT,
                 ).show()
             }
         }
     }
 
-    fun resetToNativeNow() {
+    fun resetToNativeNow(forceSystemAutoScaling: Boolean = false) {
+        val guard = pendingRevert
         pendingRevert = null
+        revertSecondsLeft = 0
+        if (forceSystemAutoScaling || guard?.revertNative1To1Pref == true) {
+            AppPrefs.setExternalNative1To1Enabled(ctx, false)
+        }
+        val scalingMode = when {
+            forceSystemAutoScaling -> BridgeProtocol.ExternalScaling.FORCE_SYSTEM_AUTO
+            guard != null -> guard.revertScalingMode
+            native1To1Enabled -> BridgeProtocol.ExternalScaling.NATIVE_1TO1
+            else -> BridgeProtocol.ExternalScaling.SMART_AUTO
+        }
         when {
             extDisplay != null -> {
-                BridgeClient.setExternalDisplayModeAsync(extDisplay.displayId, 0, 0, 0f) { ok ->
+                BridgeClient.setExternalDisplayModeAsync(
+                    extDisplay.displayId,
+                    0,
+                    0,
+                    0f,
+                    scalingMode = scalingMode,
+                ) { ok ->
                     Toast.makeText(
                         ctx,
-                        if (ok) "已恢复外接屏原生分辨率" else "恢复原生分辨率失败",
+                        ctx.getString(if (ok) R.string.res_restored_native_ext else R.string.res_restore_native_failed),
                         Toast.LENGTH_SHORT,
                     ).show()
                 }
@@ -222,7 +262,7 @@ fun OutputResolutionSectionContent(
                 BridgeClient.setExternalDisplayModeAsync(-1, 0, 0, 0f) { ok ->
                     Toast.makeText(
                         ctx,
-                        if (ok) "已恢复对端原始协商分辨率" else "恢复原始分辨率失败",
+                        ctx.getString(if (ok) R.string.res_restored_cast_negotiated else R.string.res_restore_cast_failed),
                         Toast.LENGTH_SHORT,
                     ).show()
                 }
@@ -240,17 +280,17 @@ fun OutputResolutionSectionContent(
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 val statusLine = when {
                     extDisplay != null -> {
-                        val prefix = if (extDisplay.isWirelessDisplay) "无线电视" else "物理外接屏"
+                        val prefix = stringResource(if (extDisplay.isWirelessDisplay) R.string.res_prefix_wireless_tv else R.string.res_prefix_wired_ext)
                         "$prefix：${extDisplay.name} · ${extDisplay.width}×${extDisplay.height} @ ${extDisplay.refreshRateHz}Hz"
                     }
                     remote.connected -> {
                         val fps = (remote.fpsX100 / 100f).roundToInt().coerceAtLeast(24)
-                        "${remote.channelLabel}：${remote.peerName.ifBlank { "对端设备" }} · ${remote.width}×${remote.height} @ ${fps}Hz"
+                        "${remote.channelLabel}：${remote.peerName.ifBlank { stringResource(R.string.common_peer_device) }} · ${remote.width}×${remote.height} @ ${fps}Hz"
                     }
                     autoCustomEnabled ->
-                        "未连接外接屏/投屏 · 已开启自动套用：${defaultCustom.displayText}"
+                        stringResource(R.string.res_idle_auto_apply, defaultCustom.displayText)
                     else ->
-                        "未连接外接屏或投屏 · 可提前自定义分辨率或收藏常用预设"
+                        stringResource(R.string.res_idle_hint)
                 }
                 OpalText(
                     text = statusLine,
@@ -259,7 +299,7 @@ fun OutputResolutionSectionContent(
                 )
                 if (extDisplay != null && extDisplay.isCustomSizeOverride) {
                     OpalText(
-                        text = "自定义逻辑覆写生效中（物理原生 ${extDisplay.nativeWidth}×${extDisplay.nativeHeight}）",
+                        text = stringResource(R.string.res_override_active, extDisplay.nativeWidth, extDisplay.nativeHeight),
                         fontSize = 11.sp,
                         color = OpalPalette.AccentAmber,
                     )
@@ -268,7 +308,7 @@ fun OutputResolutionSectionContent(
             if (isConnected) {
                 Spacer(Modifier.width(8.dp))
                 OpalButton(
-                    label = "恢复原生",
+                    label = stringResource(R.string.res_restore_native_btn),
                     compact = true,
                     filled = false,
                     accent = OpalPalette.AccentAmber,
@@ -290,7 +330,7 @@ fun OutputResolutionSectionContent(
                 verticalArrangement = Arrangement.spacedBy(7.dp),
             ) {
                 OpalText(
-                    text = "已应用自定义分辨率 ${guard.appliedWidth}×${guard.appliedHeight}，外接屏显示是否正常？（${revertSecondsLeft}s 后自动恢复原生）",
+                    text = stringResource(R.string.res_revert_prompt, guard.appliedWidth, guard.appliedHeight, revertSecondsLeft),
                     fontSize = 11.5.sp,
                     fontWeight = FontWeight.Medium,
                     color = OpalPalette.TextPrimary,
@@ -301,23 +341,27 @@ fun OutputResolutionSectionContent(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     OpalButton(
-                        label = "保留此分辨率",
+                        label = stringResource(R.string.res_keep_btn),
                         compact = true,
                         filled = true,
                         accent = OpalPalette.AccentEmerald,
                         onClick = {
                             pendingRevert = null
                             revertSecondsLeft = 0
-                            Toast.makeText(ctx, "已确认保留 ${guard.appliedWidth}×${guard.appliedHeight}", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, ctx.getString(R.string.res_kept_toast, guard.appliedWidth, guard.appliedHeight), Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.weight(1f),
                     )
                     OpalButton(
-                        label = "立即恢复原生",
+                        label = stringResource(R.string.res_revert_now_btn),
                         compact = true,
                         filled = false,
                         accent = OpalPalette.AccentAmber,
-                        onClick = { resetToNativeNow() },
+                        onClick = {
+                            resetToNativeNow(
+                                forceSystemAutoScaling = guard.revertScalingMode == BridgeProtocol.ExternalScaling.FORCE_SYSTEM_AUTO,
+                            )
+                        },
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -326,9 +370,33 @@ fun OutputResolutionSectionContent(
 
         // 3. Recognized Monitor EDID Modes (when physical/wireless display connected)
         if (extDisplay != null) {
+            if (extDisplay.hasAnisotropyDistortion) {
+                val infoShape = RoundedCornerShape(12.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(infoShape)
+                        .background(OpalPalette.AccentCyan.copy(alpha = if (OpalPalette.isDark) 0.14f else 0.09f))
+                        .border(0.8.dp, OpalPalette.AccentCyan.copy(alpha = 0.45f), infoShape)
+                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                ) {
+                    OpalText(
+                        text = stringResource(
+                            R.string.res_anisotropy_banner,
+                            extDisplay.nativeWidth,
+                            extDisplay.nativeHeight,
+                        ),
+                        fontSize = 11.sp,
+                        color = OpalPalette.TextPrimary,
+                        lineHeight = 15.5.sp,
+                    )
+                }
+            }
             if (extDisplay.supportedModes.isNotEmpty()) {
+                val nativeBadge = stringResource(R.string.res_mode_badge_native)
+                val anisoBadge = stringResource(R.string.res_mode_badge_anisotropy)
                 OpalText(
-                    text = "已识别的显示器原生模式（${extDisplay.supportedModes.size} 项）",
+                    text = stringResource(R.string.res_edid_modes_title, extDisplay.supportedModes.size),
                     fontSize = 11.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = OpalPalette.TextSecondary,
@@ -344,11 +412,21 @@ fun OutputResolutionSectionContent(
                                     m.width == extDisplay.width &&
                                     m.height == extDisplay.height &&
                                     abs(m.refreshRateHz - extDisplay.refreshRateHz) <= 2
+                                val suffix = when {
+                                    m.isNativePhysical && extDisplay.hasAnisotropyDistortion -> " · $nativeBadge"
+                                    m.isAnisotropySynthetic -> " · $anisoBadge"
+                                    else -> ""
+                                }
                                 OpalButton(
-                                    label = "${m.width}×${m.height} · ${m.refreshRateHz}Hz",
+                                    label = "${m.width}×${m.height} · ${m.refreshRateHz}Hz$suffix",
                                     compact = true,
                                     filled = isCurrent,
-                                    accent = if (isCurrent) OpalPalette.AccentBlue else OpalPalette.TextSecondary,
+                                    accent = when {
+                                        isCurrent -> OpalPalette.AccentBlue
+                                        m.isNativePhysical && extDisplay.hasAnisotropyDistortion -> OpalPalette.AccentEmerald
+                                        m.isAnisotropySynthetic -> OpalPalette.TextMuted
+                                        else -> OpalPalette.TextSecondary
+                                    },
                                     onClick = {
                                         applyResolutionNow(
                                             CustomResolutionSpec(m.width, m.height, m.refreshRateHz),
@@ -364,7 +442,7 @@ fun OutputResolutionSectionContent(
                 }
             } else {
                 OpalText(
-                    text = "当前显示器未上报标准 EDID 模式列表，可直接使用下方预设或手动输入宽 × 高强制生效。",
+                    text = stringResource(R.string.res_no_edid_hint),
                     fontSize = 11.5.sp,
                     color = OpalPalette.AccentAmber,
                     lineHeight = 16.sp,
@@ -375,7 +453,7 @@ fun OutputResolutionSectionContent(
         // 4. Saved User Custom Presets
         if (savedPresets.isNotEmpty()) {
             OpalText(
-                text = "我的自定义预设",
+                text = stringResource(R.string.res_saved_presets_title),
                 fontSize = 11.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = OpalPalette.TextSecondary,
@@ -439,7 +517,7 @@ fun OutputResolutionSectionContent(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             OpalText(
-                text = if (extDisplay != null) "常用分辨率与异形比例快捷切换" else "常用投屏与异形比例预设",
+                text = stringResource(if (extDisplay != null) R.string.res_builtin_ext_title else R.string.res_builtin_cast_title),
                 fontSize = 11.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = OpalPalette.TextSecondary,
@@ -452,7 +530,7 @@ fun OutputResolutionSectionContent(
                     .padding(horizontal = 8.dp, vertical = 2.5.dp),
             ) {
                 OpalText(
-                    text = if (editorExpanded) "收起手动输入" else "自定义宽 × 高",
+                    text = stringResource(if (editorExpanded) R.string.res_hide_editor else R.string.res_custom_wh_btn),
                     fontSize = 10.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = OpalPalette.AccentBlue,
@@ -523,7 +601,7 @@ fun OutputResolutionSectionContent(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     OpalText(
-                        text = "手动自定义分辨率",
+                        text = stringResource(R.string.res_manual_title),
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -546,7 +624,7 @@ fun OutputResolutionSectionContent(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        OpalText(text = "宽 (px)", fontSize = 10.sp, color = OpalPalette.TextSecondary)
+                        OpalText(text = stringResource(R.string.res_width_label), fontSize = 10.sp, color = OpalPalette.TextSecondary)
                         OpalTextInput(
                             value = widthInput,
                             onValueChange = { raw ->
@@ -554,7 +632,7 @@ fun OutputResolutionSectionContent(
                                 userEditedInputs = true
                                 inputError = ""
                             },
-                            placeholder = "如 2560",
+                            placeholder = stringResource(R.string.res_width_hint),
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -581,7 +659,7 @@ fun OutputResolutionSectionContent(
                         )
                     }
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        OpalText(text = "高 (px)", fontSize = 10.sp, color = OpalPalette.TextSecondary)
+                        OpalText(text = stringResource(R.string.res_height_label), fontSize = 10.sp, color = OpalPalette.TextSecondary)
                         OpalTextInput(
                             value = heightInput,
                             onValueChange = { raw ->
@@ -589,12 +667,12 @@ fun OutputResolutionSectionContent(
                                 userEditedInputs = true
                                 inputError = ""
                             },
-                            placeholder = "如 1440",
+                            placeholder = stringResource(R.string.res_height_hint),
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
                     Column(modifier = Modifier.weight(0.75f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        OpalText(text = "刷新率", fontSize = 10.sp, color = OpalPalette.TextSecondary)
+                        OpalText(text = stringResource(R.string.res_fps_label), fontSize = 10.sp, color = OpalPalette.TextSecondary)
                         OpalTextInput(
                             value = fpsInput,
                             onValueChange = { raw ->
@@ -602,7 +680,7 @@ fun OutputResolutionSectionContent(
                                 userEditedInputs = true
                                 inputError = ""
                             },
-                            placeholder = "自动",
+                            placeholder = stringResource(R.string.common_auto),
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -614,8 +692,8 @@ fun OutputResolutionSectionContent(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    OpalText(text = "快捷帧率", fontSize = 10.5.sp, color = OpalPalette.TextMuted)
-                    listOf("" to "自动", "60" to "60Hz", "90" to "90Hz", "120" to "120Hz").forEach { (valStr, lbl) ->
+                    OpalText(text = stringResource(R.string.res_quick_fps), fontSize = 10.5.sp, color = OpalPalette.TextMuted)
+                    listOf("" to stringResource(R.string.common_auto), "60" to "60Hz", "90" to "90Hz", "120" to "120Hz").forEach { (valStr, lbl) ->
                         val sel = fpsInput.trim() == valStr
                         Box(
                             modifier = Modifier
@@ -649,7 +727,7 @@ fun OutputResolutionSectionContent(
                     OpalText(text = parsedPreview.adjustedNote, fontSize = 10.5.sp, color = OpalPalette.AccentCyan)
                 } else {
                     OpalText(
-                        text = "支持 640×480 ～ 4096×2560（横屏/竖屏自动偶数对齐）；外接屏如 EDID 未列出该分辨率将自动使用 AOSP 强制覆写，绝不影响手机主屏。",
+                        text = stringResource(R.string.res_range_hint),
                         fontSize = 10.5.sp,
                         color = OpalPalette.TextMuted,
                         lineHeight = 14.5.sp,
@@ -661,7 +739,7 @@ fun OutputResolutionSectionContent(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     OpalButton(
-                        label = if (isConnected) "立即应用" else "设为默认分辨率",
+                        label = stringResource(if (isConnected) R.string.res_apply_now else R.string.res_set_default),
                         compact = true,
                         filled = true,
                         accent = OpalPalette.AccentBlue,
@@ -677,7 +755,7 @@ fun OutputResolutionSectionContent(
                         modifier = Modifier.weight(1f),
                     )
                     OpalButton(
-                        label = "保存为预设",
+                        label = stringResource(R.string.res_save_preset),
                         compact = true,
                         filled = false,
                         accent = OpalPalette.AccentEmerald,
@@ -691,7 +769,7 @@ fun OutputResolutionSectionContent(
                             val labeled = if (res.spec.label.isBlank()) res.spec.copy(label = ratio) else res.spec
                             AppPrefs.addCustomResolutionPreset(ctx, labeled)
                             AppPrefs.setDefaultCustomResolution(ctx, labeled)
-                            Toast.makeText(ctx, "已保存自定义预设 ${labeled.displayText}", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, ctx.getString(R.string.res_saved_preset_toast, labeled.displayText), Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -699,14 +777,66 @@ fun OutputResolutionSectionContent(
             }
         }
 
-        // 7. Auto-Apply Saved Custom Resolution Toggle
+        // 7. 1:1 Native Pixel Output (Disable OS Scaling for 4:3 / Anisotropic Portable Monitors)
         OpalSwitchRow(
-            title = "连接外接屏 / 投屏时自动套用自定义分辨率",
-            subtitle = if (autoCustomEnabled) {
-                "已开启 · 下次连接时自动应用 ${defaultCustom.displayText}"
-            } else {
-                "默认关闭（按外接屏 EDID / 对端屏幕自动识别）"
+            title = stringResource(R.string.res_native_1to1_title),
+            subtitle = stringResource(R.string.res_native_1to1_sub),
+            checked = native1To1Enabled,
+            onCheckedChange = { enabled ->
+                AppPrefs.setExternalNative1To1Enabled(ctx, enabled)
+                if (extDisplay != null) {
+                    val targetId = extDisplay.displayId
+                    if (enabled) {
+                        val nativeW = extDisplay.nativeWidth
+                        val nativeH = extDisplay.nativeHeight
+                        BridgeClient.setExternalDisplayModeAsync(
+                            targetId,
+                            nativeW,
+                            nativeH,
+                            0f,
+                            scalingMode = BridgeProtocol.ExternalScaling.NATIVE_1TO1,
+                        ) { ok ->
+                            if (ok) {
+                                pendingRevert = PendingExternalRevert(
+                                    displayId = targetId,
+                                    appliedWidth = nativeW,
+                                    appliedHeight = nativeH,
+                                    token = System.currentTimeMillis(),
+                                    revertScalingMode = BridgeProtocol.ExternalScaling.FORCE_SYSTEM_AUTO,
+                                    revertNative1To1Pref = true,
+                                )
+                                Toast.makeText(
+                                    ctx,
+                                    ctx.getString(R.string.res_native_1to1_confirm_toast, nativeW, nativeH),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                AppPrefs.setExternalNative1To1Enabled(ctx, false)
+                                Toast.makeText(ctx, ctx.getString(R.string.res_rejected_ext_toast), Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    } else {
+                        pendingRevert = null
+                        revertSecondsLeft = 0
+                        BridgeClient.setExternalDisplayModeAsync(
+                            targetId,
+                            0,
+                            0,
+                            0f,
+                            scalingMode = BridgeProtocol.ExternalScaling.FORCE_SYSTEM_AUTO,
+                        ) { ok ->
+                            val msg = if (ok) R.string.res_native_1to1_off_toast else R.string.res_restore_native_failed
+                            Toast.makeText(ctx, ctx.getString(msg), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
             },
+        )
+
+        // 8. Auto-Apply Saved Custom Resolution Toggle
+        OpalSwitchRow(
+            title = stringResource(R.string.res_auto_apply_title),
+            subtitle = stringResource(R.string.res_auto_apply_sub, defaultCustom.displayText),
             checked = autoCustomEnabled,
             onCheckedChange = { enabled ->
                 AppPrefs.setAutoCustomResolutionEnabled(ctx, enabled)
@@ -747,9 +877,9 @@ fun DexCustomResolutionWindow(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                OpalText(text = "分辨率与刷新率自定义", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                OpalText(text = stringResource(R.string.display_res_section_title), fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 OpalText(
-                    text = "支持外接显示器 EDID / 强制覆写与投屏 1:1 自定义输出",
+                    text = stringResource(R.string.display_res_section_sub),
                     fontSize = 11.sp,
                     color = OpalPalette.TextSecondary,
                     maxLines = 1,
@@ -757,7 +887,7 @@ fun DexCustomResolutionWindow(
             }
             Spacer(Modifier.width(8.dp))
             OpalButton(
-                label = "关闭",
+                label = stringResource(R.string.common_close),
                 compact = true,
                 filled = false,
                 onClick = onDismiss,

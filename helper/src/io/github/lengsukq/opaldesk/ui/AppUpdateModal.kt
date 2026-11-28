@@ -28,10 +28,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.update.AppUpdateLogic
 import io.github.lengsukq.opaldesk.update.AppUpdateManager
@@ -99,12 +101,12 @@ fun AppUpdateModal(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     OpalText(
-                        text = if (release != null) "发现新版本 ${release.tagName}" else "应用更新",
+                        text = if (release != null) stringResource(R.string.update_new_ver_title, release.tagName) else stringResource(R.string.settings_update_title),
                         fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
                     )
                     val meta = buildString {
-                        append("当前 v$currentVersion")
+                        append(ctx.getString(R.string.update_current_prefix, currentVersion))
                         if (release != null) {
                             append(" → ")
                             append(release.tagName)
@@ -159,7 +161,7 @@ fun AppUpdateModal(
             when (val s = state) {
                 is AppUpdateManager.UpdateState.Checking -> {
                     OpalText(
-                        text = "正在连接 GitHub Releases 检查最新版本…",
+                        text = stringResource(R.string.update_checking_msg),
                         fontSize = 13.sp,
                         color = OpalPalette.TextSecondary,
                     )
@@ -167,13 +169,13 @@ fun AppUpdateModal(
 
                 is AppUpdateManager.UpdateState.UpToDate -> {
                     OpalText(
-                        text = "当前已是最新版本（v${s.currentVersion}），无需更新。",
+                        text = stringResource(R.string.update_up_to_date_msg, s.currentVersion),
                         fontSize = 13.sp,
                         color = OpalPalette.AccentEmerald,
                         fontWeight = FontWeight.Medium,
                     )
                     OpalButton(
-                        label = "知道了",
+                        label = stringResource(R.string.update_got_it),
                         onClick = onDismiss,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -185,7 +187,7 @@ fun AppUpdateModal(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         OpalButton(
-                            label = "忽略此版本",
+                            label = stringResource(R.string.update_ignore_btn),
                             filled = false,
                             accent = OpalPalette.TextSecondary,
                             onClick = {
@@ -195,7 +197,7 @@ fun AppUpdateModal(
                             modifier = Modifier.weight(1f),
                         )
                         OpalButton(
-                            label = "下载并安装",
+                            label = stringResource(R.string.update_download_install_btn),
                             filled = true,
                             accent = OpalPalette.AccentBlue,
                             onClick = { AppUpdateManager.startDownload(ctx, s.release) },
@@ -218,7 +220,7 @@ fun AppUpdateModal(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             OpalText(
-                                text = "正在下载安装包…",
+                                text = stringResource(R.string.update_downloading_label),
                                 fontSize = 12.5.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = OpalPalette.TextSecondary,
@@ -254,7 +256,7 @@ fun AppUpdateModal(
                         }
                         Spacer(Modifier.height(2.dp))
                         OpalButton(
-                            label = "取消下载",
+                            label = stringResource(R.string.update_cancel_download),
                             filled = false,
                             compact = true,
                             accent = OpalPalette.AccentDanger,
@@ -267,7 +269,7 @@ fun AppUpdateModal(
                 is AppUpdateManager.UpdateState.ReadyToInstall -> {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         OpalText(
-                            text = "安装包已校验通过。安装新版 APK 后，若引擎需同步更新，回到「设置 → 重新激活引擎」即可自动同步守护进程。",
+                            text = stringResource(R.string.update_ready_hint),
                             fontSize = 12.sp,
                             lineHeight = 17.sp,
                             color = OpalPalette.TextSecondary,
@@ -277,14 +279,14 @@ fun AppUpdateModal(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             OpalButton(
-                                label = "稍后安装",
+                                label = stringResource(R.string.update_later),
                                 filled = false,
                                 accent = OpalPalette.TextSecondary,
                                 onClick = onDismiss,
                                 modifier = Modifier.weight(1f),
                             )
                             OpalButton(
-                                label = "立即安装",
+                                label = stringResource(R.string.update_install_now),
                                 filled = true,
                                 accent = OpalPalette.AccentEmerald,
                                 onClick = {
@@ -308,7 +310,7 @@ fun AppUpdateModal(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             OpalButton(
-                                label = "浏览器下载",
+                                label = stringResource(R.string.update_browser_download),
                                 filled = false,
                                 accent = OpalPalette.AccentCyan,
                                 onClick = {
@@ -320,7 +322,7 @@ fun AppUpdateModal(
                                 modifier = Modifier.weight(1f),
                             )
                             OpalButton(
-                                label = "重试",
+                                label = stringResource(R.string.common_retry),
                                 filled = true,
                                 accent = OpalPalette.AccentBlue,
                                 onClick = {
@@ -338,7 +340,7 @@ fun AppUpdateModal(
 
                 AppUpdateManager.UpdateState.Idle -> {
                     OpalButton(
-                        label = "立即检查更新",
+                        label = stringResource(R.string.update_check_now),
                         onClick = { AppUpdateManager.checkForUpdates(ctx, userInitiated = true) },
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -361,7 +363,7 @@ fun AppUpdateModal(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     OpalText(
-                        text = "下载线路",
+                        text = stringResource(R.string.update_route_title),
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = OpalPalette.TextSecondary,
@@ -374,7 +376,11 @@ fun AppUpdateModal(
                     )
                 }
                 OpalSegmentedRow(
-                    options = listOf("直连", "代理一", "代理二"),
+                    options = listOf(
+                        stringResource(R.string.update_route_direct),
+                        stringResource(R.string.update_route_proxy1),
+                        stringResource(R.string.update_route_proxy2),
+                    ),
                     selectedIndex = activeRoute.index,
                     onSelect = { idx ->
                         if (!isDownloading) {
@@ -394,7 +400,7 @@ fun AppUpdateModal(
                     contentAlignment = Alignment.Center,
                 ) {
                     OpalText(
-                        text = "在浏览器打开 GitHub Releases ↗",
+                        text = stringResource(R.string.update_open_releases),
                         fontSize = 11.5.sp,
                         color = OpalPalette.AccentBlue,
                         fontWeight = FontWeight.Medium,

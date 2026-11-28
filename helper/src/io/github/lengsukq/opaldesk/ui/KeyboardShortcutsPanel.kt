@@ -36,11 +36,13 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.WindowTilingLayout
 
@@ -318,7 +320,7 @@ fun DexKeyboardShortcutsPopover(
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 modifier = Modifier.weight(1f),
             ) {
-                OpalText(text = "键盘快捷键", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                OpalText(text = stringResource(R.string.shortcuts_popover_title), fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 OpalStatusBadge(
                     label = WorkstationShortcutCatalog.formatCompactStatus(globalEnabled, disabledIds),
                     color = if (globalEnabled && activeCount > 0) OpalPalette.AccentEmerald else OpalPalette.TextMuted,
@@ -337,14 +339,14 @@ fun DexKeyboardShortcutsPopover(
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                     ) {
                         OpalText(
-                            text = "恢复默认",
+                            text = stringResource(R.string.common_restore_defaults),
                             fontSize = 10.5.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = OpalPalette.AccentBlue,
                         )
                     }
                 }
-                OpalButton(label = "完成", compact = true, filled = false, onClick = onDismiss)
+                OpalButton(label = stringResource(R.string.common_done), compact = true, filled = false, onClick = onDismiss)
             }
         }
 
@@ -392,7 +394,7 @@ fun ConsoleKeyboardShortcutsSectionContent() {
                 )
                 Spacer(Modifier.width(8.dp))
                 OpalText(
-                    text = "恢复默认",
+                    text = stringResource(R.string.common_restore_defaults),
                     fontSize = 11.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = OpalPalette.AccentBlue,
@@ -440,7 +442,7 @@ fun ConsoleKeyboardShortcutsCard(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                OpalText(text = "外接键盘快捷键", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                OpalText(text = stringResource(R.string.shortcuts_card_title), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 OpalText(
                     text = WorkstationShortcutCatalog.formatDetailSubtitle(globalEnabled, disabledIds),
                     fontSize = 12.sp,

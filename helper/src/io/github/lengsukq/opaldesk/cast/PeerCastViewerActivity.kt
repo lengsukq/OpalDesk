@@ -2,6 +2,7 @@ package io.github.lengsukq.opaldesk.cast
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color as AndroidColor
@@ -49,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,7 +59,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.lengsukq.opaldesk.BridgeClient
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
+import io.github.lengsukq.opaldesk.prefs.OpalLocalePolicy
 import io.github.lengsukq.opaldesk.ui.ChromeGlyph
 import io.github.lengsukq.opaldesk.ui.NativeImeBridgeHost
 import io.github.lengsukq.opaldesk.ui.NativeImeHostController
@@ -103,7 +107,7 @@ class PeerCastViewerActivity : ComponentActivity() {
     private var reqFps: Int = 60
 
     private var peerName by mutableStateOf("")
-    private var statusText by mutableStateOf("正在建立 TLS 加密连接…")
+    private var statusText by mutableStateOf("")
     private var connected by mutableStateOf(false)
     private var videoW by mutableIntStateOf(1920)
     private var videoH by mutableIntStateOf(1080)
@@ -131,7 +135,7 @@ class PeerCastViewerActivity : ComponentActivity() {
         if (granted) {
             enableRemoteMic()
         } else {
-            Toast.makeText(this, "需要麦克风权限才能向对方手机回传语音", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.peercast_need_mic_perm), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -141,8 +145,12 @@ class PeerCastViewerActivity : ComponentActivity() {
         if (granted) {
             enableRemoteCamera()
         } else {
-            Toast.makeText(this, "需要摄像头权限才能映射本机画面", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.peercast_need_cam_perm), Toast.LENGTH_SHORT).show()
         }
+    }
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(OpalLocalePolicy.wrapContext(newBase))
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -911,9 +919,9 @@ private fun PeerCastViewerContent(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                OpalText(text = "正在连接 $peerName", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                OpalText(text = stringResource(R.string.peercast_connecting_to, peerName), fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 OpalText(
-                    text = if (errorText.isNotBlank()) errorText else statusText,
+                    text = if (errorText.isNotBlank()) errorText else statusText.ifBlank { stringResource(R.string.peercast_connecting_tls) },
                     fontSize = 12.5.sp,
                     color = if (errorText.isNotBlank()) OpalPalette.AccentDanger else OpalPalette.TextSecondary,
                 )
@@ -921,13 +929,13 @@ private fun PeerCastViewerContent(
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (errorText.isNotBlank()) {
                         OpalButton(
-                            label = "重新请求连接",
+                            label = stringResource(R.string.peercast_reconnect),
                             accent = OpalPalette.AccentBlue,
                             compact = true,
                             onClick = onRetryConnect,
                         )
                     }
-                    OpalButton(label = "返回主控制台", filled = errorText.isBlank(), compact = true, onClick = onDisconnect)
+                    OpalButton(label = stringResource(R.string.peercast_back_console), filled = errorText.isBlank(), compact = true, onClick = onDisconnect)
                 }
             }
         }
@@ -977,7 +985,7 @@ private fun PeerCastViewerContent(
             ) {
                 OpalTopPillIconButton(
                     glyph = ChromeGlyph.KEYBOARD,
-                    contentDescription = if (imeVisible) "收起输入法" else "输入法",
+                    contentDescription = stringResource(if (imeVisible) R.string.trackpad_hide_ime else R.string.taskbar_cc_ime),
                     active = imeVisible,
                     activeColor = OpalPalette.AccentBlue,
                     onClick = onToggleIme,
@@ -985,7 +993,7 @@ private fun PeerCastViewerContent(
                 OpalTopPillDivider()
                 if (remoteFullscreenTitle.isNotEmpty() && !isMirrorMode) {
                     OpalTopPillChip(
-                        label = "退出全屏",
+                        label = stringResource(R.string.taskbar_fs_exit),
                         glyph = ChromeGlyph.EXIT_FULLSCREEN,
                         filled = true,
                         activeColor = OpalPalette.AccentBlue,
@@ -993,14 +1001,14 @@ private fun PeerCastViewerContent(
                     )
                 }
                 OpalTopPillChip(
-                    label = "悬浮窗",
+                    label = stringResource(R.string.peercast_floating_btn),
                     tint = OpalPalette.AccentBlue,
                     active = true,
                     activeColor = OpalPalette.AccentBlue,
                     onClick = onOpenFloatingPicker,
                 )
                 OpalTopPillChip(
-                    label = if (isMirrorMode) "切回桌面" else "主屏镜像",
+                    label = stringResource(if (isMirrorMode) R.string.peercast_switch_desktop else R.string.picker_mirror_btn),
                     tint = if (isMirrorMode) OpalPalette.AccentCyan else OpalPalette.TextPrimary,
                     active = isMirrorMode,
                     activeColor = OpalPalette.AccentCyan,
@@ -1008,7 +1016,7 @@ private fun PeerCastViewerContent(
                 )
                 if (isMirrorMode) {
                     OpalTopPillChip(
-                        label = "悬浮小窗",
+                        label = stringResource(R.string.peercast_float_mini),
                         tint = OpalPalette.AccentBlue,
                         active = true,
                         activeColor = OpalPalette.AccentBlue,
@@ -1016,7 +1024,7 @@ private fun PeerCastViewerContent(
                     )
                 }
                 OpalTopPillChip(
-                    label = if (remoteBlackout) "亮屏" else "熄屏",
+                    label = stringResource(if (remoteBlackout) R.string.peercast_screen_on else R.string.peercast_screen_off),
                     active = remoteBlackout,
                     activeColor = OpalPalette.AccentAmber,
                     onClick = onToggleBlackout,
@@ -1024,12 +1032,12 @@ private fun PeerCastViewerContent(
                 OpalTopPillDivider()
                 OpalTopPillIconButton(
                     glyph = ChromeGlyph.CHEVRON_UP,
-                    contentDescription = "收起",
+                    contentDescription = stringResource(R.string.taskbar_fs_collapse),
                     tint = OpalPalette.TextSecondary,
                     onClick = onToggleToolbar,
                 )
                 OpalTopPillChip(
-                    label = "断开",
+                    label = stringResource(R.string.peercast_disconnect),
                     danger = true,
                     onClick = onDisconnect,
                 )
@@ -1057,7 +1065,7 @@ private fun PeerCastViewerContent(
                 if (micEnabled) {
                     OpalTopPillIconButton(
                         glyph = ChromeGlyph.MIC,
-                        contentDescription = "关闭麦克风",
+                        contentDescription = stringResource(R.string.peercast_mute_mic),
                         active = true,
                         activeColor = OpalPalette.AccentEmerald,
                         onClick = onToggleMic,
@@ -1066,13 +1074,13 @@ private fun PeerCastViewerContent(
                 if (cameraEnabled) {
                     OpalTopPillIconButton(
                         glyph = ChromeGlyph.CAMERA,
-                        contentDescription = "关闭摄像头",
+                        contentDescription = stringResource(R.string.peercast_stop_cam),
                         active = true,
                         activeColor = OpalPalette.AccentEmerald,
                         onClick = onToggleCamera,
                     )
                     OpalTopPillChip(
-                        label = if (cameraFacing == "back") "后" else "前",
+                        label = stringResource(if (cameraFacing == "back") R.string.peercast_cam_back else R.string.peercast_cam_front),
                         glyph = ChromeGlyph.CAMERA_FLIP,
                         tint = OpalPalette.AccentCyan,
                         active = true,
@@ -1083,7 +1091,7 @@ private fun PeerCastViewerContent(
                 if (remoteFullscreenTitle.isNotEmpty() && !isMirrorMode) {
                     OpalTopPillIconButton(
                         glyph = ChromeGlyph.EXIT_FULLSCREEN,
-                        contentDescription = "退出全屏",
+                        contentDescription = stringResource(R.string.taskbar_fs_exit),
                         active = true,
                         activeColor = OpalPalette.AccentBlue,
                         onClick = onExitRemoteFullscreen,
@@ -1091,14 +1099,14 @@ private fun PeerCastViewerContent(
                 }
                 OpalTopPillIconButton(
                     glyph = ChromeGlyph.KEYBOARD,
-                    contentDescription = if (imeVisible) "收起输入法" else "输入法",
+                    contentDescription = stringResource(if (imeVisible) R.string.trackpad_hide_ime else R.string.taskbar_cc_ime),
                     active = imeVisible,
                     activeColor = OpalPalette.AccentBlue,
                     onClick = onToggleIme,
                 )
                 OpalTopPillIconButton(
                     glyph = ChromeGlyph.CHEVRON_DOWN,
-                    contentDescription = "展开投屏控制",
+                    contentDescription = stringResource(R.string.peercast_expand_controls),
                     tint = OpalPalette.TextSecondary,
                     onClick = onToggleToolbar,
                 )

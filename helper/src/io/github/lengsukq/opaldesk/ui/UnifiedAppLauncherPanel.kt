@@ -39,12 +39,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.compositor.AppCatalogRepository
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
+import io.github.lengsukq.opaldesk.protocol.AppProfileKey
 import java.text.Collator
 import java.util.Locale
 import kotlin.math.abs
@@ -64,7 +67,12 @@ data class UnifiedAppItem(
     val openCount: Int = 0,
     val isPinnedDesktop: Boolean = false,
     val isPinnedDock: Boolean = false,
-)
+    val userId: Int = 0,
+    val profileType: String = AppProfileKey.PROFILE_PRIMARY,
+) {
+    val appKey: String get() = AppProfileKey.format(pkg, userId)
+    val isSecondaryProfile: Boolean get() = userId > 0
+}
 
 /**
  * Pure deterministic search + frequency/alphabetical sorting shared across all OpalDesk app pickers.
@@ -80,9 +88,12 @@ object AppLauncherSorter {
         val filtered = if (q.isEmpty()) {
             items
         } else {
-            items.filter {
-                it.label.lowercase(locale).contains(q) ||
-                    it.pkg.lowercase(Locale.ROOT).contains(q)
+            items.filter { item ->
+                item.label.lowercase(locale).contains(q) ||
+                    item.pkg.lowercase(Locale.ROOT).contains(q) ||
+                    (item.isSecondaryProfile && AppProfileKey.searchKeywords(item.profileType, item.userId).any { kw ->
+                        kw.lowercase(locale).contains(q)
+                    })
             }
         }
         val collator = Collator.getInstance(locale)
@@ -90,11 +101,16 @@ object AppLauncherSorter {
             filtered.sortedWith(
                 Comparator { a, b ->
                     val cmpCount = b.openCount.compareTo(a.openCount)
-                    if (cmpCount != 0) cmpCount else collator.compare(a.label, b.label)
+                    if (cmpCount != 0) return@Comparator cmpCount
+                    val cmpLabel = collator.compare(a.label, b.label)
+                    if (cmpLabel != 0) cmpLabel else a.userId.compareTo(b.userId)
                 },
             )
         } else {
-            filtered.sortedWith { a, b -> collator.compare(a.label, b.label) }
+            filtered.sortedWith { a, b ->
+                val cmpLabel = collator.compare(a.label, b.label)
+                if (cmpLabel != 0) cmpLabel else a.userId.compareTo(b.userId)
+            }
         }
     }
 }
@@ -198,7 +214,7 @@ fun UnifiedAppLauncherPanel(
                         .background(if (sortByUsage) OpalPalette.AccentBlue else OpalPalette.TextMuted),
                 )
                 OpalText(
-                    text = if (sortByUsage) "常用排序" else "名称排序",
+                    text = stringResource(if (sortByUsage) R.string.launcher_sort_usage else R.string.launcher_sort_name),
                     fontSize = 11.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = if (sortByUsage) OpalPalette.AccentBlue else OpalPalette.TextSecondary,
@@ -226,7 +242,7 @@ fun UnifiedAppLauncherPanel(
                 ) {
                     OpalText(text = errorText, fontSize = 13.sp, color = OpalPalette.AccentDanger)
                     if (onRetry != null) {
-                        OpalButton(label = "重试加载", compact = true, onClick = onRetry)
+                        OpalButton(label = stringResource(R.string.launcher_retry), compact = true, onClick = onRetry)
                     }
                 }
             }
@@ -247,7 +263,7 @@ fun UnifiedAppLauncherPanel(
                         .height(120.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    OpalText(text = "没有找到匹配的应用", fontSize = 13.sp, color = OpalPalette.TextMuted)
+                    OpalText(text = stringResource(R.string.launcher_empty), fontSize = 13.sp, color = OpalPalette.TextMuted)
                 }
             }
             else -> {
@@ -259,11 +275,13 @@ fun UnifiedAppLauncherPanel(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    items(sortedItems, key = { it.pkg }, contentType = { "app_tile" }) { app ->
-                        var icon by remember(app.pkg) { mutableStateOf(AppCatalogRepository.getCachedIcon(app.pkg)) }
-                        LaunchedEffect(app.pkg) {
+                    items(sortedItems, key = { it.appKey }, contentType = { "app_tile" }) { app ->
+                        var icon by remember(app.appKey) {
+                            mutableStateOf(AppCatalogRepository.getCachedIcon(app.pkg, app.userId))
+                        }
+                        LaunchedEffect(app.appKey) {
                             if (icon == null) {
-                                icon = AppCatalogRepository.loadAppIconAsync(ctx, app.pkg)
+                                icon = AppCatalogRepository.loadAppIconAsync(ctx, app.pkg, app.userId, app.profileType)
                             }
                         }
                         val highlighted = app.isPinnedDesktop || app.isPinnedDock
@@ -273,7 +291,7 @@ fun UnifiedAppLauncherPanel(
                                 .clip(APP_TILE_SHAPE)
                                 .background(tileBg)
                                 .onTapOrContextAction(
-                                    app.pkg,
+                                    app.appKey,
                                     onPrimaryTap = { onSelectApp(app) },
                                     onContextAction = { rootPos -> onContextApp(app, rootPos) },
                                 )
@@ -321,6 +339,30 @@ fun UnifiedAppLauncherPanel(
                                             fontSize = 19.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = tint,
+                                        )
+                                    }
+                                }
+                                if (app.isSecondaryProfile) {
+                                    val badgeText = AppCatalogRepository.formatProfileBadge(ctx, app.profileType, app.userId)
+                                    val badgeColor = when (AppProfileKey.normalizeProfileType(app.profileType, app.userId)) {
+                                        AppProfileKey.PROFILE_CLONE -> OpalPalette.AccentAmber
+                                        AppProfileKey.PROFILE_WORK -> OpalPalette.AccentBlue
+                                        else -> Color(0xFF8B5CF6)
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(badgeColor)
+                                            .border(1.dp, OpalPalette.GlassPopover, RoundedCornerShape(6.dp))
+                                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                                    ) {
+                                        OpalText(
+                                            text = badgeText,
+                                            fontSize = 8.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            maxLines = 1,
                                         )
                                     }
                                 }

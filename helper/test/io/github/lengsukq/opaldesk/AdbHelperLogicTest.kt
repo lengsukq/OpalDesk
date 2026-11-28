@@ -245,6 +245,18 @@ class AdbHelperLogicTest {
         assertTrue(withOffline.contains("检测到无线调试连接已断开"))
         assertTrue(withOffline.contains("保持「无线调试」开启"))
         assertTrue(withOffline.contains("日志摘要:\nlibadb.so: device offline"))
+
+        val withHmaHidden = AdbBootstrap.formatBinderTimeoutMessage(
+            "OPALDESK_PUSH_BINDER_FAIL: helperUid=-1 pkg=io.github.lengsukq.opaldesk diag=u0:pmNotFound|pmPathRc:1|u999:pmNotFound",
+        )
+        assertTrue(withHmaHidden.contains("Hide My Applist"))
+        assertTrue(withHmaHidden.contains("com.android.shell"))
+        assertFalse(withHmaHidden.contains("检测到无线调试连接已断开"))
+
+        val withCertMismatch = AdbBootstrap.formatBinderTimeoutMessage(
+            "OPALDESK_SECURITY_REJECT untrusted io.github.lengsukq.opaldesk reason=CERT_MISMATCH",
+        )
+        assertTrue(withCertMismatch.contains("安装包签名校验不匹配"))
     }
 
     private fun findNonLocalPrivateLanAddresses(localIpv4: String): List<InetAddress> {

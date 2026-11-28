@@ -27,11 +27,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.BridgeClient
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.PendingPairingRequest
 import kotlinx.coroutines.delay
@@ -102,9 +104,9 @@ fun PairingConsentModal(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                OpalStatusBadge(label = "无线投屏连接请求", color = OpalPalette.AccentBlue)
+                OpalStatusBadge(label = stringResource(R.string.pairing_badge), color = OpalPalette.AccentBlue)
                 OpalText(
-                    text = "剩余 ${remainingSec}s",
+                    text = stringResource(R.string.pairing_countdown, remainingSec),
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
                     color = if (remainingSec <= 10) OpalPalette.AccentDanger else OpalPalette.TextSecondary,
@@ -112,7 +114,7 @@ fun PairingConsentModal(
             }
 
             OpalText(
-                text = "是否允许「${request.clientName}」连接本机？",
+                text = stringResource(R.string.pairing_question, request.clientName),
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
             )
@@ -127,13 +129,13 @@ fun PairingConsentModal(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 OpalText(
-                    text = "请求设备：${request.clientName}",
+                    text = stringResource(R.string.pairing_device_label, request.clientName),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
                 if (request.peerIp.isNotBlank()) {
                     OpalText(
-                        text = "局域网地址：${request.peerIp}",
+                        text = stringResource(R.string.pairing_ip_label, request.peerIp),
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
                         color = OpalPalette.TextSecondary,
@@ -142,7 +144,7 @@ fun PairingConsentModal(
             }
 
             OpalText(
-                text = "选择「仅本次允许」不会记住此设备；选择「永久允许」后下次可免确认直连，随时可在主控台撤销授权。",
+                text = stringResource(R.string.pairing_hint),
                 fontSize = 12.sp,
                 color = OpalPalette.TextSecondary,
             )
@@ -150,7 +152,7 @@ fun PairingConsentModal(
             Spacer(Modifier.height(2.dp))
 
             OpalButton(
-                label = if (busy) "正在处理…" else "永久允许（免确认直连）",
+                label = stringResource(if (busy) R.string.pairing_processing else R.string.pairing_allow_permanent),
                 accent = OpalPalette.AccentEmerald,
                 enabled = !busy,
                 onClick = { submit(BridgeProtocol.PairingDecision.APPROVE_PERMANENT) },
@@ -162,14 +164,14 @@ fun PairingConsentModal(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 OpalButton(
-                    label = "仅本次允许",
+                    label = stringResource(R.string.pairing_allow_once),
                     accent = OpalPalette.AccentBlue,
                     enabled = !busy,
                     onClick = { submit(BridgeProtocol.PairingDecision.APPROVE_ONCE) },
                     modifier = Modifier.weight(1f),
                 )
                 OpalButton(
-                    label = "拒绝",
+                    label = stringResource(R.string.pairing_reject),
                     accent = OpalPalette.AccentDanger,
                     filled = false,
                     enabled = !busy,

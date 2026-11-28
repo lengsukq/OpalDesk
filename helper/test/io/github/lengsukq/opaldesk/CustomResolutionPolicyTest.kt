@@ -161,4 +161,160 @@ class CustomResolutionPolicyTest {
             ExternalDisplayPolicy.resolveEffectiveDisplaySize(2560, 1440, 0, 0),
         )
     }
+
+    @Test
+    fun curateExternalModesWithNativeDetectsAnisotropyAndRestoresNative2048x1536() {
+        // Exact OPALDESK-1A portable 4:3 2048x1536 monitor EDID list on Android 17 (61:35 EDID size)
+        val rawModes = listOf(
+            ExternalDisplayPolicy.RawExternalMode(2677, 1536, 59.0f, isSynthetic = false),
+            ExternalDisplayPolicy.RawExternalMode(2091, 1200, 60.0f, isSynthetic = false),
+            ExternalDisplayPolicy.RawExternalMode(1920, 1080, 60.0f, isSynthetic = false),
+            ExternalDisplayPolicy.RawExternalMode(1600, 1200, 60.0f, isSynthetic = false),
+            ExternalDisplayPolicy.RawExternalMode(1506, 864, 60.0f, isSynthetic = false),
+            ExternalDisplayPolicy.RawExternalMode(1339, 768, 60.0f, isSynthetic = false),
+            ExternalDisplayPolicy.RawExternalMode(1280, 1024, 60.0f, isSynthetic = false),
+            ExternalDisplayPolicy.RawExternalMode(1280, 720, 60.0f, isSynthetic = false),
+            ExternalDisplayPolicy.RawExternalMode(1024, 768, 60.0f, isSynthetic = false),
+            ExternalDisplayPolicy.RawExternalMode(1046, 600, 60.0f, isSynthetic = false),
+        )
+        val res = ExternalDisplayPolicy.curateExternalDisplayModesWithNative(
+            rawModes = rawModes,
+            nativeW = 2048,
+            nativeH = 1536,
+            nativeRefreshRate = 59.0f,
+            xDpi = 85.27f,
+            yDpi = 111.47f,
+        )
+        assertTrue(res.hasAnisotropyDistortion)
+        // Native 2048x1536 must be surfaced first and tagged isNativePhysical=true
+        val first = res.modes.first()
+        assertEquals(2048, first.width)
+        assertEquals(1536, first.height)
+        assertEquals(59, first.refreshRateHz)
+        assertTrue(first.isNativePhysical)
+        assertFalse(first.isAnisotropySynthetic)
+
+        // All five 61:35 stretched resolutions are flagged as synthetic anisotropy modes
+        for ((w, h) in listOf(2677 to 1536, 2091 to 1200, 1506 to 864, 1339 to 768, 1046 to 600)) {
+            val item = res.modes.firstOrNull { it.width == w && it.height == h }
+            assertNotNull("Expected $w×$h in curated list", item)
+            assertTrue("Expected $w×$h flagged as anisotropy synthetic", item!!.isAnisotropySynthetic)
+        }
+        // Standard hardware modes stay non-synthetic
+        for ((w, h) in listOf(1920 to 1080, 1600 to 1200, 1280 to 1024, 1280 to 720, 1024 to 768)) {
+            val item = res.modes.firstOrNull { it.width == w && it.height == h }
+            assertNotNull("Expected $w×$h in curated list", item)
+            assertFalse("Standard mode $w×$h must not be flagged synthetic", item!!.isAnisotropySynthetic)
+        }
+
+        // Standard 16:9 2560x1440 monitor has zero anisotropy distortion
+        val normalRes = ExternalDisplayPolicy.curateExternalDisplayModesWithNative(
+            rawModes = listOf(
+                ExternalDisplayPolicy.RawExternalMode(2560, 1440, 144f),
+                ExternalDisplayPolicy.RawExternalMode(1920, 1080, 60f),
+            ),
+            nativeW = 2560,
+            nativeH = 1440,
+            nativeRefreshRate = 144f,
+            xDpi = 108.8f,
+            yDpi = 108.0f,
+        )
+        assertFalse(normalRes.hasAnisotropyDistortion)
+        assertTrue(normalRes.modes.none { it.isAnisotropySynthetic })
+    }
+
+    @Test
+    fun hyperOsMirrorCollapseIgnoredByEffectiveSizeAndTriggersAutoNormalizeSafely() {
+        // HyperOS mirror collapse: external 2048x1536 reports phone portrait 1200x2608 via getRealSize()
+        assertTrue(
+            ExternalDisplayPolicy.isMirroredPrimaryDisplayCollapse(
+                nativeW = 2048,
+                nativeH = 1536,
+                logicalW = 1200,
+                logicalH = 2608,
+                primaryW = 1200,
+                primaryH = 2608,
+            ),
+        )
+        assertEquals(
+            2048 to 1536,
+            ExternalDisplayPolicy.resolveEffectiveDisplaySize(
+                modeW = 2048,
+                modeH = 1536,
+                realW = 1200,
+                realH = 2608,
+                primaryW = 1200,
+                primaryH = 2608,
+            ),
+        )
+
+        // Auto-normalize fires on mirror collapse or native/anisotropy-inflated size
+        assertTrue(
+            ExternalDisplayPolicy.shouldAutoNormalizeExternalOnEnter(
+                nativeW = 2048,
+                nativeH = 1536,
+                realW = 1200,
+                realH = 2608,
+                primaryW = 1200,
+                primaryH = 2608,
+                hasAnisotropy = false,
+                userNative1To1Enabled = false,
+                autoCustomResolutionEnabled = false,
+            ),
+        )
+        assertTrue(
+            ExternalDisplayPolicy.shouldAutoNormalizeExternalOnEnter(
+                nativeW = 2048,
+                nativeH = 1536,
+                realW = 2048,
+                realH = 1536,
+                primaryW = 1200,
+                primaryH = 2608,
+                hasAnisotropy = true,
+                userNative1To1Enabled = false,
+                autoCustomResolutionEnabled = false,
+            ),
+        )
+        assertTrue(
+            ExternalDisplayPolicy.shouldAutoNormalizeExternalOnEnter(
+                nativeW = 2048,
+                nativeH = 1536,
+                realW = 2677,
+                realH = 1536,
+                primaryW = 1200,
+                primaryH = 2608,
+                hasAnisotropy = true,
+                userNative1To1Enabled = false,
+                autoCustomResolutionEnabled = false,
+            ),
+        )
+        // Must NOT overwrite user's intentional custom 1920x1080 override
+        assertFalse(
+            ExternalDisplayPolicy.shouldAutoNormalizeExternalOnEnter(
+                nativeW = 2048,
+                nativeH = 1536,
+                realW = 1920,
+                realH = 1080,
+                primaryW = 1200,
+                primaryH = 2608,
+                hasAnisotropy = true,
+                userNative1To1Enabled = false,
+                autoCustomResolutionEnabled = false,
+            ),
+        )
+        // Must NOT override when user enabled custom auto-apply resolution
+        assertFalse(
+            ExternalDisplayPolicy.shouldAutoNormalizeExternalOnEnter(
+                nativeW = 2048,
+                nativeH = 1536,
+                realW = 2048,
+                realH = 1536,
+                primaryW = 1200,
+                primaryH = 2608,
+                hasAnisotropy = true,
+                userNative1To1Enabled = true,
+                autoCustomResolutionEnabled = true,
+            ),
+        )
+    }
 }

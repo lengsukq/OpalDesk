@@ -15,9 +15,11 @@ import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.BridgeService
 import io.github.lengsukq.opaldesk.DesktopActivity
 import io.github.lengsukq.opaldesk.MainActivity
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.cast.OpalPeerCastMutex
 import io.github.lengsukq.opaldesk.cast.OpalPeerDiscovery
 import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
+import io.github.lengsukq.opaldesk.prefs.OpalLocalePolicy
 import java.util.concurrent.Executors
 
 /**
@@ -48,7 +50,13 @@ abstract class BaseOpalTileService : TileService() {
         }
     }
 
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(OpalLocalePolicy.wrapContext(newBase))
+    }
+
     protected abstract fun computeTileSpec(): QuickEntryPolicy.QuickTileSpec
+
+    protected open fun computeLocalizedSubtitle(spec: QuickEntryPolicy.QuickTileSpec): String = spec.subtitle
 
     override fun onStartListening() {
         super.onStartListening()
@@ -75,7 +83,7 @@ abstract class BaseOpalTileService : TileService() {
             QuickEntryPolicy.QuickTileVisualState.INACTIVE -> Tile.STATE_INACTIVE
             QuickEntryPolicy.QuickTileVisualState.UNAVAILABLE -> Tile.STATE_UNAVAILABLE
         }
-        tile.subtitle = spec.subtitle
+        tile.subtitle = computeLocalizedSubtitle(spec)
         runCatching { tile.updateTile() }
     }
 
@@ -134,6 +142,18 @@ class EnterDexTileService : BaseOpalTileService() {
             remote = BridgeClient.remoteStatusFlow.value,
         )
 
+    override fun computeLocalizedSubtitle(spec: QuickEntryPolicy.QuickTileSpec): String {
+        val status = BridgeClient.statusFlow.value
+        val scene = BridgeClient.sceneFlow.value
+        val remote = BridgeClient.remoteStatusFlow.value
+        return when {
+            !status.connected -> getString(R.string.tile_enter_dex_sub_inactive)
+            remote.connected -> getString(R.string.tile_enter_dex_sub_locked)
+            scene.windows.isNotEmpty() -> getString(R.string.tile_enter_dex_sub_windows, scene.windows.size)
+            else -> getString(R.string.tile_enter_dex_sub_ready)
+        }
+    }
+
     override fun onClick() {
         super.onClick()
         BridgeService.sUserStopping = false
@@ -144,7 +164,7 @@ class EnterDexTileService : BaseOpalTileService() {
         val remote = BridgeClient.remoteStatusFlow.value
         if (BridgeClient.isBinderAliveFast() && status.connected) {
             if (remote.connected) {
-                showToast("投屏进行中，无法进入本机桌面")
+                showToast(getString(R.string.tile_enter_dex_cast_blocked_toast))
                 launchAndCollapse(
                     MainActivity.createLaunchIntent(
                         ctx = this,
@@ -172,13 +192,22 @@ class HostScreenOffTileService : BaseOpalTileService() {
     override fun computeTileSpec(): QuickEntryPolicy.QuickTileSpec =
         QuickEntryPolicy.resolveHostScreenTileState(BridgeClient.statusFlow.value)
 
+    override fun computeLocalizedSubtitle(spec: QuickEntryPolicy.QuickTileSpec): String {
+        val status = BridgeClient.statusFlow.value
+        return when {
+            !status.connected -> getString(R.string.tile_engine_inactive_sub)
+            status.hostScreenOff -> getString(R.string.tile_host_screen_off_sub)
+            else -> getString(R.string.tile_host_screen_on_sub)
+        }
+    }
+
     override fun onClick() {
         super.onClick()
         BridgeService.sUserStopping = false
         BridgeClient.bindAppContext(applicationContext)
         val curStatus = BridgeClient.statusFlow.value
         if (!curStatus.connected || !BridgeClient.isBinderAliveFast()) {
-            showToast("多窗引擎尚未激活，请先激活")
+            showToast(getString(R.string.toast_activate_engine_first))
             openActivationConsole()
             return
         }
@@ -188,9 +217,9 @@ class HostScreenOffTileService : BaseOpalTileService() {
             renderFromFlows()
             requestAllTilesUpdate(applicationContext)
             val msg = when {
-                !ok -> "当前设备暂不支持物理息屏控制"
-                nextScreenOn -> "已点亮本机屏幕"
-                else -> "已物理息屏（按电源键或音量键可随时唤醒）"
+                !ok -> getString(R.string.toast_host_screen_unsupported)
+                nextScreenOn -> getString(R.string.toast_host_screen_on)
+                else -> getString(R.string.toast_host_screen_off_short)
             }
             showToast(msg)
         }
@@ -206,13 +235,29 @@ class WifiShareTileService : BaseOpalTileService() {
             isReceivingPeerCast = OpalPeerCastMutex.roleFlow.value.isReceiving,
         )
 
+    override fun computeLocalizedSubtitle(spec: QuickEntryPolicy.QuickTileSpec): String {
+        val status = BridgeClient.statusFlow.value
+        val remote = BridgeClient.remoteStatusFlow.value
+        val receiving = OpalPeerCastMutex.roleFlow.value.isReceiving
+        return when {
+            !status.connected -> getString(R.string.tile_engine_inactive_sub)
+            receiving -> getString(R.string.tile_wifi_receiving_sub)
+            !remote.wifiEnabled -> getString(R.string.common_disabled)
+            remote.lanIp.isNotEmpty() -> {
+                val port = if (remote.wifiPort > 0) remote.wifiPort else 19878
+                "${remote.lanIp}:$port"
+            }
+            else -> getString(R.string.common_enabled)
+        }
+    }
+
     override fun onClick() {
         super.onClick()
         BridgeService.sUserStopping = false
         BridgeClient.bindAppContext(applicationContext)
         val curStatus = BridgeClient.statusFlow.value
         if (!curStatus.connected || !BridgeClient.isBinderAliveFast()) {
-            showToast("多窗引擎尚未激活，请先激活")
+            showToast(getString(R.string.toast_activate_engine_first))
             openActivationConsole()
             return
         }
@@ -241,9 +286,13 @@ class WifiShareTileService : BaseOpalTileService() {
                 requestAllTilesUpdate(applicationContext)
                 val msg = if (latest.wifiEnabled) {
                     val port = if (latest.wifiPort > 0) latest.wifiPort else 19878
-                    if (latest.lanIp.isNotEmpty()) "无线共享已开启 (${latest.lanIp}:$port)" else "无线共享已开启"
+                    if (latest.lanIp.isNotEmpty()) {
+                        getString(R.string.tile_wifi_on_addr_toast, latest.lanIp, port)
+                    } else {
+                        getString(R.string.tile_wifi_on_toast)
+                    }
                 } else {
-                    "已关闭无线共享"
+                    getString(R.string.tile_wifi_off_toast)
                 }
                 showToast(msg)
             }

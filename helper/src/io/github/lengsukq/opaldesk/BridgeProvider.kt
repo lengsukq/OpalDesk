@@ -74,7 +74,7 @@ class BridgeProvider : ContentProvider() {
             return Bundle().apply { putBoolean("ok", false) }
         }
         BridgeClient.setBinder(cb)
-        BridgeService.ensureStarted(context)
+        BridgeService.ensureStarted(context, requireForegroundProcess = true)
         return Bundle().apply {
             putBoolean("ok", true)
             putBinder(BridgeProtocol.EXTRA_PROC_TOKEN, procToken)

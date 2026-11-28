@@ -34,11 +34,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.BridgeClient
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.diagnostics.DaemonPostmortemCollector
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackKind
 import io.github.lengsukq.opaldesk.diagnostics.FeedbackRateLimiter
@@ -87,7 +89,7 @@ fun ConsoleLogsTab(
     fun refreshDaemonLogs() {
         if (!status.connected) {
             refreshing = true
-            Toast.makeText(ctx, "守护进程未连接，正在尝试补采崩溃与系统缓存日志", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, ctx.getString(R.string.diag_disconnected_postmortem_toast), Toast.LENGTH_SHORT).show()
             DaemonPostmortemCollector.collectIfDisconnectedAsync(
                 ctx = ctx,
                 triggerReason = "manual_refresh",
@@ -188,7 +190,7 @@ fun ConsoleLogsTab(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    OpalText(text = "反馈、需求与诊断", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    OpalText(text = stringResource(R.string.diag_hero_title), fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(3.dp))
                     OpalText(
                         text = "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · v$appVersion",
@@ -198,7 +200,7 @@ fun ConsoleLogsTab(
                 }
                 Spacer(Modifier.width(8.dp))
                 OpalStatusBadge(
-                    label = if (status.connected) "已连接" else "引擎离线",
+                    label = stringResource(if (status.connected) R.string.common_connected else R.string.diag_engine_offline),
                     color = if (status.connected) OpalPalette.AccentEmerald else OpalPalette.AccentAmber,
                 )
             }
@@ -210,9 +212,9 @@ fun ConsoleLogsTab(
                 val metricBg = if (isDark) Color(0x22FFFFFF) else Color(0xB8FFFFFF)
                 val metricShape = RoundedCornerShape(12.dp)
                 listOf(
-                    "虚拟屏" to if (status.connected) "${status.activeVdCount}/${status.maxVdCount}" else "--",
-                    "窗口数" to if (status.connected) "${scene.windows.size}" else "0",
-                    "今日配额" to feedbackQuota.remainingLabel().removePrefix("今日剩余 ").trim(),
+                    stringResource(R.string.diag_metric_vd) to if (status.connected) "${status.activeVdCount}/${status.maxVdCount}" else "--",
+                    stringResource(R.string.diag_metric_windows) to if (status.connected) "${scene.windows.size}" else "0",
+                    stringResource(R.string.diag_metric_quota) to feedbackQuota.remainingLabel().removePrefix("今日剩余 ").trim(),
                 ).forEach { (k, v) ->
                     Column(
                         modifier = Modifier
@@ -234,7 +236,7 @@ fun ConsoleLogsTab(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OpalButton(
-                    label = if (feedbackQuota.isExhausted) "今日上报已达上限" else "上报问题与日志",
+                    label = stringResource(if (feedbackQuota.isExhausted) R.string.diag_btn_quota_reached else R.string.diag_btn_report_bug),
                     compact = false,
                     filled = true,
                     enabled = !feedbackQuota.isExhausted,
@@ -248,7 +250,7 @@ fun ConsoleLogsTab(
                     modifier = Modifier.weight(1.25f),
                 )
                 OpalButton(
-                    label = "提功能需求",
+                    label = stringResource(R.string.diag_btn_feature_req),
                     compact = false,
                     filled = false,
                     enabled = !feedbackQuota.isExhausted,
@@ -311,7 +313,7 @@ fun ConsoleLogsTab(
                                 .background(OpalPalette.AccentBlue),
                         )
                         OpalText(
-                            text = "交流反馈 QQ 群 · $OPALDESK_QQ_GROUP_NUMBER",
+                            text = stringResource(R.string.diag_qq_title, OPALDESK_QQ_GROUP_NUMBER),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = OpalPalette.TextPrimary,
@@ -319,7 +321,7 @@ fun ConsoleLogsTab(
                         )
                     }
                     OpalText(
-                        text = "问题解答、最新版本与需求改动都会在群内第一时间同步",
+                        text = stringResource(R.string.diag_qq_sub),
                         fontSize = 11.sp,
                         color = OpalPalette.TextSecondary,
                         lineHeight = 15.sp,
@@ -335,7 +337,7 @@ fun ConsoleLogsTab(
                     contentAlignment = Alignment.Center,
                 ) {
                     OpalText(
-                        text = "加入QQ群",
+                        text = stringResource(R.string.diag_qq_join),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
@@ -346,7 +348,7 @@ fun ConsoleLogsTab(
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OpalButton(
-                    label = if (refreshing) "刷新中…" else "刷新日志",
+                    label = stringResource(if (refreshing) R.string.diag_refreshing else R.string.diag_refresh_logs),
                     compact = true,
                     filled = false,
                     enabled = !refreshing,
@@ -354,7 +356,7 @@ fun ConsoleLogsTab(
                     modifier = Modifier.weight(1f),
                 )
                 OpalButton(
-                    label = "复制报告",
+                    label = stringResource(R.string.diag_copy_report),
                     compact = true,
                     filled = false,
                     onClick = {
@@ -372,7 +374,7 @@ fun ConsoleLogsTab(
                     modifier = Modifier.weight(1f),
                 )
                 OpalButton(
-                    label = "导出分享",
+                    label = stringResource(R.string.diag_export_share),
                     compact = true,
                     filled = false,
                     accent = OpalPalette.AccentCyan,
@@ -387,7 +389,7 @@ fun ConsoleLogsTab(
                             env = OpalLogStore.captureEnvironmentSnapshot(ctx),
                         )
                         if (!OpalLogStore.shareDiagnosticReport(ctx, report)) {
-                            Toast.makeText(ctx, "导出日志文件失败", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, ctx.getString(R.string.diag_export_failed), Toast.LENGTH_SHORT).show()
                         }
                     },
                     modifier = Modifier.weight(1f),
@@ -406,13 +408,13 @@ fun ConsoleLogsTab(
         )
 
         // 2. Filters & Log Stream
-        ConsoleSectionTitle("实时日志流")
+        ConsoleSectionTitle(stringResource(R.string.diag_live_stream_title))
         MacGlassSectionCard {
             OpalSegmentedRow(
                 options = listOf(
-                    "全部 (${filteredHelper.size + filteredDaemon.size})",
-                    "客户端 (${filteredHelper.size})",
-                    "守护进程 (${filteredDaemon.size})",
+                    stringResource(R.string.diag_filter_all, filteredHelper.size + filteredDaemon.size),
+                    stringResource(R.string.diag_filter_helper, filteredHelper.size),
+                    stringResource(R.string.diag_filter_daemon, filteredDaemon.size),
                 ),
                 selectedIndex = sourceTab,
                 onSelect = {
@@ -428,7 +430,7 @@ fun ConsoleLogsTab(
                     searchQuery = it
                     showAllLines = false
                 },
-                placeholder = "按关键字筛选（如 ADB / Surface / VD / ERR）",
+                placeholder = stringResource(R.string.diag_search_placeholder),
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -440,13 +442,13 @@ fun ConsoleLogsTab(
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterToggleChip(
-                        label = if (warningsOnly) "仅警告/错误 ✓" else "仅警告/错误",
+                        label = stringResource(if (warningsOnly) R.string.diag_warn_only_on else R.string.diag_warn_only_off),
                         active = warningsOnly,
                         accent = OpalPalette.AccentAmber,
                         onClick = { warningsOnly = !warningsOnly },
                     )
                     FilterToggleChip(
-                        label = if (newestFirst) "最新在前" else "时间正序",
+                        label = stringResource(if (newestFirst) R.string.diag_newest_first else R.string.diag_oldest_first),
                         active = newestFirst,
                         accent = OpalPalette.AccentBlue,
                         onClick = { newestFirst = !newestFirst },
@@ -459,12 +461,12 @@ fun ConsoleLogsTab(
                         .border(0.7.dp, OpalPalette.AccentDanger.copy(alpha = 0.35f), CircleShape)
                         .clickable {
                             OpalLogStore.clearHelperLogs()
-                            Toast.makeText(ctx, "已清空客户端本地日志", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, ctx.getString(R.string.diag_cleared_toast), Toast.LENGTH_SHORT).show()
                         }
                         .padding(horizontal = 10.dp, vertical = 5.dp),
                 ) {
                     OpalText(
-                        text = "清空",
+                        text = stringResource(R.string.common_clear),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
                         color = OpalPalette.AccentDanger,
@@ -486,9 +488,9 @@ fun ConsoleLogsTab(
                 if (visibleRows.isEmpty()) {
                     OpalText(
                         text = when {
-                            sourceTab == 2 && !status.connected -> "守护进程未连接，激活后点击「刷新日志」即可查看底层日志。"
-                            searchQuery.isNotBlank() || warningsOnly -> "当前筛选条件下没有匹配的日志记录。"
-                            else -> "暂无日志记录，激活引擎或打开应用窗口后将在此实时显示。"
+                            sourceTab == 2 && !status.connected -> stringResource(R.string.diag_empty_daemon_offline)
+                            searchQuery.isNotBlank() || warningsOnly -> stringResource(R.string.diag_empty_filtered)
+                            else -> stringResource(R.string.diag_empty_default)
                         },
                         fontSize = 12.sp,
                         color = OpalPalette.TextMuted,
@@ -512,7 +514,7 @@ fun ConsoleLogsTab(
                     if (!showAllLines && displayedRows.size > DEFAULT_DISPLAY_LIMIT) {
                         Spacer(Modifier.height(6.dp))
                         OpalButton(
-                            label = "展开全部 ${displayedRows.size} 条日志",
+                            label = stringResource(R.string.diag_expand_all_logs, displayedRows.size),
                             compact = true,
                             filled = false,
                             onClick = { showAllLines = true },
@@ -576,8 +578,8 @@ private fun copyReportToClipboard(ctx: Context, report: String) {
     try {
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         cm?.setPrimaryClip(ClipData.newPlainText("OpalDesk Logs", report))
-        Toast.makeText(ctx, "已复制完整诊断日志报告", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, ctx.getString(R.string.diag_copied_report_toast), Toast.LENGTH_SHORT).show()
     } catch (_: Throwable) {
-        Toast.makeText(ctx, "复制到剪贴板失败", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, ctx.getString(R.string.common_copy_failed), Toast.LENGTH_SHORT).show()
     }
 }

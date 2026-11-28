@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -91,6 +92,14 @@ fun CompositorWindowFrameNode(
     var isInteracting by remember(window.windowId) { mutableStateOf(false) }
     var liveFrame by remember(window.windowId) { mutableStateOf(window.frame) }
     var pendingCommitFrame by remember(window.windowId) { mutableStateOf<WindowRect?>(null) }
+    var resizeCommitToken by remember(window.windowId) { mutableLongStateOf(0L) }
+    var resizeCommitShrink by remember(window.windowId) { mutableStateOf(false) }
+
+    fun armResizeBridge(shrinking: Boolean) {
+        LiveWindowPreviewRegistry.armResizeBridgeSync(currentWin.windowId)
+        resizeCommitShrink = shrinking
+        resizeCommitToken += 1L
+    }
 
     // Keep displaying locally committed frame until daemon confirms it (eliminates drop flicker)
     LaunchedEffect(window.frame, isInteracting, pendingCommitFrame) {
@@ -117,7 +126,9 @@ fun CompositorWindowFrameNode(
     )
     val borderColor = if (window.focused) OpalPalette.BorderFocused else OpalPalette.BorderHairline
     val headerBg = if (window.focused) OpalPalette.GlassHeaderFocused else OpalPalette.GlassHeaderUnfocused
-    val appIcon = remember(window.pkg) { AppCatalogRepository.getAppIcon(ctx, window.pkg) }
+    val appIcon = remember(window.appKey) {
+        AppCatalogRepository.getAppIcon(ctx, window.pkg, window.userId, window.profileType)
+    }
 
     val frameWidthDp = with(density) { activeFrame.width.coerceAtLeast(220).toDp() }
     val frameHeightDp = with(density) { activeFrame.height.coerceAtLeast(220).toDp() }
@@ -287,6 +298,12 @@ fun CompositorWindowFrameNode(
                                             } else {
                                                 lastLive
                                             }
+                                            if (finalFrame.width != currentWin.frame.width || finalFrame.height != currentWin.frame.height) {
+                                                armResizeBridge(
+                                                    shrinking = finalFrame.width < currentWin.frame.width ||
+                                                        finalFrame.height < currentWin.frame.height,
+                                                )
+                                            }
                                             liveFrame = finalFrame
                                             pendingCommitFrame = finalFrame
                                             committed = true
@@ -305,6 +322,7 @@ fun CompositorWindowFrameNode(
                                             val now = SystemClock.uptimeMillis()
                                             if (now - lastTapMs <= 280L) {
                                                 lastTapMs = 0L
+                                                armResizeBridge(shrinking = currentWin.isMaximized || currentWin.isFullscreen)
                                                 BridgeClient.sendWindowActionAsync(
                                                     currentWin.windowId,
                                                     BridgeProtocol.WinAction.TOGGLE_MAXIMIZE,
@@ -346,6 +364,7 @@ fun CompositorWindowFrameNode(
                         BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.MINIMIZE)
                     }
                     MacTrafficLightButton(TrafficLightType.ZOOM, window.focused) {
+                        armResizeBridge(shrinking = window.isMaximized || window.isFullscreen)
                         BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.TOGGLE_MAXIMIZE)
                     }
                     Spacer(Modifier.width(5.dp))
@@ -387,6 +406,30 @@ fun CompositorWindowFrameNode(
                             color = if (window.focused) OpalPalette.TextPrimary else OpalPalette.TextSecondary,
                             maxLines = 1,
                         )
+                        if (window.isSecondaryProfile) {
+                            val badgeText = AppCatalogRepository.formatProfileBadge(ctx, window.profileType, window.userId)
+                            val badgeColor = when (io.github.lengsukq.opaldesk.protocol.AppProfileKey.normalizeProfileType(window.profileType, window.userId)) {
+                                io.github.lengsukq.opaldesk.protocol.AppProfileKey.PROFILE_CLONE -> OpalPalette.AccentAmber
+                                io.github.lengsukq.opaldesk.protocol.AppProfileKey.PROFILE_WORK -> OpalPalette.AccentBlue
+                                else -> Color(0xFF8B5CF6)
+                            }
+                            Spacer(Modifier.width(5.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .background(badgeColor.copy(alpha = 0.18f))
+                                    .border(0.6.dp, badgeColor.copy(alpha = 0.55f), RoundedCornerShape(5.dp))
+                                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                            ) {
+                                OpalText(
+                                    text = badgeText,
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = badgeColor,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -400,6 +443,7 @@ fun CompositorWindowFrameNode(
                             val rect = CompositorGeometry.computeSnapPreviewRect(
                                 BridgeProtocol.Presentation.SNAP_LEFT, canvasW, canvasH, densityVal, currentDockInsetDp,
                             )
+                            armResizeBridge(shrinking = rect.width < window.frame.width || rect.height < window.frame.height)
                             BridgeClient.updateWindowFrameAsync(
                                 window.windowId, rect.left, rect.top, rect.right, rect.bottom,
                                 BridgeProtocol.Presentation.SNAP_LEFT,
@@ -409,6 +453,7 @@ fun CompositorWindowFrameNode(
                             val rect = CompositorGeometry.computeSnapPreviewRect(
                                 BridgeProtocol.Presentation.SNAP_RIGHT, canvasW, canvasH, densityVal, currentDockInsetDp,
                             )
+                            armResizeBridge(shrinking = rect.width < window.frame.width || rect.height < window.frame.height)
                             BridgeClient.updateWindowFrameAsync(
                                 window.windowId, rect.left, rect.top, rect.right, rect.bottom,
                                 BridgeProtocol.Presentation.SNAP_RIGHT,
@@ -426,16 +471,18 @@ fun CompositorWindowFrameNode(
                     }
 
                     HeaderSubtleIconButton(glyph = ChromeGlyph.ORIENTATION, focused = window.focused) {
+                        armResizeBridge(shrinking = true)
                         BridgeClient.sendWindowActionAsync(
                             window.windowId,
                             BridgeProtocol.WinAction.TOGGLE_ORIENTATION,
                         )
                     }
 
+                    val ctx = androidx.compose.ui.platform.LocalContext.current
                     val profileLabel = when (window.profileCode) {
-                        BridgeProtocol.Profile.PORTRAIT -> "竖屏"
-                        BridgeProtocol.Profile.TABLET -> "平板"
-                        else -> "桌面"
+                        BridgeProtocol.Profile.PORTRAIT -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_portrait)
+                        BridgeProtocol.Profile.TABLET -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_tablet)
+                        else -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_desktop)
                     }
                     Box(
                         modifier = Modifier
@@ -443,6 +490,7 @@ fun CompositorWindowFrameNode(
                             .background(if (window.focused) OpalPalette.ChipFill else Color.Transparent)
                             .border(0.6.dp, OpalPalette.BorderHairline, RoundedCornerShape(6.dp))
                             .clickable {
+                                armResizeBridge(shrinking = true)
                                 val nextAct = when (window.profileCode) {
                                     BridgeProtocol.Profile.DESKTOP -> BridgeProtocol.WinAction.SET_PROFILE_TABLET
                                     BridgeProtocol.Profile.TABLET -> BridgeProtocol.WinAction.SET_PROFILE_PORTRAIT
@@ -486,6 +534,8 @@ fun CompositorWindowFrameNode(
                     BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.FOCUS)
                 },
                 occludedByFullscreen = occludedByFullscreen,
+                resizeCommitToken = resizeCommitToken,
+                resizeCommitShrink = resizeCommitShrink,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -497,6 +547,12 @@ fun CompositorWindowFrameNode(
                 pendingCommitFrame = null
             }
             val onCommit: (WindowRect) -> Unit = { committed ->
+                if (committed.width != currentWin.frame.width || committed.height != currentWin.frame.height) {
+                    armResizeBridge(
+                        shrinking = committed.width < currentWin.frame.width ||
+                            committed.height < currentWin.frame.height,
+                    )
+                }
                 liveFrame = committed
                 pendingCommitFrame = committed
                 isInteracting = false

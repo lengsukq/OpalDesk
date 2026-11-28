@@ -34,9 +34,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.ui.OpalButton
 import io.github.lengsukq.opaldesk.ui.OpalPalette
@@ -67,7 +69,7 @@ fun RemoteAppPickerModal(
     val localLaunchCounts by AppPrefs.appLaunchCountsFlow.collectAsState()
     var remoteAppList by remember { mutableStateOf(preloadedApps ?: emptyList()) }
     var resolvedPeerName by remember { mutableStateOf(peerLabel.ifBlank { host }) }
-    var statusText by remember { mutableStateOf(if (preloadedApps != null) "" else "正在连接 $peerLabel 获取应用列表…") }
+    var statusText by remember { mutableStateOf(if (preloadedApps != null) "" else ctx.getString(R.string.picker_connecting, peerLabel)) }
     var errorText by remember { mutableStateOf("") }
     var handoverToken by remember { mutableStateOf("") }
     var retryNonce by remember { mutableIntStateOf(0) }
@@ -89,7 +91,7 @@ fun RemoteAppPickerModal(
     if (preloadedApps == null) {
         DisposableEffect(host, port, retryNonce) {
             val mainHandler = Handler(Looper.getMainLooper())
-            statusText = "正在连接 $peerLabel 获取应用列表…"
+            statusText = ctx.getString(R.string.picker_connecting, peerLabel)
             errorText = ""
             var clientRef: OpalCastPeerClient? = null
             val boundNet = if (AppPrefs.isUsbTetherCastEnabled(ctx)) {
@@ -112,7 +114,7 @@ fun RemoteAppPickerModal(
                 listener = object : OpalCastPeerClient.Listener {
                     override fun onWaitingForApproval() {
                         mainHandler.post {
-                            statusText = "等待对方设备点击「允许」…"
+                            statusText = ctx.getString(R.string.picker_waiting_approval, resolvedPeerName)
                         }
                     }
 
@@ -131,7 +133,7 @@ fun RemoteAppPickerModal(
                                 // Single-use in-memory handover token for launching 1 chosen floating app
                                 handoverToken = authToken
                             }
-                            statusText = "已授权，正在读取应用列表…"
+                            statusText = ctx.getString(R.string.picker_loading_apps)
                         }
                         clientRef?.requestAppList()
                     }
@@ -176,12 +178,15 @@ fun RemoteAppPickerModal(
 
     val unifiedItems = remember(remoteAppList, localLaunchCounts) {
         remoteAppList.map { app ->
-            val combinedCount = max(app.openCount, localLaunchCounts[app.pkg] ?: 0)
+            val localCount = localLaunchCounts[app.appKey] ?: if (app.userId == 0) (localLaunchCounts[app.pkg] ?: 0) else 0
+            val combinedCount = max(app.openCount, localCount)
             UnifiedAppItem(
                 pkg = app.pkg,
                 activityClass = app.cls,
                 label = app.label,
                 openCount = combinedCount,
+                userId = app.userId,
+                profileType = app.profileType,
             )
         }
     }
@@ -196,7 +201,7 @@ fun RemoteAppPickerModal(
             }
             ctx.startActivity(intent)
         } catch (_: Throwable) {
-            Toast.makeText(ctx, "请前往系统设置手动授予 OpalDesk 悬浮窗权限", Toast.LENGTH_LONG).show()
+            Toast.makeText(ctx, ctx.getString(R.string.picker_overlay_manual_toast), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -214,7 +219,7 @@ fun RemoteAppPickerModal(
     ) {
         UnifiedAppLauncherPanel(
             items = unifiedItems,
-            searchPlaceholder = "搜索「$resolvedPeerName」上的应用…",
+            searchPlaceholder = stringResource(R.string.picker_search_placeholder, resolvedPeerName),
             maxWidth = 520.dp,
             maxHeight = 620.dp,
             statusText = statusText,
@@ -227,9 +232,9 @@ fun RemoteAppPickerModal(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        OpalText(text = "独立应用小窗", fontSize = 17.5.sp, fontWeight = FontWeight.Bold)
+                        OpalText(text = stringResource(R.string.picker_title), fontSize = 17.5.sp, fontWeight = FontWeight.Bold)
                         OpalText(
-                            text = "来自「$resolvedPeerName」· 点击即以自由悬浮窗打开",
+                            text = stringResource(R.string.picker_subtitle, resolvedPeerName),
                             fontSize = 12.sp,
                             color = OpalPalette.TextSecondary,
                             maxLines = 1,
@@ -237,7 +242,7 @@ fun RemoteAppPickerModal(
                     }
                     Spacer(Modifier.width(8.dp))
                     OpalButton(
-                        label = "主屏镜像",
+                        label = stringResource(R.string.picker_mirror_btn),
                         accent = OpalPalette.AccentCyan,
                         compact = true,
                         onClick = {
@@ -254,13 +259,13 @@ fun RemoteAppPickerModal(
                                 handoverToken = handoverToken,
                             )
                             if (started) {
-                                Toast.makeText(ctx, "正在以悬浮窗打开「$resolvedPeerName」主屏镜像", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(ctx, ctx.getString(R.string.picker_opening_mirror_toast, resolvedPeerName), Toast.LENGTH_SHORT).show()
                                 onFloatingLaunched()
                             }
                         },
                     )
                     Spacer(Modifier.width(6.dp))
-                    OpalButton(label = "关闭", compact = true, filled = false, onClick = onDismiss)
+                    OpalButton(label = stringResource(R.string.common_close), compact = true, filled = false, onClick = onDismiss)
                 }
             },
             bannerContent = if (!hasOverlayPerm) {
@@ -274,14 +279,14 @@ fun RemoteAppPickerModal(
                             .padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        OpalStatusBadge(label = "需要悬浮窗权限", color = OpalPalette.AccentAmber)
+                        OpalStatusBadge(label = stringResource(R.string.picker_overlay_badge), color = OpalPalette.AccentAmber)
                         OpalText(
-                            text = "开启「显示在其他应用上层」后，即可一边使用本机应用，一边通过小窗操作对方设备上的独立应用。",
+                            text = stringResource(R.string.picker_overlay_desc),
                             fontSize = 12.sp,
                             color = OpalPalette.TextSecondary,
                         )
                         OpalButton(
-                            label = "前往开启悬浮窗权限",
+                            label = stringResource(R.string.picker_overlay_btn),
                             accent = OpalPalette.AccentBlue,
                             compact = true,
                             onClick = ::openOverlayPermissionSettings,
@@ -298,7 +303,15 @@ fun RemoteAppPickerModal(
                     openOverlayPermissionSettings()
                     return@UnifiedAppLauncherPanel
                 }
-                AppPrefs.recordAppLaunch(ctx, app.pkg)
+                AppPrefs.recordAppLaunch(ctx, app.appKey)
+                val badge = if (app.isSecondaryProfile) {
+                    io.github.lengsukq.opaldesk.compositor.AppCatalogRepository.formatProfileBadge(
+                        ctx, app.profileType, app.userId,
+                    )
+                } else {
+                    ""
+                }
+                val displayLabel = if (badge.isNotEmpty()) "${app.label} · $badge" else app.label
                 val started = PeerFloatingAppService.start(
                     ctx = ctx,
                     host = host,
@@ -306,11 +319,12 @@ fun RemoteAppPickerModal(
                     peerLabel = resolvedPeerName,
                     appPackage = app.pkg,
                     appActivity = app.activityClass,
-                    appLabel = app.label,
+                    appLabel = displayLabel,
+                    appUserId = app.userId,
                     handoverToken = handoverToken,
                 )
                 if (started) {
-                    Toast.makeText(ctx, "正在以悬浮窗打开「${app.label}」", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(ctx, ctx.getString(R.string.picker_opening_app_toast, displayLabel), Toast.LENGTH_SHORT).show()
                     onFloatingLaunched()
                 }
             },

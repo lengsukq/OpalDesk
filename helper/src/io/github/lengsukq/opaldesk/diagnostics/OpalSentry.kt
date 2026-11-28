@@ -64,6 +64,9 @@ object OpalSentry {
     @Volatile
     private var initialized = false
 
+    @Volatile
+    private var cachedLatestAnrExit: AnrExitSnapshot? = null
+
     fun isConfigured(): Boolean = BuildConfig.SENTRY_DSN.isNotBlank()
 
     fun resolvedStatusBaseUrl(): String =
@@ -129,8 +132,35 @@ object OpalSentry {
                             if (daemonTail.isNotBlank()) {
                                 event.setExtra("recent_daemon_logs", DiagnosticSanitizer.sanitizeText(daemonTail))
                             }
+                            val isAnr = event.exceptions.orEmpty().any { ex ->
+                                AnrExitDiagnostics.isAnrEvent(ex.type, ex.value, ex.mechanism?.type)
+                            }
+                            if (isAnr) {
+                                val anrExit = cachedLatestAnrExit ?: AnrExitDiagnostics.captureLatestAnrExit(appCtx)?.also {
+                                    cachedLatestAnrExit = it
+                                }
+                                if (anrExit != null) {
+                                    event.setTag("anr_exit_category", anrExit.category)
+                                    event.setTag("anr_exit_importance", anrExit.importanceLabel)
+                                    if (anrExit.description.isNotEmpty()) {
+                                        event.setExtra("anr_exit_description", anrExit.description)
+                                    }
+                                    event.setExtra("anr_exit_pss_kb", anrExit.pssKb)
+                                    event.setExtra("anr_exit_rss_kb", anrExit.rssKb)
+                                    if (anrExit.historySummary.isNotEmpty()) {
+                                        event.setExtra("anr_exit_history", anrExit.historySummary)
+                                    }
+                                }
+                            }
                         }
                         event
+                    }
+                }
+                syncExecutor.execute {
+                    val anrExit = AnrExitDiagnostics.captureLatestAnrExit(appCtx) ?: return@execute
+                    cachedLatestAnrExit = anrExit
+                    if (AnrExitDiagnostics.isWithinRecentLogWindow(anrExit.timestampMs, System.currentTimeMillis())) {
+                        OpalLogStore.w("ANR", AnrExitDiagnostics.formatStartupLogLine(anrExit))
                     }
                 }
                 Sentry.configureScope { scope ->

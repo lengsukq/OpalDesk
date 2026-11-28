@@ -102,6 +102,9 @@ object ExternalDisplayPolicy {
     const val MIN_EXTERNAL_MODE_FPS = 23.5f
     const val MIN_OVERSCAN_PCT = 0f
     const val MAX_OVERSCAN_PCT = 6f
+    const val ANISOTROPY_DPI_RATIO_THRESHOLD = 1.05f
+    private const val MIRROR_COLLAPSE_SIZE_TOLERANCE_PX = 4
+    private const val MIRROR_COLLAPSE_ASPECT_DIFF_THRESHOLD = 0.20f
 
     private val WIRELESS_DISPLAY_KEYWORDS = listOf(
         "wifi", "wi-fi", "wfd", "miracast", "wireless", "smartview", "smart view",
@@ -254,15 +257,17 @@ object ExternalDisplayPolicy {
         if (sameRes.isNotEmpty()) {
             return sameRes.maxByOrNull { it.refreshRate }
         }
-        return valid.maxWithOrNull(
-            compareBy<DisplayModeCandidate> { it.width.toLong() * it.height.toLong() }
-                .thenBy { it.refreshRate },
-        )
+        return null
     }
 
     /**
      * Picks the best hardware [DisplayModeCandidate] at [currentWidth] × [currentHeight] matching
      * the user's requested [targetFps] (`0` = auto peak refresh rate).
+     *
+     * <p>Never cross-switches to a different resolution when [modes] omits `(currentWidth, currentHeight)`
+     * (for instance, when Android 15–17 pixel anisotropy correction exposes synthetic modes like
+     * `2677×1536` while the active physical mode is `2048×1536`): returns `null` so the caller leaves
+     * `preferredDisplayModeId` unset and preserves the display's active resolution.
      */
     fun selectDisplayModeForTargetFps(
         modes: List<DisplayModeCandidate>,
@@ -272,22 +277,22 @@ object ExternalDisplayPolicy {
     ): DisplayModeCandidate? {
         if (modes.isEmpty()) return null
         val valid = modes.filter { it.width >= 320 && it.height >= 240 && it.refreshRate >= MIN_EXTERNAL_MODE_FPS }
-        if (valid.isEmpty()) return modes.first()
+        if (valid.isEmpty()) return null
         val sameRes = valid.filter { it.width == currentWidth && it.height == currentHeight }
-        val pool = sameRes.ifEmpty { valid }
+        if (sameRes.isEmpty()) return null
         if (targetFps <= 0) {
-            return pool.maxByOrNull { it.refreshRate }
+            return sameRes.maxByOrNull { it.refreshRate }
         }
         val req = targetFps.toFloat()
-        val exact = pool.filter { kotlin.math.abs(it.refreshRate - req) <= 2.5f }
+        val exact = sameRes.filter { kotlin.math.abs(it.refreshRate - req) <= 2.5f }
         if (exact.isNotEmpty()) {
             return exact.minByOrNull { kotlin.math.abs(it.refreshRate - req) }
         }
-        val atOrAbove = pool.filter { it.refreshRate >= req - 2.5f }
+        val atOrAbove = sameRes.filter { it.refreshRate >= req - 2.5f }
         if (atOrAbove.isNotEmpty()) {
             return atOrAbove.minByOrNull { it.refreshRate }
         }
-        return pool.maxByOrNull { it.refreshRate }
+        return sameRes.maxByOrNull { it.refreshRate }
     }
 
     /**
@@ -361,16 +366,83 @@ object ExternalDisplayPolicy {
         else -> PresentationFailureAction.FALLBACK_LOCAL_ONLY
     }
 
+    data class RawExternalMode(
+        val width: Int,
+        val height: Int,
+        val refreshRate: Float,
+        val isSynthetic: Boolean = false,
+    )
+
     data class ExternalModeCandidate(
         val width: Int,
         val height: Int,
         val refreshRateHz: Int,
+        val isNativePhysical: Boolean = false,
+        val isAnisotropySynthetic: Boolean = false,
+    )
+
+    data class CuratedExternalModesResult(
+        val modes: List<ExternalModeCandidate>,
+        val hasAnisotropyDistortion: Boolean,
     )
 
     fun isSupportedExternalMode(width: Int, height: Int, refreshRate: Float): Boolean {
         val longEdge = maxOf(width, height)
         val shortEdge = minOf(width, height)
         return longEdge >= 1024 && shortEdge >= 600 && refreshRate >= MIN_EXTERNAL_MODE_FPS
+    }
+
+    fun isAnisotropicPixelDensity(xDpi: Float, yDpi: Float): Boolean {
+        if (!xDpi.isFinite() || !yDpi.isFinite() || xDpi < 20f || yDpi < 20f) return false
+        val ratio = if (xDpi >= yDpi) xDpi / yDpi else yDpi / xDpi
+        return ratio > ANISOTROPY_DPI_RATIO_THRESHOLD
+    }
+
+    fun detectAnisotropyScaleFactor(
+        nativeW: Int,
+        nativeH: Int,
+        xDpi: Float,
+        yDpi: Float,
+        rawModes: List<RawExternalMode>,
+    ): Float {
+        if (isAnisotropicPixelDensity(xDpi, yDpi)) {
+            return if (xDpi >= yDpi) xDpi / yDpi else yDpi / xDpi
+        }
+        if (nativeW < 320 || nativeH < 320 || rawModes.isEmpty()) return 1f
+        val nativePresent = rawModes.any {
+            (it.width == nativeW && it.height == nativeH) || (it.width == nativeH && it.height == nativeW)
+        }
+        var bestInflatedRatio = 1f
+        for (m in rawModes) {
+            val widthRatio = if (m.height == nativeH && m.width > (nativeW * ANISOTROPY_DPI_RATIO_THRESHOLD).roundToInt()) {
+                m.width.toFloat() / nativeW.toFloat()
+            } else {
+                1f
+            }
+            val heightRatio = if (m.width == nativeW && m.height > (nativeH * ANISOTROPY_DPI_RATIO_THRESHOLD).roundToInt()) {
+                m.height.toFloat() / nativeH.toFloat()
+            } else {
+                1f
+            }
+            val ratio = max(widthRatio, heightRatio)
+            if (ratio > ANISOTROPY_DPI_RATIO_THRESHOLD) {
+                val oddEdge = ((m.width and 1) != 0) || ((m.height and 1) != 0)
+                if (m.isSynthetic || oddEdge || !nativePresent) {
+                    if (ratio > bestInflatedRatio) bestInflatedRatio = ratio
+                }
+            }
+        }
+        return bestInflatedRatio
+    }
+
+    private fun isStandardAspectRatio(width: Int, height: Int): Boolean {
+        if (width <= 0 || height <= 0) return false
+        val ratio = width.toFloat() / height.toFloat()
+        val standardRatios = floatArrayOf(
+            16f / 9f, 16f / 10f, 4f / 3f, 5f / 4f, 3f / 2f, 21f / 9f, 43f / 18f, 32f / 9f,
+            9f / 16f, 10f / 16f, 3f / 4f, 4f / 5f, 2f / 3f, 1f,
+        )
+        return standardRatios.any { kotlin.math.abs(ratio - it) <= 0.015f }
     }
 
     /**
@@ -386,23 +458,95 @@ object ExternalDisplayPolicy {
         rawModes: List<Triple<Int, Int, Float>>,
         maxCount: Int = 18,
     ): List<ExternalModeCandidate> {
-        if (rawModes.isEmpty() || maxCount <= 0) return emptyList()
-        val primary = rawModes.filter { (w, h, hz) -> isSupportedExternalMode(w, h, hz) }
+        return curateExternalDisplayModesWithNative(
+            rawModes = rawModes.map { (w, h, hz) -> RawExternalMode(w, h, hz, isSynthetic = false) },
+            nativeW = 0,
+            nativeH = 0,
+            nativeRefreshRate = 0f,
+            maxCount = maxCount,
+        ).modes
+    }
+
+    /**
+     * Anisotropy-aware EDID mode curator:
+     * - Always ensures the active physical hardware mode (`nativeW × nativeH`) is selectable even
+     *   when Android 15–17 pixel anisotropy correction replaces it with a stretched synthetic mode
+     *   (e.g. `2677×1536` for a 4:3 `2048×1536` portable monitor with widescreen EDID dimensions).
+     * - Marks synthetic/stretched anisotropy modes with [ExternalModeCandidate.isAnisotropySynthetic]
+     *   and keeps native hardware modes prioritized first.
+     */
+    fun curateExternalDisplayModesWithNative(
+        rawModes: List<RawExternalMode>,
+        nativeW: Int,
+        nativeH: Int,
+        nativeRefreshRate: Float,
+        xDpi: Float = 0f,
+        yDpi: Float = 0f,
+        maxCount: Int = 18,
+    ): CuratedExternalModesResult {
+        if (maxCount <= 0) return CuratedExternalModesResult(emptyList(), false)
+        val anisotropyFactor = detectAnisotropyScaleFactor(nativeW, nativeH, xDpi, yDpi, rawModes)
+        val hasAnisotropy = anisotropyFactor > ANISOTROPY_DPI_RATIO_THRESHOLD
+        val expectedAnisoAspect = if (hasAnisotropy && nativeW > 0 && nativeH > 0) {
+            val baseAspect = nativeW.toFloat() / nativeH.toFloat()
+            val widerAspect = baseAspect * anisotropyFactor
+            val tallerAspect = baseAspect / anisotropyFactor
+            widerAspect to tallerAspect
+        } else {
+            null
+        }
+
+        val combined = ArrayList<RawExternalMode>(rawModes.size + 1)
+        combined.addAll(rawModes)
+        val hasValidNative = nativeW >= CustomResolutionPolicy.MIN_SHORT_EDGE &&
+            nativeH >= CustomResolutionPolicy.MIN_SHORT_EDGE
+        if (hasValidNative && combined.none { it.width == nativeW && it.height == nativeH && !it.isSynthetic }) {
+            val safeNativeHz = if (nativeRefreshRate >= MIN_EXTERNAL_MODE_FPS) nativeRefreshRate else 60f
+            combined.add(RawExternalMode(nativeW, nativeH, safeNativeHz, isSynthetic = false))
+        }
+        if (combined.isEmpty()) return CuratedExternalModesResult(emptyList(), hasAnisotropy)
+
+        val primary = combined.filter { isSupportedExternalMode(it.width, it.height, it.refreshRate) }
         val pool = primary.ifEmpty {
-            rawModes.filter { (w, h, hz) ->
-                maxOf(w, h) >= CustomResolutionPolicy.MIN_LONG_EDGE &&
-                    minOf(w, h) >= CustomResolutionPolicy.MIN_SHORT_EDGE &&
-                    hz >= MIN_EXTERNAL_MODE_FPS
+            combined.filter {
+                maxOf(it.width, it.height) >= CustomResolutionPolicy.MIN_LONG_EDGE &&
+                    minOf(it.width, it.height) >= CustomResolutionPolicy.MIN_SHORT_EDGE &&
+                    it.refreshRate >= MIN_EXTERNAL_MODE_FPS
             }
         }
-        val byResolution = LinkedHashMap<Pair<Int, Int>, MutableSet<Int>>()
-        for ((w, h, hz) in pool) {
-            val roundedHz = hz.roundToInt().coerceAtLeast(24)
-            byResolution.getOrPut(w to h) { LinkedHashSet() }.add(roundedHz)
+
+        val byResolution = LinkedHashMap<Pair<Int, Int>, MutableList<Pair<Int, Boolean>>>()
+        for (m in pool) {
+            val roundedHz = m.refreshRate.roundToInt().coerceAtLeast(24)
+            val inferredAniso = if (m.isSynthetic) {
+                true
+            } else if (hasAnisotropy && expectedAnisoAspect != null) {
+                val dimsMatchNative = (m.width == nativeW && m.height == nativeH) ||
+                    (m.width == nativeH && m.height == nativeW)
+                if (dimsMatchNative) {
+                    false
+                } else {
+                    val aspect = m.width.toFloat() / m.height.toFloat()
+                    val matchesWider = kotlin.math.abs(aspect - expectedAnisoAspect.first) / expectedAnisoAspect.first <= 0.025f
+                    val matchesTaller = kotlin.math.abs(aspect - expectedAnisoAspect.second) / expectedAnisoAspect.second <= 0.025f
+                    val oddEdge = ((m.width and 1) != 0) || ((m.height and 1) != 0)
+                    (matchesWider || matchesTaller) && (oddEdge || !isStandardAspectRatio(m.width, m.height))
+                }
+            } else {
+                false
+            }
+            byResolution.getOrPut(m.width to m.height) { ArrayList() }.add(roundedHz to inferredAniso)
         }
+
         val curated = ArrayList<ExternalModeCandidate>()
-        for ((dims, hzSet) in byResolution) {
-            val sortedHz = hzSet.sortedDescending()
+        for ((dims, entries) in byResolution) {
+            val hzToSynth = LinkedHashMap<Int, Boolean>()
+            for ((hz, synth) in entries) {
+                // Non-synthetic hardware mode wins over synthetic mode at the same W×H@Hz
+                val prev = hzToSynth[hz]
+                hzToSynth[hz] = if (prev == null) synth else (prev && synth)
+            }
+            val sortedHz = hzToSynth.keys.sortedDescending()
             val chosen = ArrayList<Int>(2)
             val peak = sortedHz.first()
             chosen.add(peak)
@@ -413,29 +557,84 @@ object ExternalDisplayPolicy {
                 val second = sortedHz.firstOrNull { kotlin.math.abs(it - peak) >= 10 }
                 if (second != null) chosen.add(second)
             }
+            val isNative = hasValidNative && dims.first == nativeW && dims.second == nativeH
             for (hz in chosen) {
-                curated.add(ExternalModeCandidate(dims.first, dims.second, hz))
+                val isSynth = !isNative && (hzToSynth[hz] == true)
+                curated.add(
+                    ExternalModeCandidate(
+                        width = dims.first,
+                        height = dims.second,
+                        refreshRateHz = hz,
+                        isNativePhysical = isNative,
+                        isAnisotropySynthetic = isSynth,
+                    ),
+                )
             }
         }
-        return curated
+
+        val sorted = curated
             .sortedWith(
-                compareByDescending<ExternalModeCandidate> { it.width.toLong() * it.height.toLong() }
+                compareByDescending<ExternalModeCandidate> { hasAnisotropy && it.isNativePhysical }
+                    .thenBy { it.isAnisotropySynthetic }
+                    .thenByDescending { it.width.toLong() * it.height.toLong() }
                     .thenByDescending { it.refreshRateHz },
             )
             .take(maxCount)
+        return CuratedExternalModesResult(modes = sorted, hasAnisotropyDistortion = hasAnisotropy)
+    }
+
+    /**
+     * Detects when a mirroring-backed external display (e.g. HyperOS wired DP Presentation display
+     * after `clearForcedDisplaySize`) reports primary Display 0's portrait dimensions (such as
+     * `1200×2608`) instead of its own landscape physical dimensions (`2048×1536`).
+     */
+    fun isMirroredPrimaryDisplayCollapse(
+        nativeW: Int,
+        nativeH: Int,
+        logicalW: Int,
+        logicalH: Int,
+        primaryW: Int,
+        primaryH: Int,
+    ): Boolean {
+        if (nativeW < 320 || nativeH < 320 || logicalW < 320 || logicalH < 320 || primaryW < 320 || primaryH < 320) {
+            return false
+        }
+        val logicalMatchesPrimary =
+            kotlin.math.abs(logicalW - primaryW) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX &&
+                kotlin.math.abs(logicalH - primaryH) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX
+        if (!logicalMatchesPrimary) return false
+        val nativeMatchesPrimarySameOrientation =
+            kotlin.math.abs(nativeW - primaryW) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX &&
+                kotlin.math.abs(nativeH - primaryH) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX
+        if (nativeMatchesPrimarySameOrientation) return false
+        val nativeLandscape = nativeW >= nativeH
+        val logicalLandscape = logicalW >= logicalH
+        if (nativeLandscape != logicalLandscape) return true
+        val nativeAspect = nativeW.toFloat() / nativeH.toFloat()
+        val logicalAspect = logicalW.toFloat() / logicalH.toFloat()
+        return kotlin.math.abs(nativeAspect - logicalAspect) / max(nativeAspect, logicalAspect) >=
+            MIRROR_COLLAPSE_ASPECT_DIFF_THRESHOLD
     }
 
     /**
      * Resolves the currently active logical display dimensions, preferring [realW]×[realH]
      * (which reflects forced custom display sizes via `wm size` and display rotation) over raw
-     * physical EDID mode dimensions [modeW]×[modeH].
+     * physical EDID mode dimensions [modeW]×[modeH] — while ignoring mirror-collapsed primary
+     * Display 0 dimensions when [primaryW]×[primaryH] is provided.
      */
     fun resolveEffectiveDisplaySize(
         modeW: Int,
         modeH: Int,
         realW: Int,
         realH: Int,
+        primaryW: Int = 0,
+        primaryH: Int = 0,
     ): Pair<Int, Int> {
+        if (primaryW >= 320 && primaryH >= 320 &&
+            isMirroredPrimaryDisplayCollapse(modeW, modeH, realW, realH, primaryW, primaryH)
+        ) {
+            if (modeW >= 320 && modeH >= 320) return modeW to modeH
+        }
         if (realW >= 320 && realH >= 320) return realW to realH
         if (modeW >= 320 && modeH >= 320) return modeW to modeH
         return 1920 to 1080
@@ -451,6 +650,37 @@ object ExternalDisplayPolicy {
         val sameNormal = (activeW == nativeW && activeH == nativeH)
         val sameRotated = (activeW == nativeH && activeH == nativeW)
         return !sameNormal && !sameRotated
+    }
+
+    /**
+     * Decides whether entering an external display session should automatically ask the daemon to
+     * normalize the display to its native physical resolution (with 1:1 unscaled output when
+     * anisotropic or explicitly opted in), without overwriting an intentional user custom override
+     * such as `1920×1080` on a `2048×1536` screen.
+     */
+    fun shouldAutoNormalizeExternalOnEnter(
+        nativeW: Int,
+        nativeH: Int,
+        realW: Int,
+        realH: Int,
+        primaryW: Int,
+        primaryH: Int,
+        hasAnisotropy: Boolean,
+        userNative1To1Enabled: Boolean,
+        autoCustomResolutionEnabled: Boolean,
+    ): Boolean {
+        if (autoCustomResolutionEnabled || nativeW < 320 || nativeH < 320) return false
+        if (isMirroredPrimaryDisplayCollapse(nativeW, nativeH, realW, realH, primaryW, primaryH)) {
+            return true
+        }
+        if (!hasAnisotropy && !userNative1To1Enabled) return false
+        val atNativeOrUnset = realW < 320 || realH < 320 ||
+            !isCustomForcedOverride(realW, realH, nativeW, nativeH)
+        val atAnisotropyInflatedNative = hasAnisotropy && (
+            (realH == nativeH && realW > (nativeW * ANISOTROPY_DPI_RATIO_THRESHOLD).roundToInt()) ||
+                (realW == nativeW && realH > (nativeH * ANISOTROPY_DPI_RATIO_THRESHOLD).roundToInt())
+            )
+        return atNativeOrUnset || atAnisotropyInflatedNative
     }
 
     /**

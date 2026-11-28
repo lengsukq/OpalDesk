@@ -31,11 +31,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.BridgeService
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.cast.OpalPeerCastMutex
 import io.github.lengsukq.opaldesk.cast.OpalPeerDiscovery
 import io.github.lengsukq.opaldesk.cast.PeerFloatingAppService
@@ -175,10 +177,10 @@ fun ConsoleDashboardTab(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            OpalText(text = "开启多窗桌面", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            OpalText(text = stringResource(R.string.dash_hero_start_title), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(3.dp))
                             OpalText(
-                                text = "激活引擎后即可进入桌面、满屏外接或无线投屏",
+                                text = stringResource(R.string.dash_hero_start_subtitle),
                                 fontSize = 12.sp,
                                 color = OpalPalette.TextSecondary,
                             )
@@ -188,7 +190,7 @@ fun ConsoleDashboardTab(
                     }
                     Spacer(Modifier.height(14.dp))
                     OpalButton(
-                        label = "激活多窗引擎",
+                        label = stringResource(R.string.dash_hero_activate_btn),
                         onClick = onOpenActivation,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -196,7 +198,7 @@ fun ConsoleDashboardTab(
 
                 remote.connected -> {
                     val fps = (remote.fpsX100 / 100).coerceAtLeast(30)
-                    val peerName = remote.peerName.ifBlank { "对端设备" }
+                    val peerName = remote.peerName.ifBlank { stringResource(R.string.common_peer_device) }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -215,9 +217,9 @@ fun ConsoleDashboardTab(
                                 )
                                 OpalText(
                                     text = if (remote.hasActiveDesktopCast) {
-                                        "正在${remote.channelLabel}投屏"
+                                        stringResource(R.string.dash_hero_casting_title, remote.channelLabel)
                                     } else {
-                                        "独立应用小窗投射中"
+                                        stringResource(R.string.dash_hero_floating_cast_title)
                                     },
                                     fontSize = 17.sp,
                                     fontWeight = FontWeight.Bold,
@@ -231,14 +233,14 @@ fun ConsoleDashboardTab(
                             )
                         }
                         if (remote.activeSessionPermanent) {
-                            OpalStatusBadge(label = "永久信任", color = OpalPalette.AccentEmerald)
+                            OpalStatusBadge(label = stringResource(R.string.dash_hero_trusted_badge), color = OpalPalette.AccentEmerald)
                         }
                     }
 
                     Spacer(Modifier.height(14.dp))
                     if (remote.hasActiveDesktopCast) {
                         OpalButton(
-                            label = "打开本机触控板",
+                            label = stringResource(R.string.dash_hero_open_trackpad),
                             accent = OpalPalette.AccentBlue,
                             onClick = onOpenRemoteTrackpad,
                             modifier = Modifier.fillMaxWidth(),
@@ -247,7 +249,7 @@ fun ConsoleDashboardTab(
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                         OpalButton(
-                            label = if (status.hostScreenOff) "点亮本机屏幕" else "物理息屏省电",
+                            label = stringResource(if (status.hostScreenOff) R.string.dash_hero_screen_on else R.string.dash_hero_screen_off),
                             compact = true,
                             filled = status.hostScreenOff,
                             accent = if (status.hostScreenOff) OpalPalette.AccentEmerald else OpalPalette.AccentBlue,
@@ -255,7 +257,7 @@ fun ConsoleDashboardTab(
                             modifier = Modifier.weight(1f),
                         )
                         OpalButton(
-                            label = "断开投屏",
+                            label = stringResource(R.string.dash_hero_disconnect_cast),
                             compact = true,
                             filled = false,
                             accent = OpalPalette.AccentDanger,
@@ -265,7 +267,7 @@ fun ConsoleDashboardTab(
                     }
                     Spacer(Modifier.height(8.dp))
                     OpalText(
-                        text = "投屏期间已锁定本机 DeX 桌面，避免双端画面冲突",
+                        text = stringResource(R.string.dash_hero_cast_lock_hint),
                         fontSize = 11.sp,
                         color = OpalPalette.TextMuted,
                     )
@@ -289,7 +291,7 @@ fun ConsoleDashboardTab(
                                         .background(OpalPalette.AccentBlue),
                                 )
                                 OpalText(
-                                    text = if (extSession.isWirelessDisplay) "无线电视工作站运行中" else "外接屏工作站运行中",
+                                    text = stringResource(if (extSession.isWirelessDisplay) R.string.dash_hero_wireless_tv_running else R.string.dash_hero_ext_running),
                                     fontSize = 17.sp,
                                     fontWeight = FontWeight.Bold,
                                 )
@@ -297,7 +299,7 @@ fun ConsoleDashboardTab(
                             Spacer(Modifier.height(3.dp))
                             OpalText(
                                 text = activeExtSummary.ifBlank {
-                                    if (extSession.isWirelessDisplay) "无线电视副屏已连接" else "物理外接显示器已连接"
+                                    stringResource(if (extSession.isWirelessDisplay) R.string.dash_hero_wireless_tv_connected else R.string.dash_hero_ext_connected)
                                 },
                                 fontSize = 12.sp,
                                 color = OpalPalette.AccentCyan,
@@ -306,14 +308,14 @@ fun ConsoleDashboardTab(
                     }
                     Spacer(Modifier.height(14.dp))
                     OpalButton(
-                        label = "打开本机触控板",
+                        label = stringResource(R.string.dash_hero_open_trackpad),
                         onClick = { onOpenExternalOrTrackpad(activeExtDisplayId) },
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(9.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                         OpalButton(
-                            label = if (status.hostScreenOff) "点亮本机屏幕" else "物理息屏省电",
+                            label = stringResource(if (status.hostScreenOff) R.string.dash_hero_screen_on else R.string.dash_hero_screen_off),
                             compact = true,
                             filled = status.hostScreenOff,
                             accent = if (status.hostScreenOff) OpalPalette.AccentEmerald else OpalPalette.AccentBlue,
@@ -321,7 +323,7 @@ fun ConsoleDashboardTab(
                             modifier = Modifier.weight(1f),
                         )
                         OpalButton(
-                            label = "进入本机桌面",
+                            label = stringResource(R.string.dash_hero_enter_local),
                             compact = true,
                             filled = false,
                             onClick = onEnterLocalDesktop,
@@ -331,7 +333,7 @@ fun ConsoleDashboardTab(
                     if (extSession.isWirelessDisplay) {
                         Spacer(Modifier.height(7.dp))
                         OpalText(
-                            text = "无线投屏期间建议在触控板顶部使用「暗屏触控」，避免物理息屏导致部分机型断连",
+                            text = stringResource(R.string.dash_hero_wireless_dim_hint),
                             fontSize = 11.sp,
                             color = OpalPalette.TextMuted,
                         )
@@ -349,17 +351,17 @@ fun ConsoleDashboardTab(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                OpalText(text = "多窗桌面", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                OpalText(text = stringResource(R.string.dash_hero_desktop_title), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                                 if (scene.windows.isNotEmpty()) {
-                                    OpalStatusBadge(label = "${scene.windows.size} 窗口", color = OpalPalette.AccentCyan)
+                                    OpalStatusBadge(label = stringResource(R.string.dash_hero_window_count, scene.windows.size), color = OpalPalette.AccentCyan)
                                 }
                             }
                             Spacer(Modifier.height(3.dp))
                             OpalText(
                                 text = if (scene.windows.isNotEmpty()) {
-                                    "工作站运行中 · 点击随时回到桌面"
+                                    stringResource(R.string.dash_hero_running_hint)
                                 } else {
-                                    "引擎已就绪 · 一键进入本机 DeX 桌面"
+                                    stringResource(R.string.dash_hero_ready_hint)
                                 },
                                 fontSize = 12.sp,
                                 color = OpalPalette.TextSecondary,
@@ -382,13 +384,13 @@ fun ConsoleDashboardTab(
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             OpalText(
-                                text = "本机物理屏幕处于息屏状态",
+                                text = stringResource(R.string.dash_hero_host_screen_off_banner),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = OpalPalette.AccentEmerald,
                             )
                             OpalButton(
-                                label = "点亮屏幕",
+                                label = stringResource(R.string.dash_hero_wake_screen),
                                 compact = true,
                                 accent = OpalPalette.AccentEmerald,
                                 onClick = { toggleHostScreenPowerWithToast(ctx, screenOn = true) },
@@ -399,13 +401,13 @@ fun ConsoleDashboardTab(
                     Spacer(Modifier.height(14.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                         OpalButton(
-                            label = "进入本机 DeX 桌面",
+                            label = stringResource(R.string.dash_hero_enter_dex),
                             onClick = onEnterLocalDesktop,
                             modifier = Modifier.weight(1.25f),
                         )
                         if (extDisplay != null) {
                             OpalButton(
-                                label = if (extDisplay.isWirelessDisplay) "投射电视 DeX" else "外接屏满屏",
+                                label = stringResource(if (extDisplay.isWirelessDisplay) R.string.dash_hero_project_tv else R.string.dash_hero_project_ext),
                                 accent = OpalPalette.AccentEmerald,
                                 onClick = { onOpenExternalOrTrackpad(extDisplay.displayId) },
                                 modifier = Modifier.weight(1f),
@@ -417,7 +419,7 @@ fun ConsoleDashboardTab(
                         Spacer(Modifier.height(9.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                             OpalButton(
-                                label = "显示桌面",
+                                label = stringResource(R.string.dash_hero_show_desktop),
                                 compact = true,
                                 filled = false,
                                 onClick = {
@@ -428,7 +430,7 @@ fun ConsoleDashboardTab(
                                 modifier = Modifier.weight(1f),
                             )
                             OpalButton(
-                                label = "关闭全部窗口",
+                                label = stringResource(R.string.dash_hero_close_all_windows),
                                 compact = true,
                                 filled = false,
                                 accent = OpalPalette.AccentAmber,
@@ -451,17 +453,17 @@ fun ConsoleDashboardTab(
             val isWirelessExt = extSession.isWirelessDisplay || (extDisplay?.isWirelessDisplay == true)
             DashboardBentoTile(
                 title = when {
-                    isWirelessExt -> "无线电视投屏"
-                    hasPhysicalExt -> "外接显示器"
-                    else -> "外接 / 电视投屏"
+                    isWirelessExt -> stringResource(R.string.dash_tile_wireless_tv)
+                    hasPhysicalExt -> stringResource(R.string.dash_tile_ext_monitor)
+                    else -> stringResource(R.string.dash_tile_ext_or_tv)
                 },
                 subtitle = when {
-                    physicalExtActive -> "工作站运行中 · 点开触控板"
-                    extDisplay != null && extDisplay.isWirelessDisplay -> "${extDisplay.name} · 点投电视 DeX"
-                    extDisplay != null -> "${extDisplay.width}×${extDisplay.height} · 点击满屏"
-                    else -> "USB-C 或系统无线投电视"
+                    physicalExtActive -> stringResource(R.string.dash_tile_ext_active_sub)
+                    extDisplay != null && extDisplay.isWirelessDisplay -> stringResource(R.string.dash_tile_tv_ready_sub, extDisplay.name)
+                    extDisplay != null -> stringResource(R.string.dash_tile_ext_ready_sub, extDisplay.width, extDisplay.height)
+                    else -> stringResource(R.string.dash_tile_ext_idle_sub)
                 },
-                badgeText = if (hasPhysicalExt) "已连接" else "去投屏",
+                badgeText = stringResource(if (hasPhysicalExt) R.string.common_connected else R.string.dash_tile_cast_badge),
                 accent = if (hasPhysicalExt) OpalPalette.AccentEmerald else OpalPalette.AccentBlue,
                 active = hasPhysicalExt,
                 iconKind = 0,
@@ -479,18 +481,18 @@ fun ConsoleDashboardTab(
             val sharingOn = status.connected && remote.isLanShareActive && !peerRole.isReceiving
             val usbOnlyOn = usbTetherEnabled && status.connected && remote.isUsbTetherOnlyMode && !peerRole.isReceiving
             DashboardBentoTile(
-                title = "无线共享",
+                title = stringResource(R.string.dash_tile_wireless_share),
                 subtitle = when {
-                    peerRole.isReceiving -> "正在接收其他设备"
-                    sharingOn -> if (remote.lanIp.isNotEmpty()) "${remote.lanIp}:${if (remote.wifiPort > 0) remote.wifiPort else DEFAULT_OPAL_CAST_PORT}" else "服务已开启"
-                    usbOnlyOn -> "USB 共享中 (Beta)"
-                    else -> "局域网免 PIN 投给电脑/平板"
+                    peerRole.isReceiving -> stringResource(R.string.dash_tile_receiving_sub)
+                    sharingOn -> if (remote.lanIp.isNotEmpty()) "${remote.lanIp}:${if (remote.wifiPort > 0) remote.wifiPort else DEFAULT_OPAL_CAST_PORT}" else stringResource(R.string.dash_tile_share_on_sub)
+                    usbOnlyOn -> stringResource(R.string.dash_tile_usb_only_sub)
+                    else -> stringResource(R.string.dash_tile_share_idle_sub)
                 },
                 badgeText = when {
-                    peerRole.isReceiving -> "接收中"
-                    sharingOn -> "已开启"
-                    usbOnlyOn -> "USB中"
-                    else -> "未开启"
+                    peerRole.isReceiving -> stringResource(R.string.dash_tile_receiving_badge)
+                    sharingOn -> stringResource(R.string.common_enabled)
+                    usbOnlyOn -> stringResource(R.string.dash_tile_usb_badge)
+                    else -> stringResource(R.string.common_disabled)
                 },
                 accent = if (sharingOn || usbOnlyOn) OpalPalette.AccentEmerald else OpalPalette.AccentCyan,
                 active = sharingOn || usbOnlyOn,
@@ -571,14 +573,14 @@ fun ConsoleDashboardTab(
                     .padding(horizontal = 24.dp, vertical = 9.dp),
             ) {
                 OpalText(
-                    text = "完全退出 OpalDesk",
+                    text = stringResource(R.string.dash_complete_exit_btn),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = OpalPalette.AccentDanger,
                 )
             }
             OpalText(
-                text = "先停止引擎守护进程，再彻底退出应用",
+                text = stringResource(R.string.dash_complete_exit_sub),
                 fontSize = 11.sp,
                 color = OpalPalette.TextMuted,
             )

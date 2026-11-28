@@ -45,11 +45,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.notifications.DesktopNotificationItem
 import io.github.lengsukq.opaldesk.ui.OpalButton
 import io.github.lengsukq.opaldesk.ui.OpalPalette
@@ -309,7 +311,7 @@ fun DesktopNotificationCenterPopover(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                OpalText(text = "通知中心", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                OpalText(text = stringResource(R.string.notif_center_title), fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 if (notifications.isNotEmpty()) {
                     OpalStatusBadge(label = "${notifications.size}", color = OpalPalette.AccentBlue)
                 }
@@ -333,7 +335,7 @@ fun DesktopNotificationCenterPopover(
                         .padding(horizontal = 10.dp, vertical = 4.dp),
                 ) {
                     OpalText(
-                        text = if (doNotDisturb) "免打扰 · 开" else "免打扰",
+                        text = stringResource(if (doNotDisturb) R.string.notif_dnd_on else R.string.taskbar_cc_dnd),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
                         color = if (doNotDisturb) OpalPalette.AccentAmber else OpalPalette.TextSecondary,
@@ -348,7 +350,7 @@ fun DesktopNotificationCenterPopover(
                             .padding(horizontal = 10.dp, vertical = 4.dp),
                     ) {
                         OpalText(
-                            text = "清空全部",
+                            text = stringResource(R.string.notif_clear_all),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                             color = OpalPalette.TextSecondary,
@@ -369,18 +371,18 @@ fun DesktopNotificationCenterPopover(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OpalText(
-                    text = "开启手机通知同步",
+                    text = stringResource(R.string.notif_enable_title),
                     fontSize = 13.5.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
                 OpalText(
-                    text = "授予 OpalDesk「通知使用权」后，微信、短信等手机应用通知将实时同步到 DeX 桌面，点击可直接打开窗口。",
+                    text = stringResource(R.string.notif_enable_desc),
                     fontSize = 11.5.sp,
                     color = OpalPalette.TextSecondary,
                     lineHeight = 16.sp,
                 )
                 OpalButton(
-                    label = "去开启通知使用权",
+                    label = stringResource(R.string.notif_enable_btn),
                     compact = true,
                     onClick = onRequestAccess,
                     modifier = Modifier.fillMaxWidth(),
@@ -396,8 +398,8 @@ fun DesktopNotificationCenterPopover(
                 contentAlignment = Alignment.Center,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    OpalText(text = "暂无未读通知", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = OpalPalette.TextSecondary)
-                    OpalText(text = "手机收到新消息时会自动显示在这里", fontSize = 11.sp, color = OpalPalette.TextMuted)
+                    OpalText(text = stringResource(R.string.notif_empty_title), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = OpalPalette.TextSecondary)
+                    OpalText(text = stringResource(R.string.notif_empty_sub), fontSize = 11.sp, color = OpalPalette.TextMuted)
                 }
             }
         } else {

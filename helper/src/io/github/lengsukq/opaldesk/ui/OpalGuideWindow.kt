@@ -47,10 +47,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.compositor.AppCatalogRepository
 import io.github.lengsukq.opaldesk.guide.OpalGuideItem
 import io.github.lengsukq.opaldesk.guide.OpalGuidePolicy
@@ -59,7 +61,7 @@ import io.github.lengsukq.opaldesk.prefs.AppPrefs
 
 fun openAllowedGuideUrl(ctx: Context, url: String) {
     if (!OpalGuidePolicy.isAllowedExternalLinkUrl(url)) {
-        Toast.makeText(ctx, "仅支持打开受信任的官方 HTTPS 页面", Toast.LENGTH_SHORT).show()
+        Toast.makeText(ctx, ctx.getString(R.string.guide_url_untrusted), Toast.LENGTH_SHORT).show()
         return
     }
     val ok = runCatching {
@@ -69,7 +71,7 @@ fun openAllowedGuideUrl(ctx: Context, url: String) {
         true
     }.getOrDefault(false)
     if (!ok) {
-        Toast.makeText(ctx, "未检测到可用浏览器，请手动访问：$url", Toast.LENGTH_LONG).show()
+        Toast.makeText(ctx, ctx.getString(R.string.guide_no_browser, url), Toast.LENGTH_LONG).show()
     }
 }
 
@@ -111,7 +113,7 @@ fun OpalGuideDesktopIconTile(
             if (selfIcon != null) {
                 Image(
                     bitmap = selfIcon,
-                    contentDescription = "使用指南",
+                    contentDescription = stringResource(R.string.guide_icon_label),
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
@@ -126,7 +128,7 @@ fun OpalGuideDesktopIconTile(
                 .padding(horizontal = 6.dp, vertical = 1.5.dp),
         ) {
             OpalText(
-                text = "使用指南",
+                text = stringResource(R.string.guide_icon_label),
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = OpalPalette.TextPrimary,
@@ -161,14 +163,14 @@ fun GuideIconContextMenu(
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         OpalText(
-            text = "OpalDesk 使用指南",
+            text = stringResource(R.string.settings_guide_row_title),
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
             color = OpalPalette.TextSecondary,
             modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
         )
         GuideMenuActionRow(
-            title = "打开使用指南与特性",
+            title = stringResource(R.string.guide_menu_open),
             accent = OpalPalette.AccentBlue,
             onClick = {
                 onDismiss()
@@ -183,7 +185,7 @@ fun GuideIconContextMenu(
                 .background(OpalPalette.DividerColor),
         )
         GuideMenuActionRow(
-            title = "从桌面隐藏此图标",
+            title = stringResource(R.string.guide_menu_hide),
             accent = OpalPalette.AccentDanger,
             onClick = {
                 onDismiss()
@@ -323,7 +325,7 @@ fun DexFeatureGuideWindow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 OpalButton(
-                    label = if (guideState.refreshing) "同步中…" else "刷新",
+                    label = stringResource(if (guideState.refreshing) R.string.guide_syncing else R.string.common_refresh),
                     compact = true,
                     filled = false,
                     enabled = !guideState.refreshing,
@@ -331,7 +333,7 @@ fun DexFeatureGuideWindow(
                     onClick = { OpalGuideStore.refreshIfStale(ctx, force = true) },
                 )
                 OpalButton(
-                    label = "关闭",
+                    label = stringResource(R.string.common_close),
                     compact = true,
                     filled = false,
                     onClick = onDismiss,
@@ -479,14 +481,14 @@ fun DexFeatureGuideWindow(
                         AppPrefs.setDesktopGuideIconVisible(ctx, next)
                         Toast.makeText(
                             ctx,
-                            if (next) "已在 DeX 桌面显示「使用指南」图标" else "已隐藏桌面「使用指南」图标，可在设置中随时恢复",
+                            ctx.getString(if (next) R.string.guide_toggle_shown else R.string.guide_toggle_hidden),
                             Toast.LENGTH_SHORT,
                         ).show()
                     }
                     .padding(horizontal = 9.dp, vertical = 5.dp),
             ) {
                 OpalText(
-                    text = if (showDesktopIcon) "隐藏桌面图标" else "恢复桌面图标",
+                    text = stringResource(if (showDesktopIcon) R.string.guide_hide_icon_btn else R.string.guide_restore_icon_btn),
                     fontSize = 10.5.sp,
                     fontWeight = FontWeight.Medium,
                     color = OpalPalette.TextSecondary,

@@ -1,5 +1,6 @@
 package io.github.lengsukq.opaldesk
 
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Bundle
@@ -37,6 +38,7 @@ import io.github.lengsukq.opaldesk.diagnostics.OpalLogStore
 import io.github.lengsukq.opaldesk.external.ExternalDesktopMode
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
+import io.github.lengsukq.opaldesk.prefs.OpalLocalePolicy
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.ui.NativeImeBridgeHost
 import io.github.lengsukq.opaldesk.ui.OpalImeFocusTracker
@@ -55,6 +57,10 @@ import io.github.lengsukq.opaldesk.ui.rememberNativeImeHostController
  * (`Alt+Tab`, `Alt+2/3/4/G` tiling, `Ctrl+W`, `Back`, and typing) into the active `VirtualDisplay` window session.
  */
 class DesktopActivity : ComponentActivity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(OpalLocalePolicy.wrapContext(newBase))
+    }
+
     companion object {
         const val EXTRA_FORCE_LANDSCAPE = "force_landscape"
     }
@@ -71,7 +77,7 @@ class DesktopActivity : ComponentActivity() {
             runOnUiThread {
                 Toast.makeText(
                     this,
-                    if (saved != null) "已更换桌面壁纸" else "无法读取所选图片",
+                    getString(if (saved != null) R.string.toast_wallpaper_updated else R.string.toast_wallpaper_read_failed),
                     Toast.LENGTH_SHORT,
                 ).show()
             }
@@ -94,7 +100,7 @@ class DesktopActivity : ComponentActivity() {
             return
         }
         if (BridgeClient.remoteStatusFlow.value.connected) {
-            Toast.makeText(this, "投屏进行中，无法进入本机桌面，请使用本机触控板或先断开投屏", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.toast_cast_locks_local_desktop), Toast.LENGTH_SHORT).show()
             finish()
             return
         }

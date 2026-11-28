@@ -24,6 +24,56 @@ object WirelessDisplayHelper {
     @Volatile
     private var getTypeMethod: Method? = null
 
+    @Volatile
+    private var modeSyntheticChecked = false
+
+    @Volatile
+    private var modeIsSyntheticMethod: Method? = null
+
+    @Volatile
+    private var modeGetFlagsMethod: Method? = null
+
+    private const val DISPLAY_MODE_FLAG_ANISOTROPY_CORRECTION = 1 shl 2
+
+    fun isModeSyntheticOrAnisotropy(mode: Display.Mode?): Boolean {
+        if (mode == null) return false
+        if (!modeSyntheticChecked) {
+            modeIsSyntheticMethod = runCatching { Display.Mode::class.java.getMethod("isSynthetic") }.getOrNull()
+            modeGetFlagsMethod = runCatching { Display.Mode::class.java.getMethod("getFlags") }.getOrNull()
+            modeSyntheticChecked = true
+        }
+        val isSynth = modeIsSyntheticMethod?.let { m ->
+            runCatching { m.invoke(mode) == true }.getOrDefault(false)
+        } == true
+        if (isSynth) return true
+        val flags = modeGetFlagsMethod?.let { m ->
+            runCatching { (m.invoke(mode) as? Number)?.toInt() ?: 0 }.getOrDefault(0)
+        } ?: 0
+        return (flags and DISPLAY_MODE_FLAG_ANISOTROPY_CORRECTION) != 0
+    }
+
+    @Suppress("DEPRECATION")
+    fun queryPrimaryDisplaySizePx(dm: DisplayManager?): Pair<Int, Int> {
+        val d0 = runCatching { dm?.getDisplay(Display.DEFAULT_DISPLAY) }.getOrNull() ?: return 0 to 0
+        val pt = android.graphics.Point()
+        runCatching { d0.getRealSize(pt) }
+        if (pt.x >= 320 && pt.y >= 320) return pt.x to pt.y
+        val m = d0.mode
+        return if (m != null && m.physicalWidth >= 320 && m.physicalHeight >= 320) {
+            m.physicalWidth to m.physicalHeight
+        } else {
+            0 to 0
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    fun queryDisplayRealDpi(display: Display?): Pair<Float, Float> {
+        if (display == null) return 0f to 0f
+        val metrics = android.util.DisplayMetrics()
+        runCatching { display.getRealMetrics(metrics) }
+        return metrics.xdpi to metrics.ydpi
+    }
+
     data class MediaRouterPresentationInfo(
         val display: Display,
         val routeName: String,

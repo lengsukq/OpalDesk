@@ -14,12 +14,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -55,12 +58,16 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.search.OpalSpotlightEngine
 import io.github.lengsukq.opaldesk.search.SpotlightCategory
 import io.github.lengsukq.opaldesk.search.SpotlightItem
@@ -148,6 +155,35 @@ private sealed interface SpotlightListEntry {
 }
 
 /**
+ * Pure JVM-testable top-inset layout policy for [OpalSpotlightOverlay] so punch-hole cameras,
+ * notches, and status bars never occlude the search input on phones or tablets while preserving
+ * centered upper placement on external monitors.
+ */
+internal object SpotlightLayoutPolicy {
+    const val COMPACT_MIN_TOP_OFFSET_DP = 64f
+    const val COMPACT_CUTOUT_CLEARANCE_DP = 24f
+    const val WIDE_MIN_TOP_OFFSET_DP = 44f
+    const val WIDE_MAX_TOP_OFFSET_DP = 92f
+    const val WIDE_CUTOUT_CLEARANCE_DP = 20f
+
+    fun computeTopOffsetDp(
+        maxHeightDp: Float,
+        isCompact: Boolean,
+        safeTopInsetDp: Float,
+    ): Float {
+        val inset = safeTopInsetDp.coerceAtLeast(0f)
+        val safeFloor = inset + if (isCompact) COMPACT_CUTOUT_CLEARANCE_DP else WIDE_CUTOUT_CLEARANCE_DP
+        val preferred = if (isCompact) {
+            maxOf(COMPACT_MIN_TOP_OFFSET_DP, safeFloor)
+        } else {
+            maxOf((maxHeightDp * 0.10f).coerceIn(WIDE_MIN_TOP_OFFSET_DP, WIDE_MAX_TOP_OFFSET_DP), safeFloor)
+        }
+        val maxAllowed = (maxHeightDp * 0.28f).coerceAtLeast(safeFloor)
+        return preferred.coerceAtMost(maxAllowed)
+    }
+}
+
+/**
  * Unified macOS Spotlight-style Liquid Glass centered search modal shared by Host Console
  * (`MainActivity`) and DeX Desktop (`OpalCompositorWorkspace`).
  *
@@ -157,7 +193,7 @@ private sealed interface SpotlightListEntry {
 fun OpalSpotlightOverlay(
     items: List<SpotlightItem>,
     recentIds: List<String>,
-    placeholder: String = "搜索设置、应用、桌面指令或拼音首字母…",
+    placeholder: String = "",
     quickChips: List<Pair<String, String>> = emptyList(),
     controller: OpalSpotlightController = rememberOpalSpotlightController(),
     iconProvider: (@Composable (SpotlightItem) -> ImageBitmap?)? = null,
@@ -165,6 +201,8 @@ fun OpalSpotlightOverlay(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val ctx = LocalContext.current
+    val resolvedPlaceholder = placeholder.ifBlank { stringResource(R.string.spotlight_default_placeholder) }
     val hostView = LocalView.current
     val focusRequester = remember { FocusRequester() }
     val listState = rememberLazyListState()
@@ -195,11 +233,16 @@ fun OpalSpotlightOverlay(
         )
     }
 
+    val recentHeader = stringResource(R.string.spotlight_section_recent)
+    val runningWinHeader = stringResource(R.string.spotlight_section_windows)
     val (listEntries, flatSelectable) = remember(results, trimmedQuery, recentIds) {
         buildDisplayEntries(
             results = results.map { it.item },
             isEmptyQuery = trimmedQuery.isEmpty(),
             recentIdSet = recentIds.toSet(),
+            ctx = ctx,
+            recentHeader = recentHeader,
+            runningWinHeader = runningWinHeader,
         )
     }
 
@@ -237,8 +280,19 @@ fun OpalSpotlightOverlay(
         contentAlignment = Alignment.TopCenter,
     ) {
         val isCompact = maxWidth < 520.dp
-        val topOffset = if (isCompact) 26.dp else (maxHeight * 0.10f).coerceIn(36.dp, 88.dp)
-        val panelMaxH = (maxHeight - topOffset - 24.dp).coerceIn(240.dp, 560.dp)
+        val density = LocalDensity.current
+        val cutoutInsetPx = maxOf(
+            WindowInsets.displayCutout.getTop(density),
+            hostView.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0,
+        )
+        val statusInsetPx = WindowInsets.statusBars.getTop(density)
+        val safeTopInsetDp = with(density) { maxOf(cutoutInsetPx, statusInsetPx).toDp() }
+        val topOffset = SpotlightLayoutPolicy.computeTopOffsetDp(
+            maxHeightDp = maxHeight.value,
+            isCompact = isCompact,
+            safeTopInsetDp = safeTopInsetDp.value,
+        ).dp
+        val panelMaxH = (maxHeight - topOffset - 24.dp).coerceIn(200.dp, 560.dp)
         val panelShape = RoundedCornerShape(24.dp)
 
         Column(
@@ -257,7 +311,7 @@ fun OpalSpotlightOverlay(
         ) {
             SpotlightSearchHeader(
                 query = query,
-                placeholder = placeholder,
+                placeholder = resolvedPlaceholder,
                 isCompact = isCompact,
                 focusRequester = focusRequester,
                 controller = controller,
@@ -394,7 +448,7 @@ private fun SpotlightSearchHeader(
                 .padding(horizontal = 9.dp, vertical = 4.dp),
         ) {
             OpalText(
-                text = if (isCompact) "取消" else "Esc",
+                text = if (isCompact) stringResource(R.string.common_cancel) else "Esc",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = if (isCompact) null else FontFamily.Monospace,
@@ -455,13 +509,13 @@ private fun SpotlightEmptyResults(trimmedQuery: String) {
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         OpalText(
-            text = "未找到与「$trimmedQuery」匹配的结果",
+            text = stringResource(R.string.spotlight_no_results, trimmedQuery),
             fontSize = 13.5.sp,
             fontWeight = FontWeight.SemiBold,
             color = OpalPalette.TextPrimary,
         )
         OpalText(
-            text = "试试搜索「DPI」「分辨率」「输入法」「投屏」「UHID」或拼音首字母",
+            text = stringResource(R.string.spotlight_empty_tips),
             fontSize = 11.5.sp,
             color = OpalPalette.TextMuted,
         )
@@ -552,7 +606,7 @@ private fun SpotlightFooterBar(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         OpalText(
-            text = if (isEmptyQuery) "快捷推荐" else "共 $matchCount 项匹配",
+            text = if (isEmptyQuery) stringResource(R.string.spotlight_quick_rec) else stringResource(R.string.spotlight_match_count, matchCount),
             fontSize = 10.5.sp,
             color = OpalPalette.TextMuted,
         )
@@ -560,9 +614,9 @@ private fun SpotlightFooterBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            SpotlightKeyHint("↑↓", "选择")
-            SpotlightKeyHint("↵", "执行")
-            SpotlightKeyHint("Esc", "关闭")
+            SpotlightKeyHint("↑↓", stringResource(R.string.spotlight_hint_select))
+            SpotlightKeyHint("↵", stringResource(R.string.spotlight_hint_run))
+            SpotlightKeyHint("Esc", stringResource(R.string.common_close))
         }
     }
 }
@@ -773,6 +827,9 @@ private fun buildDisplayEntries(
     results: List<SpotlightItem>,
     isEmptyQuery: Boolean,
     recentIdSet: Set<String>,
+    ctx: android.content.Context,
+    recentHeader: String,
+    runningWinHeader: String,
 ): Pair<List<SpotlightListEntry>, List<SpotlightItem>> {
     if (results.isEmpty()) return emptyList<SpotlightListEntry>() to emptyList()
     val entries = ArrayList<SpotlightListEntry>(results.size + 6)
@@ -782,7 +839,7 @@ private fun buildDisplayEntries(
         val recents = results.filter { it.id in recentIdSet }
         val others = results.filter { it.id !in recentIdSet }
         if (recents.isNotEmpty()) {
-            entries.add(SpotlightListEntry.Header("recent", "最近使用", recents.size))
+            entries.add(SpotlightListEntry.Header("recent", recentHeader, recents.size))
             recents.forEach { item ->
                 entries.add(SpotlightListEntry.Row(item, flat.size))
                 flat.add(item)
@@ -800,7 +857,7 @@ private fun buildDisplayEntries(
             orderedCategories.forEach { cat ->
                 val list = groupedOthers[cat].orEmpty()
                 if (list.isNotEmpty()) {
-                    val hdr = if (cat == SpotlightCategory.RUNNING_WINDOW) "运行中窗口" else "常用直达 · ${cat.displayTitle}"
+                    val hdr = if (cat == SpotlightCategory.RUNNING_WINDOW) runningWinHeader else ctx.getString(R.string.spotlight_section_quick, cat.displayTitle)
                     entries.add(SpotlightListEntry.Header("pin_${cat.name}", hdr, list.size))
                     list.forEach { item ->
                         entries.add(SpotlightListEntry.Row(item, flat.size))

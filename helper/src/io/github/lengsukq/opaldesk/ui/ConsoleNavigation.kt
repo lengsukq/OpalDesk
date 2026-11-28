@@ -41,9 +41,11 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.lengsukq.opaldesk.R
 
 internal const val OPALDESK_QQ_GROUP_NUMBER = "1042317917"
 
@@ -59,23 +61,23 @@ internal fun joinOpalDeskQqGroup(ctx: Context) {
         ctx.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }.isSuccess
     val msg = if (launched) {
-        "已复制群号 $OPALDESK_QQ_GROUP_NUMBER，正在打开 QQ…"
+        ctx.getString(R.string.nav_qq_copied_opening, OPALDESK_QQ_GROUP_NUMBER)
     } else {
-        "已复制 QQ 群号 $OPALDESK_QQ_GROUP_NUMBER，请打开 QQ 搜索加入"
+        ctx.getString(R.string.nav_qq_copied_manual, OPALDESK_QQ_GROUP_NUMBER)
     }
     Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
 }
 
 private data class ConsoleNavItem(
     val index: Int,
-    val label: String,
+    val labelRes: Int,
 )
 
 private val CONSOLE_NAV_ITEMS = listOf(
-    ConsoleNavItem(0, "工作站"),
-    ConsoleNavItem(1, "显示"),
-    ConsoleNavItem(2, "设置"),
-    ConsoleNavItem(3, "日志"),
+    ConsoleNavItem(0, R.string.nav_tab_workstation),
+    ConsoleNavItem(1, R.string.nav_tab_display),
+    ConsoleNavItem(2, R.string.nav_tab_settings),
+    ConsoleNavItem(3, R.string.nav_tab_logs),
 )
 
 /**
@@ -96,10 +98,10 @@ fun OpalConsoleHeader(
     modifier: Modifier = Modifier,
 ) {
     val (title, subtitle) = when (selectedTab) {
-        0 -> "OpalDesk" to "多窗合成工作站"
-        1 -> "显示与外设" to "外观、画质与外接设备"
-        2 -> "系统设置" to "偏好、更新与引擎管理"
-        else -> "诊断日志" to "运行状态与问题反馈"
+        0 -> stringResource(R.string.app_name) to stringResource(R.string.nav_header_workstation_subtitle)
+        1 -> stringResource(R.string.nav_header_display_title) to stringResource(R.string.nav_header_display_subtitle)
+        2 -> stringResource(R.string.nav_header_settings_title) to stringResource(R.string.nav_header_settings_subtitle)
+        else -> stringResource(R.string.nav_header_logs_title) to stringResource(R.string.nav_header_logs_subtitle)
     }
     val isDark = OpalPalette.isDark
     val ctx = LocalContext.current
@@ -151,7 +153,7 @@ fun OpalConsoleHeader(
                             .padding(horizontal = 8.dp, vertical = 2.5.dp),
                     ) {
                         OpalText(
-                            text = "加QQ群",
+                            text = stringResource(R.string.nav_qq_group_badge),
                             fontSize = 10.5.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = OpalPalette.AccentBlue,
@@ -183,7 +185,7 @@ fun OpalConsoleHeader(
                         .padding(horizontal = 10.dp, vertical = 5.dp),
                 ) {
                     OpalText(
-                        text = if (readyToInstallUpdate) "安装 $availableReleaseTag" else availableReleaseTag,
+                        text = if (readyToInstallUpdate) stringResource(R.string.nav_install_tag, availableReleaseTag) else availableReleaseTag,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = badgeColor,
@@ -198,9 +200,9 @@ fun OpalConsoleHeader(
 
             val statusColor = if (connected) OpalPalette.AccentEmerald else OpalPalette.AccentAmber
             val statusLabel = when {
-                connected && rootEnhanced -> "引擎 · Root"
-                connected -> "引擎就绪"
-                else -> "未激活"
+                connected && rootEnhanced -> stringResource(R.string.nav_status_root)
+                connected -> stringResource(R.string.nav_status_ready)
+                else -> stringResource(R.string.common_not_activated)
             }
             Row(
                 modifier = Modifier
@@ -331,7 +333,7 @@ fun OpalConsoleBottomBar(
                     )
                     Spacer(Modifier.height(3.dp))
                     OpalText(
-                        text = item.label,
+                        text = stringResource(item.labelRes),
                         fontSize = 11.sp,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                         color = contentColor,

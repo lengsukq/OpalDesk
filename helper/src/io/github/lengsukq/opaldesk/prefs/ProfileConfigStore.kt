@@ -39,6 +39,7 @@ data class SavedLayoutWindow(
     val presentation: String = BridgeProtocol.Presentation.FLOATING,
     val minimized: Boolean = false,
     val zOrder: Int = 0,
+    val userId: Int = 0,
 )
 
 /**
@@ -460,6 +461,7 @@ object ProfileConfigStore {
                         presentation = if (w.isFullscreen) BridgeProtocol.Presentation.FLOATING else w.presentation,
                         minimized = w.isMinimized,
                         zOrder = w.zOrder,
+                        userId = w.userId,
                     )
                     mergedBounds[w.pkg] = SavedAppWindowBounds(
                         leftRatio = entry.leftRatio,
@@ -582,6 +584,9 @@ object ProfileConfigStore {
                 append(",\"p\":").append(MiniJson.quote(w.presentation))
                 append(",\"min\":").append(w.minimized)
                 append(",\"z\":").append(w.zOrder)
+                if (w.userId > 0) {
+                    append(",\"userId\":").append(w.userId)
+                }
                 append('}')
             }
             append("]}")
@@ -659,6 +664,7 @@ object ProfileConfigStore {
                                     presentation = wo.str("p", BridgeProtocol.Presentation.FLOATING),
                                     minimized = wo.bool("min", false),
                                     zOrder = wo.int("z", j),
+                                    userId = wo.int("userId", 0).coerceAtLeast(0),
                                 ),
                             )
                         }

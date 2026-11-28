@@ -60,6 +60,7 @@ import io.github.lengsukq.opaldesk.external.ExternalTrackpadPolicy
 import io.github.lengsukq.opaldesk.external.HardwareMouseDetectingFrameLayout
 import io.github.lengsukq.opaldesk.external.WirelessDisplayHelper
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
+import io.github.lengsukq.opaldesk.prefs.OpalLocalePolicy
 import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.service.DisplayLaunchHelper
@@ -87,6 +88,10 @@ import kotlin.math.roundToInt
  *    serves as a Samsung DeX-style precision multi-touch trackpad & monitor control deck.
  */
 class ExternalDesktopActivity : ComponentActivity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(OpalLocalePolicy.wrapContext(newBase))
+    }
+
     companion object {
         private const val TAG = "OpalExtDesktop"
         const val EXTRA_TARGET_DISPLAY_ID = "targetDisplayId"
@@ -111,7 +116,7 @@ class ExternalDesktopActivity : ComponentActivity() {
             runOnUiThread {
                 Toast.makeText(
                     this,
-                    if (saved != null) "已更换桌面壁纸" else "无法读取所选图片",
+                    getString(if (saved != null) R.string.toast_wallpaper_updated else R.string.toast_wallpaper_read_failed),
                     Toast.LENGTH_SHORT,
                 ).show()
             }
@@ -134,6 +139,8 @@ class ExternalDesktopActivity : ComponentActivity() {
     private var directImeController: NativeImeHostController? = null
     private var pendingRecoveryRunnable: Runnable? = null
     private var fallbackNoticeShown = false
+    private var lastAutoNormalizedDisplayId: Int = -1
+    private var activePresentationLabel: String = ""
 
     private val presentationTrackpadCloser: () -> Unit = {
         runOnUiThread { openConsoleOnPrimaryDisplay() }
@@ -142,6 +149,33 @@ class ExternalDesktopActivity : ComponentActivity() {
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
         override fun onDisplayChanged(displayId: Int) {
+            if (runningInPresentationMode
+                && targetDisplayId > Display.DEFAULT_DISPLAY
+                && displayId == targetDisplayId
+            ) {
+                val pres = presentation
+                val freshDisp = displayManager?.getDisplay(displayId)
+                if (pres != null && freshDisp != null && freshDisp.isValid) {
+                    val (primaryW, primaryH) = WirelessDisplayHelper.queryPrimaryDisplaySizePx(displayManager)
+                    pres.refreshDisplayGeometry(freshDisp, primaryW, primaryH)
+                    presentationSummary = pres.monitorSummary
+                    val label = activePresentationLabel.ifBlank { freshDisp.name ?: "外接屏" }
+                    ExternalTrackpadBridge.publishSession(
+                        owner = this@ExternalDesktopActivity,
+                        session = ExternalDesktopSession(
+                            mode = ExternalDesktopMode.PRESENTATION,
+                            displayId = freshDisp.displayId,
+                            displayName = label,
+                            widthPx = pres.displayWidthPx,
+                            heightPx = pres.displayHeightPx,
+                            refreshRateHz = pres.refreshRateHz,
+                            isRemoteCastDisplay = false,
+                            isWirelessDisplay = activeIsWirelessDisplay,
+                        ),
+                    )
+                }
+                return
+            }
             val activeDisp = this@ExternalDesktopActivity.display
             val actualDisplayId = activeDisp?.displayId ?: Display.DEFAULT_DISPLAY
             if (!runningInPresentationMode
@@ -155,6 +189,7 @@ class ExternalDesktopActivity : ComponentActivity() {
         override fun onDisplayRemoved(displayId: Int) {
             if (targetDisplayId > Display.DEFAULT_DISPLAY && displayId == targetDisplayId) {
                 OpalLogStore.i(TAG, "External display removed: displayId=$displayId, closing workstation")
+                lastAutoNormalizedDisplayId = -1
                 dismissPresentation()
                 finishAndRemoveTask()
             }
@@ -310,10 +345,14 @@ class ExternalDesktopActivity : ComponentActivity() {
             ExternalDisplayPolicy.isPublicPresentationDisplay(freshDisplay.flags)
 
         if (freshDisplay != null && freshPublicPres) {
+            val (primaryW, primaryH) = WirelessDisplayHelper.queryPrimaryDisplaySizePx(displayManager)
+            maybeAutoNormalizeExternalDisplay(freshDisplay, primaryW, primaryH)
             val pres = ExternalMonitorPresentation(
                 hostActivity = this,
                 targetDisplay = freshDisplay,
                 displayLabelOverride = displayLabel,
+                primaryWidthPx = primaryW,
+                primaryHeightPx = primaryH,
                 onPickCustomWallpaper = { wallpaperPicker.launch("image/*") },
                 onOpenConsole = ::openConsoleOnPrimaryDisplay,
                 onExitDesktop = { finishAndRemoveTask() },
@@ -322,6 +361,7 @@ class ExternalDesktopActivity : ComponentActivity() {
                 pres.show()
                 presentation = pres
                 targetDisplayId = freshDisplay.displayId
+                activePresentationLabel = displayLabel
                 runningInPresentationMode = true
                 presentationSummary = pres.monitorSummary
                 BridgeClient.setDexImeSessionActive("external_desktop", true)
@@ -522,13 +562,89 @@ class ExternalDesktopActivity : ComponentActivity() {
             currentWidth = cur.physicalWidth,
             currentHeight = cur.physicalHeight,
             targetFps = targetFps,
-        ) ?: return
+        )
         val lp = window.attributes
+        if (chosen == null) {
+            if (lp.preferredDisplayModeId != 0 || lp.preferredRefreshRate != 0f) {
+                lp.preferredDisplayModeId = 0
+                lp.preferredRefreshRate = 0f
+                window.attributes = lp
+            }
+            return
+        }
         if (lp.preferredDisplayModeId != chosen.modeId || kotlin.math.abs(lp.preferredRefreshRate - chosen.refreshRate) > 0.5f) {
             lp.preferredDisplayModeId = chosen.modeId
             lp.preferredRefreshRate = chosen.refreshRate
             window.attributes = lp
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun maybeAutoNormalizeExternalDisplay(
+        targetDisplay: Display,
+        primaryW: Int,
+        primaryH: Int,
+    ) {
+        if (!BridgeClient.statusFlow.value.connected) return
+        if (lastAutoNormalizedDisplayId == targetDisplay.displayId) return
+        val mode = targetDisplay.mode ?: return
+        val nativeW = mode.physicalWidth
+        val nativeH = mode.physicalHeight
+        if (nativeW < 320 || nativeH < 320) return
+        val realPt = android.graphics.Point()
+        runCatching { targetDisplay.getRealSize(realPt) }
+        val (extXDpi, extYDpi) = WirelessDisplayHelper.queryDisplayRealDpi(targetDisplay)
+        val rawModes = targetDisplay.supportedModes
+            .orEmpty()
+            .map {
+                ExternalDisplayPolicy.RawExternalMode(
+                    width = it.physicalWidth,
+                    height = it.physicalHeight,
+                    refreshRate = it.refreshRate,
+                    isSynthetic = WirelessDisplayHelper.isModeSyntheticOrAnisotropy(it),
+                )
+            }
+        val hasAnisotropy = ExternalDisplayPolicy.detectAnisotropyScaleFactor(
+            nativeW = nativeW,
+            nativeH = nativeH,
+            xDpi = extXDpi,
+            yDpi = extYDpi,
+            rawModes = rawModes,
+        ) > ExternalDisplayPolicy.ANISOTROPY_DPI_RATIO_THRESHOLD
+        val userNative1To1 = AppPrefs.isExternalNative1To1Enabled(this)
+        if (!ExternalDisplayPolicy.shouldAutoNormalizeExternalOnEnter(
+                nativeW = nativeW,
+                nativeH = nativeH,
+                realW = realPt.x,
+                realH = realPt.y,
+                primaryW = primaryW,
+                primaryH = primaryH,
+                hasAnisotropy = hasAnisotropy,
+                userNative1To1Enabled = userNative1To1,
+                autoCustomResolutionEnabled = AppPrefs.isAutoCustomResolutionEnabled(this),
+            )
+        ) {
+            return
+        }
+        lastAutoNormalizedDisplayId = targetDisplay.displayId
+        val scalingMode = if (userNative1To1) {
+            BridgeProtocol.ExternalScaling.NATIVE_1TO1
+        } else {
+            BridgeProtocol.ExternalScaling.SMART_AUTO
+        }
+        OpalLogStore.i(
+            TAG,
+            "Auto-normalizing Presentation displayId=${targetDisplay.displayId} " +
+                "real=${realPt.x}x${realPt.y} -> native=${nativeW}x${nativeH} " +
+                "(anisotropy=$hasAnisotropy, native1To1=$userNative1To1)",
+        )
+        BridgeClient.setExternalDisplayModeAsync(
+            displayId = targetDisplay.displayId,
+            width = nativeW,
+            height = nativeH,
+            fps = 0f,
+            scalingMode = scalingMode,
+        )
     }
 
     private fun bindDirectExtendedWorkspaceUi(currentDisplayId: Int) {
@@ -788,11 +904,14 @@ class ExternalDesktopActivity : ComponentActivity() {
         if (curDisplay != null) {
             runCatching { curDisplay.getRealSize(realPt) }
         }
+        val (primaryW, primaryH) = WirelessDisplayHelper.queryPrimaryDisplaySizePx(displayManager)
         val (widthPx, heightPx) = ExternalDisplayPolicy.resolveEffectiveDisplaySize(
             modeW = curMode?.physicalWidth ?: resources.displayMetrics.widthPixels,
             modeH = curMode?.physicalHeight ?: resources.displayMetrics.heightPixels,
             realW = realPt.x,
             realH = realPt.y,
+            primaryW = primaryW,
+            primaryH = primaryH,
         )
         val hz = (curMode?.refreshRate ?: 60f).roundToInt().coerceAtLeast(24)
         val dispName = curDisplay?.name ?: "外接屏"

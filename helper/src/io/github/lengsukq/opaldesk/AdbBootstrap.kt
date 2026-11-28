@@ -387,13 +387,30 @@ object AdbBootstrap {
 
     internal fun formatBinderTimeoutMessage(tailDiag: String): String {
         val cleanTail = tailDiag.trim()
-        val offlineHint = if (cleanTail.contains("offline", ignoreCase = true)) {
-            "\n提示：检测到无线调试连接已断开；部分机型关闭「无线调试」会连带终止后台守护进程，激活后请保持「无线调试」开启。"
-        } else {
-            ""
+        val hints = StringBuilder()
+        if (cleanTail.contains("offline", ignoreCase = true)) {
+            hints.append("\n提示：检测到无线调试连接已断开；部分机型关闭「无线调试」会连带终止后台守护进程，激活后请保持「无线调试」开启。")
+        }
+        val hasVisibilityBlocked = cleanTail.contains("OPALDESK_PUSH_BINDER_FAIL", ignoreCase = true) && (
+            cleanTail.contains("pmNotFound", ignoreCase = true) ||
+                cleanTail.contains("pmPathRc:1", ignoreCase = true) ||
+                cleanTail.contains("helperUid=-1", ignoreCase = true) ||
+                cleanTail.contains("providerOwnerMismatch", ignoreCase = true)
+            )
+        if (hasVisibilityBlocked) {
+            hints.append(
+                "\n提示：守护进程（uid=2000）无法查询到本应用包信息（pmNotFound）。" +
+                    "若设备启用了 Hide My Applist（隐藏应用列表）/ LSPosed 等模块，" +
+                    "请取消对系统 Shell（com.android.shell）隐藏 OpalDesk，或确认未安装在受隔离的分身空间后重试。",
+            )
+        }
+        if (cleanTail.contains("CERT_MISMATCH", ignoreCase = true) ||
+            cleanTail.contains("OPALDESK_SECURITY_REJECT", ignoreCase = true)
+        ) {
+            hints.append("\n提示：检测到安装包签名校验不匹配，请从官方渠道重新安装同一签名的 OpalDesk APK 后重试。")
         }
         val tailSection = if (cleanTail.isNotEmpty()) "\n日志摘要:\n$cleanTail" else ""
-        return "守护进程命令已下发，但暂未收到 Binder 握手，请稍等几秒或查看 /data/local/tmp/opaldesk.log$offlineHint$tailSection"
+        return "守护进程命令已下发，但暂未收到 Binder 握手，请稍等几秒或查看 /data/local/tmp/opaldesk.log$hints$tailSection"
     }
 
     private fun awaitDaemonBinderReady(

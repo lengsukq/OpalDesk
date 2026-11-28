@@ -567,6 +567,28 @@ class ExternalTrackpadPolicyTest {
     }
 
     @Test
+    fun selectDisplayModeForTargetFpsNeverSwitchesResolutionWhenActiveModeAbsentFromSupportedModes() {
+        // Reproduces OPALDESK-1A: active mode is 2048x1536@59Hz while Android 17 anisotropy correction
+        // exposes 2677x1536@59Hz + 1920x1080@60Hz + 1024x768@60Hz in supportedModes.
+        val anisoModes = listOf(
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 1, width = 2677, height = 1536, refreshRate = 59.0f),
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 2, width = 1920, height = 1080, refreshRate = 60.0f),
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 3, width = 1600, height = 1200, refreshRate = 60.0f),
+            ExternalDisplayPolicy.DisplayModeCandidate(modeId = 4, width = 1024, height = 768, refreshRate = 60.0f),
+        )
+        assertNull(ExternalDisplayPolicy.selectDisplayModeForTargetFps(anisoModes, 2048, 1536, targetFps = 60))
+        assertNull(ExternalDisplayPolicy.selectDisplayModeForTargetFps(anisoModes, 2048, 1536, targetFps = 0))
+        assertNull(
+            ExternalDisplayPolicy.selectPreferredDisplayMode(
+                modes = anisoModes,
+                currentWidth = 2048,
+                currentHeight = 1536,
+                preferHighestResolution = false,
+            ),
+        )
+    }
+
+    @Test
     fun autoBlackoutWorksInPresentationModeAndSuppressesAutoPhoneTrackpad() {
         val directPhysical = ExternalDesktopSession(
             mode = ExternalDesktopMode.DIRECT_EXTENDED,
