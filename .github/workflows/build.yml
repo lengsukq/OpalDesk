@@ -2,9 +2,6 @@ name: Build OpalDesk
 
 on:
   push:
-    branches:
-      - main
-      - master
     tags:
       - 'v*'
   pull_request:
@@ -35,6 +32,10 @@ on:
 # Least-privilege default across all jobs (including pull_request)
 permissions:
   contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-android:
