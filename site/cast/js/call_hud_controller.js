@@ -4,10 +4,32 @@
  * communicates with the main OpalDesk window via Tauri IPC + events.
  */
 
-import { DEFAULT_SMS_REJECT_TEMPLATES, formatCallDuration } from './companion_core.js';
+import { formatCallDuration } from './companion_core.js';
 import { resolveTauriInvoke } from './desktop_bridge.js';
+import {
+  applyDocumentI18n,
+  getSmsRejectTemplates,
+  onLocaleChange,
+  setLanguagePref,
+  STORAGE_LANGUAGE_PREF,
+  t,
+} from './i18n.js';
+
+const STORAGE_THEME = 'opaldesk-showcase-theme-v1';
 
 const $ = (id) => document.getElementById(id);
+
+function syncThemeFromStorage() {
+  try {
+    const saved = window.localStorage.getItem(STORAGE_THEME);
+    const theme = saved === 'pure-frost' || saved === 'prism-pulse'
+      ? saved
+      : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'prism-pulse' : 'pure-frost');
+    document.documentElement.setAttribute('data-theme', theme);
+  } catch {
+    // Ignore storage access errors
+  }
+}
 
 let currentCall = null;
 let durationTimer = null;
@@ -37,17 +59,34 @@ function renderCallState(state) {
 
   const badge = $('hudStateBadge');
   if (badge) {
-    badge.textContent = isRinging ? '来电响铃' : isDialing ? '正在拨号' : '通话中';
+    badge.textContent = isRinging
+      ? t('call.ringing')
+      : isDialing
+        ? t('call.dialing')
+        : t('call.offhook');
     badge.className = `hud-pill ${state.state}`;
   }
+  const callerLabel = state.displayCaller || state.contactName || state.number || t('call.unknownCaller');
   if ($('hudCallerText')) {
-    $('hudCallerText').textContent = state.displayCaller || state.contactName || state.number || '未知来电';
+    $('hudCallerText').textContent = callerLabel;
+  }
+  const avatar = $('hudAvatar');
+  if (avatar) {
+    avatar.className = `hud-avatar ${state.state}`;
+  }
+  const dot = $('hudLiveDot');
+  if (dot) {
+    dot.className = `hud-live-dot ${state.state}`;
   }
   const updateTimer = () => {
     if (!$('hudTimerText')) return;
-    $('hudTimerText').textContent = isOffhook
-      ? formatCallDuration(state.startedAtMs)
-      : (state.number || '');
+    if (isOffhook) {
+      $('hudTimerText').textContent = formatCallDuration(state.startedAtMs);
+    } else if (state.contactName && state.number && state.contactName !== state.number) {
+      $('hudTimerText').textContent = state.number;
+    } else {
+      $('hudTimerText').textContent = '';
+    }
   };
   updateTimer();
   if (isOffhook) {
@@ -60,12 +99,16 @@ function renderCallState(state) {
 
   const muteBtn = $('hudMuteBtn');
   if (muteBtn) {
-    muteBtn.textContent = state.isMuted ? '已静音' : '静音';
-    muteBtn.classList.toggle('active', Boolean(state.isMuted));
+    const label = state.isMuted ? t('call.mutedBtn') : t('call.muteBtn');
+    muteBtn.title = label;
+    muteBtn.setAttribute('aria-label', label);
+    muteBtn.classList.toggle('active-amber', Boolean(state.isMuted));
   }
   const spkBtn = $('hudSpeakerBtn');
   if (spkBtn) {
-    spkBtn.textContent = state.isSpeakerOn ? '扬声器开' : '扬声器';
+    const label = state.isSpeakerOn ? t('call.speakerOnBtn') : t('call.speakerBtn');
+    spkBtn.title = label;
+    spkBtn.setAttribute('aria-label', label);
     spkBtn.classList.toggle('active', Boolean(state.isSpeakerOn));
   }
 }
@@ -74,11 +117,12 @@ function initSmsTemplates() {
   const bar = $('hudSmsBar');
   if (!bar) return;
   bar.textContent = '';
-  for (const tpl of DEFAULT_SMS_REJECT_TEMPLATES) {
+  const templates = getSmsRejectTemplates();
+  for (const tpl of templates) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'hud-sms-chip';
-    chip.textContent = tpl.slice(0, 12) + (tpl.length > 12 ? '…' : '');
+    chip.textContent = tpl.slice(0, 18) + (tpl.length > 18 ? '…' : '');
     chip.title = tpl;
     chip.addEventListener('click', () => {
       smsBarOpen = false;
@@ -102,14 +146,44 @@ function bindEvents() {
   $('hudDismissBtn')?.addEventListener('click', () => dispatchAction({ op: 'dismiss_hud' }));
 }
 
-async function boot() {
+function refreshLocalizedUi() {
+  applyDocumentI18n();
   initSmsTemplates();
+  if (currentCall) renderCallState(currentCall);
+}
+
+async function boot() {
+  onLocaleChange(() => refreshLocalizedUi());
+  syncThemeFromStorage();
+  window.addEventListener('storage', (ev) => {
+    if (ev.key === STORAGE_LANGUAGE_PREF) {
+      setLanguagePref(ev.newValue || 'system', { persist: false });
+    } else if (ev.key === STORAGE_THEME) {
+      syncThemeFromStorage();
+    }
+  });
+  if (invoke) {
+    try {
+      const prefs = await invoke('get_client_prefs');
+      if (prefs?.language) {
+        setLanguagePref(prefs.language, { persist: true, notify: false });
+      }
+    } catch {
+      // Ignore if prefs unavailable
+    }
+  }
+  refreshLocalizedUi();
   bindEvents();
 
   const evApi = window.__TAURI__?.event;
   if (evApi && typeof evApi.listen === 'function') {
     await evApi.listen('opaldesk:call-state', (ev) => {
       if (ev?.payload) renderCallState(ev.payload);
+    });
+    await evApi.listen('opaldesk:language-changed', (ev) => {
+      if (ev?.payload?.language) {
+        setLanguagePref(ev.payload.language, { persist: true });
+      }
     });
   }
   if (invoke) {

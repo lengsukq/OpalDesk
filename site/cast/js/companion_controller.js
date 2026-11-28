@@ -38,7 +38,6 @@ import {
   encodePingPong,
 } from './protocol.js';
 import {
-  DEFAULT_SMS_REJECT_TEMPLATES,
   T9_DIALPAD_KEYS,
   createNotificationStore,
   formatCallDuration,
@@ -47,6 +46,7 @@ import {
   shouldShowCallHud,
   resolveHandoffInfo,
 } from './companion_core.js';
+import { getSmsRejectTemplates, t } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -99,7 +99,7 @@ export class OpalCompanionController {
 
   bindEvents() {
     $('companionConnectBtn')?.addEventListener('click', () => void this.connectFromLobbyInput());
-    $('companionDisconnectBtn')?.addEventListener('click', () => this.disconnect('已断开后台随行'));
+    $('companionDisconnectBtn')?.addEventListener('click', () => this.disconnect(t('companion.disconnectedToast')));
     $('companionFilesBtn')?.addEventListener('click', () => this.app.fileBrowser.open('files'));
     $('companionStorageBtn')?.addEventListener('click', () => this.app.fileBrowser.open('storage'));
     $('companionApkBtn')?.addEventListener('click', () => this.app.fileBrowser.open('apk'));
@@ -119,7 +119,7 @@ export class OpalCompanionController {
     // OTP copy
     $('companionOtpCopyBtn')?.addEventListener('click', () => {
       const otp = this.notifications.getLatestOtp();
-      if (otp?.code) this.app.copyText(otp.code, `已复制验证码 ${otp.code}`);
+      if (otp?.code) this.app.copyText(otp.code, t('companion.otpCopiedToast', { code: otp.code }));
     });
 
     // T9 Quick Dialer modal
@@ -259,7 +259,7 @@ export class OpalCompanionController {
     if (this.app.transportMode === 'usb') {
       const serial = this.app.selectedAdbSerial || this.desktop.adbDevices.find((d) => d.state === 'device')?.serial || '';
       if (!serial && this.desktop.enabled) {
-        this.app.showToast('未检测到已授权的 USB 设备');
+        this.app.showToast(t('companion.errNoUsb'));
         return;
       }
       await this.connectTarget({
@@ -274,7 +274,7 @@ export class OpalCompanionController {
     const host = ($('castHostInput')?.value || '').trim();
     const port = Number($('castPortInput')?.value) || 19878;
     if (!host) {
-      this.app.showToast('请先选择局域网设备或填写手机 IP');
+      this.app.showToast(t('companion.errNeedHost'));
       return;
     }
     await this.connectTarget({ host, port, transport: 'wifi', deviceName: host });
@@ -354,7 +354,7 @@ export class OpalCompanionController {
       };
 
       ws.onerror = () => {
-        if (!silent) this.app.showToast('后台随行连接失败，请确认手机端共享服务已开启');
+        if (!silent) this.app.showToast(t('companion.errConnectFailed'));
       };
 
       ws.onclose = () => {
@@ -364,7 +364,7 @@ export class OpalCompanionController {
       };
     } catch (err) {
       this.disconnect('', { quiet: true });
-      if (!silent) this.app.showToast(`后台随行连接失败：${err?.message || err}`);
+      if (!silent) this.app.showToast(t('companion.errConnectDetail', { error: err?.message || err }));
     }
   }
 
@@ -382,7 +382,7 @@ export class OpalCompanionController {
     this.connected = false;
     this.authenticated = false;
     if (!this.app.authenticated) {
-      this.app.fileBrowserClient?.reset('随行连接已断开');
+      this.app.fileBrowserClient?.reset(t('companion.resetDisconnected'));
       this.clearCompanionState();
     }
     this.renderCompanionHub();
@@ -396,7 +396,7 @@ export class OpalCompanionController {
       case TYPE_AUTH_RESULT: {
         const auth = decodeAuthResult(frame.payload);
         if (!auth.ok) {
-          this.disconnect(auth.message || '手机端拒绝了随行连接');
+          this.disconnect(auth.message || t('companion.errRejected'));
           return;
         }
         this.authenticated = true;
@@ -469,8 +469,8 @@ export class OpalCompanionController {
     if (evt.action === 'posted' && added.length > 0 && this.desktop.enabled) {
       for (const item of added.slice(0, 3)) {
         void this.desktop.sendNativeNotification({
-          title: item.title || item.appLabel || '手机通知',
-          body: item.otpCode ? `[验证码 ${item.otpCode}] ${item.text}` : item.text,
+          title: item.title || item.appLabel || t('companion.nativeNotifTitle'),
+          body: item.otpCode ? t('companion.nativeNotifOtpBody', { code: item.otpCode, text: item.text }) : item.text,
           appLabel: item.appLabel || item.pkg || 'OpalDesk',
           tag: item.key,
         });
@@ -547,7 +547,7 @@ export class OpalCompanionController {
       0,
       encodeNotificationAction({ op: 'invoke_action', key, actionIndex })
     );
-    this.app.showToast('已触发手机端通知操作');
+    this.app.showToast(t('companion.notifActionTriggered'));
   }
 
   replyToNotification(key, text) {
@@ -558,7 +558,7 @@ export class OpalCompanionController {
       0,
       encodeNotificationAction({ op: 'reply', key, replyText: clean })
     );
-    this.app.showToast('已发送快捷回复');
+    this.app.showToast(t('companion.notifReplySent'));
   }
 
   handleCallHudAction(action) {
@@ -599,9 +599,9 @@ export class OpalCompanionController {
     if ($('webCallHudCaller')) $('webCallHudCaller').textContent = st.displayCaller;
     if ($('webCallHudSub')) {
       $('webCallHudSub').textContent =
-        st.state === 'ringing' ? `来电响铃 · ${st.number || ''}`
-          : st.state === 'dialing' ? `正在拨号 · ${st.number || ''}`
-            : `通话中 · ${formatCallDuration(st.startedAtMs)}`;
+        st.state === 'ringing' ? `${t('call.ringing')} · ${st.number || ''}`
+          : st.state === 'dialing' ? `${t('call.dialing')} · ${st.number || ''}`
+            : `${t('call.offhook')} · ${formatCallDuration(st.startedAtMs)}`;
     }
     const isRinging = st.state === 'ringing';
     if ($('webCallHudAnswerBtn')) $('webCallHudAnswerBtn').hidden = !isRinging;
@@ -609,10 +609,12 @@ export class OpalCompanionController {
     if ($('webCallHudMuteBtn')) {
       $('webCallHudMuteBtn').hidden = isRinging;
       $('webCallHudMuteBtn').classList.toggle('active', st.isMuted);
+      $('webCallHudMuteBtn').textContent = st.isMuted ? t('call.mutedBtn') : t('call.muteBtn');
     }
     if ($('webCallHudSpeakerBtn')) {
       $('webCallHudSpeakerBtn').hidden = isRinging;
       $('webCallHudSpeakerBtn').classList.toggle('active', st.isSpeakerOn);
+      $('webCallHudSpeakerBtn').textContent = st.isSpeakerOn ? t('call.speakerOnBtn') : t('call.speakerBtn');
     }
     if ($('webCallHudHangupBtn')) $('webCallHudHangupBtn').hidden = isRinging;
   }
@@ -621,7 +623,7 @@ export class OpalCompanionController {
     if (!this.callState || this.callState.state !== 'offhook') return;
     const dur = formatCallDuration(this.callState.startedAtMs);
     if ($('webCallHudSub') && !$('webCallHud')?.hidden) {
-      $('webCallHudSub').textContent = `通话中 · ${dur}`;
+      $('webCallHudSub').textContent = `${t('call.offhook')} · ${dur}`;
     }
     const bannerDur = $('companionCallTimer');
     if (bannerDur) bannerDur.textContent = dur;
@@ -650,7 +652,7 @@ export class OpalCompanionController {
 
   openDialerModal() {
     if (!this.hasControlChannel()) {
-      this.app.showToast('请先连接手机（投屏或后台随行）后再拨打电话');
+      this.app.showToast(t('companion.dialerNeedConnect'));
       return;
     }
     if ($('dialerModalOverlay')) {
@@ -666,11 +668,11 @@ export class OpalCompanionController {
   submitDialerCall() {
     const num = sanitizeDialNumber($('dialerNumberInput')?.value || '');
     if (!num) {
-      this.app.showToast('请输入要拨打的号码');
+      this.app.showToast(t('companion.dialerNeedNumber'));
       return;
     }
     this.sendControlFrame(TYPE_CALL_ACTION, 0, encodeCallAction({ op: 'dial', number: num }));
-    this.app.showToast(`已向手机发起拨号：${num}`);
+    this.app.showToast(t('companion.dialerSentToast', { number: num }));
     this.closeDialerModal();
   }
 
@@ -687,7 +689,9 @@ export class OpalCompanionController {
       this.renderBleNearbyCard();
       if (showToast) {
         this.app.showToast(
-          this.bleDevices.length ? `扫描到 ${this.bleDevices.length} 台附近 OpalDesk 设备` : (this.bleNote || '附近暂未发现广播中的 OpalDesk 手机')
+          this.bleDevices.length
+            ? t('companion.bleFoundToast', { count: this.bleDevices.length })
+            : (this.bleNote || t('companion.bleNotFoundToast'))
         );
       }
     } catch {
@@ -701,11 +705,11 @@ export class OpalCompanionController {
     const note = $('bleNearbyNote');
     if (!card || !list) return;
     card.hidden = !this.desktop.enabled;
-    if (note) note.textContent = this.bleNote || (this.bleSupported ? '已就绪 · 靠近已信任手机可一键唤醒热点' : '当前设备蓝牙适配器未开启或暂不可用');
+    if (note) note.textContent = this.bleNote || (this.bleSupported ? t('companion.bleReady') : t('companion.bleUnavailable'));
     list.textContent = '';
 
     if (!this.bleDevices.length) {
-      list.appendChild(createEl('div', 'hint-text', '暂未发现附近广播中的手机（请在手机端开启「蓝牙靠近发现与一键热点」）'));
+      list.appendChild(createEl('div', 'hint-text', t('companion.bleEmpty')));
       return;
     }
 
@@ -716,8 +720,8 @@ export class OpalCompanionController {
       const item = createEl('div', 'device-card-row');
       const info = createEl('div', 'device-card-info');
       const title = createEl('div', 'device-card-title', trustedMatch?.displayName || dev.name || 'OpalDesk Android');
-      const batt = dev.batteryPct >= 0 ? ` · 电量 ${dev.batteryPct}%` : '';
-      const hotspotTag = dev.hotspotActive ? ' · 热点已开' : '';
+      const batt = dev.batteryPct >= 0 ? t('companion.bleBattery', { pct: dev.batteryPct }) : '';
+      const hotspotTag = dev.hotspotActive ? t('companion.bleHotspotActive') : '';
       const sub = createEl('div', 'device-card-sub mono', `RSSI ${dev.rssi} dBm${batt}${hotspotTag}`);
       info.append(title, sub);
 
@@ -726,14 +730,14 @@ export class OpalCompanionController {
         const hsBtn = createEl(
           'button',
           'btn-pill small primary',
-          this.bleBusyAddress === dev.address ? '唤醒中…' : '一键开热点'
+          this.bleBusyAddress === dev.address ? t('companion.bleWaking') : t('companion.bleWakeBtn')
         );
         hsBtn.type = 'button';
         hsBtn.disabled = Boolean(this.bleBusyAddress);
         hsBtn.addEventListener('click', () => void this.triggerHotspotForBleDevice(dev, trustedMatch));
         actions.appendChild(hsBtn);
       } else if (!trustedMatch?.authToken) {
-        actions.appendChild(createEl('span', 'status-pill', '需先配对信任'));
+        actions.appendChild(createEl('span', 'status-pill', t('companion.bleNeedTrust')));
       }
       item.append(info, actions);
       list.appendChild(item);
@@ -750,9 +754,9 @@ export class OpalCompanionController {
         clientId: this.app.clientId,
         authToken: trustedDev.authToken,
       });
-      this.app.showToast(res?.message || '已发送一键开启手机热点指令');
+      this.app.showToast(res?.message || t('companion.bleWakeSentToast'));
     } catch (err) {
-      this.app.showToast(`唤醒热点失败：${err?.message || err}`);
+      this.app.showToast(t('companion.bleWakeFailToast', { error: err?.message || err }));
     } finally {
       this.bleBusyAddress = '';
       this.renderBleNearbyCard();
@@ -770,13 +774,15 @@ export class OpalCompanionController {
       const pkg = u.searchParams.get('pkg') || '';
       const cls = u.searchParams.get('cls') || '';
       const label = u.searchParams.get('appLabel') || pkg;
+      const userId = Math.max(0, Math.round(Number(u.searchParams.get('userId') || 0)));
+      const profileType = u.searchParams.get('profileType') || '';
       const deviceKey = u.searchParams.get('deviceKey') || `${host}:${port}`;
       const deviceName = u.searchParams.get('deviceName') || host;
       const fp = u.searchParams.get('fp') || '';
       const transport = u.searchParams.get('transport') || 'wifi';
       if (pkg && (host || transport === 'usb')) {
         void this.app.standalone.requestLaunchStandaloneApp(
-          { pkg, cls, label },
+          { pkg, cls, label, userId, profileType },
           { host, port, transport, deviceKey, deviceName, certFingerprint: fp }
         );
       }
@@ -796,17 +802,17 @@ export class OpalCompanionController {
     const statusPill = $('companionStatusPill');
     if (statusPill) {
       if (this.app.authenticated) {
-        statusPill.textContent = `投屏联动中 · ${this.activePeerName}`;
+        statusPill.textContent = t('companion.statusCasting', { name: this.activePeerName });
         statusPill.className = 'status-pill ok';
       } else if (this.isCompanionOnline) {
         const batt = this.peerDeviceState?.batteryPct >= 0 ? ` · ${this.peerDeviceState.batteryPct}%` : '';
-        statusPill.textContent = `随行在线 · ${this.activePeerName}${batt}`;
+        statusPill.textContent = t('companion.statusOnline', { name: this.activePeerName, batt });
         statusPill.className = 'status-pill ok';
       } else if (connecting) {
-        statusPill.textContent = '正在建立随行通道…';
+        statusPill.textContent = t('companion.statusConnecting');
         statusPill.className = 'status-pill warn';
       } else {
-        statusPill.textContent = '未连接';
+        statusPill.textContent = t('companion.statusIdle');
         statusPill.className = 'status-pill';
       }
     }
@@ -852,12 +858,12 @@ export class OpalCompanionController {
       const m = this.mediaState;
       mediaBox.hidden = !(m && m.active);
       if (m && m.active) {
-        if ($('companionMediaTitle')) $('companionMediaTitle').textContent = m.title || '正在播放';
+        if ($('companionMediaTitle')) $('companionMediaTitle').textContent = m.title || t('companion.mediaNowPlaying');
         if ($('companionMediaArtist')) {
           $('companionMediaArtist').textContent = [m.artist, m.appLabel].filter(Boolean).join(' · ');
         }
         if ($('companionMediaPlayBtn')) {
-          $('companionMediaPlayBtn').textContent = m.playing ? '暂停' : '播放';
+          $('companionMediaPlayBtn').textContent = m.playing ? t('companion.mediaPause') : t('companion.mediaPlay');
         }
         const art = $('companionMediaArt');
         if (art) {
@@ -881,7 +887,7 @@ export class OpalCompanionController {
     const badge = createEl(
       'span',
       `status-pill ${call.state === 'ringing' ? 'warn' : 'ok'}`,
-      call.state === 'ringing' ? '来电响铃' : call.state === 'dialing' ? '正在拨号' : '通话中'
+      call.state === 'ringing' ? t('call.ringing') : call.state === 'dialing' ? t('call.dialing') : t('call.offhook')
     );
     const caller = createEl('strong', '', call.displayCaller);
     const timer = createEl('span', 'mono muted', call.state === 'offhook' ? formatCallDuration(call.startedAtMs) : call.number);
@@ -890,24 +896,24 @@ export class OpalCompanionController {
 
     const btns = createEl('div', 'companion-call-btns');
     if (call.state === 'ringing') {
-      const ans = createEl('button', 'btn-pill small emerald', '接听');
+      const ans = createEl('button', 'btn-pill small emerald', t('call.answerBtn'));
       ans.type = 'button';
       ans.addEventListener('click', () => this.handleCallHudAction({ op: 'answer' }));
-      const rej = createEl('button', 'btn-pill small danger', '拒接');
+      const rej = createEl('button', 'btn-pill small danger', t('call.rejectBtn'));
       rej.type = 'button';
       rej.addEventListener('click', () => this.handleCallHudAction({ op: 'reject' }));
-      const sms = createEl('button', 'btn-pill small', '短信拒接');
+      const sms = createEl('button', 'btn-pill small', t('call.smsRejectBtn'));
       sms.type = 'button';
-      sms.addEventListener('click', () => this.handleCallHudAction({ op: 'reject_sms', smsText: DEFAULT_SMS_REJECT_TEMPLATES[0] }));
+      sms.addEventListener('click', () => this.handleCallHudAction({ op: 'reject_sms', smsText: getSmsRejectTemplates()[0] }));
       btns.append(ans, rej, sms);
     } else {
-      const mute = createEl('button', `btn-pill small${call.isMuted ? ' primary' : ''}`, call.isMuted ? '已静音' : '静音');
+      const mute = createEl('button', `btn-pill small${call.isMuted ? ' primary' : ''}`, call.isMuted ? t('call.mutedBtn') : t('call.muteBtn'));
       mute.type = 'button';
       mute.addEventListener('click', () => this.handleCallHudAction({ op: 'toggle_mute' }));
-      const spk = createEl('button', `btn-pill small${call.isSpeakerOn ? ' primary' : ''}`, call.isSpeakerOn ? '扬声器开' : '扬声器');
+      const spk = createEl('button', `btn-pill small${call.isSpeakerOn ? ' primary' : ''}`, call.isSpeakerOn ? t('call.speakerOnBtn') : t('call.speakerBtn'));
       spk.type = 'button';
       spk.addEventListener('click', () => this.handleCallHudAction({ op: 'toggle_speaker' }));
-      const hang = createEl('button', 'btn-pill small danger', '挂断');
+      const hang = createEl('button', 'btn-pill small danger', t('call.hangupBtn'));
       hang.type = 'button';
       hang.addEventListener('click', () => this.handleCallHudAction({ op: 'hangup' }));
       btns.append(mute, spk, hang);
@@ -925,7 +931,7 @@ export class OpalCompanionController {
 
     list.textContent = '';
     if (!items.length) {
-      list.appendChild(createEl('div', 'hint-text', '暂无手机通知（新消息将自动实时同步至此，并在 Windows 推送系统通知）'));
+      list.appendChild(createEl('div', 'hint-text', t('companion.notifEmpty')));
       return;
     }
 
@@ -939,7 +945,7 @@ export class OpalCompanionController {
       if (item.clearable) {
         const closeBtn = createEl('button', 'hist-icon-btn remove', '×');
         closeBtn.type = 'button';
-        closeBtn.title = '在手机上清除此通知';
+        closeBtn.title = t('companion.notifClearTitle');
         closeBtn.addEventListener('click', () => this.dismissNotification(item.key));
         head.appendChild(closeBtn);
       }
@@ -952,9 +958,9 @@ export class OpalCompanionController {
       if (hasFooter) {
         const footer = createEl('div', 'companion-notif-actions');
         if (item.otpCode) {
-          const otpBtn = createEl('button', 'btn-pill small primary', `复制 ${item.otpCode}`);
+          const otpBtn = createEl('button', 'btn-pill small primary', t('companion.notifCopyOtp', { code: item.otpCode }));
           otpBtn.type = 'button';
-          otpBtn.addEventListener('click', () => this.app.copyText(item.otpCode, `已复制验证码 ${item.otpCode}`));
+          otpBtn.addEventListener('click', () => this.app.copyText(item.otpCode, t('companion.otpCopiedToast', { code: item.otpCode })));
           footer.appendChild(otpBtn);
         }
         for (const act of item.actions.slice(0, 3)) {
@@ -964,7 +970,7 @@ export class OpalCompanionController {
           footer.appendChild(actBtn);
         }
         if (item.pkg) {
-          const popBtn = createEl('button', 'btn-pill small ghost', '小窗打开');
+          const popBtn = createEl('button', 'btn-pill small ghost', t('companion.notifPopout'));
           popBtn.type = 'button';
           popBtn.addEventListener('click', () => this.app.launchPopoutByPackage(item.pkg, item.appLabel || item.pkg));
           footer.appendChild(popBtn);
@@ -976,8 +982,8 @@ export class OpalCompanionController {
         const replyRow = createEl('div', 'companion-reply-row');
         const inp = document.createElement('input');
         inp.type = 'text';
-        inp.placeholder = `${item.replyLabel || '快捷回复'}…`;
-        const sendBtn = createEl('button', 'btn-pill small primary', '发送');
+        inp.placeholder = t('companion.notifReplyPlaceholder', { label: item.replyLabel || t('companion.notifReplyDefault') });
+        const sendBtn = createEl('button', 'btn-pill small primary', t('common.send'));
         sendBtn.type = 'button';
         const submit = () => {
           const val = inp.value.trim();

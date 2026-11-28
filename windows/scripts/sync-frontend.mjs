@@ -24,16 +24,16 @@ export function rewriteCastHtmlForDesktopDist(html) {
   return String(html || '')
     .replaceAll('../assets/icon.svg', './assets/icon.svg')
     .replace(
-      '<a href="../index.html" class="brand-link">',
+      /<a\s+href="\.\.\/index\.html"\s+class="brand-link">/g,
       '<a href="./index.html" class="brand-link">'
     )
     .replace(
-      '<a href="../overview.html" class="pill-btn">2D 详解</a>',
-      '<a href="https://lengsukq.github.io/OpalDesk/overview.html" target="_blank" rel="noopener noreferrer" class="pill-btn desktop-ext-link">2D 详解</a>'
+      /<a\s+href="\.\.\/overview\.html"\s+class="pill-btn([^"]*)"([^>]*)>([\s\S]*?)<\/a>/g,
+      '<a href="https://lengsukq.github.io/OpalDesk/overview.html" target="_blank" rel="noopener noreferrer" class="pill-btn$1 desktop-ext-link"$2>$3</a>'
     )
     .replace(
-      '<a href="../index.html" class="pill-btn">3D 舞台</a>',
-      '<a href="https://lengsukq.github.io/OpalDesk/" target="_blank" rel="noopener noreferrer" class="pill-btn desktop-ext-link">3D 舞台</a>'
+      /<a\s+href="\.\.\/index\.html"\s+class="pill-btn([^"]*)"([^>]*)>([\s\S]*?)<\/a>/g,
+      '<a href="https://lengsukq.github.io/OpalDesk/" target="_blank" rel="noopener noreferrer" class="pill-btn$1 desktop-ext-link"$2>$3</a>'
     );
 }
 

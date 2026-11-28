@@ -1,4 +1,5 @@
 use crate::adb::sanitize_custom_adb_path;
+use crate::i18n::{sanitize_language_pref, LANG_SYSTEM};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,6 +8,8 @@ use std::sync::Mutex;
 const PREFS_SCHEMA_VERSION: u32 = 1;
 const MIN_BITRATE_KBPS: u32 = 2_500;
 const MAX_BITRATE_KBPS: u32 = 50_000;
+const DEFAULT_DIRECT_OPEN_MAX_MB: u16 = 10;
+const MAX_DIRECT_OPEN_MAX_MB: u16 = 200;
 
 fn default_schema_version() -> u32 {
     PREFS_SCHEMA_VERSION
@@ -14,6 +17,14 @@ fn default_schema_version() -> u32 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_language() -> String {
+    LANG_SYSTEM.to_string()
+}
+
+fn default_direct_open_max_mb() -> u16 {
+    DEFAULT_DIRECT_OPEN_MAX_MB
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,6 +50,10 @@ pub struct ClientPrefs {
     pub companion_auto_connect: bool,
     #[serde(default = "default_true")]
     pub ble_nearby_enabled: bool,
+    #[serde(default = "default_language")]
+    pub language: String,
+    #[serde(default = "default_direct_open_max_mb")]
+    pub direct_open_max_mb: u16,
 }
 
 impl Default for ClientPrefs {
@@ -54,6 +69,8 @@ impl Default for ClientPrefs {
             hide_to_tray_on_close: true,
             companion_auto_connect: true,
             ble_nearby_enabled: true,
+            language: default_language(),
+            direct_open_max_mb: default_direct_open_max_mb(),
         }
     }
 }
@@ -70,6 +87,8 @@ pub struct ClientPrefsPatch {
     pub hide_to_tray_on_close: Option<bool>,
     pub companion_auto_connect: Option<bool>,
     pub ble_nearby_enabled: Option<bool>,
+    pub language: Option<String>,
+    pub direct_open_max_mb: Option<u16>,
 }
 
 fn sanitize_codec(raw: &str) -> String {
@@ -96,12 +115,18 @@ fn sanitize_bitrate(kbps: u32) -> u32 {
     }
 }
 
+fn sanitize_direct_open_max_mb(mb: u16) -> u16 {
+    mb.min(MAX_DIRECT_OPEN_MAX_MB)
+}
+
 fn sanitize_prefs(mut prefs: ClientPrefs) -> ClientPrefs {
     prefs.version = PREFS_SCHEMA_VERSION;
     prefs.custom_adb_path = sanitize_custom_adb_path(prefs.custom_adb_path);
     prefs.preferred_codec = sanitize_codec(&prefs.preferred_codec);
     prefs.target_fps = sanitize_fps(prefs.target_fps);
     prefs.bitrate_kbps = sanitize_bitrate(prefs.bitrate_kbps);
+    prefs.language = sanitize_language_pref(&prefs.language);
+    prefs.direct_open_max_mb = sanitize_direct_open_max_mb(prefs.direct_open_max_mb);
     prefs
 }
 
@@ -165,6 +190,12 @@ impl PrefsStore {
         }
         if let Some(next_ble) = patch.ble_nearby_enabled {
             guard.ble_nearby_enabled = next_ble;
+        }
+        if let Some(next_lang) = patch.language {
+            guard.language = sanitize_language_pref(&next_lang);
+        }
+        if let Some(next_direct_open) = patch.direct_open_max_mb {
+            guard.direct_open_max_mb = sanitize_direct_open_max_mb(next_direct_open);
         }
         guard.version = PREFS_SCHEMA_VERSION;
 
@@ -231,6 +262,8 @@ mod tests {
                 hide_to_tray_on_close: Some(false),
                 companion_auto_connect: Some(true),
                 ble_nearby_enabled: Some(false),
+                language: Some("en-US".to_string()),
+                direct_open_max_mb: Some(25),
             })
             .expect("save prefs");
 
@@ -243,6 +276,8 @@ mod tests {
         assert_eq!(updated.bitrate_kbps, 22_000);
         assert!(!updated.audio_enabled);
         assert!(updated.hide_local_cursor);
+        assert_eq!(updated.language, "en");
+        assert_eq!(updated.direct_open_max_mb, 25);
 
         // Reload from disk simulating full process restart
         let reloaded = PrefsStore::new(path.clone()).get();
@@ -269,6 +304,8 @@ mod tests {
                 bitrate_kbps: Some(100_000),
                 audio_enabled: None,
                 hide_local_cursor: None,
+                language: Some("invalid-locale".to_string()),
+                direct_open_max_mb: Some(999),
                 ..ClientPrefsPatch::default()
             })
             .expect("sanitize save");
@@ -277,6 +314,8 @@ mod tests {
         assert_eq!(saved.target_fps, 0);
         assert_eq!(saved.bitrate_kbps, MAX_BITRATE_KBPS);
         assert!(saved.audio_enabled);
+        assert_eq!(saved.language, "system");
+        assert_eq!(saved.direct_open_max_mb, MAX_DIRECT_OPEN_MAX_MB);
         let _ = fs::remove_file(path);
     }
 }

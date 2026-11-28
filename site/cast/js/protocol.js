@@ -115,6 +115,57 @@ export const MAX_FILE_NAME_UTF8_BYTES = 1024;
 export const APK_FORMATS = Object.freeze(['apk', 'apks', 'apkm', 'xapk']);
 
 /**
+ * Formats canonical cross-platform app key: plain `pkg` for primary user (0),
+ * or `<pkg>#u<userId>` for cloned/work/secondary profiles (`userId > 0`).
+ */
+export function formatAppKey(pkg, userId = 0) {
+  const clean = String(pkg || '').trim();
+  const uid = Math.max(0, Math.round(Number(userId) || 0));
+  return uid > 0 ? `${clean}#u${uid}` : clean;
+}
+
+/**
+ * Parses a canonical app key (`com.tencent.mm` or `com.tencent.mm#u999`) back into `{ pkg, userId }`.
+ */
+export function parseAppKey(appKey) {
+  const trimmed = String(appKey || '').trim();
+  const idx = trimmed.lastIndexOf('#u');
+  if (idx > 0 && idx + 2 < trimmed.length) {
+    const parsed = Number.parseInt(trimmed.slice(idx + 2), 10);
+    if (Number.isFinite(parsed) && parsed > 0 && String(parsed) === trimmed.slice(idx + 2)) {
+      return { pkg: trimmed.slice(0, idx), userId: parsed };
+    }
+  }
+  return { pkg: trimmed, userId: 0 };
+}
+
+/**
+ * Normalizes a secondary profile type tag (`clone` | `work` | `private` | `profile`), or `''` for user 0.
+ */
+export function normalizeProfileType(raw, userId = 0) {
+  const uid = Math.max(0, Math.round(Number(userId) || 0));
+  if (uid <= 0) return '';
+  const cleaned = String(raw || '').trim().toLowerCase();
+  if (cleaned === 'clone' || cleaned === 'work' || cleaned === 'private' || cleaned === 'profile') {
+    return cleaned;
+  }
+  return (uid === 999 || uid === 95 || uid === 128) ? 'clone' : 'profile';
+}
+
+/**
+ * Returns bilingual search keywords for secondary user/profile apps.
+ */
+export function getProfileSearchKeywords(userId = 0, profileType = '') {
+  const uid = Math.max(0, Math.round(Number(userId) || 0));
+  if (uid <= 0) return [];
+  const words = [`u${uid}`, `user ${uid}`, '分身', '多开', '双开', 'clone', 'dual'];
+  const norm = normalizeProfileType(profileType, uid);
+  if (norm === 'work') words.push('工作', 'work', '企业');
+  else if (norm === 'private') words.push('隐私', '私密', 'private');
+  return words;
+}
+
+/**
  * Infers supported Android package format from filename/path extension.
  */
 export function inferApkFormat(filePath) {
@@ -231,8 +282,10 @@ export function encodeHello({
   sessionRole = SESSION_ROLE_DESKTOP,
   appPackage = '',
   appActivity = '',
+  appUserId = 0,
   companionEvents = null,
 } = {}) {
+  const normalizedAppUserId = Math.max(0, Math.round(Number(appUserId) || 0));
   const payloadObj = {
     protocolVersion: PROTOCOL_VERSION,
     clientName,
@@ -253,6 +306,9 @@ export function encodeHello({
     appPackage,
     appActivity,
   };
+  if (normalizedAppUserId > 0) {
+    payloadObj.appUserId = normalizedAppUserId;
+  }
   if (typeof companionEvents === 'boolean') {
     payloadObj.companionEvents = companionEvents;
   } else if (sessionRole === SESSION_ROLE_DESKTOP || sessionRole === SESSION_ROLE_COMPANION) {
@@ -460,7 +516,19 @@ export function decodeDeviceState(payload) {
 
 export function decodeAppList(payload) {
   const obj = JSON.parse(textDecoder.decode(payload));
-  return Array.isArray(obj.apps) ? obj.apps : [];
+  if (!Array.isArray(obj.apps)) return [];
+  return obj.apps.map((item) => {
+    const pkg = String(item?.pkg || '').trim();
+    const userId = Math.max(0, Math.round(Number(item?.userId) || 0));
+    const profileType = normalizeProfileType(item?.profileType || '', userId);
+    return {
+      ...item,
+      pkg,
+      userId,
+      profileType,
+      appKey: formatAppKey(pkg, userId),
+    };
+  });
 }
 
 export function decodeImeRequest(payload) {

@@ -3,6 +3,8 @@
  * Pure, storage-injectable module shared by Lobby History Bar and In-Cast App Picker.
  */
 
+import { formatAppKey, normalizeProfileType } from './protocol.js';
+
 export const MAX_STANDALONE_WINDOWS = 3;
 export const MAX_STANDALONE_HISTORY = 16;
 export const STORAGE_STANDALONE_HISTORY = 'opaldesk-standalone-history-v1';
@@ -27,10 +29,10 @@ function resolveStorage(storage) {
   }
 }
 
-export function makeStandaloneHistoryId(deviceKey, pkg) {
+export function makeStandaloneHistoryId(deviceKey, pkg, userId = 0) {
   const dev = String(deviceKey || '').trim();
-  const cleanPkg = String(pkg || '').trim();
-  return `${dev}::${cleanPkg}`;
+  const key = formatAppKey(pkg, userId);
+  return `${dev}::${key}`;
 }
 
 export function normalizeStandaloneHistory(entries) {
@@ -40,11 +42,17 @@ export function normalizeStandaloneHistory(entries) {
     .filter((item) => item && typeof item.pkg === 'string' && item.pkg.trim().length > 0)
     .map((item) => {
       const pkg = item.pkg.trim();
+      const userId = Math.max(0, Math.round(Number(item.userId) || 0));
+      const profileType = normalizeProfileType(item.profileType || '', userId);
+      const appKey = formatAppKey(pkg, userId);
       const deviceKey = String(item.deviceKey || item.host || 'usb').trim();
-      const id = makeStandaloneHistoryId(deviceKey, pkg);
+      const id = makeStandaloneHistoryId(deviceKey, pkg, userId);
       return {
         id,
         pkg,
+        userId,
+        profileType,
+        appKey,
         cls: String(item.cls || '').trim(),
         label: String(item.label || '').trim() || pkg,
         deviceKey,
@@ -95,21 +103,26 @@ export function saveStandaloneHistory(entries, storage) {
 
 export function recordStandaloneLaunch(incoming, storage) {
   const cleanPkg = String(incoming?.pkg || '').trim();
+  const userId = Math.max(0, Math.round(Number(incoming?.userId) || 0));
   const cleanDeviceKey = String(incoming?.deviceKey || incoming?.host || 'usb').trim();
   if (!cleanPkg || !cleanDeviceKey) {
     return loadStandaloneHistory(storage);
   }
   const existing = loadStandaloneHistory(storage);
-  const targetId = makeStandaloneHistoryId(cleanDeviceKey, cleanPkg);
+  const targetId = makeStandaloneHistoryId(cleanDeviceKey, cleanPkg, userId);
   const prev = existing.find((e) => e.id === targetId);
   const nextPinned =
     typeof incoming?.pinnedOnTop === 'boolean'
       ? incoming.pinnedOnTop
       : Boolean(prev?.pinnedOnTop);
+  const profileType = normalizeProfileType(incoming?.profileType || prev?.profileType || '', userId);
 
   const merged = {
     id: targetId,
     pkg: cleanPkg,
+    userId,
+    profileType,
+    appKey: formatAppKey(cleanPkg, userId),
     cls: String(incoming?.cls || '').trim() || prev?.cls || '',
     label: String(incoming?.label || '').trim() || prev?.label || cleanPkg,
     deviceKey: cleanDeviceKey,
@@ -128,13 +141,15 @@ export function recordStandaloneLaunch(incoming, storage) {
   return saveStandaloneHistory([merged, ...rest], storage);
 }
 
-export function updateStandalonePinPref(pkg, pinnedOnTop, deviceKey = '', storage) {
-  const cleanPkg = String(pkg || '').trim();
-  if (!cleanPkg) return loadStandaloneHistory(storage);
+export function updateStandalonePinPref(pkgOrAppKey, pinnedOnTop, deviceKey = '', storage, userId = 0) {
+  const cleanInput = String(pkgOrAppKey || '').trim();
+  if (!cleanInput) return loadStandaloneHistory(storage);
+  const targetKey = Number(userId) > 0 ? formatAppKey(cleanInput, userId) : cleanInput;
   const cleanDevice = String(deviceKey || '').trim();
   const existing = loadStandaloneHistory(storage);
   const updated = existing.map((entry) => {
-    const matchesPkg = entry.pkg === cleanPkg;
+    const entryKey = entry.appKey || formatAppKey(entry.pkg, entry.userId || 0);
+    const matchesPkg = entryKey === targetKey;
     const matchesDevice = !cleanDevice || entry.deviceKey === cleanDevice;
     if (matchesPkg && matchesDevice) {
       return { ...entry, pinnedOnTop: Boolean(pinnedOnTop) };
@@ -144,16 +159,18 @@ export function updateStandalonePinPref(pkg, pinnedOnTop, deviceKey = '', storag
   return saveStandaloneHistory(updated, storage);
 }
 
-export function getStandalonePinPref(pkg, deviceKey = '', storage) {
-  const cleanPkg = String(pkg || '').trim();
-  if (!cleanPkg) return false;
+export function getStandalonePinPref(pkgOrAppKey, deviceKey = '', storage, userId = 0) {
+  const cleanInput = String(pkgOrAppKey || '').trim();
+  if (!cleanInput) return false;
+  const targetKey = Number(userId) > 0 ? formatAppKey(cleanInput, userId) : cleanInput;
   const cleanDevice = String(deviceKey || '').trim();
   const existing = loadStandaloneHistory(storage);
+  const matchesEntry = (e) => (e.appKey || formatAppKey(e.pkg, e.userId || 0)) === targetKey;
   if (cleanDevice) {
-    const exact = existing.find((e) => e.pkg === cleanPkg && e.deviceKey === cleanDevice);
+    const exact = existing.find((e) => matchesEntry(e) && e.deviceKey === cleanDevice);
     if (exact) return Boolean(exact.pinnedOnTop);
   }
-  const fallback = existing.find((e) => e.pkg === cleanPkg);
+  const fallback = existing.find(matchesEntry);
   return Boolean(fallback?.pinnedOnTop);
 }
 
@@ -174,22 +191,26 @@ export function sortAppsForLauncher(apps, historyEntries = [], sortMode = 'recen
   const historyMap = new Map();
   for (const h of historyEntries || []) {
     if (!h?.pkg) continue;
-    const prev = historyMap.get(h.pkg);
+    const key = h.appKey || formatAppKey(h.pkg, h.userId || 0);
+    const prev = historyMap.get(key);
     if (!prev || (h.lastOpenedAtMs || 0) > (prev.lastOpenedAtMs || 0)) {
-      historyMap.set(h.pkg, h);
+      historyMap.set(key, h);
     }
   }
 
-  const compareName = (a, b) =>
-    String(a.label || a.pkg || '').localeCompare(String(b.label || b.pkg || ''), 'zh-Hans-CN');
+  const compareName = (a, b) => {
+    const cmp = String(a.label || a.pkg || '').localeCompare(String(b.label || b.pkg || ''), 'zh-Hans-CN');
+    if (cmp !== 0) return cmp;
+    return (Number(a.userId) || 0) - (Number(b.userId) || 0);
+  };
 
   if (sortMode === 'name') {
     return list.sort(compareName);
   }
 
   return list.sort((a, b) => {
-    const ha = historyMap.get(a.pkg);
-    const hb = historyMap.get(b.pkg);
+    const ha = historyMap.get(a.appKey || formatAppKey(a.pkg, a.userId || 0));
+    const hb = historyMap.get(b.appKey || formatAppKey(b.pkg, b.userId || 0));
     const ta = ha?.lastOpenedAtMs || 0;
     const tb = hb?.lastOpenedAtMs || 0;
     if (ta !== tb) return tb - ta;

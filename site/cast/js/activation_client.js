@@ -4,6 +4,8 @@
  * live mDNS wireless ADB discovery streaming, activation commands, and handover to Web Cast.
  */
 
+import { t } from './i18n.js';
+
 export async function probeHttpsHealth(host, port, timeoutMs = 3500) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -26,7 +28,7 @@ export async function probeHttpsHealth(host, port, timeoutMs = 3500) {
       ok: false,
       needsTrust: err?.name !== 'AbortError',
       timedOut: err?.name === 'AbortError',
-      error: err?.message || '连接失败',
+      error: err?.message || t('activate.probeFailed'),
     };
   } finally {
     clearTimeout(timer);
@@ -56,13 +58,13 @@ export class LanActivationClient {
   connect(host, port, sessionCode, wsUrlOverride = '') {
     this.disconnect();
     const url = wsUrlOverride || `wss://${host}:${port}/activate`;
-    this.onStatus('connecting', `正在连接激活服务 ${host}:${port}…`);
+    this.onStatus('connecting', t('activate.clientConnecting', { host, port }));
 
     const ws = new WebSocket(url);
     this.ws = ws;
 
     ws.onopen = () => {
-      this.onStatus('authenticating', '加密通道已建立，正在校验 6 位访问码…');
+      this.onStatus('authenticating', t('activate.clientAuthenticating'));
       this.sendJson({ type: 'auth', sessionCode: String(sessionCode || '').trim() });
       this.pingTimer = setInterval(() => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -83,9 +85,9 @@ export class LanActivationClient {
           this.authenticated = Boolean(msg.ok);
           this.onAuthResult(msg);
           if (msg.ok) {
-            this.onStatus('connected', '已连接手机局域网激活服务');
+            this.onStatus('connected', t('activate.clientConnected'));
           } else {
-            this.onStatus('auth_failed', msg.message || '访问码校验失败');
+            this.onStatus('auth_failed', msg.message || t('activate.clientAuthFailed'));
           }
           break;
         case 'state':
@@ -101,7 +103,7 @@ export class LanActivationClient {
           this.onReadyForCast(msg);
           break;
         case 'error':
-          this.onError(msg.message || '操作失败');
+          this.onError(msg.message || t('activate.clientOpFailed'));
           break;
         default:
           break;
@@ -109,13 +111,13 @@ export class LanActivationClient {
     };
 
     ws.onerror = () => {
-      this.onError('无法建立加密 WebSocket 连接，请先确认已信任设备证书且与手机处于同一 Wi-Fi');
+      this.onError(t('activate.clientWsError'));
     };
 
     ws.onclose = (ev) => {
       this.clearTimers();
       this.authenticated = false;
-      this.onClose(ev.reason || (ev.wasClean ? '激活服务已关闭' : '连接已断开'));
+      this.onClose(ev.reason || (ev.wasClean ? t('activate.clientClosed') : t('activate.clientDisconnected')));
     };
   }
 

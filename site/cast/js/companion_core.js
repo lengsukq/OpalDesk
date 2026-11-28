@@ -8,6 +8,8 @@
  * Shared by Windows Tauri Desktop & Web Cast. Zero DOM or Tauri dependencies.
  */
 
+import { getSmsRejectTemplates, t } from './i18n.js';
+
 export const OTP_FRESHNESS_WINDOW_MS = 3 * 60 * 1000;
 export const MAX_STORED_NOTIFICATIONS = 60;
 
@@ -16,6 +18,8 @@ export const DEFAULT_SMS_REJECT_TEMPLATES = Object.freeze([
   '正在忙，暂时不方便接听，稍后联系您。',
   '请发消息联系，谢谢。',
 ]);
+
+export { getSmsRejectTemplates };
 
 export const T9_DIALPAD_KEYS = Object.freeze([
   { digit: '1', letters: '' },
@@ -87,7 +91,7 @@ export function createNotificationStore({ maxItems = MAX_STORED_NOTIFICATIONS } 
       postTimeMs: Number(raw.postTimeMs || 0),
       clearable: raw.clearable !== false,
       canReply: Boolean(raw.canReply),
-      replyLabel: String(raw.replyLabel || '回复'),
+      replyLabel: String(raw.replyLabel || t('companion.notifReplyDefault')),
       otpCode,
       actions: filterDisplayActions(raw.actions),
     };
@@ -107,7 +111,7 @@ export function createNotificationStore({ maxItems = MAX_STORED_NOTIFICATIONS } 
       latestOtp = {
         code: item.otpCode,
         key: item.key,
-        appLabel: item.appLabel || item.pkg || '验证码',
+        appLabel: item.appLabel || item.pkg || t('companion.otpBadge'),
         receivedAtMs: nowMs,
       };
     }

@@ -6,6 +6,8 @@
 
 import {
   DEFAULT_REMOTE_ROOT,
+  DEFAULT_DIRECT_OPEN_MAX_MB,
+  DIRECT_OPEN_MAX_MB_OPTIONS,
   QUICK_NAV_SHORTCUTS,
   normalizeRemotePath,
   joinRemotePath,
@@ -15,10 +17,15 @@ import {
   formatFileTimestamp,
   classifyEntryKind,
   isPreviewableImageEntry,
+  sanitizeDirectOpenMaxMb,
+  shouldDirectOpenEntry,
   sortRemoteEntries,
   getStorageCategoryMeta,
 } from './file_browser_client.js';
 import { inferApkFormat } from './protocol.js';
+import { t } from './i18n.js';
+
+const STORAGE_DIRECT_OPEN_MAX_MB = 'opaldesk-direct-open-max-mb-v1';
 
 const $ = (id) => document.getElementById(id);
 
@@ -33,12 +40,33 @@ const ENTRY_KIND_ICON = Object.freeze({
   file: '📃',
 });
 
-const APK_STAGE_LABELS = Object.freeze({
-  uploading: '正在上传安装包…',
-  extracting: '正在解压分包资源…',
-  installing: '正在静默安装应用…',
-  succeeded: '安装成功',
-  failed: '安装失败',
+const APK_STAGE_KEYS = Object.freeze({
+  uploading: 'fm.apkStageUploading',
+  extracting: 'fm.apkStageExtracting',
+  installing: 'fm.apkStageInstalling',
+  succeeded: 'fm.apkStageSucceeded',
+  failed: 'fm.apkStageFailed',
+});
+
+const QUICK_NAV_I18N_KEYS = Object.freeze({
+  '/sdcard': 'fm.quickInternal',
+  '/sdcard/Download': 'fm.quickDownloads',
+  '/sdcard/DCIM': 'fm.quickDcim',
+  '/sdcard/Pictures': 'fm.quickPictures',
+  '/sdcard/Documents': 'fm.quickDocuments',
+  '/sdcard/Android/data/com.tencent.mm/MicroMsg/Download': 'fm.quickWechat',
+});
+
+const STORAGE_CAT_I18N_KEYS = Object.freeze({
+  photos: 'fm.catPhotos',
+  images: 'fm.catPhotos',
+  videos: 'fm.catVideos',
+  audio: 'fm.catAudio',
+  documents: 'fm.catDocuments',
+  apks: 'fm.catApks',
+  archives: 'fm.catArchives',
+  downloads: 'fm.catDownloads',
+  other: 'fm.catOther',
 });
 
 function createEl(tag, className = '', text = '') {
@@ -82,8 +110,49 @@ export class OpalFileBrowserController {
     this.storageSummary = null;
     this.storageLoading = false;
     this.thumbnailCache = new Map();
+    this.tempOpenCache = new Map(); // cacheKey -> local temp path (desktop)
+    this.directOpenMaxMb = this._loadLocalDirectOpenMaxMb();
     this.activeTransferNote = '';
     this.apkInstallBusy = false;
+  }
+
+  _loadLocalDirectOpenMaxMb() {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_DIRECT_OPEN_MAX_MB);
+      return sanitizeDirectOpenMaxMb(raw, DEFAULT_DIRECT_OPEN_MAX_MB);
+    } catch {
+      return DEFAULT_DIRECT_OPEN_MAX_MB;
+    }
+  }
+
+  _saveLocalDirectOpenMaxMb(mb) {
+    try {
+      window.localStorage.setItem(STORAGE_DIRECT_OPEN_MAX_MB, String(mb));
+    } catch {
+      // Ignore storage restriction
+    }
+  }
+
+  syncDirectOpenThresholdUi() {
+    const desktopPref = this.app.desktop?.clientPrefs?.directOpenMaxMb;
+    if (desktopPref !== undefined && desktopPref !== null) {
+      this.directOpenMaxMb = sanitizeDirectOpenMaxMb(desktopPref, DEFAULT_DIRECT_OPEN_MAX_MB);
+      this._saveLocalDirectOpenMaxMb(this.directOpenMaxMb);
+    }
+    const sel = $('fmDirectOpenSelect');
+    if (!sel) return;
+    sel.textContent = '';
+    const options = DIRECT_OPEN_MAX_MB_OPTIONS.includes(this.directOpenMaxMb)
+      ? DIRECT_OPEN_MAX_MB_OPTIONS
+      : [...DIRECT_OPEN_MAX_MB_OPTIONS, this.directOpenMaxMb].sort((a, b) => a - b);
+    for (const mb of options) {
+      const opt = document.createElement('option');
+      opt.value = String(mb);
+      opt.textContent = mb === 0 ? t('fm.directOpenOff') : t('fm.directOpenOption', { mb });
+      sel.appendChild(opt);
+    }
+    sel.value = String(this.directOpenMaxMb);
+    sel.title = t('fm.directOpenTitle');
   }
 
   bindEvents() {
@@ -117,9 +186,18 @@ export class OpalFileBrowserController {
       this.sortDir = dir || 'asc';
       this.renderEntries();
     });
+    $('fmDirectOpenSelect')?.addEventListener('change', (e) => {
+      const nextMb = sanitizeDirectOpenMaxMb(e.target.value, DEFAULT_DIRECT_OPEN_MAX_MB);
+      this.directOpenMaxMb = nextMb;
+      this._saveLocalDirectOpenMaxMb(nextMb);
+      if (this.app.desktop?.enabled) {
+        void this.app.desktop.updateClientPrefs({ directOpenMaxMb: nextMb });
+      }
+    });
+    this.syncDirectOpenThresholdUi();
     $('fmViewToggleBtn')?.addEventListener('click', () => {
       this.viewMode = this.viewMode === 'list' ? 'grid' : 'list';
-      $('fmViewToggleBtn').textContent = this.viewMode === 'list' ? '网格' : '列表';
+      $('fmViewToggleBtn').textContent = this.viewMode === 'list' ? t('fm.viewGrid') : t('fm.viewList');
       this.renderEntries();
     });
     $('fmBatchDownloadBtn')?.addEventListener('click', () => void this.downloadSelectedEntries());
@@ -180,7 +258,7 @@ export class OpalFileBrowserController {
 
   open(initialTab = 'files', initialPath = '') {
     if (!this.app.hasControlChannel()) {
-      this.app.showToast('请先连接手机（投屏或后台随行模式）后再管理文件');
+      this.app.showToast(t('fm.needConnectToast'));
       return;
     }
     const overlay = $('fileManagerOverlay');
@@ -189,6 +267,7 @@ export class OpalFileBrowserController {
     if (initialPath) {
       this.currentPath = normalizeRemotePath(initialPath);
     }
+    this.syncDirectOpenThresholdUi();
     this.selectTab(initialTab);
   }
 
@@ -245,7 +324,8 @@ export class OpalFileBrowserController {
     if (!host) return;
     host.textContent = '';
     for (const item of QUICK_NAV_SHORTCUTS) {
-      const btn = createEl('button', 'fm-quick-nav-btn', item.label);
+      const labelKey = QUICK_NAV_I18N_KEYS[item.path];
+      const btn = createEl('button', 'fm-quick-nav-btn', labelKey ? t(labelKey) : item.label);
       btn.type = 'button';
       btn.dataset.path = item.path;
       btn.addEventListener('click', () => {
@@ -280,7 +360,8 @@ export class OpalFileBrowserController {
     const crumbs = buildPathBreadcrumbs(this.currentPath);
     crumbs.forEach((crumb, idx) => {
       if (idx > 0) host.appendChild(createEl('span', 'fm-crumb-sep', '/'));
-      const btn = createEl('button', 'fm-crumb-btn', crumb.label);
+      const label = crumb.path === '/sdcard' ? t('fm.crumbPhoneStorage') : crumb.label;
+      const btn = createEl('button', 'fm-crumb-btn', label);
       btn.type = 'button';
       btn.disabled = idx === crumbs.length - 1;
       btn.addEventListener('click', () => void this.navigate(crumb.path));
@@ -290,18 +371,18 @@ export class OpalFileBrowserController {
 
   async refreshCurrentDir() {
     if (!this.app.hasControlChannel()) {
-      this.setStatusBanner('当前未连接手机控制通道', 'warn');
+      this.setStatusBanner(t('fm.notConnectedBanner'), 'warn');
       return;
     }
     this.loading = true;
-    this.setStatusBanner(`正在读取 ${this.currentPath}…`);
+    this.setStatusBanner(t('fm.readingDir', { path: this.currentPath }));
     try {
       const resp = await this.client.list(this.currentPath);
       this.entries = resp.entries || [];
       this.setStatusBanner('');
     } catch (err) {
       this.entries = [];
-      this.setStatusBanner(err?.message || '读取目录失败', 'error');
+      this.setStatusBanner(err?.message || t('fm.readDirFail'), 'error');
     } finally {
       this.loading = false;
       this.renderEntries();
@@ -314,7 +395,7 @@ export class OpalFileBrowserController {
     const count = this.selectedPaths.size;
     bar.hidden = count === 0;
     const label = $('fmSelectedCount');
-    if (label) label.textContent = `已选择 ${count} 项`;
+    if (label) label.textContent = t('fm.selectedCount', { count });
   }
 
   renderEntries() {
@@ -330,7 +411,7 @@ export class OpalFileBrowserController {
     }
 
     if (list.length === 0) {
-      host.appendChild(createEl('div', 'fm-empty', this.loading ? '正在加载…' : '当前目录为空'));
+      host.appendChild(createEl('div', 'fm-empty', this.loading ? t('fm.loading') : t('fm.emptyDir')));
       return;
     }
 
@@ -365,6 +446,10 @@ export class OpalFileBrowserController {
       info.addEventListener('click', () => {
         if (entry.isDir) {
           void this.navigate(entry.path);
+        } else if (kind === 'apk') {
+          void this.installRemoteApk(entry.path);
+        } else if (this.app.desktop?.enabled && shouldDirectOpenEntry(entry, this.directOpenMaxMb)) {
+          void this.openEntryDirectly(entry);
         } else if (isPreviewableImageEntry(entry)) {
           void this.previewImage(entry);
         } else {
@@ -375,23 +460,33 @@ export class OpalFileBrowserController {
       const actions = createEl('div', 'fm-entry-actions');
       if (!entry.isDir) {
         if (kind === 'apk') {
-          const instBtn = createEl('button', 'btn-pill small primary', '安装');
+          const instBtn = createEl('button', 'btn-pill small primary', t('fm.btnInstall'));
           instBtn.type = 'button';
           instBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             void this.installRemoteApk(entry.path);
           });
           actions.appendChild(instBtn);
-        } else if (isPreviewableImageEntry(entry)) {
-          const prevBtn = createEl('button', 'btn-pill small', '预览');
-          prevBtn.type = 'button';
-          prevBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            void this.previewImage(entry);
-          });
-          actions.appendChild(prevBtn);
+        } else {
+          if (this.app.desktop?.enabled) {
+            const openBtn = createEl('button', 'btn-pill small primary', t('fm.btnOpen'));
+            openBtn.type = 'button';
+            openBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              void this.openEntryDirectly(entry);
+            });
+            actions.appendChild(openBtn);
+          } else if (isPreviewableImageEntry(entry)) {
+            const prevBtn = createEl('button', 'btn-pill small', t('fm.btnPreview'));
+            prevBtn.type = 'button';
+            prevBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              void this.previewImage(entry);
+            });
+            actions.appendChild(prevBtn);
+          }
         }
-        const dlBtn = createEl('button', 'btn-pill small', '下载');
+        const dlBtn = createEl('button', 'btn-pill small', t('fm.btnDownload'));
         dlBtn.type = 'button';
         dlBtn.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -400,13 +495,13 @@ export class OpalFileBrowserController {
         actions.appendChild(dlBtn);
       }
 
-      const renBtn = createEl('button', 'btn-pill small ghost', '重命名');
+      const renBtn = createEl('button', 'btn-pill small ghost', t('fm.btnRename'));
       renBtn.type = 'button';
       renBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         void this.promptRename(entry);
       });
-      const delBtn = createEl('button', 'btn-pill small danger-ghost', '删除');
+      const delBtn = createEl('button', 'btn-pill small danger-ghost', t('fm.btnDelete'));
       delBtn.type = 'button';
       delBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -439,10 +534,10 @@ export class OpalFileBrowserController {
   }
 
   async previewImage(entry) {
-    this.setStatusBanner(`正在加载 ${entry.name} 预览…`);
+    this.setStatusBanner(t('fm.loadingPreview', { name: entry.name }));
     try {
       const b64 = this.thumbnailCache.get(entry.path) || (await this.client.getThumbnail(entry.path));
-      if (!b64) throw new Error('无法生成该图片的缩略预览');
+      if (!b64) throw new Error(t('fm.thumbFail'));
       this.thumbnailCache.set(entry.path, b64);
       const img = $('fmPreviewImg');
       const title = $('fmPreviewTitle');
@@ -451,7 +546,71 @@ export class OpalFileBrowserController {
       if ($('fmPreviewOverlay')) $('fmPreviewOverlay').hidden = false;
       this.setStatusBanner('');
     } catch (err) {
-      this.setStatusBanner(err?.message || '预览失败', 'error');
+      this.setStatusBanner(err?.message || t('fm.previewFail'), 'error');
+    }
+  }
+
+  async openEntryDirectly(entry) {
+    if (!entry || entry.isDir) return;
+    const desktop = this.app.desktop;
+    const useNativeTemp = desktop?.enabled
+      && typeof desktop.beginFileDownload === 'function'
+      && typeof desktop.openFileInOs === 'function';
+
+    if (!useNativeTemp) {
+      if (isPreviewableImageEntry(entry)) {
+        await this.previewImage(entry);
+      } else {
+        await this.downloadEntry(entry);
+      }
+      return;
+    }
+
+    const cacheKey = `${entry.path}|${entry.size || 0}|${entry.modifiedMs || 0}`;
+    const cachedPath = this.tempOpenCache.get(cacheKey);
+    if (cachedPath) {
+      try {
+        await desktop.openFileInOs(cachedPath);
+        this.setStatusBanner(t('fm.openedToast', { name: entry.name }), 'ok');
+        this.app.showToast(t('fm.openedToast', { name: entry.name }));
+        return;
+      } catch {
+        this.tempOpenCache.delete(cacheKey);
+      }
+    }
+
+    let sessionId = '';
+    this.setStatusBanner(t('fm.opening', { name: entry.name }));
+    try {
+      const begun = await desktop.beginFileDownload({ fileName: entry.name, subdir: 'temp' });
+      sessionId = begun.sessionId;
+      await this.client.pullFile(entry.path, {
+        onChunk: async (chunkBytes) => {
+          await desktop.writeFileDownloadChunk({ sessionId, bytes: chunkBytes });
+        },
+        onProgress: (received, total) => {
+          const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
+          this.setStatusBanner(t('fm.openingProgress', { name: entry.name, pct }));
+        },
+      });
+      const done = await desktop.finishFileDownload({ sessionId });
+      sessionId = '';
+      this.tempOpenCache.set(cacheKey, done.savedPath);
+      if (this.tempOpenCache.size > 48) {
+        const oldestKey = this.tempOpenCache.keys().next().value;
+        if (oldestKey) this.tempOpenCache.delete(oldestKey);
+      }
+      await desktop.openFileInOs(done.savedPath);
+      this.setStatusBanner(t('fm.openedToast', { name: entry.name }), 'ok');
+      this.app.showToast(t('fm.openedToast', { name: entry.name }), {
+        actionText: t('cast.openLocationAction'),
+        actionFn: () => void desktop.revealInExplorer(done.savedPath),
+      });
+    } catch (err) {
+      if (sessionId) {
+        await desktop.abortFileDownload({ sessionId }).catch(() => {});
+      }
+      this.setStatusBanner(err?.message || t('fm.openFail', { name: entry.name }), 'error');
     }
   }
 
@@ -460,7 +619,7 @@ export class OpalFileBrowserController {
     const desktop = this.app.desktop;
     const useNativeStream = desktop?.enabled && typeof desktop.beginFileDownload === 'function';
     let sessionId = '';
-    this.setStatusBanner(`正在下载 ${entry.name}…`);
+    this.setStatusBanner(t('fm.downloading', { name: entry.name }));
 
     try {
       if (useNativeStream) {
@@ -476,34 +635,34 @@ export class OpalFileBrowserController {
           : null,
         onProgress: (received, total) => {
           const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
-          this.setStatusBanner(`正在下载 ${entry.name} (${pct}% · ${formatBytes(received)})`);
+          this.setStatusBanner(t('fm.downloadingProgress', { name: entry.name, pct, received: formatBytes(received) }));
         },
       });
 
       if (useNativeStream) {
         const done = await desktop.finishFileDownload({ sessionId });
         sessionId = '';
-        this.setStatusBanner(`已下载到 ${done.savedPath}`, 'ok');
-        this.app.showToast(`已下载 ${entry.name}`, {
-          actionText: '在文件夹中显示',
+        this.setStatusBanner(t('fm.downloadedTo', { path: done.savedPath }), 'ok');
+        this.app.showToast(t('fm.downloadedToast', { name: entry.name }), {
+          actionText: t('cast.openLocationAction'),
           actionFn: () => void desktop.revealInExplorer(done.savedPath),
         });
       } else if (result.bytes) {
         triggerBrowserBlobDownload(result.bytes, result.fileName || entry.name);
-        this.setStatusBanner(`已下载 ${entry.name} (${formatBytes(result.receivedBytes)})`, 'ok');
+        this.setStatusBanner(`${t('fm.downloadedToast', { name: entry.name })} (${formatBytes(result.receivedBytes)})`, 'ok');
       }
     } catch (err) {
       if (useNativeStream && sessionId) {
         await desktop.abortFileDownload({ sessionId }).catch(() => {});
       }
-      this.setStatusBanner(err?.message || `下载 ${entry.name} 失败`, 'error');
+      this.setStatusBanner(err?.message || t('fm.downloadFail', { name: entry.name }), 'error');
     }
   }
 
   async downloadSelectedEntries() {
     const selected = this.entries.filter((e) => this.selectedPaths.has(e.path) && !e.isDir);
     if (!selected.length) {
-      this.app.showToast('请至少选择一个文件（不支持直接批量下载文件夹）');
+      this.app.showToast(t('fm.selectFilesToast'));
       return;
     }
     for (const item of selected) {
@@ -522,63 +681,63 @@ export class OpalFileBrowserController {
   async uploadFiles(files) {
     if (!files?.length) return;
     for (const file of files) {
-      this.setStatusBanner(`正在上传 ${file.name}…`);
+      this.setStatusBanner(t('fm.uploading', { name: file.name }));
       try {
         await this.client.uploadFile(file, {
           onProgress: (sent, total) => {
             const pct = total > 0 ? Math.round((sent / total) * 100) : 100;
-            this.setStatusBanner(`正在上传 ${file.name} (${pct}%)`);
+            this.setStatusBanner(t('fm.uploadingProgress', { name: file.name, pct }));
           },
         });
-        this.app.showToast(`已上传 ${file.name} 到手机下载目录`);
+        this.app.showToast(t('fm.uploadedToast', { name: file.name }));
       } catch (err) {
-        this.setStatusBanner(err?.message || `上传 ${file.name} 失败`, 'error');
+        this.setStatusBanner(err?.message || t('fm.uploadFail', { name: file.name }), 'error');
         return;
       }
     }
-    this.setStatusBanner('上传完成', 'ok');
+    this.setStatusBanner(t('fm.uploadDone'), 'ok');
     if (this.currentPath.startsWith('/sdcard/Download')) {
       await this.refreshCurrentDir();
     }
   }
 
   async promptMkdir() {
-    const name = window.prompt('输入新文件夹名称：', '');
+    const name = window.prompt(t('fm.mkdirPrompt'), '');
     if (!name || !name.trim()) return;
     try {
       await this.client.mkdir(joinRemotePath(this.currentPath, name.trim()));
       await this.refreshCurrentDir();
-      this.app.showToast(`已创建文件夹 ${name.trim()}`);
+      this.app.showToast(t('fm.mkdirToast', { name: name.trim() }));
     } catch (err) {
-      this.setStatusBanner(err?.message || '新建文件夹失败', 'error');
+      this.setStatusBanner(err?.message || t('fm.mkdirFail'), 'error');
     }
   }
 
   async promptRename(entry) {
-    const nextName = window.prompt('重命名为：', entry.name);
+    const nextName = window.prompt(t('fm.renamePrompt'), entry.name);
     if (!nextName || !nextName.trim() || nextName.trim() === entry.name) return;
     const parent = getParentRemotePath(entry.path);
     const nextPath = joinRemotePath(parent, nextName.trim());
     try {
       await this.client.rename(entry.path, nextPath);
       await this.refreshCurrentDir();
-      this.app.showToast(`已重命名为 ${nextName.trim()}`);
+      this.app.showToast(t('fm.renameToast', { name: nextName.trim() }));
     } catch (err) {
-      this.setStatusBanner(err?.message || '重命名失败', 'error');
+      this.setStatusBanner(err?.message || t('fm.renameFail'), 'error');
     }
   }
 
   async confirmDelete(list) {
     const msg = list.length === 1
-      ? `确定删除「${list[0].name}」吗？此操作无法撤销。`
-      : `确定删除选中的 ${list.length} 个项目吗？此操作无法撤销。`;
+      ? t('fm.deleteConfirmOne', { name: list[0].name })
+      : t('fm.deleteConfirmMany', { count: list.length });
     if (!window.confirm(msg)) return;
     for (const item of list) {
       try {
         await this.client.deletePath(item.path);
         this.selectedPaths.delete(item.path);
       } catch (err) {
-        this.setStatusBanner(err?.message || `删除 ${item.name} 失败`, 'error');
+        this.setStatusBanner(err?.message || t('fm.deleteFail', { name: item.name }), 'error');
         break;
       }
     }
@@ -594,12 +753,12 @@ export class OpalFileBrowserController {
       return;
     }
     this.storageLoading = true;
-    this.setStatusBanner('正在扫描手机存储空间（按类型 / 文件夹 / 应用排行）…');
+    this.setStatusBanner(t('fm.scanningStorage'));
     try {
       this.storageSummary = await this.client.scanStorage(DEFAULT_REMOTE_ROOT, 4);
       this.setStatusBanner('');
     } catch (err) {
-      this.setStatusBanner(err?.message || '存储空间扫描失败', 'error');
+      this.setStatusBanner(err?.message || t('fm.scanFail'), 'error');
     } finally {
       this.storageLoading = false;
       this.renderStorage();
@@ -612,13 +771,13 @@ export class OpalFileBrowserController {
     if (head) {
       head.textContent = '';
       if (!summary) {
-        head.appendChild(createEl('div', 'fm-empty', this.storageLoading ? '正在扫描中…' : '点击「重新扫描」分析手机存储'));
+        head.appendChild(createEl('div', 'fm-empty', this.storageLoading ? t('fm.storageScanning') : t('fm.storageRescanHint')));
       } else {
         const pct = summary.totalBytes > 0 ? Math.min(100, Math.round((summary.usedBytes / summary.totalBytes) * 100)) : 0;
         const stats = createEl('div', 'fm-storage-stats');
         stats.append(
-          createEl('strong', '', `已用 ${formatBytes(summary.usedBytes)} / ${formatBytes(summary.totalBytes)} (${pct}%)`),
-          createEl('span', 'muted', `可用 ${formatBytes(summary.freeBytes)}`)
+          createEl('strong', '', t('fm.storageUsed', { used: formatBytes(summary.usedBytes), total: formatBytes(summary.totalBytes), pct })),
+          createEl('span', 'muted', t('fm.storageFree', { free: formatBytes(summary.freeBytes) }))
         );
         const track = createEl('div', 'fm-storage-bar-track');
         const fill = createEl('div', 'fm-storage-bar-fill');
@@ -651,20 +810,22 @@ export class OpalFileBrowserController {
     const total = Math.max(1, summary.usedBytes || summary.totalBytes);
     for (const cat of summary.categories || []) {
       const meta = getStorageCategoryMeta(cat.name);
+      const catKey = STORAGE_CAT_I18N_KEYS[String(cat.name || '').toLowerCase()];
+      const catLabel = catKey ? t(catKey) : meta.label;
       const card = createEl('div', 'fm-cat-card');
       const dot = createEl('span', 'fm-cat-dot');
       dot.style.background = meta.color;
       const top = createEl('div', 'fm-cat-top');
-      top.append(dot, createEl('strong', '', meta.label));
+      top.append(dot, createEl('strong', '', catLabel));
       const val = createEl('div', 'fm-cat-val', formatBytes(cat.bytes));
-      const sub = createEl('div', 'fm-cat-sub', `${cat.fileCount} 个文件 · ${((cat.bytes / total) * 100).toFixed(1)}%`);
+      const sub = createEl('div', 'fm-cat-sub', t('fm.fileCount', { count: cat.fileCount, pct: ((cat.bytes / total) * 100).toFixed(1) }));
       card.append(top, val, sub);
       grid.appendChild(card);
     }
     host.appendChild(grid);
 
     if (summary.largeFiles?.length) {
-      host.appendChild(createEl('h4', 'fm-sub-heading', '大文件排行 Top 20'));
+      host.appendChild(createEl('h4', 'fm-sub-heading', t('fm.largeFilesHeading')));
       const list = createEl('div', 'fm-rank-list');
       for (const f of summary.largeFiles.slice(0, 20)) {
         const row = createEl('div', 'fm-rank-row');
@@ -672,10 +833,10 @@ export class OpalFileBrowserController {
         info.append(createEl('div', 'fm-rank-title', f.name), createEl('div', 'fm-rank-path mono', f.path));
         const right = createEl('div', 'fm-rank-right');
         right.appendChild(createEl('span', 'fm-rank-size mono', formatBytes(f.size)));
-        const dlBtn = createEl('button', 'btn-pill small', '下载');
+        const dlBtn = createEl('button', 'btn-pill small', t('fm.btnDownload'));
         dlBtn.type = 'button';
         dlBtn.addEventListener('click', () => void this.downloadEntry({ name: f.name, path: f.path, size: f.size, isDir: false }));
-        const delBtn = createEl('button', 'btn-pill small danger-ghost', '删除');
+        const delBtn = createEl('button', 'btn-pill small danger-ghost', t('fm.btnDelete'));
         delBtn.type = 'button';
         delBtn.addEventListener('click', async () => {
           await this.confirmDelete([{ name: f.name, path: f.path }]);
@@ -692,7 +853,7 @@ export class OpalFileBrowserController {
   _renderStorageFolders(host, summary) {
     const folders = summary.folders || [];
     if (!folders.length) {
-      host.appendChild(createEl('div', 'fm-empty', '暂无文件夹排行数据'));
+      host.appendChild(createEl('div', 'fm-empty', t('fm.noFolders')));
       return;
     }
     const maxBytes = Math.max(1, folders[0]?.bytes || 1);
@@ -702,7 +863,7 @@ export class OpalFileBrowserController {
       const info = createEl('div', 'fm-rank-info');
       info.append(
         createEl('div', 'fm-rank-title', `📁 ${folder.name || folder.path}`),
-        createEl('div', 'fm-rank-path mono', `${folder.path} · ${folder.fileCount} 个文件`)
+        createEl('div', 'fm-rank-path mono', t('fm.folderFiles', { path: folder.path, count: folder.fileCount }))
       );
       const bar = createEl('div', 'fm-mini-bar');
       const fill = createEl('div', 'fm-mini-bar-fill');
@@ -712,7 +873,7 @@ export class OpalFileBrowserController {
 
       const right = createEl('div', 'fm-rank-right');
       right.appendChild(createEl('span', 'fm-rank-size mono', formatBytes(folder.bytes)));
-      const openBtn = createEl('button', 'btn-pill small primary', '查看');
+      const openBtn = createEl('button', 'btn-pill small primary', t('fm.btnView'));
       openBtn.type = 'button';
       openBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -733,7 +894,7 @@ export class OpalFileBrowserController {
   _renderStorageApps(host, summary) {
     const apps = summary.apps || [];
     if (!apps.length) {
-      host.appendChild(createEl('div', 'fm-empty', '暂无应用存储排行数据（需手机端守护进程支持 StorageStats）'));
+      host.appendChild(createEl('div', 'fm-empty', t('fm.noApps')));
       return;
     }
     const maxBytes = Math.max(1, apps[0]?.totalBytes || 1);
@@ -746,7 +907,7 @@ export class OpalFileBrowserController {
         createEl(
           'div',
           'fm-rank-path mono',
-          `应用 ${formatBytes(app.apkBytes)} · 数据 ${formatBytes(app.dataBytes)} · 缓存 ${formatBytes(app.cacheBytes)}`
+          t('fm.appBreakdown', { apk: formatBytes(app.apkBytes), data: formatBytes(app.dataBytes), cache: formatBytes(app.cacheBytes) })
         )
       );
       const bar = createEl('div', 'fm-mini-bar');
@@ -758,7 +919,7 @@ export class OpalFileBrowserController {
       const right = createEl('div', 'fm-rank-right');
       right.appendChild(createEl('span', 'fm-rank-size mono', formatBytes(app.totalBytes)));
       if (app.pkg) {
-        const popBtn = createEl('button', 'btn-pill small', '小窗打开');
+        const popBtn = createEl('button', 'btn-pill small', t('fm.btnPopout'));
         popBtn.type = 'button';
         popBtn.addEventListener('click', () => {
           this.app.launchPopoutByPackage(app.pkg, app.appLabel || app.pkg);
@@ -785,19 +946,19 @@ export class OpalFileBrowserController {
 
   async uploadAndInstallApk(file) {
     if (this.apkInstallBusy) {
-      this.app.showToast('当前已有安装包正在安装，请稍候');
+      this.app.showToast(t('fm.apkBusyToast'));
       return;
     }
     const format = inferApkFormat(file.name);
     if (!format) {
-      this.app.showToast('请选择 .apk / .apks / .apkm / .xapk 格式的安装包');
+      this.app.showToast(t('fm.apkBadFormatToast'));
       return;
     }
     this.apkInstallBusy = true;
     this._renderApkProgress({
-      stageLabel: `正在上传 ${file.name}…`,
+      stageLabel: t('fm.apkUploading', { name: file.name }),
       progress: 5,
-      detail: `${formatBytes(file.size)} · 格式 ${format.toUpperCase()}`,
+      detail: t('fm.apkUploadDetail', { size: formatBytes(file.size), format: format.toUpperCase() }),
     });
 
     try {
@@ -805,7 +966,7 @@ export class OpalFileBrowserController {
         onProgress: (sent, total) => {
           const pct = total > 0 ? Math.round((sent / total) * 45) : 45;
           this._renderApkProgress({
-            stageLabel: `正在上传 ${file.name} (${Math.round((sent / Math.max(1, total)) * 100)}%)`,
+            stageLabel: t('fm.apkUploadingProgress', { name: file.name, pct: Math.round((sent / Math.max(1, total)) * 100) }),
             progress: pct,
             detail: `${formatBytes(sent)} / ${formatBytes(total)}`,
           });
@@ -814,9 +975,9 @@ export class OpalFileBrowserController {
       await this._runApkInstall(ack.remotePath, format);
     } catch (err) {
       this._renderApkProgress({
-        stageLabel: '上传或安装失败',
+        stageLabel: t('fm.apkUploadFail'),
         progress: 100,
-        detail: err?.message || '未知错误',
+        detail: err?.message || t('common.unknownError'),
         tone: 'error',
       });
     } finally {
@@ -827,12 +988,12 @@ export class OpalFileBrowserController {
   async installRemoteApk(remotePath) {
     this.selectTab('apk');
     if (this.apkInstallBusy) {
-      this.app.showToast('当前已有安装包正在安装，请稍候');
+      this.app.showToast(t('fm.apkBusyToast'));
       return;
     }
     const format = inferApkFormat(remotePath);
     if (!format) {
-      this.app.showToast('不支持的安装包格式');
+      this.app.showToast(t('fm.apkUnsupportedToast'));
       return;
     }
     this.apkInstallBusy = true;
@@ -840,9 +1001,9 @@ export class OpalFileBrowserController {
       await this._runApkInstall(remotePath, format);
     } catch (err) {
       this._renderApkProgress({
-        stageLabel: '安装失败',
+        stageLabel: t('fm.apkInstallFail'),
         progress: 100,
-        detail: err?.message || '未知错误',
+        detail: err?.message || t('common.unknownError'),
         tone: 'error',
       });
     } finally {
@@ -854,7 +1015,7 @@ export class OpalFileBrowserController {
     const replaceExisting = $('fmApkReplaceCheck') ? $('fmApkReplaceCheck').checked : true;
     const allowDowngrade = $('fmApkDowngradeCheck') ? $('fmApkDowngradeCheck').checked : false;
     this._renderApkProgress({
-      stageLabel: '已发送到手机端，正在准备安装…',
+      stageLabel: t('fm.apkSentPreparing'),
       progress: 50,
       detail: remotePath,
     });
@@ -864,8 +1025,9 @@ export class OpalFileBrowserController {
       allowDowngrade,
       onStatus: (st) => {
         const mappedPct = 50 + Math.round((st.progress || 0) * 0.5);
+        const stageKey = APK_STAGE_KEYS[st.stage];
         this._renderApkProgress({
-          stageLabel: APK_STAGE_LABELS[st.stage] || st.stage || '安装中…',
+          stageLabel: stageKey ? t(stageKey) : (st.stage || t('fm.apkInstallingFallback')),
           progress: mappedPct,
           detail: st.message || st.packageName || remotePath,
           tone: st.stage === 'succeeded' ? 'ok' : st.stage === 'failed' ? 'error' : '',
@@ -873,11 +1035,11 @@ export class OpalFileBrowserController {
       },
     });
     this._renderApkProgress({
-      stageLabel: '安装成功',
+      stageLabel: t('fm.apkStageSucceeded'),
       progress: 100,
-      detail: res.packageName ? `包名：${res.packageName}` : (res.message || '应用已安装到手机'),
+      detail: res.packageName ? t('fm.apkSuccessDetailPkg', { pkg: res.packageName }) : (res.message || t('fm.apkSuccessDetailDefault')),
       tone: 'ok',
     });
-    this.app.showToast(`APK 安装成功${res.packageName ? ` (${res.packageName})` : ''}`);
+    this.app.showToast(t('fm.apkSuccessToast', { pkg: res.packageName ? ` (${res.packageName})` : '' }));
   }
 }

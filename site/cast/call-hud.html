@@ -1,11 +1,63 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="prism-pulse">
+<html lang="en" data-theme="pure-frost">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OpalDesk · 通话浮窗</title>
+  <title data-i18n="call.pageTitle">OpalDesk · Call HUD</title>
   <link rel="icon" type="image/svg+xml" href="../assets/icon.svg" />
+  <script>
+    (function () {
+      try {
+        var saved = window.localStorage.getItem('opaldesk-showcase-theme-v1');
+        var theme = saved === 'pure-frost' || saved === 'prism-pulse'
+          ? saved
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'prism-pulse' : 'pure-frost');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (_) {}
+    })();
+  </script>
   <style>
+    :root,
+    [data-theme="pure-frost"] {
+      --hud-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 249, 255, 0.90));
+      --hud-rim: rgba(196, 210, 234, 0.85);
+      --hud-spec: rgba(255, 255, 255, 0.98);
+      --hud-shadow: 0 14px 30px -6px rgba(15, 28, 52, 0.22), 0 4px 10px -2px rgba(15, 28, 52, 0.10);
+      --hud-text: #141824;
+      --hud-muted: #5a657b;
+      --hud-btn-bg: rgba(15, 28, 52, 0.065);
+      --hud-btn-hover: rgba(15, 28, 52, 0.12);
+      --hud-btn-rim: rgba(15, 28, 52, 0.10);
+      --hud-dismiss-bg: #ffffff;
+      --hud-dismiss-fg: #4b5563;
+      --hud-chip-bg: rgba(15, 28, 52, 0.055);
+      --hud-chip-hover: rgba(47, 124, 246, 0.14);
+      --hud-blue: #2f7cf6;
+      --hud-green: #30d158;
+      --hud-red: #ff3b30;
+      --hud-amber: #f59e0b;
+    }
+
+    [data-theme="prism-pulse"] {
+      --hud-bg: linear-gradient(180deg, rgba(34, 39, 56, 0.94), rgba(22, 26, 38, 0.96));
+      --hud-rim: rgba(255, 255, 255, 0.16);
+      --hud-spec: rgba(255, 255, 255, 0.20);
+      --hud-shadow: 0 18px 34px -6px rgba(0, 0, 0, 0.56), 0 4px 12px -2px rgba(0, 0, 0, 0.34);
+      --hud-text: #f3f6fc;
+      --hud-muted: rgba(203, 214, 235, 0.72);
+      --hud-btn-bg: rgba(255, 255, 255, 0.12);
+      --hud-btn-hover: rgba(255, 255, 255, 0.20);
+      --hud-btn-rim: rgba(255, 255, 255, 0.16);
+      --hud-dismiss-bg: #2c3244;
+      --hud-dismiss-fg: rgba(240, 245, 255, 0.88);
+      --hud-chip-bg: rgba(255, 255, 255, 0.09);
+      --hud-chip-hover: rgba(47, 143, 255, 0.26);
+      --hud-blue: #4696ff;
+      --hud-green: #30d158;
+      --hud-red: #ff453a;
+      --hud-amber: #fbbf24;
+    }
+
     *, *::before, *::after { box-sizing: border-box; }
     html, body {
       margin: 0;
@@ -14,147 +66,319 @@
       height: 100%;
       overflow: hidden;
       background: transparent;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "PingFang SC", sans-serif;
-      color: #f4f7fd;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable", "Segoe UI", "PingFang SC", sans-serif;
+      color: var(--hud-text);
       user-select: none;
+      -webkit-font-smoothing: antialiased;
     }
-    .hud-shell {
+
+    /* Generous transparent shadow padding prevents any rectangular edge clipping on Windows */
+    .hud-canvas {
       width: 100%;
       height: 100%;
-      padding: 12px 14px;
-      border-radius: 20px;
-      background: linear-gradient(155deg, rgba(24, 30, 44, 0.90), rgba(14, 18, 28, 0.94));
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+      padding: 18px 24px 26px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      background: transparent;
+    }
+
+    .hud-shell {
+      position: relative;
+      width: 384px;
+      padding: 15px 15px 15px 14px;
+      border-radius: 28px;
+      background: var(--hud-bg);
+      border: 1px solid var(--hud-rim);
+      box-shadow: var(--hud-shadow), inset 0 1px 0 var(--hud-spec);
+      backdrop-filter: blur(26px) saturate(180%);
+      -webkit-backdrop-filter: blur(26px) saturate(180%);
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
-      gap: 8px;
+      gap: 10px;
       -webkit-app-region: drag;
+      transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
     }
-    .hud-top {
+
+    .hud-main-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 8px;
+      gap: 12px;
+      min-height: 50px;
     }
+
+    .hud-avatar {
+      position: relative;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(145deg, rgba(48, 209, 88, 0.22), rgba(48, 209, 88, 0.10));
+      border: 1px solid rgba(48, 209, 88, 0.34);
+      color: var(--hud-green);
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .hud-avatar.dialing {
+      background: linear-gradient(145deg, rgba(47, 124, 246, 0.22), rgba(99, 102, 241, 0.14));
+      border-color: rgba(47, 124, 246, 0.34);
+      color: var(--hud-blue);
+    }
+    .hud-avatar.ringing::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: 50%;
+      border: 2px solid rgba(48, 209, 88, 0.45);
+      animation: callPulse 1.4s ease-out infinite;
+    }
+    @keyframes callPulse {
+      0% { transform: scale(1); opacity: 0.7; }
+      100% { transform: scale(1.28); opacity: 0; }
+    }
+    .hud-avatar svg {
+      width: 19px;
+      height: 19px;
+      fill: currentColor;
+    }
+
     .hud-caller-wrap {
       min-width: 0;
       flex: 1;
-    }
-    .hud-badge-row {
       display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 2px;
-    }
-    .hud-pill {
-      font-size: 10.5px;
-      font-weight: 700;
-      padding: 2px 8px;
-      border-radius: 999px;
-      background: rgba(47, 143, 255, 0.22);
-      color: #7cc0ff;
-    }
-    .hud-pill.ringing {
-      background: rgba(251, 191, 36, 0.22);
-      color: #fcd34d;
-    }
-    .hud-pill.offhook {
-      background: rgba(52, 211, 153, 0.22);
-      color: #6ee7b7;
+      flex-direction: column;
+      gap: 2px;
     }
     .hud-caller {
-      font-size: 15px;
-      font-weight: 700;
+      font-size: 14.5px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .hud-sub-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+    .hud-live-dot {
+      width: 6.5px;
+      height: 6.5px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--hud-green);
+    }
+    .hud-live-dot.dialing { background: var(--hud-blue); }
+    .hud-pill {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--hud-muted);
+      white-space: nowrap;
+    }
     .hud-sub {
       font-size: 12px;
-      color: rgba(215, 224, 240, 0.72);
+      font-weight: 500;
+      color: var(--hud-muted);
       font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
+    .hud-sub:not(:empty)::before {
+      content: "· ";
+      opacity: 0.7;
+    }
+
     .hud-dismiss {
-      -webkit-app-region: no-drag;
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      background: rgba(255, 255, 255, 0.08);
-      color: rgba(240, 245, 255, 0.85);
-      border-radius: 999px;
-      font-size: 11px;
-      padding: 4px 10px;
+      position: absolute;
+      top: -6px;
+      left: -6px;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border-radius: 50%;
+      border: 1px solid var(--hud-rim);
+      background: var(--hud-dismiss-bg);
+      color: var(--hud-dismiss-fg);
+      box-shadow: 0 3px 8px rgba(0, 0, 0, 0.18);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       cursor: pointer;
+      opacity: 0;
+      transform: scale(0.82);
+      transition: opacity 0.16s ease, transform 0.16s ease;
+      -webkit-app-region: no-drag;
     }
-    .hud-dismiss:hover { background: rgba(255, 255, 255, 0.16); }
+    .hud-shell:hover .hud-dismiss,
+    .hud-dismiss:focus-visible {
+      opacity: 1;
+      transform: scale(1);
+    }
+    .hud-dismiss:hover {
+      background: var(--hud-btn-hover);
+      color: var(--hud-text);
+    }
+
     .hud-actions {
       -webkit-app-region: no-drag;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 9px;
+      flex-shrink: 0;
     }
+
+    /* Iconic iOS circular call action buttons */
     .hud-btn {
-      flex: 1;
-      height: 36px;
-      border: 0;
-      border-radius: 12px;
-      font-size: 12.5px;
-      font-weight: 600;
+      width: 38px;
+      height: 38px;
+      padding: 0;
+      border-radius: 50%;
+      border: 1px solid var(--hud-btn-rim);
+      background: var(--hud-btn-bg);
+      color: var(--hud-text);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       cursor: pointer;
-      color: #fff;
-      background: rgba(255, 255, 255, 0.12);
-      transition: transform 0.12s ease, background 0.15s ease;
+      transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1), background 0.15s ease, box-shadow 0.18s ease;
     }
-    .hud-btn:hover { background: rgba(255, 255, 255, 0.2); }
-    .hud-btn:active { transform: scale(0.97); }
-    .hud-btn.answer { background: linear-gradient(135deg, #16a34a, #22c55e); }
-    .hud-btn.danger { background: linear-gradient(135deg, #dc2626, #ef4444); }
-    .hud-btn.active { background: #2563eb; }
+    .hud-btn.secondary {
+      width: 36px;
+      height: 36px;
+    }
+    .hud-btn svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+    .hud-btn:hover {
+      transform: scale(1.06);
+      background: var(--hud-btn-hover);
+    }
+    .hud-btn:active {
+      transform: scale(0.95);
+    }
+    .hud-btn.answer {
+      border-color: rgba(255, 255, 255, 0.28);
+      background: linear-gradient(180deg, #38dc62, #28c24e);
+      color: #fff;
+      box-shadow: 0 5px 14px -2px rgba(48, 209, 88, 0.48);
+    }
+    .hud-btn.answer:hover {
+      background: linear-gradient(180deg, #42e46c, #2ccf55);
+      box-shadow: 0 7px 16px -2px rgba(48, 209, 88, 0.58);
+    }
+    .hud-btn.danger {
+      border-color: rgba(255, 255, 255, 0.26);
+      background: linear-gradient(180deg, #ff5147, #e63329);
+      color: #fff;
+      box-shadow: 0 5px 14px -2px rgba(255, 59, 48, 0.45);
+    }
+    .hud-btn.danger:hover {
+      background: linear-gradient(180deg, #ff6057, #f03c32);
+      box-shadow: 0 7px 16px -2px rgba(255, 59, 48, 0.56);
+    }
+    .hud-btn.active {
+      border-color: rgba(255, 255, 255, 0.28);
+      background: linear-gradient(180deg, #3c8bff, #2563eb);
+      color: #fff;
+      box-shadow: 0 4px 12px -2px rgba(47, 124, 246, 0.44);
+    }
+    .hud-btn.active-amber {
+      border-color: rgba(255, 255, 255, 0.28);
+      background: linear-gradient(180deg, #fbbf24, #d97706);
+      color: #fff;
+      box-shadow: 0 4px 12px -2px rgba(245, 158, 11, 0.44);
+    }
+
     .hud-sms-bar {
       -webkit-app-region: no-drag;
       display: flex;
       gap: 6px;
+      padding-top: 8px;
+      border-top: 1px solid var(--hud-rim);
       overflow-x: auto;
+      scrollbar-width: none;
     }
+    .hud-sms-bar::-webkit-scrollbar { display: none; }
     .hud-sms-chip {
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      background: rgba(255, 255, 255, 0.08);
-      color: #e2e8f0;
-      border-radius: 8px;
+      border: 1px solid var(--hud-btn-rim);
+      background: var(--hud-chip-bg);
+      color: var(--hud-text);
+      border-radius: 999px;
       font-size: 11px;
-      padding: 3px 8px;
+      font-weight: 500;
+      padding: 5px 10px;
       cursor: pointer;
       white-space: nowrap;
+      transition: background 0.15s ease, transform 0.12s ease;
     }
-    .hud-sms-chip:hover { background: rgba(47, 143, 255, 0.28); }
+    .hud-sms-chip:hover {
+      background: var(--hud-chip-hover);
+      transform: translateY(-1px);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .hud-avatar.ringing::before { animation: none; }
+      .hud-btn, .hud-dismiss, .hud-shell { transition: none; }
+    }
     [hidden] { display: none !important; }
   </style>
 </head>
 <body>
-  <div class="hud-shell">
-    <div class="hud-top">
-      <div class="hud-caller-wrap">
-        <div class="hud-badge-row">
-          <span class="hud-pill" id="hudStateBadge">来电</span>
-          <span class="hud-sub" id="hudTimerText"></span>
+  <div class="hud-canvas">
+    <div class="hud-shell">
+      <button type="button" class="hud-dismiss" id="hudDismissBtn" data-i18n-title="call.dismissTitle" data-i18n-aria="call.dismissBtn" title="Temporarily hide Call HUD without hanging up" aria-label="Hide">×</button>
+
+      <div class="hud-main-row">
+        <div class="hud-avatar ringing" id="hudAvatar" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.02-.24c1.12.37 2.33.57 3.57.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.61 21 3 13.39 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.24.2 2.45.57 3.57a1 1 0 0 1-.25 1.02l-2.2 2.2z"/></svg>
         </div>
-        <div class="hud-caller" id="hudCallerText">未知来电</div>
+
+        <div class="hud-caller-wrap">
+          <div class="hud-caller" id="hudCallerText" data-i18n="call.unknownCaller">Unknown Caller</div>
+          <div class="hud-sub-row">
+            <span class="hud-live-dot" id="hudLiveDot" aria-hidden="true"></span>
+            <span class="hud-pill" id="hudStateBadge" data-i18n="call.incoming">Call</span>
+            <span class="hud-sub" id="hudTimerText"></span>
+          </div>
+        </div>
+
+        <div class="hud-actions" id="hudRingingActions" hidden>
+          <button type="button" class="hud-btn secondary" id="hudSmsToggleBtn" data-i18n-title="call.smsBtn" data-i18n-aria="call.smsBtn" title="SMS" aria-label="SMS">
+            <svg viewBox="0 0 24 24"><path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/></svg>
+          </button>
+          <button type="button" class="hud-btn danger" id="hudRejectBtn" data-i18n-title="call.rejectBtn" data-i18n-aria="call.rejectBtn" title="Decline" aria-label="Decline">
+            <svg viewBox="0 0 24 24"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85a1 1 0 0 1-1.41 0L.29 13.1a1 1 0 0 1 0-1.41C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.69a1 1 0 0 1 0 1.41l-2.48 2.48a1 1 0 0 1-1.41 0 11.4 11.4 0 0 0-2.66-1.85 1 1 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+          </button>
+          <button type="button" class="hud-btn answer" id="hudAnswerBtn" data-i18n-title="call.answerBtn" data-i18n-aria="call.answerBtn" title="Answer" aria-label="Answer">
+            <svg viewBox="0 0 24 24"><path d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.02-.24c1.12.37 2.33.57 3.57.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.61 21 3 13.39 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.24.2 2.45.57 3.57a1 1 0 0 1-.25 1.02l-2.2 2.2z"/></svg>
+          </button>
+        </div>
+
+        <div class="hud-actions" id="hudActiveActions" hidden>
+          <button type="button" class="hud-btn secondary" id="hudMuteBtn" data-i18n-title="call.muteBtn" data-i18n-aria="call.muteBtn" title="Mute" aria-label="Mute">
+            <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+          </button>
+          <button type="button" class="hud-btn secondary" id="hudSpeakerBtn" data-i18n-title="call.speakerBtn" data-i18n-aria="call.speakerBtn" title="Speaker" aria-label="Speaker">
+            <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+          </button>
+          <button type="button" class="hud-btn danger" id="hudHangupBtn" data-i18n-title="call.hangupBtn" data-i18n-aria="call.hangupBtn" title="Hang Up" aria-label="Hang Up">
+            <svg viewBox="0 0 24 24"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85a1 1 0 0 1-1.41 0L.29 13.1a1 1 0 0 1 0-1.41C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.69a1 1 0 0 1 0 1.41l-2.48 2.48a1 1 0 0 1-1.41 0 11.4 11.4 0 0 0-2.66-1.85 1 1 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+          </button>
+        </div>
       </div>
-      <button type="button" class="hud-dismiss" id="hudDismissBtn" title="仅暂时隐藏浮窗，不会挂断电话">暂隐</button>
-    </div>
 
-    <div class="hud-sms-bar" id="hudSmsBar" hidden></div>
-
-    <div class="hud-actions" id="hudRingingActions" hidden>
-      <button type="button" class="hud-btn answer" id="hudAnswerBtn">接听</button>
-      <button type="button" class="hud-btn danger" id="hudRejectBtn">拒接</button>
-      <button type="button" class="hud-btn" id="hudSmsToggleBtn">短信</button>
-    </div>
-
-    <div class="hud-actions" id="hudActiveActions" hidden>
-      <button type="button" class="hud-btn" id="hudMuteBtn">静音</button>
-      <button type="button" class="hud-btn" id="hudSpeakerBtn">扬声器</button>
-      <button type="button" class="hud-btn danger" id="hudHangupBtn">挂断</button>
+      <div class="hud-sms-bar" id="hudSmsBar" hidden></div>
     </div>
   </div>
   <script type="module" src="./js/call_hud_controller.js"></script>

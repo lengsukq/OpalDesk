@@ -16,6 +16,7 @@ import {
   QQ_GROUP_NUMBER,
   resolveFeedbackBadge,
 } from './feedback_helpers.js';
+import { t } from './i18n.js';
 
 const STORAGE_REPORTER_NAME = 'opaldesk-feedback-reporter-v1';
 
@@ -57,7 +58,7 @@ export class OpalDiagnosticsController {
     $('openBugReportBtn')?.addEventListener('click', () => this.openFeedbackModal('bug'));
     $('openFeatureReportBtn')?.addEventListener('click', () => this.openFeedbackModal('feature'));
     $('copyQqGroupBtn')?.addEventListener('click', () => {
-      this.copyText(QQ_GROUP_NUMBER, `已复制 QQ 群号 ${QQ_GROUP_NUMBER}`);
+      this.copyText(QQ_GROUP_NUMBER, t('diag.qqCopiedToast', { group: QQ_GROUP_NUMBER }));
     });
 
     $('refreshLogsBtn')?.addEventListener('click', () => this.refreshLogs(true));
@@ -75,7 +76,7 @@ export class OpalDiagnosticsController {
       const btn = $('logOrderBtn');
       if (btn) {
         btn.classList.toggle('active', this.newestFirst);
-        btn.textContent = this.newestFirst ? '最新在前' : '时间正序';
+        btn.textContent = this.newestFirst ? t('diag.orderNewest') : t('diag.orderOldest');
       }
       this.renderLogConsole();
     });
@@ -115,7 +116,7 @@ export class OpalDiagnosticsController {
     $('fbSubmitBtn')?.addEventListener('click', () => this.submitFeedback());
     $('fbCopyCodeBtn')?.addEventListener('click', () => {
       if (this.lastSuccessShortCode) {
-        this.copyText(this.lastSuccessShortCode, `已复制反馈码 #${this.lastSuccessShortCode}`);
+        this.copyText(this.lastSuccessShortCode, t('diag.codeCopiedToast', { code: this.lastSuccessShortCode }));
       }
     });
     $('feedbackModalOverlay')?.addEventListener('click', (e) => {
@@ -126,7 +127,7 @@ export class OpalDiagnosticsController {
   }
 
   async initialize() {
-    this.log('I', 'App', this.desktop.enabled ? 'Windows 桌面客户端日志模块已就绪' : 'Web 端本地诊断日志已就绪');
+    this.log('I', 'App', this.desktop.enabled ? t('diag.initDesktopLog') : t('diag.initWebLog'));
     if (this.desktop.enabled) {
       await Promise.all([this.refreshLogs(false), this.refreshFeedbackState()]);
     } else {
@@ -183,7 +184,7 @@ export class OpalDiagnosticsController {
     this.renderMetrics();
     this.renderLogConsole();
     if (showToastOnDone) {
-      this.showToast(`已刷新日志（共 ${this.logEntries.length} 条）`);
+      this.showToast(t('diag.logsRefreshedToast', { count: this.logEntries.length }));
     }
   }
 
@@ -212,9 +213,12 @@ export class OpalDiagnosticsController {
 
     if ($('diagDeviceMeta')) {
       if (this.desktop.enabled) {
-        $('diagDeviceMeta').textContent = `OpalDesk v${this.feedbackState.appVersion || '1.0.22'} · ${this.feedbackState.deviceSummary || 'Desktop'}`;
+        $('diagDeviceMeta').textContent = t('diag.clientMetaDesktop', {
+          version: this.feedbackState.appVersion || '1.0.22',
+          summary: this.feedbackState.deviceSummary || 'Desktop',
+        });
       } else {
-        $('diagDeviceMeta').textContent = `OpalDesk Web 模式 · 本地内存诊断日志（在线反馈上报需使用 Windows / macOS 桌面客户端）`;
+        $('diagDeviceMeta').textContent = t('diag.clientMetaWeb');
       }
     }
     if ($('diagMetricTotal')) $('diagMetricTotal').textContent = String(total);
@@ -222,7 +226,7 @@ export class OpalDiagnosticsController {
     if ($('diagMetricQuota')) {
       $('diagMetricQuota').textContent = this.desktop.enabled
         ? `${quota.remaining}/${quota.maxDaily}`
-        : '桌面端可用';
+        : t('diag.quotaDesktopOnly');
     }
   }
 
@@ -239,7 +243,7 @@ export class OpalDiagnosticsController {
     if (!filtered.length) {
       const empty = document.createElement('span');
       empty.className = 'hint-text';
-      empty.textContent = this.logEntries.length === 0 ? '暂无运行日志记录。' : '当前筛选条件下没有匹配日志。';
+      empty.textContent = this.logEntries.length === 0 ? t('diag.logEmpty') : t('diag.logNoMatch');
       el.appendChild(empty);
       return;
     }
@@ -278,9 +282,9 @@ export class OpalDiagnosticsController {
 
     if (syncMeta) {
       if (!this.desktop.enabled) {
-        syncMeta.textContent = '仅桌面客户端支持在线同步';
+        syncMeta.textContent = t('diag.syncDesktopOnly');
       } else if (this.feedbackState.lastSyncAtMs > 0) {
-        syncMeta.textContent = `上次同步 ${formatFeedbackTime(this.feedbackState.lastSyncAtMs)}`;
+        syncMeta.textContent = t('diag.lastSync', { time: formatFeedbackTime(this.feedbackState.lastSyncAtMs) });
       } else {
         syncMeta.textContent = '';
       }
@@ -292,8 +296,8 @@ export class OpalDiagnosticsController {
       const hint = document.createElement('span');
       hint.className = 'hint-text';
       hint.textContent = this.desktop.enabled
-        ? '暂无本地反馈记录。提交问题或功能建议，或点「查反馈码」找回历史反馈进度。'
-        : '纯浏览器 Web 模式无法直连反馈服务器；请下载 OpalDesk Windows / macOS 桌面端或加入 QQ 群 1042317917 反馈。';
+        ? t('diag.recordsEmptyDesktop')
+        : t('diag.recordsEmptyWeb');
       listEl.appendChild(hint);
       return;
     }
@@ -312,15 +316,15 @@ export class OpalDiagnosticsController {
       const codeBtn = document.createElement('span');
       codeBtn.className = 'fb-code-tag mono';
       codeBtn.textContent = `#${rec.shortCode || '--------'}`;
-      codeBtn.title = '点击复制反馈码';
+      codeBtn.title = t('diag.copyCodeTitle');
       codeBtn.addEventListener('click', () => {
-        if (rec.shortCode) this.copyText(rec.shortCode, `已复制反馈码 #${rec.shortCode}`);
+        if (rec.shortCode) this.copyText(rec.shortCode, t('diag.codeCopiedToast', { code: rec.shortCode }));
       });
 
       const kind = normalizeFeedbackKind(rec.kind);
       const kindPill = document.createElement('span');
       kindPill.className = `fb-kind-pill ${kind}`;
-      kindPill.textContent = kind === 'feature' ? '功能建议' : '问题反馈';
+      kindPill.textContent = kind === 'feature' ? t('diag.kindFeature') : t('diag.kindBug');
 
       const badgeInfo = resolveFeedbackBadge(rec, curVer);
       const statusPill = document.createElement('span');
@@ -332,7 +336,7 @@ export class OpalDiagnosticsController {
       const delBtn = document.createElement('button');
       delBtn.type = 'button';
       delBtn.className = 'hist-icon-btn remove';
-      delBtn.title = '从本地列表移除';
+      delBtn.title = t('diag.removeLocalTitle');
       delBtn.textContent = '×';
       delBtn.addEventListener('click', async () => {
         if (!this.desktop.enabled) return;
@@ -349,12 +353,12 @@ export class OpalDiagnosticsController {
 
       const summary = document.createElement('div');
       summary.className = 'fb-record-summary';
-      summary.textContent = rec.summary || (kind === 'feature' ? '功能建议' : '问题反馈');
+      summary.textContent = rec.summary || (kind === 'feature' ? t('diag.kindFeature') : t('diag.kindBug'));
 
       const meta = document.createElement('div');
       meta.className = 'fb-record-meta';
       const metaParts = [];
-      if (rec.reportedVersion) metaParts.push(`上报版本 v${rec.reportedVersion}`);
+      if (rec.reportedVersion) metaParts.push(t('diag.reportedVersion', { version: rec.reportedVersion }));
       if (rec.createdAtMs > 0) metaParts.push(formatFeedbackTime(rec.createdAtMs));
       if (badgeInfo.hint) metaParts.push(badgeInfo.hint);
       meta.textContent = metaParts.join(' · ');
@@ -364,7 +368,7 @@ export class OpalDiagnosticsController {
       if (rec.replyNote) {
         const reply = document.createElement('div');
         reply.className = 'fb-reply-callout';
-        reply.textContent = `开发者回复：${rec.replyNote}`;
+        reply.textContent = t('diag.devReplyPrefix', { note: rec.replyNote });
         card.appendChild(reply);
       }
 
@@ -389,9 +393,9 @@ export class OpalDiagnosticsController {
         });
         report = buildWebDiagnosticReport(filtered);
       }
-      this.copyText(report, '已复制诊断日志报告到剪贴板');
+      this.copyText(report, t('diag.copyReportToast'));
     } catch (err) {
-      this.showToast(`复制诊断报告失败：${err?.message || err}`);
+      this.showToast(t('diag.copyReportFail', { error: err?.message || err }));
     }
   }
 
@@ -404,7 +408,7 @@ export class OpalDiagnosticsController {
           query: this.logQuery,
         });
         const savedPath = await this.desktop.exportDiagnosticReport(content);
-        this.showToast(`已导出诊断日志：${savedPath}`);
+        this.showToast(t('diag.exportDesktopToast', { path: savedPath }));
         await this.refreshLogs(false);
         return;
       }
@@ -423,9 +427,9 @@ export class OpalDiagnosticsController {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      this.showToast('已下载 Web 诊断日志 .txt 文件');
+      this.showToast(t('diag.exportWebToast'));
     } catch (err) {
-      this.showToast(`导出日志失败：${err?.message || err}`);
+      this.showToast(t('diag.exportFail', { error: err?.message || err }));
     }
   }
 
@@ -440,12 +444,12 @@ export class OpalDiagnosticsController {
     this.logEntries = [];
     this.renderMetrics();
     this.renderLogConsole();
-    this.showToast('已清空本地运行日志');
+    this.showToast(t('diag.logsClearedToast'));
   }
 
   async refreshFeedbackStatuses(force = true) {
     if (!this.desktop.enabled) {
-      this.showToast('请使用 OpalDesk 桌面客户端刷新在线反馈状态');
+      this.showToast(t('diag.refreshDesktopOnly'));
       return;
     }
     const btn = $('refreshFeedbackBtn');
@@ -461,13 +465,13 @@ export class OpalDiagnosticsController {
       this.renderFeedbackRecords();
       if (force) {
         if (outcome.success) {
-          this.showToast(outcome.message || `已同步 ${outcome.updatedCount || 0} 条反馈进度`);
+          this.showToast(outcome.message || t('diag.syncedToast', { count: outcome.updatedCount || 0 }));
         } else {
-          this.showToast(outcome.message || '同步反馈状态失败');
+          this.showToast(outcome.message || t('diag.syncFailToast'));
         }
       }
     } catch (err) {
-      if (force) this.showToast(`刷新状态失败：${err?.message || err}`);
+      if (force) this.showToast(t('diag.refreshFailToast', { error: err?.message || err }));
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -475,7 +479,7 @@ export class OpalDiagnosticsController {
 
   async lookupByCode() {
     if (!this.desktop.enabled) {
-      this.showToast('请使用 OpalDesk 桌面客户端查询反馈码');
+      this.showToast(t('diag.lookupDesktopOnly'));
       return;
     }
     const raw = $('feedbackLookupInput')?.value || '';
@@ -484,13 +488,13 @@ export class OpalDiagnosticsController {
     if (!code) {
       if (statusEl) {
         statusEl.hidden = false;
-        statusEl.textContent = '请输入 8 位反馈码（由 0-9、A-F 组成，例如 A1B2C3D4）。';
+        statusEl.textContent = t('diag.lookupInvalidCode');
       }
       return;
     }
     if (statusEl) {
       statusEl.hidden = false;
-      statusEl.textContent = `正在查询反馈码 #${code}…`;
+      statusEl.textContent = t('diag.lookupSearching', { code });
     }
     try {
       const outcome = await this.desktop.lookupFeedbackByCode(code);
@@ -502,13 +506,13 @@ export class OpalDiagnosticsController {
       }
       this.renderFeedbackRecords();
       if (outcome.found) {
-        if (statusEl) statusEl.textContent = `已找回反馈 #${code} 并同步到下方追踪列表。`;
+        if (statusEl) statusEl.textContent = t('diag.lookupFound', { code });
         if ($('feedbackLookupInput')) $('feedbackLookupInput').value = '';
       } else {
-        if (statusEl) statusEl.textContent = outcome.message || `未找到反馈码 #${code}。`;
+        if (statusEl) statusEl.textContent = outcome.message || t('diag.lookupNotFound', { code });
       }
     } catch (err) {
-      if (statusEl) statusEl.textContent = `查询失败：${err?.message || err}`;
+      if (statusEl) statusEl.textContent = t('diag.lookupFail', { error: err?.message || err });
     }
   }
 
@@ -560,12 +564,12 @@ export class OpalDiagnosticsController {
     $('fbKindFeatureBtn')?.setAttribute('aria-selected', String(isFeature));
 
     if ($('fbDescLabel')) {
-      $('fbDescLabel').textContent = isFeature ? '功能建议描述（必填）' : '问题描述与复现步骤（选填或简述）';
+      $('fbDescLabel').textContent = isFeature ? t('diag.descFeatureLabel') : t('diag.descBugLabel');
     }
     if ($('fbDescInput')) {
       $('fbDescInput').placeholder = isFeature
-        ? '请描述希望新增的功能、使用场景及预期交互效果…'
-        : '请描述遇到的问题、手机型号、连接方式（Wi-Fi / USB）及触发步骤…';
+        ? t('diag.descFeaturePlaceholder')
+        : t('diag.descBugPlaceholder');
     }
     if (resetLogToggle && $('fbIncludeLogsCheck')) {
       // Default ON for bugs, OFF for feature requests (matches Android & macOS)
@@ -579,8 +583,8 @@ export class OpalDiagnosticsController {
     const pill = $('fbModalQuotaPill');
     if (pill) {
       pill.textContent = this.desktop.enabled
-        ? `今日剩余 ${quota.remaining}/${quota.maxDaily} 次`
-        : '纯 Web 模式';
+        ? t('diag.modalQuotaRemaining', { remaining: quota.remaining, max: quota.maxDaily })
+        : t('diag.modalWebMode');
       pill.className = `status-pill mono ${quota.exhausted ? 'warn' : 'ok'}`;
     }
 
@@ -588,13 +592,13 @@ export class OpalDiagnosticsController {
     if (warnBox) {
       if (!this.desktop.enabled) {
         warnBox.hidden = false;
-        warnBox.textContent = '当前为浏览器 Web 模式，无法直接上传诊断包。请使用 Windows / macOS 桌面客户端提交，或点上方「复制诊断报告」发到 QQ 群 1042317917。';
+        warnBox.textContent = t('diag.warnWebMode');
       } else if (!this.feedbackState.sentryConfigured) {
         warnBox.hidden = false;
-        warnBox.textContent = '当前开发构建未注入在线反馈密钥（OPALDESK_SENTRY_DSN），请使用正式 Release 安装包提交，或复制诊断报告发到 QQ 群 1042317917。';
+        warnBox.textContent = t('diag.warnNotConfigured');
       } else if (quota.exhausted) {
         warnBox.hidden = false;
-        warnBox.textContent = '今日反馈与日志上传次数已达上限（5/5），请明天再试，或加入 QQ 群 1042317917 联系。';
+        warnBox.textContent = t('diag.warnQuotaExhausted');
       } else {
         warnBox.hidden = true;
       }
@@ -619,7 +623,7 @@ export class OpalDiagnosticsController {
     });
     const featureEmpty = this.modalKind === 'feature' && !desc.trim();
     btn.disabled = !allowed || featureEmpty;
-    btn.textContent = this.submitting ? '正在提交…' : this.modalKind === 'feature' ? '提交功能建议' : '提交问题反馈';
+    btn.textContent = this.submitting ? t('diag.submittingBtn') : this.modalKind === 'feature' ? t('diag.submitFeatureBtn') : t('diag.submitBugBtn');
   }
 
   async submitFeedback() {
@@ -630,7 +634,7 @@ export class OpalDiagnosticsController {
     this.saveReporterName(reporterName);
 
     if (this.modalKind === 'feature' && !description) {
-      this.setModalError('请先填写你的功能建议内容');
+      this.setModalError(t('diag.errFeatureEmpty'));
       return;
     }
     this.setModalError('');
@@ -656,17 +660,18 @@ export class OpalDiagnosticsController {
         if ($('fbSuccessBox')) {
           $('fbSuccessBox').hidden = false;
           $('fbSuccessTitle').textContent =
-            this.modalKind === 'feature' ? `功能建议已提交（#${outcome.shortCode}）` : `问题反馈已提交（#${outcome.shortCode}）`;
-          $('fbSuccessDetail').textContent =
-            `反馈码 #${outcome.shortCode} 已自动保存到「我的反馈追踪」。可凭此码在 QQ 群 ${QQ_GROUP_NUMBER} 中跟进进度。`;
+            this.modalKind === 'feature'
+              ? t('diag.successTitleFeature', { code: outcome.shortCode })
+              : t('diag.successTitleBug', { code: outcome.shortCode });
+          $('fbSuccessDetail').textContent = t('diag.successDetail', { code: outcome.shortCode, group: QQ_GROUP_NUMBER });
         }
         await Promise.all([this.refreshFeedbackState(), this.refreshLogs(false)]);
-        this.showToast(`反馈已提交，反馈码 #${outcome.shortCode}`);
+        this.showToast(t('diag.submittedToast', { code: outcome.shortCode }));
       } else {
-        this.setModalError(outcome.errorMessage || '提交失败，请检查网络后重试');
+        this.setModalError(outcome.errorMessage || t('diag.errSubmitFailed'));
       }
     } catch (err) {
-      this.setModalError(String(err?.message || err || '反馈提交发生异常'));
+      this.setModalError(String(err?.message || err || t('diag.errSubmitException')));
     } finally {
       this.submitting = false;
       this.syncModalConfigAndQuota();

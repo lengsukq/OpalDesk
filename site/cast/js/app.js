@@ -117,6 +117,14 @@ import {
   VIDEO_CODEC_HEVC,
 } from './protocol.js';
 import { OpalVideoDecoder, probeVideoCodecs } from './video_decoder.js';
+import {
+  applyDocumentI18n,
+  getLanguagePref,
+  onLocaleChange,
+  setLanguagePref,
+  STORAGE_LANGUAGE_PREF,
+  t,
+} from './i18n.js';
 
 const STORAGE_CLIENT_ID = 'opaldesk-web-client-id-v1';
 const STORAGE_DEVICES = 'opaldesk-web-devices-v1';
@@ -336,6 +344,8 @@ class OpalCastWebApp {
     this.standaloneAppPkg = '';
     this.standaloneAppCls = '';
     this.standaloneAppLabel = '';
+    this.standaloneAppUserId = 0;
+    this.standaloneAppProfileType = '';
     this.standaloneDeviceKey = '';
     this.standaloneDeviceName = '';
     this.explicitCertPin = '';
@@ -451,7 +461,7 @@ class OpalCastWebApp {
           FLAG_CLIPBOARD_IMAGE_PNG,
           encodeImageClipboardEvent(TEXT_MODE_COMMIT_PASTE, this.textSeq++, pngBytes)
         );
-        this.showToast('已粘贴图片到手机端');
+        this.showToast(t('cast.clipboardImgSyncedToast'));
       },
       onFileDrop: (files) => this.sendDroppedFiles(files),
       onUserGesture: () => this.audio.resumeFromGesture(),
@@ -466,10 +476,10 @@ class OpalCastWebApp {
           $('actTrustBox').hidden = true;
           $('actWorkspace').hidden = false;
           $('disconnectActBtn').hidden = false;
-          this.appendActLog('✓ 访问码认证通过，等待手机端无线调试端口信息…');
+          this.appendActLog(t('activate.authPassedLog'));
         } else {
-          this.setActError(res.message || '6 位访问码不正确');
-          this.appendActLog(`✗ 认证失败: ${res.message || ''}`);
+          this.setActError(res.message || t('activate.errAuthFailed'));
+          this.appendActLog(t('activate.authFailedLog', { msg: res.message || '' }));
         }
       },
       onState: (state) => this.renderActivationState(state),
@@ -477,12 +487,12 @@ class OpalCastWebApp {
       onResult: (res) => {
         this.appendActLog(`${res.ok ? '✓' : '✗'} ${res.message || ''}`);
         this.setActBusy(false);
-        if (!res.ok) this.setActError(res.message || '激活未成功');
+        if (!res.ok) this.setActError(res.message || t('activate.errNotSucceeded'));
       },
       onReadyForCast: (info) => {
-        this.appendActLog(`★ ${info.message || '已就绪'}`);
+        this.appendActLog(`★ ${info.message || 'Ready'}`);
         if (info.ok && info.host) {
-          this.showToast('引擎激活成功，正在切入 Web 投屏…');
+          this.showToast(t('activate.readyForCastToast'));
           this.activation.disconnect();
           $('castHostInput').value = info.host;
           $('castPortInput').value = String(info.castPort || 19878);
@@ -496,7 +506,7 @@ class OpalCastWebApp {
         this.appendActLog(`! ${msg}`);
       },
       onClose: (reason) => {
-        this.appendActLog(`连接关闭: ${reason}`);
+        this.appendActLog(t('activate.closeLog', { reason }));
         $('disconnectActBtn').hidden = true;
       },
     });
@@ -526,16 +536,16 @@ class OpalCastWebApp {
         const btn = $('tbRecordBtn');
         const lbl = $('tbRecordLabel');
         if (btn) btn.classList.toggle('recording', recording);
-        if (lbl) lbl.textContent = recording ? `停止 ${elapsedLabel}` : '录屏';
+        if (lbl) lbl.textContent = recording ? t('cast.recordStopLabel', { elapsed: elapsedLabel }) : t('cast.recordLabel');
       },
       onSaved: ({ fileName, savedPath }) => {
         if (savedPath && this.desktop.enabled) {
-          this.showToast(`录屏已保存：${fileName}`, {
-            actionText: '打开位置',
+          this.showToast(t('cast.recordSaved', { name: fileName }), {
+            actionText: t('cast.openLocationAction'),
             actionFn: () => void this.desktop.revealInExplorer(savedPath),
           });
         } else {
-          this.showToast(`录屏已保存：${fileName}`);
+          this.showToast(t('cast.recordSaved', { name: fileName }));
         }
       },
       onError: (msg) => this.showToast(msg),
@@ -545,6 +555,14 @@ class OpalCastWebApp {
   }
 
   async init() {
+    this.codecCaps = null;
+    applyDocumentI18n();
+    onLocaleChange(() => this.refreshLocalizedUi());
+    window.addEventListener('storage', (ev) => {
+      if (ev.key === STORAGE_LANGUAGE_PREF) {
+        setLanguagePref(ev.newValue || 'system', { persist: false });
+      }
+    });
     this.bindUiEvents();
     this.input.attach();
     if (this.desktop.enabled) {
@@ -561,15 +579,14 @@ class OpalCastWebApp {
     this.installResizeObserver();
 
     const caps = await probeVideoCodecs();
+    this.codecCaps = caps;
     const badge = $('codecBadge');
     if (!caps.supported) {
-      badge.textContent = 'WebCodecs 不可用';
+      badge.textContent = t('nav.codecUnsupported');
       badge.classList.add('warn');
-      this.showBrowserWarn(
-        '当前浏览器不支持 WebCodecs 硬件视频解码（或处于非安全上下文）。请通过 GitHub Pages HTTPS 在最新版 Chrome / Edge / Firefox 中打开。'
-      );
+      this.showBrowserWarn(t('cast.browserUnsupportedWarn'));
     } else {
-      badge.textContent = caps.hevc ? 'H.264 + HEVC 硬解就绪' : 'H.264 硬解就绪';
+      badge.textContent = caps.hevc ? t('nav.codecHevcReady') : t('nav.codecH264Ready');
       badge.classList.add('ok');
       const codecSelect = $('castCodecSelect');
       if (codecSelect) {
@@ -580,38 +597,117 @@ class OpalCastWebApp {
         });
         if (!caps.hevc) {
           const hevcOpt = codecSelect.querySelector('option[value="hevc"]');
-          if (hevcOpt) hevcOpt.textContent = 'HEVC / H.265 (当前浏览器未检出硬解)';
+          if (hevcOpt) hevcOpt.textContent = t('cast.codecHevcNoHw');
         }
       }
     }
 
     if (isSafariBrowser()) {
-      this.showBrowserWarn(
-        '检测到 Safari 浏览器：Safari 对公网页面跨源连接局域网自签名 WSS 限制较严，若放行证书后仍无法握手，建议使用 Chrome 或 Edge 浏览器。'
-      );
+      this.showBrowserWarn(t('cast.safariWarn'));
     }
 
+    this.refreshLocalizedUi();
     this.applyUrlParams();
   }
 
+  refreshLocalizedUi() {
+    applyDocumentI18n();
+    const langSel = $('langSelect');
+    if (langSel) {
+      langSel.value = getLanguagePref();
+    }
+    if (this.desktop.enabled) {
+      const heroTitle = $('heroTitle');
+      if (heroTitle) heroTitle.textContent = t('hero.desktopTitle');
+      const heroSub = $('heroSubtitle');
+      if (heroSub) heroSub.textContent = t('hero.desktopSubtitle');
+      if ($('connectCastBtn') && !$('connectCastBtn').disabled) {
+        $('connectCastBtn').textContent = t('cast.connectDesktopBtn');
+      }
+    } else if ($('connectCastBtn') && !$('connectCastBtn').disabled) {
+      $('connectCastBtn').textContent = t('cast.connectWebBtn');
+    }
+    if (this.codecCaps) {
+      const badge = $('codecBadge');
+      if (badge) {
+        badge.textContent = !this.codecCaps.supported
+          ? t('nav.codecUnsupported')
+          : this.codecCaps.hevc
+            ? t('nav.codecHevcReady')
+            : t('nav.codecH264Ready');
+      }
+      if (!this.codecCaps.hevc) {
+        const hevcOpt = $('castCodecSelect')?.querySelector('option[value="hevc"]');
+        if (hevcOpt) hevcOpt.textContent = t('cast.codecHevcNoHw');
+      }
+    }
+    if ($('castHostLabel')) {
+      $('castHostLabel').textContent = this.transportMode === 'usb' ? t('cast.hostLabelUsb') : t('cast.hostLabelWifi');
+    }
+    this.updateUsbForwardHint();
+    if (this.desktop.enabled) {
+      this.syncCustomAdbPathUi(this.desktop.adbStatus);
+      this.renderDesktopMdnsDevices(this.desktop.mdnsDevices);
+      if (this.usbTetherBetaEnabled) {
+        this.renderDesktopUsbTetherDevices(this.desktop.usbTetherDevices);
+      }
+    }
+    this.renderRecentDevices();
+    this.companion?.renderCompanionHub();
+    this.companion?.renderBleNearbyCard();
+    this.companion?.syncCallHudDisplay();
+    this.standalone?.renderLobbyHistoryBar();
+    this.standalone?.syncQuotaBadges();
+    this.standalone?.syncPinButtonUi();
+    this.standalone?.syncStandaloneToolbarPrefsUi();
+    this.diagnostics?.renderMetrics();
+    this.diagnostics?.renderLogConsole();
+    this.diagnostics?.renderFeedbackRecords();
+    this.fileBrowser?.renderQuickNav();
+    this.fileBrowser?.renderBreadcrumbs();
+    this.fileBrowser?.syncDirectOpenThresholdUi();
+    if ($('fmViewToggleBtn')) {
+      $('fmViewToggleBtn').textContent = this.fileBrowser?.viewMode === 'grid' ? t('fm.viewList') : t('fm.viewGrid');
+    }
+    if ($('tbInputModeBtn')) {
+      $('tbInputModeBtn').textContent = this.input.primaryLeftAsTouch ? t('stage.touchBtn') : t('stage.mouseBtn');
+    }
+    if ($('tbDisconnectBtn')) {
+      const isStandaloneDesktop = this.sessionRole === SESSION_ROLE_STANDALONE_APP && this.desktop.enabled;
+      $('tbDisconnectBtn').textContent = isStandaloneDesktop ? t('stage.closeWindowBtn') : t('stage.disconnectBtn');
+      $('tbDisconnectBtn').title = isStandaloneDesktop ? t('stage.closeWindowTitle') : t('stage.disconnectTitle');
+    }
+    this.syncBlackoutUi();
+    this.syncMicUi();
+    this.syncCameraUi();
+    this.syncFullscreenUi();
+    this.syncRemoteFullscreenUi();
+    if (this.authenticated) {
+      this.updateTelemetry();
+    }
+  }
+
   async initDesktopMode() {
+    document.body.classList.add('desktop-app');
     const badge = $('brandModeBadge');
     if (badge) {
       badge.textContent = (navigator.userAgent || '').includes('Windows') ? 'Windows Client' : 'Desktop';
     }
     const heroTitle = $('heroTitle');
-    if (heroTitle) heroTitle.textContent = 'OpalDesk 桌面无线显示器 & 激活中心';
+    if (heroTitle) heroTitle.textContent = t('hero.desktopTitle');
     const heroSub = $('heroSubtitle');
     if (heroSub) {
-      heroSub.textContent =
-        '局域网 mDNS 自动发现 · TLS 1.3 TOFU 证书指纹核验直连 · WebCodecs 硬件直解 + USB 一键免命令投屏';
+      heroSub.textContent = t('hero.desktopSubtitle');
     }
-    $('connectCastBtn').textContent = '开始投屏';
+    $('connectCastBtn').textContent = t('cast.connectDesktopBtn');
 
     try {
       const info = await this.desktop.initialize();
       if (info?.clientId) {
         this.clientId = info.clientId;
+      }
+      if (info?.prefs?.language) {
+        setLanguagePref(info.prefs.language, { persist: true, notify: false });
       }
       if (info?.micaApplied) {
         document.body.classList.add('desktop-mica-ready');
@@ -652,8 +748,8 @@ class OpalCastWebApp {
     const summaryEl = $('adbPathSummary');
     if (summaryEl) {
       summaryEl.textContent = savedPath
-        ? '自定义 adb.exe 路径（已记忆上次路径）'
-        : '自定义 adb.exe 路径（可选 · 保存后自动记忆）';
+        ? t('cast.adbSummaryRemembered')
+        : t('cast.adbSummaryDefault');
     }
     const clearBtn = $('clearAdbPathBtn');
     if (clearBtn) {
@@ -717,20 +813,20 @@ class OpalCastWebApp {
       if (!silent) {
         if (!cleaned) {
           this.showToast(
-            st.available ? `已清除自定义路径，恢复自动探测 ADB: ${st.adbPath}` : '已清除已记忆的自定义 ADB 路径'
+            st.available ? t('cast.adbClearedAuto', { path: st.adbPath }) : t('cast.adbCleared')
           );
         } else if (st.available) {
-          this.showToast(`已保存并记忆 ADB 路径: ${st.adbPath}`);
+          this.showToast(t('cast.adbSaved', { path: st.adbPath }));
         } else {
-          this.showToast('已记忆该路径，但未在其中找到可用的 adb.exe，请检查路径是否正确');
+          this.showToast(t('cast.adbSavedNotFound'));
         }
       }
       return st;
     } catch (err) {
-      const msg = String(err?.message || err || '未知错误');
-      this.diagnostics?.log('W', 'ADB', `保存自定义 ADB 路径失败: ${msg}`);
+      const msg = String(err?.message || err || t('common.unknownError'));
+      this.diagnostics?.log('W', 'ADB', `Failed to save custom ADB path: ${msg}`);
       if (!silent) {
-        this.showToast(`保存 ADB 路径失败: ${msg}`);
+        this.showToast(t('cast.adbSaveFailed', { error: msg }));
       }
       return null;
     }
@@ -842,7 +938,11 @@ class OpalCastWebApp {
       if (inputEl) inputEl.value = String(res.mbps);
       saveCustomBitrateMbps(res.mbps);
       if (notifyOnClamp && res.clamped) {
-        this.showToast(`自定义码率支持 ${MIN_CUSTOM_BITRATE_MBPS}–${MAX_CUSTOM_BITRATE_MBPS} Mbps，已自动调整为 ${res.mbps} Mbps`);
+        this.showToast(t('cast.customBitrateClamped', {
+          min: MIN_CUSTOM_BITRATE_MBPS,
+          max: MAX_CUSTOM_BITRATE_MBPS,
+          mbps: res.mbps,
+        }));
       }
       return { mode: 'custom', bitrateKbps: res.kbps, mbps: res.mbps };
     }
@@ -878,6 +978,8 @@ class OpalCastWebApp {
     const pkg = params.get('pkg') || '';
     const cls = params.get('cls') || '';
     const appLabel = params.get('appLabel') || '';
+    const userId = Math.max(0, Math.round(Number(params.get('userId') || 0)));
+    const profileType = params.get('profileType') || '';
     const deviceKey = params.get('deviceKey') || '';
     const deviceName = params.get('deviceName') || '';
     const pin = params.get('pin') || '';
@@ -917,10 +1019,17 @@ class OpalCastWebApp {
       this.sessionRole = SESSION_ROLE_STANDALONE_APP;
       this.standaloneAppPkg = pkg;
       this.standaloneAppCls = cls;
+      this.standaloneAppUserId = userId;
+      this.standaloneAppProfileType = profileType;
       this.standaloneAppLabel = appLabel || pkg;
       this.standaloneDeviceKey = deviceKey;
       this.standaloneDeviceName = deviceName;
-      document.title = `OpalDesk · ${this.standaloneAppLabel}`;
+      const appKey = userId > 0 ? `${pkg}#u${userId}` : pkg;
+      const profileBadge = this.standalone.getProfileBadgeText(userId, profileType);
+      const titleDisplay = profileBadge && !this.standaloneAppLabel.includes(profileBadge)
+        ? `${this.standaloneAppLabel} (${profileBadge})`
+        : this.standaloneAppLabel;
+      document.title = `OpalDesk · ${titleDisplay}`;
       const preset = params.get('preset') || '';
       const dpiParam = Number(params.get('dpi') || 0);
       const compatParam = params.get('compat') === '1';
@@ -929,7 +1038,7 @@ class OpalCastWebApp {
         if (preset) patch.preferredPreset = preset;
         if (dpiParam > 0) patch.customDpi = dpiParam;
         if (compatParam) patch.compatibilityResolution = true;
-        this.standalone.prefsStore.updatePref(deviceKey, pkg, patch);
+        this.standalone.prefsStore.updatePref(deviceKey, appKey, patch);
       }
       this.standalone.applyInitialStandalonePin(pin === '1');
       this.standalone.syncStandaloneToolbarPrefsUi();
@@ -948,6 +1057,16 @@ class OpalCastWebApp {
   }
 
   bindUiEvents() {
+    const langSel = $('langSelect');
+    if (langSel) {
+      langSel.value = getLanguagePref();
+      langSel.addEventListener('change', (e) => {
+        setLanguagePref(e.target.value, { persist: true });
+        if (this.desktop.enabled) {
+          void this.desktop.updateClientPrefs({ language: getLanguagePref() });
+        }
+      });
+    }
     $('themeToggleBtn').addEventListener('click', () => {
       const cur = document.documentElement.getAttribute('data-theme');
       const next = cur === 'prism-pulse' ? 'pure-frost' : 'prism-pulse';
@@ -970,9 +1089,17 @@ class OpalCastWebApp {
 
     $('copyAdbForwardBtn').addEventListener('click', () => {
       const port = Number($('castPortInput').value) || 19878;
-      this.copyText(`adb forward tcp:${port} localabstract:opaldesk_stream`, '已复制 USB 转发命令');
+      this.copyText(`adb forward tcp:${port} localabstract:opaldesk_stream`, t('cast.copyForwardToast'));
     });
     $('castPortInput').addEventListener('input', () => this.updateUsbForwardHint());
+    const connectOnEnter = (e) => {
+      if (e.key === 'Enter' && !$('connectCastBtn')?.disabled) {
+        e.preventDefault();
+        this.startCastConnection();
+      }
+    };
+    $('castHostInput')?.addEventListener('keydown', connectOnEnter);
+    $('castPortInput')?.addEventListener('keydown', connectOnEnter);
     $('castCodecSelect')?.addEventListener('change', (e) => {
       const codec = e.target.value;
       saveCodecPref(codec);
@@ -1024,7 +1151,7 @@ class OpalCastWebApp {
       if (!this.desktop.enabled) return;
       const list = await this.desktop.pollMdnsDevices(true);
       this.renderDesktopMdnsDevices(list);
-      this.showToast('已刷新局域网 mDNS 设备扫描');
+      this.showToast(t('cast.mdnsRefreshedToast'));
     });
     $('scanAdbDevicesBtn')?.addEventListener('click', () => this.refreshDesktopUsbPanel());
     $('usbTetherBetaCheck')?.addEventListener('change', (e) => {
@@ -1078,7 +1205,7 @@ class OpalCastWebApp {
       const pairCode = $('adbPairCodeInput').value.trim();
       const connectPort = Number($('adbConnPortInput').value) || 0;
       if (!pairPort || pairCode.length !== 6) {
-        this.setActError('请填写配对端口和 6 位无线调试配对码');
+        this.setActError(t('activate.errPairRequired'));
         return;
       }
       this.setActError('');
@@ -1093,7 +1220,7 @@ class OpalCastWebApp {
     $('actDirectConnBtn').addEventListener('click', () => {
       const connectPort = Number($('adbConnPortInput').value) || 0;
       if (!connectPort) {
-        this.setActError('请先填写无线调试主页显示的连接端口');
+        this.setActError(t('activate.errConnPortRequired'));
         return;
       }
       this.setActError('');
@@ -1110,7 +1237,7 @@ class OpalCastWebApp {
     });
     $('actRefreshStateBtn').addEventListener('click', () => this.activation.requestStateRefresh());
     $('copyActFallbackBtn').addEventListener('click', () => {
-      this.copyText($('actFallbackCmd').textContent || '', '已复制无线 ADB 兜底命令');
+      this.copyText($('actFallbackCmd').textContent || '', t('activate.copyFallbackToast'));
     });
 
     // Stage toolbar actions
@@ -1120,7 +1247,7 @@ class OpalCastWebApp {
         this.desktop.closeCurrentWindow().catch(() => {});
         return;
       }
-      this.disconnectCast('已取消连接');
+      this.disconnectCast(t('cast.cancelledToast'));
     });
     $('tbDisconnectBtn').addEventListener('click', () => {
       if (this.sessionRole === SESSION_ROLE_STANDALONE_APP && this.desktop.enabled) {
@@ -1128,7 +1255,7 @@ class OpalCastWebApp {
         this.desktop.closeCurrentWindow().catch(() => {});
         return;
       }
-      this.disconnectCast('已断开投屏');
+      this.disconnectCast(t('cast.disconnectedToast'));
     });
     $('tbBackBtn').addEventListener('click', () => {
       this.sendOpalFrame(TYPE_SYSTEM_ACTION, 0, encodeSystemAction(SYS_BACK));
@@ -1170,17 +1297,17 @@ class OpalCastWebApp {
           ? this.standaloneAppLabel
           : 'OpalDesk';
         const res = await captureCanvasScreenshot($('castCanvas'), { desktop: this.desktop, label });
-        const clipSuffix = res.copiedToClipboard ? '（已复制到剪贴板）' : '';
+        const clipSuffix = res.copiedToClipboard ? t('cast.screenshotClipboardSuffix') : '';
         if (res.savedPath && this.desktop.enabled) {
-          this.showToast(`截图已保存至桌面${clipSuffix}`, {
-            actionText: '打开位置',
+          this.showToast(t('cast.screenshotSavedDesktop', { suffix: clipSuffix }), {
+            actionText: t('cast.openLocationAction'),
             actionFn: () => void this.desktop.revealInExplorer(res.savedPath),
           });
         } else {
-          this.showToast(`截图已保存：${res.fileName}${clipSuffix}`);
+          this.showToast(t('cast.screenshotSavedFile', { name: res.fileName, suffix: clipSuffix }));
         }
       } catch (err) {
-        this.showToast(err?.message || '截图失败');
+        this.showToast(err?.message || t('cast.screenshotFailed'));
       }
       this.bumpToolbarVisibility();
       this.input.focusIme();
@@ -1194,9 +1321,9 @@ class OpalCastWebApp {
       const nextTouch = !this.input.primaryLeftAsTouch;
       this.input.setPrimaryLeftAsTouch(nextTouch);
       const btn = $('tbInputModeBtn');
-      btn.textContent = nextTouch ? '触控' : '鼠标';
+      btn.textContent = nextTouch ? t('stage.touchBtn') : t('stage.mouseBtn');
       btn.classList.toggle('active', nextTouch);
-      this.showToast(nextTouch ? '左键拖拽已切换为「触控滑动」模式（支持列表拖拽滚动）' : '左键拖拽已切换为「鼠标指针」模式（支持文本框选）');
+      this.showToast(nextTouch ? t('cast.touchModeToast') : t('cast.mouseModeToast'));
       this.input.focusIme();
     });
     $('tbKeyboardBtn').addEventListener('click', () => {
@@ -1258,7 +1385,7 @@ class OpalCastWebApp {
       this.hideLocalCursor = Boolean(e.target.checked);
       this.syncLocalCursorUi();
       this.persistCastPrefs({ hideLocalCursor: this.hideLocalCursor });
-      this.showToast(this.hideLocalCursor ? '已隐藏投屏画面内的本机指针（使用端侧单指针）' : '已恢复显示本机系统指针');
+      this.showToast(this.hideLocalCursor ? t('cast.hideCursorOnToast') : t('cast.hideCursorOffToast'));
     });
 
     // App launcher popover
@@ -1321,7 +1448,95 @@ class OpalCastWebApp {
       $('dropOverlay').hidden = true;
     });
 
+    // Consistent backdrop-click dismiss for secondary modals
+    $('lobbyAppsModalOverlay')?.addEventListener('click', (e) => {
+      if (e.target === $('lobbyAppsModalOverlay')) $('closeLobbyAppsModalBtn')?.click();
+    });
+    $('feedbackModalOverlay')?.addEventListener('click', (e) => {
+      if (e.target === $('feedbackModalOverlay')) $('fbCancelBtn')?.click();
+    });
+    $('fileManagerOverlay')?.addEventListener('click', (e) => {
+      if (e.target === $('fileManagerOverlay')) $('closeFileManagerBtn')?.click();
+    });
+    $('fmPreviewOverlay')?.addEventListener('click', (e) => {
+      if (e.target === $('fmPreviewOverlay')) $('fmPreviewCloseBtn')?.click();
+    });
+
     window.addEventListener('keydown', (e) => {
+      const targetTag = (e.target && e.target.tagName) ? e.target.tagName.toUpperCase() : '';
+      const isTyping = targetTag === 'INPUT' || targetTag === 'TEXTAREA' || targetTag === 'SELECT';
+
+      // Escape: dismiss topmost open modal or stage popover cleanly
+      if (e.key === 'Escape') {
+        if ($('fmPreviewOverlay') && !$('fmPreviewOverlay').hidden) {
+          e.preventDefault();
+          $('fmPreviewCloseBtn')?.click();
+          return;
+        }
+        if ($('fileManagerOverlay') && !$('fileManagerOverlay').hidden) {
+          e.preventDefault();
+          $('closeFileManagerBtn')?.click();
+          return;
+        }
+        if ($('dialerModalOverlay') && !$('dialerModalOverlay').hidden) {
+          e.preventDefault();
+          $('closeDialerModalBtn')?.click();
+          return;
+        }
+        if ($('lobbyAppsModalOverlay') && !$('lobbyAppsModalOverlay').hidden) {
+          e.preventDefault();
+          $('closeLobbyAppsModalBtn')?.click();
+          return;
+        }
+        if ($('feedbackModalOverlay') && !$('feedbackModalOverlay').hidden) {
+          e.preventDefault();
+          $('fbCancelBtn')?.click();
+          return;
+        }
+        if ($('qualityPopover') && !$('qualityPopover').hidden) {
+          e.preventDefault();
+          $('qualityPopover').hidden = true;
+          this.input.focusIme();
+          return;
+        }
+        if ($('appsPopover') && !$('appsPopover').hidden) {
+          e.preventDefault();
+          $('appsPopover').hidden = true;
+          this.input.focusIme();
+          return;
+        }
+      }
+
+      // Lobby quick tab switching (Ctrl/Cmd + 1/2/3)
+      if (!this.authenticated && !isTyping && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+        if (e.key === '1') { e.preventDefault(); this.selectLobbyTab('cast'); return; }
+        if (e.key === '2') { e.preventDefault(); this.selectLobbyTab('activate'); return; }
+        if (e.key === '3') { e.preventDefault(); this.selectLobbyTab('logs'); return; }
+      }
+
+      // Global Ctrl/Cmd + Shift + F: open Phone Files & Storage when any channel is connected
+      if (!isTyping && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.code === 'KeyF') {
+        if (this.companion?.hasControlChannel?.()) {
+          e.preventDefault();
+          this.fileBrowser.open('files');
+          return;
+        }
+      }
+
+      // Cast stage shortcuts (Ctrl/Cmd + Shift + S screenshot, Ctrl/Cmd + Shift + V record)
+      if (this.authenticated && !isTyping && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey) {
+        if (e.code === 'KeyS') {
+          e.preventDefault();
+          $('tbScreenshotBtn')?.click();
+          return;
+        }
+        if (e.code === 'KeyV') {
+          e.preventDefault();
+          $('tbRecordBtn')?.click();
+          return;
+        }
+      }
+
       if (!this.authenticated || !e.shiftKey || !(e.altKey || e.metaKey)) return;
       if (e.code === 'KeyT' && this.desktop.enabled) {
         e.preventDefault();
@@ -1345,7 +1560,7 @@ class OpalCastWebApp {
     if (codeEl) codeEl.textContent = `adb forward tcp:${port} localabstract:opaldesk_stream`;
     const hintEl = $('usbForwardHint');
     if (hintEl) {
-      hintEl.innerHTML = `在电脑终端执行上方命令后，点击下方「开始 Web 投屏」即可通过 <code>ws://127.0.0.1:${port}/ws</code> 零警告直连。`;
+      hintEl.textContent = t('cast.usbForwardHint', { port });
     }
   }
 
@@ -1355,11 +1570,11 @@ class OpalCastWebApp {
       if (!d || d.type !== 'opaldesk-tls-trusted') return;
       if (d.role === 'activate') {
         $('actTrustBox').hidden = true;
-        this.showToast('激活服务证书已信任，正在自动连接…');
+        this.showToast(t('cast.trustCertReadyAct'));
         this.startActivationConnection();
       } else if (d.role === 'cast') {
         $('castTrustBox').hidden = true;
-        this.showToast('设备加密证书已信任，正在自动进入投屏…');
+        this.showToast(t('cast.trustCertReadyCast'));
         this.startCastConnection();
       }
     });
@@ -1426,13 +1641,13 @@ class OpalCastWebApp {
     if (isUsb) {
       hostInput.value = '127.0.0.1';
       hostInput.readOnly = true;
-      if (hostLabel) hostLabel.textContent = 'USB 本地转发地址';
+      if (hostLabel) hostLabel.textContent = t('cast.hostLabelUsb');
       if (!$('castPortInput').value) $('castPortInput').value = '19878';
       $('castTrustBox').hidden = true;
       this.updateUsbForwardHint();
     } else {
       hostInput.readOnly = false;
-      if (hostLabel) hostLabel.textContent = '手机局域网 IP';
+      if (hostLabel) hostLabel.textContent = t('cast.hostLabelWifi');
       if (hostInput.value.trim() === '127.0.0.1') {
         hostInput.value = this.lastWifiHost || '';
       }
@@ -1446,7 +1661,7 @@ class OpalCastWebApp {
     if (!devices.length) {
       const hint = document.createElement('span');
       hint.className = 'hint-text';
-      hint.textContent = '正在扫描局域网 _opaldesk._tcp 设备… 请确认手机端已开启「跨设备互联 → 共享本机」。';
+      hint.textContent = t('cast.mdnsScanning');
       listEl.appendChild(hint);
       return;
     }
@@ -1462,7 +1677,7 @@ class OpalCastWebApp {
         : dev.displayName;
       const sub = document.createElement('span');
       sub.className = 'mono';
-      sub.textContent = `${dev.host}:${dev.port}${dev.shortFingerprint ? ` · 指纹 ${dev.shortFingerprint}` : ''}`;
+      sub.textContent = `${dev.host}:${dev.port}${dev.shortFingerprint ? ` · ${t('cast.mdnsFingerprint', { fp: dev.shortFingerprint })}` : ''}`;
       meta.append(title, sub);
 
       const actions = document.createElement('div');
@@ -1471,7 +1686,7 @@ class OpalCastWebApp {
       const appBtn = document.createElement('button');
       appBtn.type = 'button';
       appBtn.className = 'mini-btn';
-      appBtn.textContent = '应用小窗';
+      appBtn.textContent = t('cast.mdnsStandalone');
       appBtn.addEventListener('click', () => {
         this.standalone.openLobbyAppPicker({
           transport: 'wifi',
@@ -1486,7 +1701,7 @@ class OpalCastWebApp {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'primary-btn compact';
-      btn.textContent = '连接投屏';
+      btn.textContent = t('cast.mdnsConnect');
       btn.addEventListener('click', () => {
         this.selectTransportMode('wifi');
         $('castHostInput').value = dev.host;
@@ -1515,8 +1730,7 @@ class OpalCastWebApp {
     if (!devices.length) {
       const hint = document.createElement('span');
       hint.className = 'hint-text';
-      hint.textContent =
-        '未识别到 USB 网络共享手机：请连接数据线并在手机开启系统「USB 网络共享」及 OpalDesk 共享服务后点「刷新识别」（Beta 测试功能，不保证所有设备均可正常使用）。';
+      hint.textContent = t('cast.usbTetherEmpty');
       listEl.appendChild(hint);
       return;
     }
@@ -1527,11 +1741,11 @@ class OpalCastWebApp {
       const meta = document.createElement('div');
       meta.className = 'mdns-device-meta';
       const title = document.createElement('strong');
-      title.textContent = `${dev.displayName || dev.host} · USB 网络共享 (Beta)`;
+      title.textContent = t('cast.usbTetherTitle', { name: dev.displayName || dev.host });
       const nicLabel = dev.interfaceAlias || dev.interfaceDescription || 'USB';
       const sub = document.createElement('span');
       sub.className = 'mono';
-      sub.textContent = `${dev.host}:${dev.port} · ${nicLabel}${dev.shortFingerprint ? ` · 指纹 ${dev.shortFingerprint}` : ''}`;
+      sub.textContent = `${dev.host}:${dev.port} · ${nicLabel}${dev.shortFingerprint ? ` · ${t('cast.mdnsFingerprint', { fp: dev.shortFingerprint })}` : ''}`;
       meta.append(title, sub);
 
       const actions = document.createElement('div');
@@ -1540,7 +1754,7 @@ class OpalCastWebApp {
       const appBtn = document.createElement('button');
       appBtn.type = 'button';
       appBtn.className = 'mini-btn';
-      appBtn.textContent = '应用小窗';
+      appBtn.textContent = t('cast.mdnsStandalone');
       appBtn.addEventListener('click', () => {
         this.standalone.openLobbyAppPicker({
           transport: 'wifi',
@@ -1555,7 +1769,7 @@ class OpalCastWebApp {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'primary-btn compact';
-      btn.textContent = '连接投屏';
+      btn.textContent = t('cast.mdnsConnect');
       btn.addEventListener('click', () => {
         this.explicitCertPin = '';
         this.selectTransportMode('wifi');
@@ -1575,21 +1789,21 @@ class OpalCastWebApp {
     const listEl = $('desktopUsbTetherList');
     if (listEl) {
       listEl.hidden = false;
-      listEl.innerHTML = '<span class="hint-text">正在探测 Windows USB 网络共享网卡网关…</span>';
+      listEl.innerHTML = `<span class="hint-text">${t('cast.usbTetherProbing')}</span>`;
     }
     try {
       const port = Number($('castPortInput')?.value) || 19878;
       const list = await this.desktop.scanUsbTetherDevices(port);
       this.renderDesktopUsbTetherDevices(list);
       if (showToastOnDone) {
-        this.showToast(list.length ? `已识别 ${list.length} 台 USB 网络共享设备 (Beta)` : '暂未识别到 USB 网络共享设备');
+        this.showToast(list.length ? t('cast.usbTetherToastFound', { count: list.length }) : t('cast.usbTetherToastNone'));
       }
     } catch (err) {
       if (listEl) {
         listEl.innerHTML = '';
         const errSpan = document.createElement('span');
         errSpan.className = 'hint-text';
-        errSpan.textContent = `USB 网络共享识别失败：${String(err?.message || err || '未知错误')}`;
+        errSpan.textContent = t('cast.usbTetherFailed', { error: String(err?.message || err || t('common.unknownError')) });
         listEl.appendChild(errSpan);
       }
     }
@@ -1612,18 +1826,18 @@ class OpalCastWebApp {
         const detailsEl = $('adbPathDetails');
         if (detailsEl) detailsEl.open = true;
         hintEl.textContent = status.customAdbPath
-          ? `已记忆的自定义路径中未找到 adb.exe（${status.customAdbPath}）：请检查文件是否存在或重新指定路径。`
-          : '未检测到 adb.exe：请安装 Android Platform-Tools 或在下方指定路径（保存后自动记忆）。';
+          ? t('cast.adbNotFoundRemembered', { path: status.customAdbPath })
+          : t('cast.adbNotFound');
         return;
       }
       hintEl.textContent = status.customAdbPath
-        ? `已就绪 ADB（已记忆路径）: ${status.adbPath}`
-        : `已就绪 ADB: ${status.adbPath}`;
+        ? t('cast.adbReadyRemembered', { path: status.adbPath })
+        : t('cast.adbReady', { path: status.adbPath });
       const devices = await this.desktop.scanAdbDevices();
       if (!devices.length) {
         const empty = document.createElement('span');
         empty.className = 'hint-text';
-        empty.textContent = '暂未发现 USB 设备：请连接数据线并在手机开启「开发者选项 → USB 调试」。';
+        empty.textContent = t('cast.adbNoDevice');
         listEl.appendChild(empty);
         return;
       }
@@ -1641,8 +1855,8 @@ class OpalCastWebApp {
         const sub = document.createElement('span');
         sub.textContent =
           dev.state === 'device'
-            ? '状态：已授权就绪（点击右侧按钮将自动拉起守护进程并直连投屏）'
-            : `状态：${dev.state}（请在手机弹窗勾选「始终允许调试」）`;
+            ? t('cast.adbStateReady')
+            : t('cast.adbStateUnauth', { state: dev.state });
         meta.append(title, sub);
 
         const actions = document.createElement('div');
@@ -1652,7 +1866,7 @@ class OpalCastWebApp {
         appBtn.type = 'button';
         appBtn.className = 'mini-btn';
         appBtn.disabled = dev.state !== 'device';
-        appBtn.textContent = '应用小窗';
+        appBtn.textContent = t('cast.mdnsStandalone');
         appBtn.addEventListener('click', () => {
           this.selectedAdbSerial = dev.serial;
           this.standalone.openLobbyAppPicker({
@@ -1669,7 +1883,7 @@ class OpalCastWebApp {
         btn.type = 'button';
         btn.className = 'primary-btn compact';
         btn.disabled = dev.state !== 'device';
-        btn.textContent = '一键激活并投屏';
+        btn.textContent = t('cast.adbBtnConnect');
         btn.addEventListener('click', () => {
           this.selectedAdbSerial = dev.serial;
           this.startCastConnection();
@@ -1679,7 +1893,7 @@ class OpalCastWebApp {
         listEl.appendChild(row);
       }
     } catch (err) {
-      hintEl.textContent = String(err?.message || err || '扫描 ADB 设备失败');
+      hintEl.textContent = String(err?.message || err || t('cast.adbScanFailed'));
     }
   }
 
@@ -1688,20 +1902,20 @@ class OpalCastWebApp {
       this.tofuResolver = resolve;
       const isChanged = evalRes.status === 'changed';
       $('tofuModalTitle').textContent = isChanged
-        ? '检测到设备加密证书已变更'
-        : '首次连接：核验手机加密证书指纹';
+        ? t('tofu.titleChanged')
+        : t('tofu.titleFirst');
       $('tofuModalDesc').textContent = isChanged
-        ? `主机 ${host}:${port} 的证书与历史记录（${evalRes.expectedShort}）不一致。若手机重装过 OpalDesk，请核对新指纹后确认信任。`
-        : `即将建立到 ${evalRes.mdnsDevice?.displayName || host} (${host}:${port}) 的 TLS 1.3 加密通道，请确认证书指纹：`;
+        ? t('tofu.descChanged', { host, port, expected: evalRes.expectedShort })
+        : t('tofu.descFirst', { name: evalRes.mdnsDevice?.displayName || host, host, port });
       const mdnsBadge = $('tofuMdnsBadge');
       if (evalRes.mdnsVerified) {
         mdnsBadge.hidden = false;
         mdnsBadge.className = 'status-pill ok mono';
-        mdnsBadge.textContent = '✓ 与局域网 mDNS 广播指纹一致';
+        mdnsBadge.textContent = t('tofu.badgeMdnsOk');
       } else {
         mdnsBadge.hidden = false;
         mdnsBadge.className = 'status-pill warn mono';
-        mdnsBadge.textContent = isChanged ? '⚠ 证书指纹已发生变更' : '手动 IP 直连 · 请核对手机端指纹';
+        mdnsBadge.textContent = isChanged ? t('tofu.badgeChanged') : t('tofu.badgeManual');
       }
       $('tofuShortFp').textContent = evalRes.actualShort || '----';
       $('tofuFullFp').textContent = evalRes.actualFingerprint || '';
@@ -1728,12 +1942,10 @@ class OpalCastWebApp {
       explicitPin,
     });
     if (evalRes.status === 'invalid') {
-      throw new Error('未能读取有效的设备 TLS 证书指纹');
+      throw new Error(t('cast.errInvalidCert'));
     }
     if (evalRes.status === 'mismatch') {
-      throw new Error(
-        `TLS 证书指纹校验未通过（预期 ${evalRes.expectedShort}，实际 ${evalRes.actualShort}）`
-      );
+      throw new Error(t('cast.errCertMismatch', { expected: evalRes.expectedShort, actual: evalRes.actualShort }));
     }
     if (evalRes.status === 'tofu_required' || evalRes.status === 'changed') {
       const ok = await this.promptTofuConfirmation(host, port, evalRes);
@@ -1763,13 +1975,13 @@ class OpalCastWebApp {
     const host = (isUsb ? '127.0.0.1' : $('castHostInput').value.trim());
     const port = Number($('castPortInput').value) || 19878;
     if (!host) {
-      this.setCastError('请填写手机局域网 IP 地址');
+      this.setCastError(t('cast.errMissingHost'));
       return;
     }
 
     $('connectCastBtn').disabled = true;
-    $('connectCastBtn').textContent = '正在探测设备…';
-    const defaultBtnLabel = this.desktop.enabled ? '开始投屏' : '开始 Web 投屏';
+    $('connectCastBtn').textContent = t('cast.probingBtn');
+    const defaultBtnLabel = this.desktop.enabled ? t('cast.connectDesktopBtn') : t('cast.connectWebBtn');
 
     if (this.desktop.enabled) {
       try {
@@ -1789,9 +2001,9 @@ class OpalCastWebApp {
               devices.find((d) => d.serial === this.selectedAdbSerial && d.state === 'device') ||
               devices.find((d) => d.state === 'device');
             if (!chosen) {
-              throw new Error('未检测到已授权的 USB 调试手机，请连接数据线并在手机端允许 USB 调试');
+              throw new Error(t('cast.errNoUsbDevice'));
             }
-            $('connectCastBtn').textContent = '正在引导守护进程并建立 USB 通道…';
+            $('connectCastBtn').textContent = t('cast.usbBootstrappingBtn');
             const fwd = await this.desktop.bootstrapAndForwardUsb(chosen.serial);
             this.selectedAdbSerial = chosen.serial;
             this.activeHost = '127.0.0.1';
@@ -1819,7 +2031,7 @@ class OpalCastWebApp {
       } catch (err) {
         $('connectCastBtn').disabled = false;
         $('connectCastBtn').textContent = defaultBtnLabel;
-        this.setCastError(String(err?.message || err || '桌面端建立加密连接失败'));
+        this.setCastError(String(err?.message || err || t('cast.errDesktopConnectFailed')));
       }
       return;
     }
@@ -1831,9 +2043,9 @@ class OpalCastWebApp {
         $('connectCastBtn').textContent = defaultBtnLabel;
         if (probe.needsTrust) {
           $('castTrustBox').hidden = false;
-          $('castTrustMsg').textContent = `无法直接验证 https://${host}:${port} 的本地加密证书。请先点击右侧按钮放行证书（或在 Chrome 本地网络弹窗点「允许」）。`;
+          $('castTrustMsg').textContent = t('cast.trustProbeMsg', { host, port });
         } else {
-          this.setCastError(`无法连接到手机 ${host}:${port}（${probe.error}）。请确认手机已开启「跨设备互联 → 共享本机」且在同一局域网。`);
+          this.setCastError(t('cast.errProbeFailed', { host, port, error: probe.error }));
         }
         return;
       }
@@ -1856,16 +2068,16 @@ class OpalCastWebApp {
       ws = new WebSocket(wsUrl);
     } catch (err) {
       $('connectCastBtn').disabled = false;
-      $('connectCastBtn').textContent = this.desktop.enabled ? '开始投屏' : '开始 Web 投屏';
+      $('connectCastBtn').textContent = this.desktop.enabled ? t('cast.connectDesktopBtn') : t('cast.connectWebBtn');
       const detail = err?.message || String(err || '');
       if (isUsb) {
         this.setCastError(
           isSafariBrowser()
-            ? `Safari 禁止在 HTTPS 页面连接本地明文 ws://127.0.0.1:${port}/ws（${detail}）。请改用 Chrome / Edge 浏览器，或切换到局域网无线 (WSS) 模式。`
-            : `无法发起本地 USB WebSocket 连接 (${wsUrl}): ${detail}`
+            ? t('cast.errSafariUsb', { port, detail })
+            : t('cast.errWsInitUsb', { url: wsUrl, detail })
         );
       } else {
-        this.setCastError(`无法发起 WebSocket 连接 (${wsUrl}): ${detail}`);
+        this.setCastError(t('cast.errWsInit', { url: wsUrl, detail }));
       }
       return;
     }
@@ -1901,6 +2113,7 @@ class OpalCastWebApp {
         sessionRole: this.sessionRole,
         appPackage: this.standaloneAppPkg,
         appActivity: this.standaloneAppCls,
+        appUserId: this.standaloneAppUserId,
       });
       this.sendOpalFrame(TYPE_HELLO, 0, helloPayload);
     };
@@ -1920,11 +2133,11 @@ class OpalCastWebApp {
       if (!this.authenticated) {
         if (isUsb) {
           const usbTip = this.desktop.enabled
-            ? `USB 通道握手失败（127.0.0.1:${port}）：请确认手机已授权 USB 调试、OpalDesk 守护进程已激活，且手机端已更新至最新版。`
-            : `USB 本地转发握手失败（ws://127.0.0.1:${port}/ws）：请先在终端执行 adb forward tcp:${port} localabstract:opaldesk_stream，并确认手机端 OpalDesk 引擎已激活。`;
+            ? t('cast.errUsbHandshakeDesktop', { port })
+            : t('cast.errUsbHandshakeWeb', { port });
           this.disconnectCast(usbTip);
         } else {
-          this.disconnectCast('WebSocket 握手失败：请检查证书是否已放行或手机端无线共享是否开启');
+          this.disconnectCast(t('cast.errWsHandshake'));
           if (!this.desktop.enabled) $('castTrustBox').hidden = false;
         }
       }
@@ -1934,9 +2147,9 @@ class OpalCastWebApp {
       const wasAuth = this.authenticated;
       if (!this.ws) return;
       const defaultFail = isUsb
-        ? `未能建立 USB 投屏会话（127.0.0.1:${port}）：请检查 adb forward 与手机端守护进程是否运行`
-        : '未能建立投屏会话';
-      const reason = ev.reason || (wasAuth ? '投屏连接已断开' : defaultFail);
+        ? t('cast.errUsbSessionFail', { port })
+        : t('cast.errSessionFail');
+      const reason = ev.reason || (wasAuth ? t('cast.errDisconnected') : defaultFail);
       this.disconnectCast(reason);
     };
   }
@@ -1947,7 +2160,7 @@ class OpalCastWebApp {
       case TYPE_AUTH_RESULT: {
         const auth = decodeAuthResult(frame.payload);
         if (!auth.ok) {
-          this.disconnectCast(auth.message || '手机端拒绝了此次投屏请求');
+          this.disconnectCast(auth.message || t('cast.errAuthRejected'));
           return;
         }
         this.authenticated = true;
@@ -1998,7 +2211,7 @@ class OpalCastWebApp {
           }
           this.renderRecentDevices();
         }
-        this.showToast(`已连接到 ${auth.deviceName || this.activeHost}`);
+        this.showToast(t('cast.connectedToast', { name: auth.deviceName || this.activeHost }));
         break;
       }
 
@@ -2045,7 +2258,7 @@ class OpalCastWebApp {
             this.updateTelemetry();
             if (st.injectStatus === -1 && !this.inputBlockedWarned) {
               this.inputBlockedWarned = true;
-              this.showToast('手机端拦截了跨屏操控：小米/HyperOS 请在手机「开发者选项」开启「USB 调试（安全设置）」后重连');
+              this.showToast(t('cast.inputBlockedToast'));
             } else if (st.injectStatus > 0) {
               this.inputBlockedWarned = false;
             }
@@ -2147,9 +2360,9 @@ class OpalCastWebApp {
         try {
           const ack = decodeFileTransferAck(frame.payload);
           if (ack.status === FILE_ACK_OK) {
-            this.showToast(`文件已送达手机: ${ack.pathOrError}`);
+            this.showToast(t('cast.fileSentToast', { path: ack.pathOrError }));
           } else {
-            this.showToast(`文件传输失败: ${ack.pathOrError}`);
+            this.showToast(t('cast.fileFailToast', { error: ack.pathOrError }));
           }
         } catch {
           // Ignore
@@ -2220,7 +2433,7 @@ class OpalCastWebApp {
           }
         : null;
     if (!target) {
-      this.showToast('当前无已连接设备，无法打开应用小窗');
+      this.showToast(t('cast.noDeviceForPopout'));
       return;
     }
     this.fileBrowser.close();
@@ -2323,7 +2536,7 @@ class OpalCastWebApp {
   async sendDroppedFiles(files) {
     for (const file of files) {
       const transferId = this.transferSeq++;
-      this.showToast(`正在发送 ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)…`);
+      this.showToast(t('cast.fileSendingToast', { name: file.name, mb: (file.size / 1024 / 1024).toFixed(2) }));
       const buf = new Uint8Array(await file.arrayBuffer());
       let offset = 0;
       let isFirst = true;
@@ -2354,30 +2567,30 @@ class OpalCastWebApp {
   handleRemoteClipboardText(text) {
     if (document.hasFocus() && navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(
-        () => this.showToast('已同步手机剪贴板内容'),
-        () => this.showToast('收到手机剪贴板文本', '点此复制', () => this.copyText(text, '已复制手机剪贴板'))
+        () => this.showToast(t('cast.clipboardSyncedToast')),
+        () => this.showToast(t('cast.clipboardReceivedToast'), t('cast.clipboardCopyAction'), () => this.copyText(text, t('cast.clipboardCopiedToast')))
       );
     } else {
-      this.showToast('收到手机剪贴板文本', '点此复制', () => this.copyText(text, '已复制手机剪贴板'));
+      this.showToast(t('cast.clipboardReceivedToast'), t('cast.clipboardCopyAction'), () => this.copyText(text, t('cast.clipboardCopiedToast')));
     }
   }
 
   handleRemoteClipboardImage(pngData) {
     const writeImg = () => {
       if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
-        this.showToast('当前浏览器不支持自动写入图片剪贴板');
+        this.showToast(t('cast.clipboardImgUnsupportedToast'));
         return;
       }
       const blob = new Blob([pngData], { type: 'image/png' });
       navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(
-        () => this.showToast('已同步手机图片剪贴板'),
-        () => this.showToast('收到手机剪贴板图片', '点此复制图片', () => writeImg())
+        () => this.showToast(t('cast.clipboardImgSyncedToast')),
+        () => this.showToast(t('cast.clipboardImgReceivedToast'), t('cast.clipboardImgCopyAction'), () => writeImg())
       );
     };
     if (document.hasFocus() && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
       writeImg();
     } else {
-      this.showToast('收到手机剪贴板图片', '点此复制图片', () => writeImg());
+      this.showToast(t('cast.clipboardImgReceivedToast'), t('cast.clipboardImgCopyAction'), () => writeImg());
     }
   }
 
@@ -2401,15 +2614,15 @@ class OpalCastWebApp {
     $('tbAppsBtn').hidden = isStandalone;
     $('tbAudioBtn').hidden = false;
     if ($('tbDisconnectBtn')) {
-      $('tbDisconnectBtn').textContent = isStandalone && this.desktop.enabled ? '关闭' : '断开';
-      $('tbDisconnectBtn').title = isStandalone && this.desktop.enabled ? '关闭此悬浮小窗' : '断开投屏';
+      $('tbDisconnectBtn').textContent = isStandalone && this.desktop.enabled ? t('stage.closeWindowBtn') : t('stage.disconnectBtn');
+      $('tbDisconnectBtn').title = isStandalone && this.desktop.enabled ? t('stage.closeWindowTitle') : t('stage.disconnectTitle');
     }
     this.standalone.syncPinButtonUi();
     $('liveFpsSelect').value = $('castFpsSelect').value;
     $('liveBitrateSelect').value = $('castBitrateSelect').value;
     this.syncBitrateInputsUi('live');
     $('connectCastBtn').disabled = false;
-    $('connectCastBtn').textContent = this.desktop.enabled ? '开始投屏' : '开始 Web 投屏';
+    $('connectCastBtn').textContent = this.desktop.enabled ? t('cast.connectDesktopBtn') : t('cast.connectWebBtn');
   }
 
   disconnectCast(reasonMessage = '') {
@@ -2435,7 +2648,7 @@ class OpalCastWebApp {
     if (this.recorder?.isRecording) {
       this.recorder.stop();
     }
-    this.fileBrowserClient?.reset('投屏已断开');
+    this.fileBrowserClient?.reset(t('cast.errDisconnected'));
     this.syncBlackoutUi();
     this.syncRemoteFullscreenUi();
     this.teardownCastSocket();
@@ -2449,7 +2662,7 @@ class OpalCastWebApp {
     $('qualityPopover').hidden = true;
     $('appsPopover').hidden = true;
     $('connectCastBtn').disabled = false;
-    $('connectCastBtn').textContent = this.desktop.enabled ? '开始投屏' : '开始 Web 投屏';
+    $('connectCastBtn').textContent = this.desktop.enabled ? t('cast.connectDesktopBtn') : t('cast.connectWebBtn');
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }
@@ -2524,10 +2737,14 @@ class OpalCastWebApp {
     if (this.lastRttMs > 0) parts.push(`${this.lastRttMs}ms`);
     parts.push(this.remoteCodecId === VIDEO_CODEC_HEVC ? 'HEVC' : 'H.264');
     if (this.bitrateMode === 'auto') {
-      parts.push(this.autoAdaptiveBitrateKbps > 0 ? `自动 ${Math.round(this.autoAdaptiveBitrateKbps / 1000)}M` : '自动码率');
+      parts.push(
+        this.autoAdaptiveBitrateKbps > 0
+          ? t('stage.telemetryAutoBitrate', { mbps: Math.round(this.autoAdaptiveBitrateKbps / 1000) })
+          : t('stage.telemetryAutoBitrateShort')
+      );
     }
     if (this.injectStatus === 2) parts.push('UHID');
-    else if (this.injectStatus === -1) parts.push('触控受限');
+    else if (this.injectStatus === -1) parts.push(t('stage.telemetryTouchLimited'));
     $('stageTelemetry').textContent = parts.join(' · ');
   }
 
@@ -2536,19 +2753,19 @@ class OpalCastWebApp {
     this.blackoutActive = !this.blackoutActive;
     this.syncBlackoutUi();
     this.sendOpalFrame(TYPE_SYSTEM_ACTION, 0, encodeSystemAction(SYS_TOGGLE_BLACKOUT, this.blackoutActive ? 1 : 0));
-    this.showToast(this.blackoutActive ? '已熄灭手机主屏' : '已点亮手机主屏');
+    this.showToast(this.blackoutActive ? t('cast.blackoutOnToast') : t('cast.blackoutOffToast'));
   }
 
   syncBlackoutUi() {
     const btn = $('tbBlackoutBtn');
     if (!btn) return;
     btn.classList.toggle('active', Boolean(this.blackoutActive));
-    btn.textContent = this.blackoutActive ? '亮屏' : '黑屏';
+    btn.textContent = this.blackoutActive ? t('stage.blackoutOnBtn') : t('stage.blackoutBtn');
   }
 
   async toggleRemoteMic() {
     if (!this.authenticated) {
-      this.showToast('请等待投屏连接完成后再开启麦克风');
+      this.showToast(t('cast.micNeedConnectToast'));
       return;
     }
     if (this.micEnabled) {
@@ -2587,14 +2804,14 @@ class OpalCastWebApp {
     const on = Boolean(this.micEnabled);
     btn.classList.toggle('active-emerald', on);
     btn.classList.remove('active');
-    const tip = on ? '麦克风已开启 · 点击关闭' : '向手机回传本机麦克风声音';
+    const tip = on ? t('stage.micOnTitle') : t('stage.micTitle');
     btn.title = tip;
-    btn.setAttribute('aria-label', on ? '关闭麦克风' : '麦克风');
+    btn.setAttribute('aria-label', on ? t('stage.micOffAria') : t('stage.micAria'));
   }
 
   async toggleRemoteCamera() {
     if (!this.authenticated) {
-      this.showToast('请等待投屏连接完成后再开启摄像头映射');
+      this.showToast(t('cast.camNeedConnectToast'));
       return;
     }
     if (this.cameraEnabled) {
@@ -2637,9 +2854,9 @@ class OpalCastWebApp {
     const on = Boolean(this.cameraEnabled);
     btn.classList.toggle('active-emerald', on);
     btn.classList.remove('active');
-    const tip = on ? '摄像头映射已开启 · 点击关闭' : 'Root 后开启：向手机映射本机摄像头';
+    const tip = on ? t('stage.camOnTitle') : t('stage.camTitle');
     btn.title = tip;
-    btn.setAttribute('aria-label', on ? '关闭摄像头' : '摄像头');
+    btn.setAttribute('aria-label', on ? t('stage.camOffAria') : t('stage.camAria'));
   }
 
   syncKeyboardUi(open) {
@@ -2647,9 +2864,9 @@ class OpalCastWebApp {
     if (!btn) return;
     const on = Boolean(open);
     btn.classList.toggle('active', on);
-    const tip = on ? '收起软键盘' : '弹出 / 收起软键盘';
+    const tip = on ? t('stage.keyboardHideTitle') : t('stage.keyboardTitle');
     btn.title = tip;
-    btn.setAttribute('aria-label', on ? '收起键盘' : '软键盘');
+    btn.setAttribute('aria-label', on ? t('stage.keyboardHideAria') : t('stage.keyboardAria'));
   }
 
   syncAudioUi(st) {
@@ -2662,27 +2879,27 @@ class OpalCastWebApp {
       if (onIcon) onIcon.hidden = false;
       if (offIcon) offIcon.hidden = true;
       if (lbl) {
-        lbl.textContent = '点此出声';
+        lbl.textContent = t('stage.audioUnlockLabel');
         lbl.hidden = false;
       }
       btn.classList.add('active');
-      btn.title = '点此解锁并播放声音';
-      btn.setAttribute('aria-label', '点此出声');
-      this.showToast('浏览器需要手势以解锁音频', '开启声音', () => this.audio.resumeFromGesture());
+      btn.title = t('stage.audioUnlockTitle');
+      btn.setAttribute('aria-label', t('stage.audioUnlockLabel'));
+      this.showToast(t('cast.audioGestureToast'), t('cast.audioUnlockAction'), () => this.audio.resumeFromGesture());
     } else if (st.muted) {
       if (onIcon) onIcon.hidden = true;
       if (offIcon) offIcon.hidden = false;
       if (lbl) lbl.hidden = true;
       btn.classList.remove('active');
-      btn.title = '已静音 · 点击恢复声音';
-      btn.setAttribute('aria-label', '恢复声音');
+      btn.title = t('stage.audioMutedTitle');
+      btn.setAttribute('aria-label', t('stage.audioRestoreAria'));
     } else {
       if (onIcon) onIcon.hidden = false;
       if (offIcon) offIcon.hidden = true;
       if (lbl) lbl.hidden = true;
       btn.classList.remove('active');
-      btn.title = '静音 / 开启声音';
-      btn.setAttribute('aria-label', '声音');
+      btn.title = t('stage.audioTitle');
+      btn.setAttribute('aria-label', t('stage.audioAria'));
     }
   }
 
@@ -2695,8 +2912,8 @@ class OpalCastWebApp {
     if (enterIcon) enterIcon.hidden = isFs;
     if (exitIcon) exitIcon.hidden = !isFs;
     btn.classList.toggle('active', isFs);
-    btn.title = isFs ? '退出全屏' : '全屏显示';
-    btn.setAttribute('aria-label', isFs ? '退出全屏' : '全屏显示');
+    btn.title = isFs ? t('stage.fsExitTitle') : t('stage.fsEnterTitle');
+    btn.setAttribute('aria-label', isFs ? t('stage.fsExitTitle') : t('stage.fsEnterTitle'));
   }
 
   syncRemoteFullscreenUi() {
@@ -2705,7 +2922,7 @@ class OpalCastWebApp {
     const active = Boolean(this.remoteFullscreenTitle) && this.sessionRole !== SESSION_ROLE_STANDALONE_APP;
     btn.hidden = !active;
     if (active) {
-      btn.title = `退出应用全屏（${this.remoteFullscreenTitle}）`;
+      btn.title = t('stage.exitAppFsTitleWithApp', { title: this.remoteFullscreenTitle });
     }
   }
 
@@ -2739,42 +2956,40 @@ class OpalCastWebApp {
     const code = $('actCodeInput').value.trim();
 
     if (!host) {
-      this.setActError('请填写手机局域网 IP');
+      this.setActError(t('activate.errMissingHost'));
       return;
     }
     if (!/^\d{6}$/.test(code)) {
-      this.setActError('请输入手机屏幕上显示的 6 位会话访问码');
+      this.setActError(t('activate.errInvalidCode'));
       return;
     }
 
     $('connectActBtn').disabled = true;
-    $('connectActBtn').textContent = '正在探测激活服务…';
+    $('connectActBtn').textContent = t('activate.probingBtn');
     if (this.desktop.enabled) {
       try {
         const tunnel = await this.ensureDesktopTlsTunnel(host, port, '/activate');
         $('connectActBtn').disabled = false;
-        $('connectActBtn').textContent = '连接手机激活服务';
+        $('connectActBtn').textContent = t('activate.connectBtn');
         if (!tunnel) return;
         $('actLogOutput').textContent = '';
         this.activation.connect(host, port, code, tunnel.localWsUrl);
       } catch (err) {
         $('connectActBtn').disabled = false;
-        $('connectActBtn').textContent = '连接手机激活服务';
-        this.setActError(
-          `无法连接手机激活服务 ${host}:${port}（${err?.message || err}）。请确认手机端已开启「Web激活」服务且在同一局域网。`
-        );
+        $('connectActBtn').textContent = t('activate.connectBtn');
+        this.setActError(t('activate.errConnectFailed', { host, port, error: err?.message || err }));
       }
       return;
     }
     const probe = await probeHttpsHealth(host, port);
     $('connectActBtn').disabled = false;
-    $('connectActBtn').textContent = '连接手机激活服务';
+    $('connectActBtn').textContent = t('activate.connectBtn');
 
     if (!probe.ok) {
       if (probe.needsTrust) {
         $('actTrustBox').hidden = false;
       } else {
-        this.setActError(`无法连接手机激活服务 ${host}:${port}（${probe.error}）。请确认手机端已开启「Web激活」服务且在同一 Wi-Fi。`);
+        this.setActError(t('activate.errConnectFailed', { host, port, error: probe.error }));
       }
       return;
     }
@@ -2787,7 +3002,10 @@ class OpalCastWebApp {
     $('actDeviceTitle').textContent = `${st.deviceName || 'Android'} (${st.lanIp || ''})`;
     const pPort = st.discovery?.pairingPort || 0;
     const cPort = st.discovery?.connectPort || 0;
-    $('actDiscoverySummary').textContent = `mDNS 配对端口: ${pPort || '等待手机打开配对弹窗'} · 连接端口: ${cPort || '未发现'}`;
+    $('actDiscoverySummary').textContent = t('activate.discoverySummary', {
+      pairPort: pPort || t('activate.waitingPairPopup'),
+      connPort: cPort || t('activate.notFound'),
+    });
 
     if (pPort > 0 && !$('adbPairPortInput').matches(':focus')) {
       $('adbPairPortInput').value = String(pPort);
@@ -2797,7 +3015,7 @@ class OpalCastWebApp {
     }
 
     const badge = $('actDaemonBadge');
-    badge.textContent = st.daemonConnected ? '引擎已激活' : '未激活';
+    badge.textContent = st.daemonConnected ? t('activate.daemonActive') : t('activate.daemonInactive');
     badge.className = `status-pill ${st.daemonConnected ? 'ok' : 'warn'}`;
     $('actShizukuBtn').hidden = !st.shizukuGranted;
     this.setActBusy(Boolean(st.busy));
@@ -2844,7 +3062,7 @@ class OpalCastWebApp {
         btn.type = 'button';
         btn.className = 'recent-chip';
         const shortFp = formatShortFingerprint(dev.certFingerprint);
-        btn.title = shortFp ? `已固定证书指纹: ${shortFp}` : '';
+        btn.title = shortFp ? t('cast.recentFpTitle', { fp: shortFp }) : '';
         btn.textContent = `${dev.displayName || dev.host} (${dev.host}:${dev.port})`;
         btn.addEventListener('click', () => {
           this.selectTransportMode('wifi');
@@ -2856,8 +3074,8 @@ class OpalCastWebApp {
         const appBtn = document.createElement('button');
         appBtn.type = 'button';
         appBtn.className = 'recent-revoke-btn';
-        appBtn.title = '免开全屏桌面，直接选择应用以悬浮小窗打开';
-        appBtn.textContent = '小窗';
+        appBtn.title = t('cast.recentStandaloneTitle');
+        appBtn.textContent = t('cast.recentStandaloneBtn');
         appBtn.addEventListener('click', () => {
           this.standalone.openLobbyAppPicker({
             transport: 'wifi',
@@ -2872,12 +3090,12 @@ class OpalCastWebApp {
         const revokeBtn = document.createElement('button');
         revokeBtn.type = 'button';
         revokeBtn.className = 'recent-revoke-btn';
-        revokeBtn.title = '移除此信任设备及证书指纹';
+        revokeBtn.title = t('cast.recentRevokeTitle');
         revokeBtn.textContent = '×';
         revokeBtn.addEventListener('click', async () => {
           await this.desktop.revokeTrustedDevice(dev.id);
           this.renderRecentDevices();
-          this.showToast(`已移除信任设备 ${dev.displayName || dev.host}`);
+          this.showToast(t('cast.recentRemovedToast', { name: dev.displayName || dev.host }));
         });
 
         group.append(btn, appBtn, revokeBtn);
@@ -2971,7 +3189,7 @@ class OpalCastWebApp {
     if (!text) return;
     navigator.clipboard?.writeText(text).then(
       () => this.showToast(successMsg),
-      () => this.showToast('剪贴板写入受限，请手动选择复制')
+      () => this.showToast(t('cast.clipboardWriteRestricted'))
     );
   }
 }

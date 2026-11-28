@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="pure-frost">
+<html lang="en" data-theme="pure-frost">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>OpalDesk Web — 浏览器被投屏端 &amp; 局域网免线激活中心</title>
-  <meta name="description" content="OpalDesk Web 接收端与局域网激活中心：零客户端安装，通过 GitHub Pages + WebCodecs 直连手机 60/120fps 无线投屏与免线激活。" />
+  <title data-i18n="nav.pageTitle">OpalDesk Web — Browser Cast Receiver &amp; LAN Activation Hub</title>
+  <meta name="description" data-i18n-content="nav.pageDesc" content="OpalDesk Web Cast receiver and LAN activation hub: zero-install 60/120fps wireless cast via WebCodecs and cable-free activation." />
   <link rel="icon" type="image/svg+xml" href="../assets/icon.svg" />
   <script>
     (function () {
@@ -40,7 +40,8 @@
     autocorrect="off"
     autocapitalize="off"
     spellcheck="false"
-    aria-label="OpalDesk 远端输入法桥"
+    data-i18n-aria="nav.imeAria"
+    aria-label="OpalDesk remote IME bridge"
   ></textarea>
 
   <!-- ==================== LOBBY VIEW ==================== -->
@@ -52,19 +53,24 @@
           <span class="brand-title">OpalDesk</span>
           <span id="brandModeBadge" class="brand-badge mono">Web Cast</span>
         </a>
-        <span id="codecBadge" class="status-pill mono">检测 WebCodecs…</span>
+        <span id="codecBadge" class="status-pill mono" data-i18n="nav.codecChecking">Checking WebCodecs…</span>
       </div>
       <div class="nav-actions">
-        <a href="../overview.html" class="pill-btn">2D 详解</a>
-        <a href="../index.html" class="pill-btn">3D 舞台</a>
-        <button id="themeToggleBtn" type="button" class="pill-btn">切换主题</button>
+        <a href="../overview.html" class="pill-btn web-only-nav" data-i18n="nav.overview2d">2D Overview</a>
+        <a href="../index.html" class="pill-btn web-only-nav" data-i18n="nav.stage3d">3D Stage</a>
+        <select id="langSelect" class="pill-btn lang-select" data-i18n-aria="lang.aria" data-i18n-title="lang.label" aria-label="Display Language" title="Language">
+          <option value="system" data-i18n="lang.followSystem">Follow System</option>
+          <option value="zh-CN" data-i18n="lang.zhCN">简体中文</option>
+          <option value="en" data-i18n="lang.en">English</option>
+        </select>
+        <button id="themeToggleBtn" type="button" class="pill-btn" data-i18n="nav.switchTheme">Switch Theme</button>
       </div>
     </header>
 
     <main class="lobby-main">
       <section class="hero-copy">
-        <h1 id="heroTitle">浏览器秒变 OpalDesk 无线显示器</h1>
-        <p id="heroSubtitle">免安装客户端 · WebCodecs 硬件直解 H.264 / HEVC + AAC 音频 · 支持局域网远程无线调试激活</p>
+        <h1 id="heroTitle" data-i18n="hero.webTitle">Turn Your Browser into an OpalDesk Wireless Display</h1>
+        <p id="heroSubtitle" data-i18n="hero.webSubtitle">Zero client install · WebCodecs hardware H.264 / HEVC + AAC audio · Cable-free LAN Wireless Debugging activation</p>
       </section>
 
       <!-- Browser compatibility warnings -->
@@ -73,62 +79,64 @@
       <!-- Primary Glass Card -->
       <section class="lobby-card glass-surface">
         <div class="segmented-bar three-tabs" role="tablist">
-          <button id="tabCastBtn" type="button" class="seg-btn active" role="tab" aria-selected="true">
-            无线 / USB 投屏
+          <button id="tabCastBtn" type="button" class="seg-btn active" role="tab" aria-selected="true" data-i18n="tabs.cast">
+            Wireless / USB Cast
           </button>
-          <button id="tabActivateBtn" type="button" class="seg-btn" role="tab" aria-selected="false">
-            局域网激活引擎
+          <button id="tabActivateBtn" type="button" class="seg-btn" role="tab" aria-selected="false" data-i18n="tabs.activate">
+            LAN Activation
           </button>
-          <button id="tabLogsBtn" type="button" class="seg-btn" role="tab" aria-selected="false">
-            日志与反馈
+          <button id="tabLogsBtn" type="button" class="seg-btn" role="tab" aria-selected="false" data-i18n="tabs.logs">
+            Diagnostics &amp; Feedback
           </button>
         </div>
 
         <!-- ===== TAB 1: WEB CAST RECEIVER ===== -->
         <div id="paneCast" class="tab-pane">
-          <div class="sub-toggle-row">
-            <button id="modeWifiBtn" type="button" class="chip-btn active">局域网无线 (WSS)</button>
-            <button id="modeUsbBtn" type="button" class="chip-btn">USB 本地转发 (免证书)</button>
-          </div>
+          <div class="cast-workspace-grid">
+            <div class="cast-primary-col">
+              <div class="sub-toggle-row">
+                <button id="modeWifiBtn" type="button" class="chip-btn active" data-i18n="cast.modeWifi">LAN Wireless (WSS)</button>
+                <button id="modeUsbBtn" type="button" class="chip-btn" data-i18n="cast.modeUsb">USB Local Forward (No Cert)</button>
+              </div>
 
           <!-- Desktop Companion Native mDNS Discovery Panel (Tauri only) -->
           <div id="desktopMdnsSection" class="info-box desktop-panel" hidden>
             <div class="info-box-head">
-              <strong>局域网在线设备 (mDNS 自动发现)</strong>
-              <button id="refreshMdnsBtn" type="button" class="mini-btn">刷新扫描</button>
+              <strong data-i18n="cast.mdnsTitle">Online LAN Devices (mDNS Discovery)</strong>
+              <button id="refreshMdnsBtn" type="button" class="mini-btn" data-i18n="cast.mdnsRefresh">Rescan</button>
             </div>
             <div id="desktopMdnsList" class="mdns-chip-list">
-              <span class="hint-text">正在扫描局域网 _opaldesk._tcp 设备… 请在手机端开启「跨设备互联 → 共享本机」。</span>
+              <span class="hint-text" data-i18n="cast.mdnsScanning">Scanning for _opaldesk._tcp devices on LAN… Enable "Interconnect → Wireless Share" on your phone.</span>
             </div>
           </div>
 
           <!-- Desktop Companion Native USB ADB Panel (Tauri only) -->
           <div id="desktopUsbSection" class="info-box desktop-panel" hidden>
             <div class="info-box-head">
-              <strong>USB 免证书极速直连 (内置 ADB 自动引导)</strong>
-              <button id="scanAdbDevicesBtn" type="button" class="mini-btn">扫描 USB 设备</button>
+              <strong data-i18n="cast.usbSectionTitle">USB Direct Cast (Built-in ADB Bootstrap)</strong>
+              <button id="scanAdbDevicesBtn" type="button" class="mini-btn" data-i18n="cast.usbScanBtn">Scan USB Devices</button>
             </div>
-            <p id="adbStatusHint" class="hint-text">正在检测本机 ADB 环境…</p>
+            <p id="adbStatusHint" class="hint-text" data-i18n="cast.adbChecking">Checking local ADB environment…</p>
             <div id="desktopAdbList" class="adb-device-list"></div>
             <details id="adbPathDetails" class="adb-path-details">
-              <summary id="adbPathSummary">自定义 adb.exe 路径（可选 · 保存后自动记忆）</summary>
+              <summary id="adbPathSummary" data-i18n="cast.adbSummaryDefault">Custom adb.exe path (optional · remembered once saved)</summary>
               <div class="adb-path-row">
-                <input id="customAdbPathInput" type="text" placeholder="例如 C:\Android\platform-tools\adb.exe（支持带引号路径或目录）" autocomplete="off" />
-                <button id="saveAdbPathBtn" type="button" class="mini-btn">保存路径</button>
-                <button id="clearAdbPathBtn" type="button" class="mini-btn" hidden>清除</button>
+                <input id="customAdbPathInput" type="text" data-i18n-placeholder="cast.adbPathPlaceholder" placeholder="e.g. C:\Android\platform-tools\adb.exe (quoted path or folder supported)" autocomplete="off" />
+                <button id="saveAdbPathBtn" type="button" class="mini-btn" data-i18n="cast.adbSaveBtn">Save Path</button>
+                <button id="clearAdbPathBtn" type="button" class="mini-btn" data-i18n="cast.adbClearBtn" hidden>Clear</button>
               </div>
             </details>
             <div id="desktopUsbTetherWrap" class="usb-tether-beta-box">
               <div class="info-box-head">
                 <label class="switch-row compact-switch">
                   <input id="usbTetherBetaCheck" type="checkbox" />
-                  <span>启用 USB 网络共享自动识别（免 ADB）</span>
+                  <span data-i18n="cast.usbTetherEnable">Enable USB Tethering Auto-Discovery (No ADB)</span>
                   <span class="status-pill warn mono">Beta</span>
                 </label>
-                <button id="scanUsbTetherBtn" type="button" class="mini-btn" hidden>刷新识别</button>
+                <button id="scanUsbTetherBtn" type="button" class="mini-btn" data-i18n="cast.usbTetherRefresh" hidden>Rescan</button>
               </div>
-              <p id="usbTetherBetaHint" class="hint-text">
-                可选测试功能（默认关闭，不影响主线 ADB 投屏，不保证所有设备均可正常使用）：开启后自动识别 Windows USB 网络共享（RNDIS / NCM）网卡上的 OpalDesk 手机。
+              <p id="usbTetherBetaHint" class="hint-text" data-i18n="cast.usbTetherHint">
+                Optional experimental feature (off by default, does not affect ADB Cast, not guaranteed on all devices): detects OpalDesk phones on Windows USB Tethering (RNDIS / NCM) adapters.
               </p>
               <div id="desktopUsbTetherList" class="mdns-chip-list" hidden></div>
             </div>
@@ -136,52 +144,52 @@
 
           <div id="usbHelperBox" class="info-box" hidden>
             <div class="info-box-head">
-              <strong>USB 免证书极速通道</strong>
-              <button id="copyAdbForwardBtn" type="button" class="mini-btn">复制转发命令</button>
+              <strong data-i18n="cast.usbHelperTitle">USB Cert-Free Fast Channel</strong>
+              <button id="copyAdbForwardBtn" type="button" class="mini-btn" data-i18n="cast.copyForwardCmd">Copy Forward Command</button>
             </div>
             <code id="usbForwardCode" class="mono-code">adb forward tcp:19878 localabstract:opaldesk_stream</code>
-            <p id="usbForwardHint" class="hint-text">在电脑终端执行上方命令后，点击下方「开始 Web 投屏」即可通过 <code>ws://127.0.0.1:19878/ws</code> 零警告直连。</p>
+            <p id="usbForwardHint" class="hint-text">Run the command above in your terminal, then click "Start Web Cast" to connect directly via ws://127.0.0.1:19878/ws.</p>
           </div>
 
           <div class="form-grid">
             <label class="field">
-              <span id="castHostLabel">手机局域网 IP</span>
-              <input id="castHostInput" type="text" placeholder="例如 192.168.31.88" autocomplete="off" />
+              <span id="castHostLabel" data-i18n="cast.hostLabelWifi">Phone LAN IP</span>
+              <input id="castHostInput" type="text" data-i18n-placeholder="cast.hostPlaceholder" placeholder="e.g. 192.168.31.88" autocomplete="off" />
             </label>
             <label class="field field-sm">
-              <span>投屏端口</span>
+              <span data-i18n="cast.portLabel">Cast Port</span>
               <input id="castPortInput" type="number" value="19878" min="1" max="65535" />
             </label>
           </div>
 
           <div class="form-grid three-col">
             <label class="field">
-              <span>视频编码偏好</span>
+              <span data-i18n="cast.codecLabel">Video Codec</span>
               <select id="castCodecSelect">
-                <option value="h264">H.264 (推荐 · 全平台兼容)</option>
-                <option value="hevc">HEVC / H.265 (高画质)</option>
+                <option value="h264" data-i18n="cast.codecH264">H.264 (Recommended · Universal)</option>
+                <option value="hevc" data-i18n="cast.codecHevc">HEVC / H.265 (High Quality)</option>
               </select>
             </label>
             <label class="field">
-              <span>目标帧率</span>
+              <span data-i18n="cast.fpsLabel">Target FPS</span>
               <select id="castFpsSelect">
-                <option value="60">60 Hz (流畅省电)</option>
-                <option value="90">90 Hz (流畅高刷)</option>
-                <option value="120">120 Hz (高刷丝滑)</option>
-                <option value="144">144 Hz (电竞高刷)</option>
-                <option value="165">165 Hz (极速高刷)</option>
+                <option value="60" data-i18n="cast.fps60">60 Hz (Balanced)</option>
+                <option value="90" data-i18n="cast.fps90">90 Hz (Smooth)</option>
+                <option value="120" data-i18n="cast.fps120">120 Hz (Fluid)</option>
+                <option value="144" data-i18n="cast.fps144">144 Hz (High Refresh)</option>
+                <option value="165" data-i18n="cast.fps165">165 Hz (Ultra)</option>
               </select>
             </label>
             <label class="field">
-              <span>清晰度 / 码率</span>
+              <span data-i18n="cast.bitrateLabel">Quality / Bitrate</span>
               <select id="castBitrateSelect">
-                <option value="auto">自动档 (实时性能自适应)</option>
-                <option value="8000">8 Mbps (均衡)</option>
-                <option value="14000" selected>14 Mbps (高清推荐)</option>
-                <option value="22000">22 Mbps (超清 2K)</option>
-                <option value="32000">32 Mbps (极清高刷)</option>
-                <option value="45000">45 Mbps (有线原画)</option>
-                <option value="custom">自定义 (4–100 Mbps)</option>
+                <option value="auto" data-i18n="cast.bitrateAuto">Auto (Real-time Adaptive)</option>
+                <option value="8000" data-i18n="cast.bitrate8">8 Mbps (Balanced)</option>
+                <option value="14000" selected data-i18n="cast.bitrate14">14 Mbps (HD Recommended)</option>
+                <option value="22000" data-i18n="cast.bitrate22">22 Mbps (2K Crisp)</option>
+                <option value="32000" data-i18n="cast.bitrate32">32 Mbps (Ultra High FPS)</option>
+                <option value="45000" data-i18n="cast.bitrate45">45 Mbps (Wired Lossless)</option>
+                <option value="custom" data-i18n="cast.bitrateCustom">Custom (4–100 Mbps)</option>
               </select>
               <div id="castCustomBitrateWrap" class="custom-bitrate-row" hidden>
                 <input id="castCustomBitrateInput" type="number" min="4" max="100" step="1" value="50" placeholder="50" />
@@ -192,65 +200,67 @@
 
           <label class="switch-row">
             <input id="castAudioCheck" type="checkbox" checked />
-            <span>同步播放手机系统音频（48kHz 立体声 AAC-LC）</span>
+            <span data-i18n="cast.audioSyncLabel">Stream phone system audio (48kHz stereo AAC-LC)</span>
           </label>
 
           <label id="hideToTrayRow" class="switch-row" hidden>
             <input id="hideToTrayCheck" type="checkbox" checked />
-            <span>关闭主窗口时最小化到系统托盘（保持通知、来电浮窗与后台随行在线）</span>
+            <span data-i18n="cast.hideToTrayLabel">Minimize to system tray on close (keeps notifications, Call HUD &amp; Companion Mode online)</span>
           </label>
 
           <!-- Certificate Trust Guided Helper -->
           <div id="castTrustBox" class="alert-banner info" hidden>
             <div class="banner-body">
-              <strong>首次局域网连接需信任手机加密证书</strong>
-              <p id="castTrustMsg">浏览器出于安全策略不会自动弹出局域网自签名证书确认框。点击右侧按钮打开放行页，点一次「高级 → 继续前往」即可自动返回并连接。</p>
+              <strong data-i18n="cast.trustTitle">Trust Phone Certificate for First LAN Connection</strong>
+              <p id="castTrustMsg" data-i18n="cast.trustDefaultMsg">Browsers block self-signed LAN certificates by default. Click the button on the right, choose "Advanced → Proceed", and you will return here automatically.</p>
             </div>
-            <button id="openCastTrustBtn" type="button" class="primary-btn compact">步骤 1：信任设备证书</button>
+            <button id="openCastTrustBtn" type="button" class="primary-btn compact" data-i18n="cast.trustBtn">Step 1: Trust Device Cert</button>
           </div>
 
           <div id="castErrorBox" class="alert-banner danger" hidden></div>
 
           <div class="cta-row">
-            <button id="connectCastBtn" type="button" class="primary-btn full">开始 Web 投屏</button>
+            <button id="connectCastBtn" type="button" class="primary-btn full" data-i18n="cast.connectWebBtn">Start Web Cast</button>
           </div>
+            </div><!-- /.cast-primary-col -->
 
+            <div class="cast-companion-col">
           <!-- Background Companion Hub (Notifications, Media Remote, Handoff, Call, OTP, Files/APK) -->
           <div id="companionHubCard" class="info-box companion-hub-card">
             <div class="info-box-head">
               <div class="standalone-history-title-group">
-                <strong>后台随行中枢</strong>
-                <span id="companionStatusPill" class="status-pill">未连接</span>
+                <strong data-i18n="companion.title">Companion Mode Hub</strong>
+                <span id="companionStatusPill" class="status-pill" data-i18n="companion.statusIdle">Disconnected</span>
               </div>
               <div class="standalone-history-actions">
-                <button id="companionConnectBtn" type="button" class="mini-btn">仅连随行（免投屏）</button>
-                <button id="companionDisconnectBtn" type="button" class="mini-btn" hidden>断开随行</button>
+                <button id="companionConnectBtn" type="button" class="mini-btn" data-i18n="companion.connectBtn">Companion Only</button>
+                <button id="companionDisconnectBtn" type="button" class="mini-btn" data-i18n="companion.disconnectBtn" hidden>Disconnect</button>
               </div>
             </div>
-            <p class="hint-text">免开桌面画布即可同步手机通知、OTP 验证码、媒体切歌、来电控制、文件管理与无线装 APK。</p>
+            <p class="hint-text" data-i18n="companion.hint">Sync phone notifications, OTP codes, media controls, calls, Phone Files, and wireless APK installs without opening the Cast canvas.</p>
 
             <div id="companionBody" class="companion-body" hidden>
               <div class="companion-tools-row">
-                <button id="companionFilesBtn" type="button" class="btn-pill small primary">文件管理</button>
-                <button id="companionStorageBtn" type="button" class="btn-pill small">存储分析</button>
-                <button id="companionApkBtn" type="button" class="btn-pill small">无线装 APK</button>
-                <button id="companionDialerBtn" type="button" class="btn-pill small">快捷拨号</button>
+                <button id="companionFilesBtn" type="button" class="btn-pill small primary" data-i18n="companion.btnFiles">Phone Files</button>
+                <button id="companionStorageBtn" type="button" class="btn-pill small" data-i18n="companion.btnStorage">Storage Analyzer</button>
+                <button id="companionApkBtn" type="button" class="btn-pill small" data-i18n="companion.btnApk">Wireless APK</button>
+                <button id="companionDialerBtn" type="button" class="btn-pill small" data-i18n="companion.btnDialer">Quick Dialer</button>
               </div>
 
               <div id="companionHandoffRow" class="companion-strip" hidden>
                 <div class="companion-strip-text">
-                  <span class="status-pill ok">Handoff 接力</span>
+                  <span class="status-pill ok" data-i18n="companion.handoffBadge">Handoff</span>
                   <strong id="companionHandoffApp"></strong>
                 </div>
-                <button id="companionHandoffPopoutBtn" type="button" class="btn-pill small primary">在电脑小窗打开</button>
+                <button id="companionHandoffPopoutBtn" type="button" class="btn-pill small primary" data-i18n="companion.handoffPopoutBtn">Open on PC</button>
               </div>
 
               <div id="companionOtpBar" class="companion-strip otp" hidden>
                 <div class="companion-strip-text">
-                  <span id="companionOtpFrom" class="status-pill warn">验证码</span>
+                  <span id="companionOtpFrom" class="status-pill warn" data-i18n="companion.otpBadge">OTP</span>
                   <code id="companionOtpCode" class="mono companion-otp-code">------</code>
                 </div>
-                <button id="companionOtpCopyBtn" type="button" class="btn-pill small primary">一键复制</button>
+                <button id="companionOtpCopyBtn" type="button" class="btn-pill small primary" data-i18n="companion.otpCopyBtn">Copy OTP</button>
               </div>
 
               <div id="companionCallBanner" class="companion-call-banner" hidden></div>
@@ -258,23 +268,23 @@
               <div id="companionMediaBox" class="companion-media-box" hidden>
                 <img id="companionMediaArt" class="companion-media-art" alt="" hidden />
                 <div class="companion-media-meta">
-                  <div id="companionMediaTitle" class="companion-media-title">正在播放</div>
+                  <div id="companionMediaTitle" class="companion-media-title" data-i18n="companion.mediaNowPlaying">Now Playing</div>
                   <div id="companionMediaArtist" class="companion-media-artist"></div>
                 </div>
                 <div class="companion-media-ctrls">
-                  <button id="companionMediaPrevBtn" type="button" class="mini-btn" title="上一曲">⏮</button>
-                  <button id="companionMediaPlayBtn" type="button" class="mini-btn" title="播放/暂停">播放</button>
-                  <button id="companionMediaNextBtn" type="button" class="mini-btn" title="下一曲">⏭</button>
+                  <button id="companionMediaPrevBtn" type="button" class="mini-btn" data-i18n-title="companion.mediaPrevTitle" title="Previous Track">⏮</button>
+                  <button id="companionMediaPlayBtn" type="button" class="mini-btn" data-i18n-title="companion.mediaPlayTitle" data-i18n="companion.mediaPlay" title="Play / Pause">Play</button>
+                  <button id="companionMediaNextBtn" type="button" class="mini-btn" data-i18n-title="companion.mediaNextTitle" title="Next Track">⏭</button>
                 </div>
               </div>
 
               <div class="companion-notif-section">
                 <div class="info-box-head">
                   <div class="standalone-history-title-group">
-                    <span class="companion-sub-label">手机通知</span>
+                    <span class="companion-sub-label" data-i18n="companion.notifTitle">Notification Sync</span>
                     <span id="companionNotifCount" class="status-pill mono">0</span>
                   </div>
-                  <button id="companionClearNotifsBtn" type="button" class="text-btn" hidden>清空全部</button>
+                  <button id="companionClearNotifsBtn" type="button" class="text-btn" data-i18n="companion.clearAllBtn" hidden>Clear All</button>
                 </div>
                 <div id="companionNotifList" class="companion-notif-list"></div>
               </div>
@@ -284,10 +294,10 @@
           <!-- BLE Nearby Discovery & 1-Click Instant Hotspot (Windows Desktop Tauri only) -->
           <div id="bleNearbyCard" class="info-box desktop-panel" hidden>
             <div class="info-box-head">
-              <strong>附近设备与一键热点 (BLE)</strong>
-              <button id="refreshBleBtn" type="button" class="mini-btn">扫描附近</button>
+              <strong data-i18n="companion.bleTitle">BLE Nearby Discovery &amp; Instant Hotspot</strong>
+              <button id="refreshBleBtn" type="button" class="mini-btn" data-i18n="companion.bleRefreshBtn">Scan Nearby</button>
             </div>
-            <p id="bleNearbyNote" class="hint-text">正在检测蓝牙靠近发现能力…</p>
+            <p id="bleNearbyNote" class="hint-text" data-i18n="companion.bleDetecting">Checking BLE Nearby Discovery…</p>
             <div id="bleNearbyList" class="adb-device-list"></div>
           </div>
 
@@ -295,116 +305,118 @@
           <div id="standaloneHistorySection" class="info-box standalone-history-box">
             <div class="info-box-head">
               <div class="standalone-history-title-group">
-                <strong>历史 APP 小窗</strong>
-                <span id="standaloneQuotaPill" class="status-pill mono">已开 0/3</span>
+                <strong data-i18n="standalone.historyTitle">Recent Standalone Windows</strong>
+                <span id="standaloneQuotaPill" class="status-pill mono">0/3</span>
               </div>
               <div class="standalone-history-actions">
-                <button id="closeAllStandaloneBtn" type="button" class="mini-btn" hidden>关闭全部小窗</button>
-                <button id="clearStandaloneHistoryBtn" type="button" class="text-btn" hidden>清空历史</button>
+                <button id="closeAllStandaloneBtn" type="button" class="mini-btn" data-i18n="standalone.closeAllBtn" hidden>Close All</button>
+                <button id="clearStandaloneHistoryBtn" type="button" class="text-btn" data-i18n="standalone.clearHistoryBtn" hidden>Clear History</button>
               </div>
             </div>
-            <p class="hint-text">最多同时开启 3 个单应用悬浮小窗；点击历史应用可免开桌面一键打开，已开启时可选择重载或聚焦。</p>
+            <p class="hint-text" data-i18n="standalone.historyHint">Up to 3 concurrent Standalone Windows. Click a recent app to launch directly without opening full desktop.</p>
             <div id="standaloneHistoryList" class="standalone-history-grid">
-              <span class="hint-text">暂无历史小窗记录：点击下方设备卡片的「应用小窗」或在投屏控制栏打开独立小窗后将自动记录。</span>
+              <span class="hint-text" data-i18n="standalone.historyEmpty">No recent windows yet: click "Standalone Window" on a device card or launch from the toolbar.</span>
             </div>
           </div>
 
           <!-- Saved recent devices -->
           <div id="recentDevicesWrap" class="recent-wrap" hidden>
             <div class="recent-head">
-              <span>最近信任的设备</span>
-              <button id="clearRecentBtn" type="button" class="text-btn">清空记录</button>
+              <span data-i18n="cast.recentDevicesTitle">Recently Trusted Devices</span>
+              <button id="clearRecentBtn" type="button" class="text-btn" data-i18n="cast.clearRecentBtn">Clear History</button>
             </div>
             <div id="recentDevicesList" class="recent-list"></div>
           </div>
+            </div><!-- /.cast-companion-col -->
+          </div><!-- /.cast-workspace-grid -->
         </div>
 
         <!-- ===== TAB 2: LAN ACTIVATION HUB ===== -->
         <div id="paneActivate" class="tab-pane" hidden>
-          <p class="pane-intro">
-            在手机 OpalDesk App 内打开「激活 → Web激活」并开启服务，随后把手机停留在系统「开发者选项 → 无线调试 → 使用配对码配对设备」页面即可在本页免线完成激活。
+          <p class="pane-intro" data-i18n="activate.intro">
+            Open "Activate → Web Activation" in the OpalDesk Android app, then keep your phone on "Developer Options → Wireless Debugging → Pair device with pairing code" to activate cable-free.
           </p>
 
           <div class="form-grid three-col">
             <label class="field">
-              <span>手机局域网 IP</span>
-              <input id="actHostInput" type="text" placeholder="例如 192.168.31.88" autocomplete="off" />
+              <span data-i18n="activate.hostLabel">Phone LAN IP</span>
+              <input id="actHostInput" type="text" data-i18n-placeholder="cast.hostPlaceholder" placeholder="e.g. 192.168.31.88" autocomplete="off" />
             </label>
             <label class="field">
-              <span>激活端口</span>
+              <span data-i18n="activate.portLabel">Activation Port</span>
               <input id="actPortInput" type="number" value="19879" min="1" max="65535" />
             </label>
             <label class="field">
-              <span>6 位会话访问码</span>
-              <input id="actCodeInput" type="text" inputmode="numeric" maxlength="6" placeholder="手机端 6 位码" autocomplete="off" />
+              <span data-i18n="activate.codeLabel">6-Digit Session Code</span>
+              <input id="actCodeInput" type="text" inputmode="numeric" maxlength="6" data-i18n-placeholder="activate.codePlaceholder" placeholder="6-digit phone code" autocomplete="off" />
             </label>
           </div>
 
           <div id="actTrustBox" class="alert-banner info" hidden>
             <div class="banner-body">
-              <strong>首次局域网激活需放行激活服务证书</strong>
-              <p>点击右侧按钮在弹出页放行手机 <code>:19879</code> 本地自签证书，放行后自动回到本页建立加密通道。</p>
+              <strong data-i18n="activate.trustTitle">Trust Activation Service Certificate</strong>
+              <p data-i18n="activate.trustDesc">Click the button on the right to trust the phone :19879 local certificate, then return here automatically.</p>
             </div>
-            <button id="openActTrustBtn" type="button" class="primary-btn compact">信任激活证书</button>
+            <button id="openActTrustBtn" type="button" class="primary-btn compact" data-i18n="activate.trustBtn">Trust Activation Cert</button>
           </div>
 
           <div id="actErrorBox" class="alert-banner danger" hidden></div>
 
           <div class="cta-row">
-            <button id="connectActBtn" type="button" class="primary-btn full">连接手机激活服务</button>
-            <button id="disconnectActBtn" type="button" class="ghost-btn" hidden>断开激活服务</button>
+            <button id="connectActBtn" type="button" class="primary-btn full" data-i18n="activate.connectBtn">Connect Activation Service</button>
+            <button id="disconnectActBtn" type="button" class="ghost-btn" data-i18n="activate.disconnectBtn" hidden>Disconnect</button>
           </div>
 
           <!-- Connected Activation Workspace -->
           <div id="actWorkspace" class="act-workspace" hidden>
             <div class="device-status-strip">
               <div>
-                <strong id="actDeviceTitle">已连接手机</strong>
-                <div id="actDiscoverySummary" class="mono small-muted">等待 mDNS 发现无线调试端口…</div>
+                <strong id="actDeviceTitle" data-i18n="activate.connectedTitle">Phone Connected</strong>
+                <div id="actDiscoverySummary" class="mono small-muted" data-i18n="activate.waitingMdns">Waiting for mDNS Wireless Debugging ports…</div>
               </div>
-              <span id="actDaemonBadge" class="status-pill">未激活</span>
+              <span id="actDaemonBadge" class="status-pill" data-i18n="activate.daemonInactive">Inactive</span>
             </div>
 
             <div class="act-panel">
-              <h3>① 无线调试配对并激活（首次使用）</h3>
+              <h3 data-i18n="activate.step1Title">① Pair &amp; Activate Wireless Debugging (First Time)</h3>
               <div class="form-grid three-col">
                 <label class="field">
-                  <span>配对端口 (自动发现)</span>
-                  <input id="adbPairPortInput" type="number" placeholder="自动填充" />
+                  <span data-i18n="activate.pairPortLabel">Pairing Port (Auto)</span>
+                  <input id="adbPairPortInput" type="number" data-i18n-placeholder="activate.pairPortPlaceholder" placeholder="Auto-filled" />
                 </label>
                 <label class="field">
-                  <span>手机 6 位配对码</span>
-                  <input id="adbPairCodeInput" type="text" inputmode="numeric" maxlength="6" placeholder="输入系统弹窗配对码" />
+                  <span data-i18n="activate.pairCodeLabel">6-Digit Pairing Code</span>
+                  <input id="adbPairCodeInput" type="text" inputmode="numeric" maxlength="6" data-i18n-placeholder="activate.pairCodePlaceholder" placeholder="Enter system pairing code" />
                 </label>
                 <label class="field">
-                  <span>连接端口 (可选)</span>
-                  <input id="adbConnPortInput" type="number" placeholder="自动填充" />
+                  <span data-i18n="activate.connPortLabel">Connect Port (Optional)</span>
+                  <input id="adbConnPortInput" type="number" data-i18n-placeholder="activate.connPortPlaceholder" placeholder="Auto-filled" />
                 </label>
               </div>
               <label class="switch-row">
                 <input id="actAutoCastCheck" type="checkbox" checked />
-                <span>激活成功后自动开启无线共享并切入 Web 投屏</span>
+                <span data-i18n="activate.autoCastLabel">Auto-enable Wireless Share and switch to Web Cast after activation</span>
               </label>
               <div class="cta-row">
-                <button id="actPairStartBtn" type="button" class="primary-btn">配对并激活引擎</button>
-                <button id="actDirectConnBtn" type="button" class="ghost-btn">已配对 · 一键直连</button>
-                <button id="actShizukuBtn" type="button" class="ghost-btn" hidden>Shizuku 秒激活</button>
+                <button id="actPairStartBtn" type="button" class="primary-btn" data-i18n="activate.pairStartBtn">Pair &amp; Activate Engine</button>
+                <button id="actDirectConnBtn" type="button" class="ghost-btn" data-i18n="activate.directConnBtn">Already Paired · Connect</button>
+                <button id="actShizukuBtn" type="button" class="ghost-btn" data-i18n="activate.shizukuBtn" hidden>Instant Shizuku Activate</button>
               </div>
             </div>
 
             <div class="log-panel">
               <div class="log-head">
-                <span>实时激活日志</span>
-                <button id="actRefreshStateBtn" type="button" class="mini-btn">刷新端口</button>
+                <span data-i18n="activate.logTitle">Live Activation Log</span>
+                <button id="actRefreshStateBtn" type="button" class="mini-btn" data-i18n="activate.refreshPortsBtn">Refresh Ports</button>
               </div>
               <pre id="actLogOutput" class="log-output mono"></pre>
             </div>
 
             <details class="fallback-details">
-              <summary>兜底方案：复制电脑终端无线 ADB 激活命令</summary>
+              <summary data-i18n="activate.fallbackSummary">Fallback: Copy Terminal Wireless ADB Command</summary>
               <div class="fallback-body">
                 <code id="actFallbackCmd" class="mono-code"></code>
-                <button id="copyActFallbackBtn" type="button" class="mini-btn">复制命令</button>
+                <button id="copyActFallbackBtn" type="button" class="mini-btn" data-i18n="activate.copyCmdBtn">Copy Command</button>
               </div>
             </details>
           </div>
@@ -415,40 +427,40 @@
           <div class="diag-hero-card">
             <div class="diag-hero-top">
               <div>
-                <h2 class="diag-title">运行日志与问题 / 需求反馈</h2>
+                <h2 class="diag-title" data-i18n="diag.title">Diagnostics Log &amp; Issue / Feature Feedback</h2>
                 <div id="diagDeviceMeta" class="small-muted mono">OpalDesk Client</div>
               </div>
               <div class="diag-hero-cta">
-                <button id="openBugReportBtn" type="button" class="primary-btn compact">上报问题与日志</button>
-                <button id="openFeatureReportBtn" type="button" class="ghost-btn compact">提功能需求</button>
+                <button id="openBugReportBtn" type="button" class="primary-btn compact" data-i18n="diag.bugReportBtn">Report Issue</button>
+                <button id="openFeatureReportBtn" type="button" class="ghost-btn compact" data-i18n="diag.featureReportBtn">Request Feature</button>
               </div>
             </div>
 
             <div class="diag-metrics-row">
               <div class="diag-metric-pill">
-                <span>日志条数</span>
+                <span data-i18n="diag.metricTotal">Log Entries</span>
                 <strong id="diagMetricTotal" class="mono">0</strong>
               </div>
               <div class="diag-metric-pill warn">
-                <span>警告 / 错误</span>
+                <span data-i18n="diag.metricWarn">Warnings / Errors</span>
                 <strong id="diagMetricWarn" class="mono">0</strong>
               </div>
               <div class="diag-metric-pill accent">
-                <span>今日上报配额</span>
+                <span data-i18n="diag.metricQuota">Daily Quota</span>
                 <strong id="diagMetricQuota" class="mono">5/5</strong>
               </div>
             </div>
 
             <div class="qq-group-banner">
-              <span>交流反馈 QQ 群：<strong class="mono">1042317917</strong>（问题排查 / 功能建议 / 版本通知）</span>
-              <button id="copyQqGroupBtn" type="button" class="mini-btn">复制群号</button>
+              <span><span data-i18n="diag.qqBannerPrefix">Community QQ Group: </span><strong class="mono">1042317917</strong><span data-i18n="diag.qqBannerSuffix"> (troubleshooting / feature ideas / releases)</span></span>
+              <button id="copyQqGroupBtn" type="button" class="mini-btn" data-i18n="diag.copyQqBtn">Copy Group ID</button>
             </div>
 
             <div class="diag-toolbar-row">
-              <button id="refreshLogsBtn" type="button" class="mini-btn">刷新日志</button>
-              <button id="copyLogsBtn" type="button" class="mini-btn">复制诊断报告</button>
-              <button id="exportLogsBtn" type="button" class="mini-btn">导出 .txt</button>
-              <button id="clearLogsBtn" type="button" class="mini-btn danger-outline">清空日志</button>
+              <button id="refreshLogsBtn" type="button" class="mini-btn" data-i18n="diag.refreshLogsBtn">Refresh</button>
+              <button id="copyLogsBtn" type="button" class="mini-btn" data-i18n="diag.copyLogsBtn">Copy Report</button>
+              <button id="exportLogsBtn" type="button" class="mini-btn" data-i18n="diag.exportLogsBtn">Export .txt</button>
+              <button id="clearLogsBtn" type="button" class="mini-btn danger-outline" data-i18n="diag.clearLogsBtn">Clear Logs</button>
             </div>
           </div>
 
@@ -456,36 +468,36 @@
           <div id="feedbackTrackingSection" class="info-box diag-card">
             <div class="info-box-head">
               <div class="standalone-history-title-group">
-                <strong>我的反馈追踪</strong>
+                <strong data-i18n="diag.trackingTitle">My Feedback Tracking</strong>
                 <span id="feedbackSyncMeta" class="small-muted"></span>
               </div>
               <div class="standalone-history-actions">
-                <button id="lookupFeedbackBtn" type="button" class="mini-btn">查反馈码</button>
-                <button id="refreshFeedbackBtn" type="button" class="mini-btn">刷新状态</button>
+                <button id="lookupFeedbackBtn" type="button" class="mini-btn" data-i18n="diag.lookupBtn">Lookup Code</button>
+                <button id="refreshFeedbackBtn" type="button" class="mini-btn" data-i18n="diag.refreshFeedbackBtn">Refresh Status</button>
               </div>
             </div>
 
             <div id="feedbackLookupBar" class="feedback-lookup-bar" hidden>
-              <input id="feedbackLookupInput" type="text" maxlength="9" placeholder="输入 8 位反馈码（如 A1B2C3D4）" autocomplete="off" />
-              <button id="submitFeedbackLookupBtn" type="button" class="primary-btn compact">查询</button>
-              <button id="cancelFeedbackLookupBtn" type="button" class="mini-btn">收起</button>
+              <input id="feedbackLookupInput" type="text" maxlength="9" data-i18n-placeholder="diag.lookupPlaceholder" placeholder="Enter 8-char feedback code (e.g. A1B2C3D4)" autocomplete="off" />
+              <button id="submitFeedbackLookupBtn" type="button" class="primary-btn compact" data-i18n="diag.lookupSubmitBtn">Lookup</button>
+              <button id="cancelFeedbackLookupBtn" type="button" class="mini-btn" data-i18n="diag.lookupCollapseBtn">Hide</button>
             </div>
             <div id="feedbackLookupStatus" class="hint-text" hidden></div>
             <div id="feedbackRecordsList" class="feedback-records-list">
-              <span class="hint-text">暂无本地反馈记录。提交问题或功能建议后，可在此实时追踪开发者处理进度与回复。</span>
+              <span class="hint-text" data-i18n="diag.recordsEmptyDesktop">No local feedback records yet. Submit an issue/idea or click "Lookup Code" to track progress.</span>
             </div>
           </div>
 
           <!-- Live Log Stream -->
           <div class="info-box diag-card">
             <div class="info-box-head">
-              <strong>实时运行日志</strong>
+              <strong data-i18n="diag.liveLogTitle">Diagnostics Log</strong>
               <div class="diag-filter-chips">
-                <button id="logWarnOnlyBtn" type="button" class="chip-btn compact-chip">仅警告/错误</button>
-                <button id="logOrderBtn" type="button" class="chip-btn compact-chip active">最新在前</button>
+                <button id="logWarnOnlyBtn" type="button" class="chip-btn compact-chip" data-i18n="diag.warnOnlyBtn">Warn / Error</button>
+                <button id="logOrderBtn" type="button" class="chip-btn compact-chip active" data-i18n="diag.orderNewest">Newest First</button>
               </div>
             </div>
-            <input id="logSearchInput" type="search" class="diag-search-input" placeholder="按标签或关键词过滤日志…" autocomplete="off" />
+            <input id="logSearchInput" type="search" class="diag-search-input" data-i18n-placeholder="diag.searchPlaceholder" placeholder="Filter logs by tag or keyword…" autocomplete="off" />
             <div id="diagLogConsole" class="diag-log-console mono"></div>
           </div>
         </div>
@@ -496,7 +508,7 @@
   <!-- ==================== FULLSCREEN CAST STAGE ==================== -->
   <div id="stageView" class="stage-shell" hidden>
     <!-- Minimal top grab handle to reveal auto-hidden toolbar without blocking app top bars -->
-    <button id="stageRevealHandle" type="button" class="stage-reveal-handle" title="展开控制栏" aria-label="展开控制栏">
+    <button id="stageRevealHandle" type="button" class="stage-reveal-handle" data-i18n-title="stage.revealHandleTitle" data-i18n-aria="stage.revealHandleTitle" title="Show toolbar" aria-label="Show toolbar">
       <span></span>
     </button>
 
@@ -505,29 +517,29 @@
       <div class="tb-left">
         <span class="live-dot"></span>
         <strong id="stagePeerName">Android</strong>
-        <span id="stageTelemetry" class="mono tb-meta">等待画面…</span>
+        <span id="stageTelemetry" class="mono tb-meta" data-i18n="stage.waitingVideo">Waiting for video…</span>
       </div>
       <div class="tb-actions">
-        <button id="tbBackBtn" type="button" class="tb-btn tb-icon-btn" title="返回 (Esc / 右键)" aria-label="返回">
+        <button id="tbBackBtn" type="button" class="tb-btn tb-icon-btn" data-i18n-title="stage.backTitle" data-i18n-aria="stage.backAria" title="Back (Esc / Right-Click)" aria-label="Back">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 3.2L5.5 8l5 4.8" /></svg>
         </button>
-        <button id="tbHomeBtn" type="button" class="tb-btn tb-icon-btn" title="显示桌面" aria-label="显示桌面">
+        <button id="tbHomeBtn" type="button" class="tb-btn tb-icon-btn" data-i18n-title="stage.homeTitle" data-i18n-aria="stage.homeAria" title="Show Desktop" aria-label="Show Desktop">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.2 7.8L8 2.6l5.8 5.2M4 7.2v5.8h8V7.2" /></svg>
         </button>
-        <button id="tbExitAppFsBtn" type="button" class="tb-btn active" title="退出远程应用全屏" hidden>退出全屏</button>
+        <button id="tbExitAppFsBtn" type="button" class="tb-btn active" data-i18n="stage.exitAppFsBtn" data-i18n-title="stage.exitAppFsTitle" title="Exit remote app fullscreen" hidden>Exit Fullscreen</button>
         <span class="tb-sep" aria-hidden="true"></span>
-        <button id="tbPinBtn" type="button" class="tb-btn" title="切换悬浮窗置顶 (Alt+Shift+T)" hidden>置顶</button>
+        <button id="tbPinBtn" type="button" class="tb-btn" data-i18n="standalone.pinBtn" data-i18n-title="standalone.pinOffTitle" title="Pin window on top (Alt+Shift+T)" hidden>Pin</button>
         <div id="tbStandalonePrefsGroup" class="tb-standalone-prefs" hidden>
-          <button id="tbPopoutFavoriteBtn" type="button" class="tb-btn" title="收藏此应用">☆</button>
-          <select id="tbPopoutPresetSelect" class="tb-select" title="小窗比例预设">
-            <option value="phone">手机</option>
-            <option value="fold">折叠</option>
-            <option value="tablet">平板</option>
-            <option value="custom">自由</option>
+          <button id="tbPopoutFavoriteBtn" type="button" class="tb-btn" data-i18n-title="standalone.favAddTitle" title="Favorite &amp; pin to top">☆</button>
+          <select id="tbPopoutPresetSelect" class="tb-select" data-i18n-title="standalone.presetSelectTitle" title="Window aspect preset">
+            <option value="phone" data-i18n="standalone.presetPhone">Phone</option>
+            <option value="fold" data-i18n="standalone.presetFold">Fold</option>
+            <option value="tablet" data-i18n="standalone.presetTablet">Tablet</option>
+            <option value="custom" data-i18n="standalone.presetCustom">Free</option>
           </select>
-          <button id="tbPopoutCompatBtn" type="button" class="tb-btn" title="切换 1080×1920 兼容分辨率模式">兼容</button>
-          <select id="tbPopoutDpiSelect" class="tb-select" title="此应用独立 DPI">
-            <option value="0">自动DPI</option>
+          <button id="tbPopoutCompatBtn" type="button" class="tb-btn" data-i18n="standalone.compatBtn" data-i18n-title="standalone.compatOffTitle" title="Enable 1080×1920 @400DPI compatibility resolution">Compat</button>
+          <select id="tbPopoutDpiSelect" class="tb-select" data-i18n-title="standalone.dpiSelectTitle" title="Per-app DPI">
+            <option value="0" data-i18n="standalone.dpiAuto">Auto DPI</option>
             <option value="240">240</option>
             <option value="280">280</option>
             <option value="320">320</option>
@@ -536,35 +548,35 @@
             <option value="440">440</option>
           </select>
         </div>
-        <button id="tbBlackoutBtn" type="button" class="tb-btn" title="一键熄灭 / 点亮手机主屏 (Alt+Shift+B)">黑屏</button>
-        <button id="tbAppsBtn" type="button" class="tb-btn" title="打开手机应用或独立小窗">应用</button>
-        <button id="tbFilesBtn" type="button" class="tb-btn" title="双向文件管理 / 存储分析 / 无线装 APK">文件</button>
-        <button id="tbDialerBtn" type="button" class="tb-btn" title="快捷拨号">拨号</button>
-        <button id="tbScreenshotBtn" type="button" class="tb-btn" title="一键截图到桌面并复制到剪贴板">截图</button>
-        <button id="tbRecordBtn" type="button" class="tb-btn" title="开始 / 停止录屏"><span id="tbRecordLabel">录屏</span></button>
-        <button id="tbInputModeBtn" type="button" class="tb-btn active" title="切换左键拖拽模式：触控滑动（推荐） / 鼠标指针">触控</button>
-        <button id="tbQualityBtn" type="button" class="tb-btn" title="分辨率与刷新率">画质</button>
+        <button id="tbBlackoutBtn" type="button" class="tb-btn" data-i18n="stage.blackoutBtn" data-i18n-title="stage.blackoutTitle" title="Toggle Host Screen Off (Alt+Shift+B)">Screen Off</button>
+        <button id="tbAppsBtn" type="button" class="tb-btn" data-i18n="stage.appsBtn" data-i18n-title="stage.appsTitle" title="Open phone apps or Standalone Windows">Apps</button>
+        <button id="tbFilesBtn" type="button" class="tb-btn" data-i18n="stage.filesBtn" data-i18n-title="stage.filesTitle" title="Phone Files / Storage Analyzer / Wireless APK">Files</button>
+        <button id="tbDialerBtn" type="button" class="tb-btn" data-i18n="stage.dialerBtn" data-i18n-title="stage.dialerTitle" title="Quick Dialer">Dialer</button>
+        <button id="tbScreenshotBtn" type="button" class="tb-btn" data-i18n="stage.screenshotBtn" data-i18n-title="stage.screenshotTitle" title="Save screenshot to Desktop &amp; copy to clipboard">Shot</button>
+        <button id="tbRecordBtn" type="button" class="tb-btn" data-i18n-title="stage.recordTitle" title="Start / Stop screen recording"><span id="tbRecordLabel" data-i18n="cast.recordLabel">Record</span></button>
+        <button id="tbInputModeBtn" type="button" class="tb-btn active" data-i18n="stage.touchBtn" data-i18n-title="stage.inputModeTitle" title="Left-drag mode: Touch Swipe (recommended) / Mouse Pointer">Touch</button>
+        <button id="tbQualityBtn" type="button" class="tb-btn" data-i18n="stage.qualityBtn" data-i18n-title="stage.qualityTitle" title="Resolution &amp; Refresh Rate">Quality</button>
         <span class="tb-sep" aria-hidden="true"></span>
-        <button id="tbKeyboardBtn" type="button" class="tb-btn tb-icon-btn" title="弹出 / 收起软键盘" aria-label="软键盘">
+        <button id="tbKeyboardBtn" type="button" class="tb-btn tb-icon-btn" data-i18n-title="stage.keyboardTitle" data-i18n-aria="stage.keyboardAria" title="Toggle soft keyboard" aria-label="Soft Keyboard">
           <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="3.5" width="13" height="9" rx="1.8" /><path d="M4.2 6.8h.01M6.7 6.8h.01M9.3 6.8h.01M11.8 6.8h.01M4.8 9.8h6.4" /></svg>
         </button>
-        <button id="tbMicBtn" type="button" class="tb-btn tb-icon-btn" title="向手机回传本机麦克风声音" aria-label="麦克风">
+        <button id="tbMicBtn" type="button" class="tb-btn tb-icon-btn" data-i18n-title="stage.micTitle" data-i18n-aria="stage.micAria" title="Stream local microphone to phone" aria-label="Microphone">
           <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="1.8" width="5" height="7.4" rx="2.5" /><path d="M3.2 7.4a4.8 4.8 0 0 0 9.6 0M8 12.2v2.2M5.2 14.4h5.6" /></svg>
         </button>
-        <button id="tbCameraBtn" type="button" class="tb-btn tb-icon-btn" title="Root 后开启：向手机映射本机摄像头" aria-label="摄像头">
+        <button id="tbCameraBtn" type="button" class="tb-btn tb-icon-btn" data-i18n-title="stage.camTitle" data-i18n-aria="stage.camAria" title="Root required: map local webcam to phone" aria-label="Camera">
           <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="3.8" width="8.6" height="8.4" rx="1.8" /><path d="M10.3 6.4l4.2-2.1v7.4l-4.2-2.1z" /></svg>
         </button>
-        <button id="tbAudioBtn" type="button" class="tb-btn tb-icon-btn" title="静音 / 开启声音" aria-label="声音">
+        <button id="tbAudioBtn" type="button" class="tb-btn tb-icon-btn" data-i18n-title="stage.audioTitle" data-i18n-aria="stage.audioAria" title="Mute / Unmute audio" aria-label="Audio">
           <svg class="tb-icon-sound-on" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.2 6.2h2.7l3.4-2.8v9.2L4.9 9.8H2.2zM11 5.6a3.4 3.4 0 0 1 0 4.8M12.9 3.8a6 6 0 0 1 0 8.4" /></svg>
           <svg class="tb-icon-sound-off" viewBox="0 0 16 16" aria-hidden="true" hidden><path d="M2.2 6.2h2.7l3.4-2.8v9.2L4.9 9.8H2.2zM10.8 6l3.6 4M14.4 6l-3.6 4" /></svg>
-          <span class="tb-inline-label" hidden>点此出声</span>
+          <span class="tb-inline-label" data-i18n="stage.audioUnlockLabel" hidden>Unmute</span>
         </button>
-        <button id="tbFullscreenBtn" type="button" class="tb-btn tb-icon-btn" title="全屏显示" aria-label="全屏显示">
+        <button id="tbFullscreenBtn" type="button" class="tb-btn tb-icon-btn" data-i18n-title="stage.fsEnterTitle" data-i18n-aria="stage.fsEnterTitle" title="Fullscreen" aria-label="Fullscreen">
           <svg class="tb-icon-fs-enter" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.4 6V2.4H6M10 2.4h3.6V6M13.6 10v3.6H10M6 13.6H2.4V10" /></svg>
           <svg class="tb-icon-fs-exit" viewBox="0 0 16 16" aria-hidden="true" hidden><path d="M2.4 6H6V2.4M13.6 6H10V2.4M13.6 10H10v3.6M2.4 10H6v3.6" /></svg>
         </button>
         <span class="tb-sep" aria-hidden="true"></span>
-        <button id="tbDisconnectBtn" type="button" class="tb-btn danger" title="断开投屏">断开</button>
+        <button id="tbDisconnectBtn" type="button" class="tb-btn danger" data-i18n="stage.disconnectBtn" data-i18n-title="stage.disconnectTitle" title="Disconnect Cast">Disconnect</button>
       </div>
     </div>
 
@@ -572,7 +584,7 @@
     <div id="canvasWrap" class="canvas-wrap">
       <canvas id="castCanvas" class="cast-canvas"></canvas>
       <div id="dropOverlay" class="drop-overlay" hidden>
-        <div class="drop-card glass-surface">释放鼠标即可将文件发送至手机 Download/OpalDesk 目录</div>
+        <div class="drop-card glass-surface" data-i18n="stage.dropCard">Drop files here to send to phone Download/OpalDesk</div>
       </div>
     </div>
 
@@ -580,26 +592,26 @@
     <div id="approvalOverlay" class="stage-overlay" hidden>
       <div class="overlay-card glass-surface">
         <div class="spinner"></div>
-        <h2 id="approvalTitle">等待手机端确认连接…</h2>
-        <p id="approvalDesc">请在手机通知栏或 OpalDesk 弹窗中点击「永久允许」或「仅本次允许」。</p>
-        <button id="cancelConnectBtn" type="button" class="ghost-btn">取消连接</button>
+        <h2 id="approvalTitle" data-i18n="stage.approvalTitle">Waiting for Phone Approval…</h2>
+        <p id="approvalDesc" data-i18n="stage.approvalDesc">Tap "Always Allow" or "Allow Once" on your phone notification or OpalDesk dialog.</p>
+        <button id="cancelConnectBtn" type="button" class="ghost-btn" data-i18n="stage.cancelConnectBtn">Cancel Connection</button>
       </div>
     </div>
 
     <!-- Quality Popover -->
     <div id="qualityPopover" class="stage-popover glass-surface" hidden>
       <div class="pop-head">
-        <strong>画质与分辨率</strong>
-        <button id="closeQualityPopBtn" type="button" class="mini-btn">关闭</button>
+        <strong data-i18n="stage.qualityTitleHead">Quality &amp; Resolution</strong>
+        <button id="closeQualityPopBtn" type="button" class="mini-btn" data-i18n="common.close">Close</button>
       </div>
       <div class="pop-grid">
-        <button type="button" class="chip-btn" data-preset="auto">自适应窗口</button>
+        <button type="button" class="chip-btn" data-preset="auto" data-i18n="stage.presetAuto">Fit Window</button>
         <button type="button" class="chip-btn" data-preset="1920x1080">1080p 16:9</button>
         <button type="button" class="chip-btn" data-preset="2560x1440">2K 16:9</button>
-        <button type="button" class="chip-btn" data-preset="1280x800">720p 省流</button>
+        <button type="button" class="chip-btn" data-preset="1280x800" data-i18n="stage.preset720p">720p Saver</button>
       </div>
       <div class="pop-row">
-        <label><span>刷新率</span>
+        <label><span data-i18n="stage.refreshRateLabel">Refresh Rate</span>
           <select id="liveFpsSelect">
             <option value="60">60 Hz</option>
             <option value="90">90 Hz</option>
@@ -608,15 +620,15 @@
             <option value="165">165 Hz</option>
           </select>
         </label>
-        <label><span>码率</span>
+        <label><span data-i18n="stage.bitrateLabel">Bitrate</span>
           <select id="liveBitrateSelect">
-            <option value="auto">自动档 (实时自适应)</option>
+            <option value="auto" data-i18n="stage.bitrateAutoLive">Auto (Adaptive)</option>
             <option value="8000">8 Mbps</option>
             <option value="14000">14 Mbps</option>
             <option value="22000">22 Mbps</option>
             <option value="32000">32 Mbps</option>
             <option value="45000">45 Mbps (USB)</option>
-            <option value="custom">自定义 (4–100 Mbps)</option>
+            <option value="custom" data-i18n="cast.bitrateCustom">Custom (4–100 Mbps)</option>
           </select>
           <div id="liveCustomBitrateWrap" class="custom-bitrate-row" hidden>
             <input id="liveCustomBitrateInput" type="number" min="4" max="100" step="1" value="50" placeholder="50" />
@@ -625,9 +637,9 @@
         </label>
       </div>
       <div class="pop-row">
-        <label><span>显示密度 (DPI)</span>
+        <label><span data-i18n="stage.dpiLabel">Display Density (DPI)</span>
           <select id="liveDpiSelect">
-            <option value="0" selected>自动</option>
+            <option value="0" selected data-i18n="stage.dpiAuto">Auto</option>
             <option value="160">160 DPI</option>
             <option value="200">200 DPI</option>
             <option value="240">240 DPI</option>
@@ -640,28 +652,28 @@
       </div>
       <label class="switch-row">
         <input id="hideLocalCursorCheck" type="checkbox" />
-        <span>隐藏本机鼠标指针（解决部分机型投屏双指针）</span>
+        <span data-i18n="stage.hideCursorLabel">Hide local mouse cursor (fixes dual cursor on some devices)</span>
       </label>
-      <button id="applyQualityBtn" type="button" class="primary-btn full compact">立即应用</button>
+      <button id="applyQualityBtn" type="button" class="primary-btn full compact" data-i18n="stage.applyQualityBtn">Apply Now</button>
     </div>
 
     <!-- Remote App Launcher Popover -->
     <div id="appsPopover" class="stage-popover apps-popover glass-surface" hidden>
       <div class="pop-head">
         <div class="standalone-history-title-group">
-          <strong>远程应用启动器</strong>
-          <span id="appsPopQuotaBadge" class="status-pill mono">小窗 0/3</span>
+          <strong data-i18n="stage.appsLauncherTitle">Remote App Launcher</strong>
+          <span id="appsPopQuotaBadge" class="status-pill mono">0/3</span>
         </div>
         <div class="standalone-history-actions">
-          <button id="appsSortToggleBtn" type="button" class="mini-btn">常用排序</button>
-          <button id="closeAppsPopBtn" type="button" class="mini-btn">关闭</button>
+          <button id="appsSortToggleBtn" type="button" class="mini-btn" data-i18n="standalone.sortRecent">Recent</button>
+          <button id="closeAppsPopBtn" type="button" class="mini-btn" data-i18n="common.close">Close</button>
         </div>
       </div>
       <div id="appsPopHistoryWrap" class="pop-history-wrap" hidden>
-        <div class="pop-history-head">历史 APP 小窗</div>
+        <div class="pop-history-head" data-i18n="standalone.historyTitle">Recent Standalone Windows</div>
         <div id="appsPopHistoryList" class="pop-history-chips"></div>
       </div>
-      <input id="appSearchInput" type="search" placeholder="搜索手机应用…" autocomplete="off" />
+      <input id="appSearchInput" type="search" data-i18n-placeholder="standalone.searchPlaceholder" placeholder="Search app name or package…" autocomplete="off" />
       <div id="appsList" class="apps-list"></div>
     </div>
   </div>
@@ -669,17 +681,17 @@
   <!-- Desktop Companion TOFU Certificate Fingerprint Verification Modal -->
   <div id="tofuModalOverlay" class="stage-overlay" hidden>
     <div class="overlay-card glass-surface tofu-card">
-      <h2 id="tofuModalTitle">核验手机加密证书指纹</h2>
-      <p id="tofuModalDesc">首次连接该设备，请核对下方 SHA-256 短指纹与手机端是否一致。</p>
+      <h2 id="tofuModalTitle" data-i18n="tofu.titleFirst">Verify Phone Certificate Fingerprint</h2>
+      <p id="tofuModalDesc">Verify the SHA-256 fingerprint below matches your phone.</p>
       <div id="tofuMdnsBadge" class="status-pill mono" hidden></div>
       <div class="tofu-fp-box">
-        <span class="tofu-fp-label">SHA-256 证书指纹</span>
+        <span class="tofu-fp-label" data-i18n="tofu.fpLabel">SHA-256 Certificate Fingerprint</span>
         <code id="tofuShortFp" class="tofu-short-code mono">----</code>
         <code id="tofuFullFp" class="tofu-full-code mono"></code>
       </div>
       <div class="cta-row tofu-actions">
-        <button id="tofuApproveBtn" type="button" class="primary-btn">信任证书并连接</button>
-        <button id="tofuRejectBtn" type="button" class="ghost-btn">取消</button>
+        <button id="tofuApproveBtn" type="button" class="primary-btn" data-i18n="tofu.approveBtn">Trust &amp; Connect</button>
+        <button id="tofuRejectBtn" type="button" class="ghost-btn" data-i18n="common.cancel">Cancel</button>
       </div>
     </div>
   </div>
@@ -689,20 +701,20 @@
     <div class="overlay-card glass-surface modal-wide">
       <div class="pop-head">
         <div class="standalone-history-title-group">
-          <strong id="lobbyAppsModalTitle">选择应用悬浮小窗</strong>
-          <span id="lobbyAppsQuotaBadge" class="status-pill mono">已开 0/3</span>
+          <strong id="lobbyAppsModalTitle" data-i18n="standalone.modalTitle">Select Standalone Window App</strong>
+          <span id="lobbyAppsQuotaBadge" class="status-pill mono">0/3</span>
         </div>
         <div class="standalone-history-actions">
-          <button id="lobbyAppsSortBtn" type="button" class="mini-btn">常用排序</button>
-          <button id="closeLobbyAppsModalBtn" type="button" class="mini-btn">关闭</button>
+          <button id="lobbyAppsSortBtn" type="button" class="mini-btn" data-i18n="standalone.sortRecent">Recent</button>
+          <button id="closeLobbyAppsModalBtn" type="button" class="mini-btn" data-i18n="common.close">Close</button>
         </div>
       </div>
-      <p id="lobbyAppsStatusText" class="hint-text modal-status-line">正在连接手机获取应用列表…</p>
+      <p id="lobbyAppsStatusText" class="hint-text modal-status-line" data-i18n="standalone.modalStatusLoading">Connecting to phone to load app list…</p>
       <div id="lobbyAppsHistoryWrap" class="pop-history-wrap" hidden>
-        <div class="pop-history-head">历史 APP 小窗</div>
+        <div class="pop-history-head" data-i18n="standalone.historyTitle">Recent Standalone Windows</div>
         <div id="lobbyAppsHistoryList" class="pop-history-chips"></div>
       </div>
-      <input id="lobbyAppSearchInput" type="search" class="diag-search-input" placeholder="搜索手机应用名称或包名…" autocomplete="off" />
+      <input id="lobbyAppSearchInput" type="search" class="diag-search-input" data-i18n-placeholder="standalone.searchPlaceholder" placeholder="Search app name or package…" autocomplete="off" />
       <div id="lobbyAppsList" class="apps-list modal-apps-list"></div>
     </div>
   </div>
@@ -710,12 +722,12 @@
   <!-- Secondary Confirmation Modal when Standalone App Window is Already Open -->
   <div id="reloadStandaloneModalOverlay" class="stage-overlay" hidden>
     <div class="overlay-card glass-surface reload-card">
-      <h2 id="reloadModalTitle">应用悬浮小窗已打开</h2>
-      <p id="reloadModalDesc">该应用的独立小窗正在运行。你可以重载小窗并重启远端应用，或仅聚焦到已打开的窗口。</p>
+      <h2 id="reloadModalTitle" data-i18n="standalone.reloadTitle">Standalone Window Already Open</h2>
+      <p id="reloadModalDesc" data-i18n="standalone.reloadDesc">This app is already running in a Standalone Window. Reload the window and app, or focus the existing window.</p>
       <div class="reload-actions">
-        <button id="reloadConfirmBtn" type="button" class="primary-btn full">重载小窗 + 应用</button>
-        <button id="reloadFocusBtn" type="button" class="ghost-btn full">仅聚焦现有窗口</button>
-        <button id="reloadCancelBtn" type="button" class="text-btn">取消</button>
+        <button id="reloadConfirmBtn" type="button" class="primary-btn full" data-i18n="standalone.reloadConfirmBtn">Reload Window + App</button>
+        <button id="reloadFocusBtn" type="button" class="ghost-btn full" data-i18n="standalone.reloadFocusBtn">Focus Existing Window</button>
+        <button id="reloadCancelBtn" type="button" class="text-btn" data-i18n="common.cancel">Cancel</button>
       </div>
     </div>
   </div>
@@ -724,29 +736,29 @@
   <div id="feedbackModalOverlay" class="stage-overlay" hidden>
     <div class="overlay-card glass-surface modal-wide feedback-modal-card">
       <div class="pop-head">
-        <strong id="fbModalTitle">问题与需求反馈</strong>
-        <span id="fbModalQuotaPill" class="status-pill mono">今日剩余 5/5 次</span>
+        <strong id="fbModalTitle" data-i18n="diag.modalTitle">Report Issue / Feature Request</strong>
+        <span id="fbModalQuotaPill" class="status-pill mono">5/5</span>
       </div>
 
       <div class="segmented-bar compact-seg" role="tablist">
-        <button id="fbKindBugBtn" type="button" class="seg-btn active" role="tab" aria-selected="true">问题反馈</button>
-        <button id="fbKindFeatureBtn" type="button" class="seg-btn" role="tab" aria-selected="false">功能建议</button>
+        <button id="fbKindBugBtn" type="button" class="seg-btn active" role="tab" aria-selected="true" data-i18n="diag.kindBug">Report Issue</button>
+        <button id="fbKindFeatureBtn" type="button" class="seg-btn" role="tab" aria-selected="false" data-i18n="diag.kindFeature">Feature Request</button>
       </div>
 
       <div id="fbConfigWarnBox" class="alert-banner warn" hidden></div>
 
       <div class="fb-form-fields">
         <label class="field">
-          <span>称呼 / 联系昵称（选填）</span>
-          <input id="fbReporterInput" type="text" maxlength="64" placeholder="例如：群昵称或称呼，方便定位回复" autocomplete="off" />
+          <span data-i18n="diag.reporterLabel">Name / Nickname (Optional)</span>
+          <input id="fbReporterInput" type="text" maxlength="64" data-i18n-placeholder="diag.reporterPlaceholder" placeholder="e.g. your handle for follow-up" autocomplete="off" />
         </label>
         <label class="field">
-          <span id="fbDescLabel">问题描述（必填）</span>
-          <textarea id="fbDescInput" rows="4" maxlength="2000" placeholder="请描述遇到的问题、触发步骤、设备型号或期望效果…"></textarea>
+          <span id="fbDescLabel" data-i18n="diag.descBugLabel">Issue Description &amp; Steps</span>
+          <textarea id="fbDescInput" rows="4" maxlength="2000" data-i18n-placeholder="diag.descBugPlaceholder" placeholder="Describe the issue, phone model, connection type (Wi-Fi / USB), and steps to reproduce…"></textarea>
         </label>
         <label class="switch-row">
           <input id="fbIncludeLogsCheck" type="checkbox" checked />
-          <span id="fbIncludeLogsLabel">附带脱敏后的客户端运行日志（GZIP 压缩，不附带截屏；取消勾选不会清空本地日志）</span>
+          <span id="fbIncludeLogsLabel" data-i18n="diag.includeLogsLabel">Attach sanitized client logs (GZIP compressed, no screenshots; unchecking keeps local logs)</span>
         </label>
       </div>
 
@@ -754,15 +766,15 @@
 
       <div id="fbSuccessBox" class="alert-banner info fb-success-box" hidden>
         <div class="banner-body">
-          <strong id="fbSuccessTitle">反馈提交成功</strong>
+          <strong id="fbSuccessTitle"></strong>
           <p id="fbSuccessDetail"></p>
         </div>
-        <button id="fbCopyCodeBtn" type="button" class="primary-btn compact">复制反馈码</button>
+        <button id="fbCopyCodeBtn" type="button" class="primary-btn compact" data-i18n="diag.copyCodeBtn">Copy Code</button>
       </div>
 
       <div class="cta-row modal-footer-actions">
-        <button id="fbCancelBtn" type="button" class="ghost-btn">关闭</button>
-        <button id="fbSubmitBtn" type="button" class="primary-btn">提交反馈</button>
+        <button id="fbCancelBtn" type="button" class="ghost-btn" data-i18n="common.close">Close</button>
+        <button id="fbSubmitBtn" type="button" class="primary-btn" data-i18n="diag.submitBtn">Submit Feedback</button>
       </div>
     </div>
   </div>
@@ -772,15 +784,15 @@
     <div class="overlay-card glass-surface fm-modal-card">
       <div class="pop-head">
         <div class="standalone-history-title-group">
-          <strong>手机文件、存储分析与无线装包</strong>
+          <strong data-i18n="fm.modalTitle">Phone Files, Storage Analyzer &amp; Wireless APK</strong>
         </div>
-        <button id="closeFileManagerBtn" type="button" class="mini-btn">关闭</button>
+        <button id="closeFileManagerBtn" type="button" class="mini-btn" data-i18n="common.close">Close</button>
       </div>
 
       <div class="segmented-bar three-tabs compact-seg" role="tablist">
-        <button id="fmTabFilesBtn" type="button" class="seg-btn active" role="tab">文件管理</button>
-        <button id="fmTabStorageBtn" type="button" class="seg-btn" role="tab">存储空间分析</button>
-        <button id="fmTabApkBtn" type="button" class="seg-btn" role="tab">无线安装 APK</button>
+        <button id="fmTabFilesBtn" type="button" class="seg-btn active" role="tab" data-i18n="fm.tabFiles">Phone Files</button>
+        <button id="fmTabStorageBtn" type="button" class="seg-btn" role="tab" data-i18n="fm.tabStorage">Storage Analyzer</button>
+        <button id="fmTabApkBtn" type="button" class="seg-btn" role="tab" data-i18n="fm.tabApk">Wireless APK</button>
       </div>
 
       <div id="fmStatusBanner" class="fm-status-banner" hidden></div>
@@ -790,27 +802,28 @@
         <div class="fm-toolbar">
           <div id="fmQuickNavList" class="fm-quick-nav"></div>
           <div class="fm-path-bar">
-            <button id="fmUpBtn" type="button" class="mini-btn" title="返回上级目录">↑ 上级</button>
+            <button id="fmUpBtn" type="button" class="mini-btn" data-i18n="fm.upBtn" data-i18n-title="fm.upTitle" title="Parent directory">↑ Up</button>
             <div id="fmBreadcrumbs" class="fm-breadcrumbs"></div>
           </div>
           <div class="fm-controls-row">
-            <input id="fmSearchInput" type="search" class="fm-search-input" placeholder="过滤当前目录…" autocomplete="off" />
+            <input id="fmSearchInput" type="search" class="fm-search-input" data-i18n-placeholder="fm.searchPlaceholder" placeholder="Filter current folder…" autocomplete="off" />
             <select id="fmSortSelect" class="fm-sort-select">
-              <option value="name:asc">名称 ↑</option>
-              <option value="size:desc">大小 ↓</option>
-              <option value="modified:desc">时间 ↓</option>
+              <option value="name:asc" data-i18n="fm.sortNameAsc">Name ↑</option>
+              <option value="size:desc" data-i18n="fm.sortSizeDesc">Size ↓</option>
+              <option value="modified:desc" data-i18n="fm.sortModDesc">Modified ↓</option>
             </select>
-            <button id="fmViewToggleBtn" type="button" class="mini-btn">网格</button>
-            <button id="fmUploadBtn" type="button" class="mini-btn">上传文件</button>
-            <button id="fmMkdirBtn" type="button" class="mini-btn">新建目录</button>
-            <button id="fmRefreshBtn" type="button" class="mini-btn">刷新</button>
+            <select id="fmDirectOpenSelect" class="fm-sort-select" data-i18n-title="fm.directOpenTitle" title="Direct-open small files size threshold"></select>
+            <button id="fmViewToggleBtn" type="button" class="mini-btn" data-i18n="fm.viewGrid">Grid</button>
+            <button id="fmUploadBtn" type="button" class="mini-btn" data-i18n="fm.uploadBtn">Upload</button>
+            <button id="fmMkdirBtn" type="button" class="mini-btn" data-i18n="fm.mkdirBtn">New Folder</button>
+            <button id="fmRefreshBtn" type="button" class="mini-btn" data-i18n="fm.refreshBtn">Refresh</button>
             <input id="fmUploadInput" type="file" multiple hidden />
           </div>
           <div id="fmBatchBar" class="fm-batch-bar" hidden>
-            <span id="fmSelectedCount" class="small-muted">已选择 0 项</span>
+            <span id="fmSelectedCount" class="small-muted">0 selected</span>
             <div class="standalone-history-actions">
-              <button id="fmBatchDownloadBtn" type="button" class="btn-pill small primary">批量下载</button>
-              <button id="fmBatchDeleteBtn" type="button" class="btn-pill small danger-ghost">批量删除</button>
+              <button id="fmBatchDownloadBtn" type="button" class="btn-pill small primary" data-i18n="fm.batchDownloadBtn">Download Selected</button>
+              <button id="fmBatchDeleteBtn" type="button" class="btn-pill small danger-ghost" data-i18n="fm.batchDeleteBtn">Delete Selected</button>
             </div>
           </div>
         </div>
@@ -821,12 +834,12 @@
       <div id="fmStoragePane" class="fm-pane" hidden>
         <div class="fm-storage-top">
           <div id="fmStorageOverview" class="fm-storage-overview"></div>
-          <button id="fmRescanStorageBtn" type="button" class="mini-btn">重新扫描</button>
+          <button id="fmRescanStorageBtn" type="button" class="mini-btn" data-i18n="fm.rescanBtn">Rescan</button>
         </div>
         <div class="segmented-bar three-tabs compact-seg">
-          <button id="fmSubCategoriesBtn" type="button" class="seg-btn active">按类型 &amp; 大文件</button>
-          <button id="fmSubFoldersBtn" type="button" class="seg-btn">文件夹 Top 25</button>
-          <button id="fmSubAppsBtn" type="button" class="seg-btn">应用存储排行</button>
+          <button id="fmSubCategoriesBtn" type="button" class="seg-btn active" data-i18n="fm.subCategories">Categories &amp; Large Files</button>
+          <button id="fmSubFoldersBtn" type="button" class="seg-btn" data-i18n="fm.subFolders">Top 25 Folders</button>
+          <button id="fmSubAppsBtn" type="button" class="seg-btn" data-i18n="fm.subApps">App Storage</button>
         </div>
         <div id="fmStorageBody" class="fm-storage-body"></div>
       </div>
@@ -835,23 +848,23 @@
       <div id="fmApkPane" class="fm-pane" hidden>
         <div id="fmApkDropzone" class="fm-apk-dropzone">
           <div class="fm-apk-icon">📦</div>
-          <strong>拖拽安装包到此处，或点击下方选择文件</strong>
-          <p class="hint-text">支持标准 <code>.apk</code> 及分包格式 <code>.apks / .apkm / .xapk</code>，通过加密通道直传并静默安装到手机。</p>
+          <strong data-i18n="fm.apkDropTitle">Drop APK package here, or click below to choose a file</strong>
+          <p class="hint-text" data-i18n="fm.apkDropHint">Supports standard .apk and split bundles (.apks / .apkm / .xapk) via encrypted direct upload &amp; silent install.</p>
           <div class="fm-apk-options">
             <label class="switch-row compact-switch">
               <input id="fmApkReplaceCheck" type="checkbox" checked />
-              <span>覆盖已有应用 (-r)</span>
+              <span data-i18n="fm.apkReplaceLabel">Replace existing app (-r)</span>
             </label>
             <label class="switch-row compact-switch">
               <input id="fmApkDowngradeCheck" type="checkbox" />
-              <span>允许降级安装 (-d)</span>
+              <span data-i18n="fm.apkDowngradeLabel">Allow downgrade (-d)</span>
             </label>
           </div>
-          <button id="fmPickApkBtn" type="button" class="primary-btn compact">选择 APK / APKS / XAPK 安装</button>
+          <button id="fmPickApkBtn" type="button" class="primary-btn compact" data-i18n="fm.apkPickBtn">Choose APK / APKS / XAPK</button>
           <input id="fmApkFileInput" type="file" accept=".apk,.apks,.apkm,.xapk" hidden />
         </div>
         <div id="fmApkProgressCard" class="fm-apk-progress-card" hidden>
-          <div class="fm-apk-stage" id="fmApkStageText">准备中…</div>
+          <div class="fm-apk-stage" id="fmApkStageText" data-i18n="fm.apkPreparing">Preparing…</div>
           <div class="fm-storage-bar-track">
             <div id="fmApkProgressFill" class="fm-storage-bar-fill" style="width:0%"></div>
           </div>
@@ -865,8 +878,8 @@
   <div id="fmPreviewOverlay" class="stage-overlay" hidden>
     <div class="overlay-card glass-surface fm-preview-card">
       <div class="pop-head">
-        <strong id="fmPreviewTitle">图片预览</strong>
-        <button id="fmPreviewCloseBtn" type="button" class="mini-btn">关闭</button>
+        <strong id="fmPreviewTitle" data-i18n="fm.previewTitle">Image Preview</strong>
+        <button id="fmPreviewCloseBtn" type="button" class="mini-btn" data-i18n="common.close">Close</button>
       </div>
       <img id="fmPreviewImg" class="fm-preview-img" alt="preview" />
     </div>
@@ -876,15 +889,15 @@
   <div id="dialerModalOverlay" class="stage-overlay" hidden>
     <div class="overlay-card glass-surface dialer-card">
       <div class="pop-head">
-        <strong>手机快捷拨号</strong>
-        <button id="closeDialerModalBtn" type="button" class="mini-btn">关闭</button>
+        <strong data-i18n="companion.dialerTitle">Quick Dialer</strong>
+        <button id="closeDialerModalBtn" type="button" class="mini-btn" data-i18n="common.close">Close</button>
       </div>
       <div class="dialer-input-row">
-        <input id="dialerNumberInput" type="tel" class="dialer-input mono" placeholder="输入号码或点击下方键盘" autocomplete="off" />
-        <button id="dialerBackspaceBtn" type="button" class="mini-btn" title="退格">⌫</button>
+        <input id="dialerNumberInput" type="tel" class="dialer-input mono" data-i18n-placeholder="companion.dialerPlaceholder" placeholder="Enter number or tap keypad" autocomplete="off" />
+        <button id="dialerBackspaceBtn" type="button" class="mini-btn" data-i18n-title="companion.dialerBackspaceTitle" title="Backspace">⌫</button>
       </div>
       <div id="dialerKeypadGrid" class="dialer-keypad-grid"></div>
-      <button id="dialerCallBtn" type="button" class="primary-btn full">在手机上拨打</button>
+      <button id="dialerCallBtn" type="button" class="primary-btn full" data-i18n="companion.dialerCallBtn">Dial on Phone</button>
     </div>
   </div>
 
@@ -892,17 +905,17 @@
   <div id="webCallHud" class="web-call-hud glass-surface" hidden>
     <div class="web-call-hud-top">
       <div>
-        <strong id="webCallHudCaller">来电</strong>
-        <div id="webCallHudSub" class="small-muted mono">来电响铃</div>
+        <strong id="webCallHudCaller" data-i18n="call.incoming">Call</strong>
+        <div id="webCallHudSub" class="small-muted mono" data-i18n="call.ringing">Incoming Call</div>
       </div>
-      <button id="webCallHudDismissBtn" type="button" class="mini-btn" title="仅暂隐浮窗，不挂断">暂隐</button>
+      <button id="webCallHudDismissBtn" type="button" class="mini-btn" data-i18n="call.dismissBtn" data-i18n-title="call.dismissTitle" title="Temporarily hide Call HUD without hanging up">Hide</button>
     </div>
     <div class="web-call-hud-actions">
-      <button id="webCallHudAnswerBtn" type="button" class="btn-pill small emerald">接听</button>
-      <button id="webCallHudRejectBtn" type="button" class="btn-pill small danger">拒接</button>
-      <button id="webCallHudMuteBtn" type="button" class="btn-pill small" hidden>静音</button>
-      <button id="webCallHudSpeakerBtn" type="button" class="btn-pill small" hidden>扬声器</button>
-      <button id="webCallHudHangupBtn" type="button" class="btn-pill small danger" hidden>挂断</button>
+      <button id="webCallHudAnswerBtn" type="button" class="btn-pill small emerald" data-i18n="call.answerBtn">Answer</button>
+      <button id="webCallHudRejectBtn" type="button" class="btn-pill small danger" data-i18n="call.rejectBtn">Decline</button>
+      <button id="webCallHudMuteBtn" type="button" class="btn-pill small" data-i18n="call.muteBtn" hidden>Mute</button>
+      <button id="webCallHudSpeakerBtn" type="button" class="btn-pill small" data-i18n="call.speakerBtn" hidden>Speaker</button>
+      <button id="webCallHudHangupBtn" type="button" class="btn-pill small danger" data-i18n="call.hangupBtn" hidden>Hang Up</button>
     </div>
   </div>
 

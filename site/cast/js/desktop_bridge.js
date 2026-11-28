@@ -159,6 +159,8 @@ export function buildStandaloneWindowQuery({
   pkg,
   cls = '',
   label = '',
+  userId = 0,
+  profileType = '',
   deviceKey = '',
   deviceName = '',
   certFingerprint = '',
@@ -187,6 +189,13 @@ export function buildStandaloneWindowQuery({
   }
   if (label) {
     params.set('appLabel', String(label).trim());
+  }
+  const normalizedUid = Math.max(0, Math.round(Number(userId) || 0));
+  if (normalizedUid > 0) {
+    params.set('userId', String(normalizedUid));
+    if (profileType) {
+      params.set('profileType', String(profileType).trim());
+    }
   }
   if (deviceKey) {
     params.set('deviceKey', String(deviceKey).trim());
@@ -318,6 +327,9 @@ export function normalizeCastPrefs(raw = {}) {
   const hideToTrayOnClose = typeof raw?.hideToTrayOnClose === 'boolean' ? raw.hideToTrayOnClose : null;
   const companionAutoConnect = typeof raw?.companionAutoConnect === 'boolean' ? raw.companionAutoConnect : null;
   const bleNearbyEnabled = typeof raw?.bleNearbyEnabled === 'boolean' ? raw.bleNearbyEnabled : null;
+  const directOpenRaw = raw?.directOpenMaxMb;
+  const directOpenNum = directOpenRaw === null || directOpenRaw === undefined || directOpenRaw === '' ? NaN : Number(directOpenRaw);
+  const directOpenMaxMb = Number.isFinite(directOpenNum) ? Math.max(0, Math.min(200, Math.round(directOpenNum))) : null;
   const customAdbPath = sanitizeCustomAdbPath(raw?.customAdbPath);
   return {
     preferredCodec: codec,
@@ -331,6 +343,7 @@ export function normalizeCastPrefs(raw = {}) {
     hideToTrayOnClose,
     companionAutoConnect,
     bleNearbyEnabled,
+    directOpenMaxMb,
     customAdbPath,
   };
 }
@@ -500,6 +513,8 @@ export class OpalDesktopBridge {
     pkg,
     cls = '',
     label = '',
+    userId = 0,
+    profileType = '',
     host,
     port,
     transport = 'wifi',
@@ -515,6 +530,7 @@ export class OpalDesktopBridge {
     dpi = 0,
     compat = false,
   }) {
+    const normalizedUid = Math.max(0, Math.round(Number(userId) || 0));
     const query = buildStandaloneWindowQuery({
       host,
       port,
@@ -523,6 +539,8 @@ export class OpalDesktopBridge {
       pkg,
       cls,
       label,
+      userId: normalizedUid,
+      profileType,
       deviceKey,
       deviceName,
       certFingerprint,
@@ -533,6 +551,7 @@ export class OpalDesktopBridge {
     });
     return this.invoke('open_standalone_window', {
       pkg,
+      userId: normalizedUid,
       title: label || pkg,
       query,
       width,

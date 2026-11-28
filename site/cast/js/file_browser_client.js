@@ -27,6 +27,36 @@ import {
 } from './protocol.js';
 
 export const DEFAULT_REMOTE_ROOT = '/sdcard';
+export const DEFAULT_DIRECT_OPEN_MAX_MB = 10;
+export const MAX_DIRECT_OPEN_MAX_MB = 200;
+export const DIRECT_OPEN_MAX_MB_OPTIONS = Object.freeze([0, 5, 10, 25, 50, 100]);
+
+const UNSAFE_DIRECT_OPEN_EXTS = new Set([
+  'app', 'command', 'tool', 'pkg', 'dmg', 'sh', 'zsh', 'bash', 'csh', 'ksh',
+  'exe', 'msi', 'bat', 'cmd', 'com', 'scr', 'pif', 'vbs', 'vbe', 'js', 'jse',
+  'wsf', 'wsh', 'ps1', 'hta', 'cpl', 'reg',
+]);
+
+export function sanitizeDirectOpenMaxMb(raw, fallback = DEFAULT_DIRECT_OPEN_MAX_MB) {
+  if (raw === null || raw === undefined || raw === '') return fallback;
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(0, Math.min(MAX_DIRECT_OPEN_MAX_MB, Math.round(num)));
+}
+
+export function shouldDirectOpenEntry(entry, maxSizeMb = DEFAULT_DIRECT_OPEN_MAX_MB) {
+  if (!entry || entry.isDir) return false;
+  const limitMb = sanitizeDirectOpenMaxMb(maxSizeMb, DEFAULT_DIRECT_OPEN_MAX_MB);
+  if (limitMb <= 0) return false;
+  const name = String(entry.name || '');
+  const dotIdx = name.lastIndexOf('.');
+  const ext = dotIdx >= 0 ? name.slice(dotIdx + 1).toLowerCase() : '';
+  if (ext === 'apk' || ext === 'apks' || ext === 'apkm' || ext === 'xapk') return false;
+  if (UNSAFE_DIRECT_OPEN_EXTS.has(ext)) return false;
+  const sizeBytes = Number(entry.size);
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return false;
+  return sizeBytes <= limitMb * 1024 * 1024;
+}
 export const QUICK_NAV_SHORTCUTS = Object.freeze([
   { label: '内部存储', path: '/sdcard', icon: 'home' },
   { label: '下载', path: '/sdcard/Download', icon: 'download' },

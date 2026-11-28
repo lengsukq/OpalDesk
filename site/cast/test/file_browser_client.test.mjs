@@ -13,11 +13,14 @@ import {
   encodeFilePullChunk,
 } from '../js/protocol.js';
 import {
+  DEFAULT_DIRECT_OPEN_MAX_MB,
   normalizeRemotePath,
   getParentRemotePath,
   buildPathBreadcrumbs,
   formatBytes,
   classifyEntryKind,
+  sanitizeDirectOpenMaxMb,
+  shouldDirectOpenEntry,
   sortRemoteEntries,
   OpalFileBrowserClient,
 } from '../js/file_browser_client.js';
@@ -130,4 +133,23 @@ test('OpalFileBrowserClient handles list, streaming 0x1C pull & 0x34/0x1D APK in
   const instRes = await installPromise;
   assert.deepEqual(stages, ['installing', 'succeeded']);
   assert.equal(instRes.packageName, 'com.demo');
+});
+
+test('direct-open threshold policy defaults to 10 MB, respects overrides, and guards executables', () => {
+  const tenMb = 10 * 1024 * 1024;
+  assert.equal(DEFAULT_DIRECT_OPEN_MAX_MB, 10);
+  assert.equal(sanitizeDirectOpenMaxMb(undefined), 10);
+  assert.equal(sanitizeDirectOpenMaxMb(-4), 0);
+  assert.equal(sanitizeDirectOpenMaxMb(500), 200);
+  assert.equal(sanitizeDirectOpenMaxMb(25), 25);
+
+  assert.equal(shouldDirectOpenEntry({ name: 'doc.pdf', isDir: false, size: tenMb }, 10), true);
+  assert.equal(shouldDirectOpenEntry({ name: 'video.mp4', isDir: false, size: tenMb + 1 }, 10), false);
+  assert.equal(shouldDirectOpenEntry({ name: 'video.mp4', isDir: false, size: tenMb + 1 }, 25), true);
+  assert.equal(shouldDirectOpenEntry({ name: 'doc.pdf', isDir: false, size: 1024 }, 0), false);
+
+  assert.equal(shouldDirectOpenEntry({ name: 'Folder', isDir: true, size: 0 }, 100), false);
+  assert.equal(shouldDirectOpenEntry({ name: 'pkg.apk', isDir: false, size: 1024 }, 100), false);
+  assert.equal(shouldDirectOpenEntry({ name: 'script.ps1', isDir: false, size: 512 }, 100), false);
+  assert.equal(shouldDirectOpenEntry({ name: 'setup.exe', isDir: false, size: 2048 }, 100), false);
 });

@@ -5,8 +5,14 @@ use tauri::{
 };
 
 pub const CALL_HUD_LABEL: &str = "call-hud";
-const CALL_HUD_WIDTH: f64 = 376.0;
-const CALL_HUD_HEIGHT: f64 = 158.0;
+/// Visible iOS pill banner is ~384×84 (expands cleanly up to ~134 when SMS chips open)
+/// inside a 432×184 transparent canvas (24px margin on all sides) with native DWM window
+/// shadow disabled (`shadow(false)`) so the CSS rounded pill shadow feathers cleanly with
+/// zero square corners or rectangular clipping.
+const CALL_HUD_WIDTH: f64 = 432.0;
+const CALL_HUD_HEIGHT: f64 = 184.0;
+const CALL_HUD_SHADOW_MARGIN_X: f64 = 24.0;
+const CALL_HUD_SHADOW_MARGIN_TOP: f64 = 18.0;
 
 #[cfg(target_os = "windows")]
 const CALL_HUD_BROWSER_ARGS: &str =
@@ -71,6 +77,7 @@ fn ensure_call_hud_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     .title("OpalDesk Call")
     .inner_size(CALL_HUD_WIDTH, CALL_HUD_HEIGHT)
     .decorations(false)
+    .shadow(false)
     .transparent(true)
     .always_on_top(true)
     .skip_taskbar(true)
@@ -95,10 +102,10 @@ fn position_top_right(win: &WebviewWindow) {
         let mon_size = monitor.size();
         let mon_pos = monitor.position();
         let hud_w = (CALL_HUD_WIDTH * scale).round() as i32;
-        let margin_x = (24.0 * scale).round() as i32;
-        let margin_y = (28.0 * scale).round() as i32;
-        let x = mon_pos.x + (mon_size.width as i32) - hud_w - margin_x;
-        let y = mon_pos.y + margin_y;
+        let visible_margin_x = ((16.0 - CALL_HUD_SHADOW_MARGIN_X) * scale).round() as i32;
+        let visible_margin_y = ((18.0 - CALL_HUD_SHADOW_MARGIN_TOP) * scale).round() as i32;
+        let x = mon_pos.x + (mon_size.width as i32) - hud_w - visible_margin_x;
+        let y = mon_pos.y + visible_margin_y.max(0);
         let _ = win.set_position(PhysicalPosition::new(x.max(mon_pos.x), y));
     }
 }

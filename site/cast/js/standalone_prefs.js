@@ -4,6 +4,8 @@
  * Mirrors macOS `StandaloneAppPreferencesStore` + `PopoutAspectPreset`.
  */
 
+import { formatAppKey } from './protocol.js';
+
 export const STORAGE_STANDALONE_PREFS = 'opaldesk_standalone_app_prefs_v1';
 
 export const POPOUT_ASPECT_PRESETS = Object.freeze({
@@ -307,7 +309,8 @@ export function createStandalonePrefsStore({ storage = null, storageKey = STORAG
   function sortAppsWithFavorites(apps, deviceKey) {
     if (!Array.isArray(apps) || apps.length <= 1) return Array.isArray(apps) ? [...apps] : [];
     const decorated = apps.map((app, index) => {
-      const pref = getPref(deviceKey, app?.pkg);
+      const appKey = app?.appKey || formatAppKey(app?.pkg, app?.userId || 0);
+      const pref = getPref(deviceKey, appKey);
       return { app, index, isFavorite: pref.isFavorite, favoriteOrder: pref.favoriteOrder };
     });
     decorated.sort((a, b) => {

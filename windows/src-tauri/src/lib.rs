@@ -4,6 +4,7 @@ pub mod call_hud;
 pub mod feedback;
 pub mod file_io;
 pub mod fingerprint;
+pub mod i18n;
 pub mod logs;
 pub mod mdns;
 pub mod prefs;
@@ -49,6 +50,8 @@ const WEBVIEW2_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSm
 #[derive(Debug, Clone)]
 struct StandaloneMeta {
     pkg: String,
+    app_key: String,
+    user_id: u32,
     title: String,
     always_on_top: bool,
 }
@@ -88,6 +91,8 @@ pub struct DesktopRuntimeInfo {
 pub struct StandaloneWindowInfo {
     pub label: String,
     pub pkg: String,
+    pub app_key: String,
+    pub user_id: u32,
     pub title: String,
     pub always_on_top: bool,
 }
@@ -142,6 +147,10 @@ fn collect_live_standalone_windows(
             let pkg = meta
                 .map(|m| m.pkg.clone())
                 .unwrap_or_else(|| label.trim_start_matches(STANDALONE_LABEL_PREFIX).to_string());
+            let user_id = meta.map(|m| m.user_id).unwrap_or(0);
+            let app_key = meta
+                .map(|m| m.app_key.clone())
+                .unwrap_or_else(|| if user_id > 0 { format!("{pkg}#u{user_id}") } else { pkg.clone() });
             let title = meta
                 .map(|m| m.title.clone())
                 .or_else(|| windows.get(&label).and_then(|w| w.title().ok()))
@@ -153,6 +162,8 @@ fn collect_live_standalone_windows(
             StandaloneWindowInfo {
                 label,
                 pkg,
+                app_key,
+                user_id,
                 title,
                 always_on_top,
             }
@@ -187,13 +198,24 @@ fn get_client_prefs(state: tauri::State<'_, DesktopState>) -> ClientPrefs {
 
 #[tauri::command]
 fn update_client_prefs(
+    app: tauri::AppHandle,
     state: tauri::State<'_, DesktopState>,
     patch: ClientPrefsPatch,
 ) -> Result<ClientPrefs, String> {
     let adb_changed = patch.custom_adb_path.is_some();
+    let lang_changed = patch.language.is_some();
     let saved = state.prefs_store.update(patch)?;
     if adb_changed {
         state.adb_manager.set_custom_adb_path(saved.custom_adb_path.clone());
+    }
+    if lang_changed {
+        let locale = i18n::resolve_active_locale(&saved.language);
+        if let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) {
+            if let Ok(menu) = build_tray_menu(&app, locale) {
+                let _ = tray.set_menu(Some(menu));
+            }
+        }
+        let _ = app.emit("opaldesk:language-changed", serde_json::json!({ "language": saved.language }));
     }
     Ok(saved)
 }
@@ -352,6 +374,7 @@ async fn open_standalone_window(
     app: tauri::AppHandle,
     state: tauri::State<'_, DesktopState>,
     pkg: String,
+    user_id: Option<u32>,
     title: String,
     query: String,
     width: Option<f64>,
@@ -363,7 +386,13 @@ async fn open_standalone_window(
     if clean_pkg.is_empty() {
         return Err("应用包名不能为空".into());
     }
-    let label = sanitize_standalone_label(&clean_pkg);
+    let uid = user_id.unwrap_or(0);
+    let app_key = if uid > 0 {
+        format!("{clean_pkg}#u{uid}")
+    } else {
+        clean_pkg.clone()
+    };
+    let label = sanitize_standalone_label(&app_key);
     let pinned = always_on_top.unwrap_or(false);
     let should_reload = force_reload.unwrap_or(false);
     let display_title = if title.trim().is_empty() {
@@ -448,6 +477,8 @@ async fn open_standalone_window(
             label.clone(),
             StandaloneMeta {
                 pkg: clean_pkg.clone(),
+                app_key: app_key.clone(),
+                user_id: uid,
                 title: display_title.clone(),
                 always_on_top: pinned,
             },
@@ -457,7 +488,7 @@ async fn open_standalone_window(
     let next_count = collect_live_standalone_windows(&app, &state).len();
     state.log_store.info(
         "Standalone",
-        &format!("Opened standalone window pkg={clean_pkg} pinned={pinned} ({next_count}/{MAX_STANDALONE_WINDOWS})"),
+        &format!("Opened standalone window appKey={app_key} pinned={pinned} ({next_count}/{MAX_STANDALONE_WINDOWS})"),
     );
 
     Ok(OpenStandaloneWindowResult {
@@ -931,14 +962,15 @@ fn focus_main_window(app_handle: &tauri::AppHandle) {
     }
 }
 
-fn setup_system_tray(app: &tauri::App) -> tauri::Result<()> {
-    let show_item = MenuItem::with_id(app, "show_main", "显示 OpalDesk 主控台", true, None::<&str>)?;
-    let companion_item = MenuItem::with_id(app, "connect_companion", "连接后台随行", true, None::<&str>)?;
-    let files_item = MenuItem::with_id(app, "open_files", "手机文件管理", true, None::<&str>)?;
-    let storage_item = MenuItem::with_id(app, "open_storage", "存储空间分析", true, None::<&str>)?;
-    let dialer_item = MenuItem::with_id(app, "open_dialer", "快捷拨号", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit_app", "退出 OpalDesk", true, None::<&str>)?;
-    let menu = Menu::with_items(
+fn build_tray_menu(app: &tauri::AppHandle, locale: i18n::Locale) -> tauri::Result<Menu<tauri::Wry>> {
+    let labels = i18n::tray_labels(locale);
+    let show_item = MenuItem::with_id(app, "show_main", labels.show_main, true, None::<&str>)?;
+    let companion_item = MenuItem::with_id(app, "connect_companion", labels.connect_companion, true, None::<&str>)?;
+    let files_item = MenuItem::with_id(app, "open_files", labels.open_files, true, None::<&str>)?;
+    let storage_item = MenuItem::with_id(app, "open_storage", labels.open_storage, true, None::<&str>)?;
+    let dialer_item = MenuItem::with_id(app, "open_dialer", labels.open_dialer, true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit_app", labels.quit_app, true, None::<&str>)?;
+    Menu::with_items(
         app,
         &[
             &show_item,
@@ -948,11 +980,17 @@ fn setup_system_tray(app: &tauri::App) -> tauri::Result<()> {
             &dialer_item,
             &quit_item,
         ],
-    )?;
+    )
+}
+
+fn setup_system_tray(app: &tauri::App, language_pref: &str) -> tauri::Result<()> {
+    let locale = i18n::resolve_active_locale(language_pref);
+    let labels = i18n::tray_labels(locale);
+    let menu = build_tray_menu(app.handle(), locale)?;
 
     let mut tray = TrayIconBuilder::with_id(MAIN_TRAY_ID)
         .menu(&menu)
-        .tooltip("OpalDesk · 待机")
+        .tooltip(labels.idle_tooltip)
         .show_menu_on_left_click(false)
         .on_menu_event(|app_handle, event| match event.id.as_ref() {
             "show_main" => focus_main_window(app_handle),
@@ -1066,7 +1104,7 @@ pub fn run() {
                 standalone_meta: Mutex::new(HashMap::new()),
             });
 
-            let _ = setup_system_tray(app);
+            let _ = setup_system_tray(app, &saved_prefs.language);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

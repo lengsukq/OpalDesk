@@ -151,8 +151,13 @@ test('normalizeCastPrefs validates codec, fps, bitrate, cursor, and ADB path; br
     hideToTrayOnClose: null,
     companionAutoConnect: null,
     bleNearbyEnabled: null,
+    directOpenMaxMb: null,
     customAdbPath: 'C:\\Android\\adb.exe',
   });
+
+  assert.equal(normalizeCastPrefs({ directOpenMaxMb: 25 }).directOpenMaxMb, 25);
+  assert.equal(normalizeCastPrefs({ directOpenMaxMb: 999 }).directOpenMaxMb, 200);
+  assert.equal(normalizeCastPrefs({ directOpenMaxMb: -5 }).directOpenMaxMb, 0);
 
   assert.equal(normalizeCastPrefs({ targetFps: 165 }).targetFps, 165);
   assert.equal(normalizeCastPrefs({ resizeMode: '9999x9999', liveDpi: 999 }).resizeMode, '');

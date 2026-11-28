@@ -15,6 +15,9 @@ import {
   encodeFrame,
   encodeHello,
   encodeWindowAction,
+  formatAppKey,
+  getProfileSearchKeywords,
+  normalizeProfileType,
   SESSION_ROLE_APP_CATALOG,
   SESSION_ROLE_STANDALONE_APP,
   TYPE_APP_LIST,
@@ -42,6 +45,7 @@ import {
   resolvePopoutLaunchGeometry,
   formatPopoutPrefBadges,
 } from './standalone_prefs.js';
+import { t } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -75,13 +79,13 @@ export class OpalStandaloneController {
       this.historyEntries = clearStandaloneHistory();
       this.renderLobbyHistoryBar();
       this.renderInCastHistoryStrip();
-      this.app.showToast('已清空历史小窗记录');
+      this.app.showToast(t('standalone.historyClearedToast'));
     });
 
     $('appsSortToggleBtn')?.addEventListener('click', () => {
       this.inCastSortMode = this.inCastSortMode === 'recent' ? 'name' : 'recent';
       if ($('appsSortToggleBtn')) {
-        $('appsSortToggleBtn').textContent = this.inCastSortMode === 'recent' ? '常用排序' : '名称排序';
+        $('appsSortToggleBtn').textContent = this.inCastSortMode === 'recent' ? t('standalone.sortRecent') : t('standalone.sortName');
       }
       this.renderInCastAppList();
     });
@@ -91,7 +95,7 @@ export class OpalStandaloneController {
     $('lobbyAppsSortBtn')?.addEventListener('click', () => {
       this.lobbySortMode = this.lobbySortMode === 'recent' ? 'name' : 'recent';
       if ($('lobbyAppsSortBtn')) {
-        $('lobbyAppsSortBtn').textContent = this.lobbySortMode === 'recent' ? '常用排序' : '名称排序';
+        $('lobbyAppsSortBtn').textContent = this.lobbySortMode === 'recent' ? t('standalone.sortRecent') : t('standalone.sortName');
       }
       this.renderLobbyAppPickerList();
     });
@@ -145,7 +149,7 @@ export class OpalStandaloneController {
         const w = Math.round(window.outerWidth || window.innerWidth || 0);
         const h = Math.round(window.outerHeight || window.innerHeight || 0);
         if (w >= 340 && h >= 420) {
-          this.prefsStore.updatePref(this.app.standaloneDeviceKey, this.app.standaloneAppPkg, {
+          this.prefsStore.updatePref(this.app.standaloneDeviceKey, this.getCurrentStandaloneAppKey(), {
             customWidth: w,
             customHeight: h,
           });
@@ -166,9 +170,46 @@ export class OpalStandaloneController {
     });
   }
 
+  getCurrentStandaloneAppKey() {
+    return formatAppKey(this.app.standaloneAppPkg, this.app.standaloneAppUserId || 0);
+  }
+
+  getProfileBadgeText(userId = 0, profileType = '') {
+    const uid = Math.max(0, Math.round(Number(userId) || 0));
+    if (uid <= 0) return '';
+    const norm = normalizeProfileType(profileType, uid);
+    if (norm === 'clone') return t('profile.badgeClone');
+    if (norm === 'work') return t('profile.badgeWork');
+    if (norm === 'private') return t('profile.badgePrivate');
+    return t('profile.badgeSecondary', { userId: uid });
+  }
+
+  createProfileBadgeEl(userId = 0, profileType = '') {
+    const text = this.getProfileBadgeText(userId, profileType);
+    if (!text) return null;
+    const norm = normalizeProfileType(profileType, userId);
+    const el = document.createElement('span');
+    el.className = `app-profile-badge ${norm || 'clone'}`;
+    el.textContent = text;
+    return el;
+  }
+
+  matchesAppSearch(appItem, query) {
+    if (!query) return true;
+    const q = query.toLowerCase();
+    if ((appItem?.label || '').toLowerCase().includes(q) || (appItem?.pkg || '').toLowerCase().includes(q)) {
+      return true;
+    }
+    const uid = Math.max(0, Math.round(Number(appItem?.userId) || 0));
+    if (uid <= 0) return false;
+    const badge = this.getProfileBadgeText(uid, appItem?.profileType).toLowerCase();
+    if (badge && badge.includes(q)) return true;
+    return getProfileSearchKeywords(uid, appItem?.profileType).some((kw) => kw.toLowerCase().includes(q));
+  }
+
   getCurrentStandalonePref() {
     if (this.app.sessionRole !== SESSION_ROLE_STANDALONE_APP || !this.app.standaloneAppPkg) return null;
-    return this.prefsStore.getPref(this.app.standaloneDeviceKey, this.app.standaloneAppPkg);
+    return this.prefsStore.getPref(this.app.standaloneDeviceKey, this.getCurrentStandaloneAppKey());
   }
 
   syncStandaloneToolbarPrefsUi() {
@@ -184,7 +225,7 @@ export class OpalStandaloneController {
     if (favBtn) {
       favBtn.textContent = pref.isFavorite ? '★' : '☆';
       favBtn.classList.toggle('active', pref.isFavorite);
-      favBtn.title = pref.isFavorite ? '已收藏到常用置顶 · 点击取消' : '收藏此应用（在列表置顶）';
+      favBtn.title = pref.isFavorite ? t('standalone.favRemoveTitle') : t('standalone.favAddTitle');
     }
     const presetSel = $('tbPopoutPresetSelect');
     if (presetSel && presetSel.querySelector(`option[value="${pref.preferredPreset}"]`)) {
@@ -194,8 +235,8 @@ export class OpalStandaloneController {
     if (compatBtn) {
       compatBtn.classList.toggle('active', pref.compatibilityResolution);
       compatBtn.title = pref.compatibilityResolution
-        ? '已开启 1080×1920 @400DPI 兼容分辨率（修复部分银行/游戏黑边）'
-        : '开启 1080×1920 @400DPI 兼容分辨率';
+        ? t('standalone.compatOnTitle')
+        : t('standalone.compatOffTitle');
     }
     const dpiSel = $('tbPopoutDpiSelect');
     if (dpiSel && dpiSel.querySelector(`option[value="${pref.customDpi}"]`)) {
@@ -205,14 +246,18 @@ export class OpalStandaloneController {
 
   toggleCurrentStandaloneFavorite() {
     if (!this.app.standaloneAppPkg) return;
-    const next = this.prefsStore.toggleFavorite(this.app.standaloneDeviceKey, this.app.standaloneAppPkg);
+    const next = this.prefsStore.toggleFavorite(this.app.standaloneDeviceKey, this.getCurrentStandaloneAppKey());
     this.syncStandaloneToolbarPrefsUi();
-    this.app.showToast(next.isFavorite ? `已收藏「${this.app.standaloneAppLabel}」` : `已取消收藏「${this.app.standaloneAppLabel}」`);
+    this.app.showToast(
+      next.isFavorite
+        ? t('standalone.favAddedToast', { name: this.app.standaloneAppLabel })
+        : t('standalone.favRemovedToast', { name: this.app.standaloneAppLabel })
+    );
   }
 
   async applyCurrentStandalonePreset(presetId) {
     if (!this.app.standaloneAppPkg || !POPOUT_ASPECT_PRESETS[presetId]) return;
-    const next = this.prefsStore.updatePref(this.app.standaloneDeviceKey, this.app.standaloneAppPkg, {
+    const next = this.prefsStore.updatePref(this.app.standaloneDeviceKey, this.getCurrentStandaloneAppKey(), {
       preferredPreset: presetId,
       compatibilityResolution: false,
     });
@@ -222,13 +267,18 @@ export class OpalStandaloneController {
     }
     this.app.applyStandaloneStreamGeometry?.(geo);
     this.syncStandaloneToolbarPrefsUi();
-    this.app.showToast(`已切换为「${POPOUT_ASPECT_PRESETS[presetId].label}」(${geo.streamWidth}×${geo.streamHeight})`);
+    const presetKeyMap = { phone: 'standalone.presetPhone', fold: 'standalone.presetFold', tablet: 'standalone.presetTablet', custom: 'standalone.presetCustom' };
+    this.app.showToast(t('standalone.presetSwitchedToast', {
+      label: presetKeyMap[presetId] ? t(presetKeyMap[presetId]) : POPOUT_ASPECT_PRESETS[presetId].label,
+      w: geo.streamWidth,
+      h: geo.streamHeight,
+    }));
   }
 
   async toggleCurrentStandaloneCompat() {
     if (!this.app.standaloneAppPkg) return;
     const cur = this.getCurrentStandalonePref();
-    const next = this.prefsStore.updatePref(this.app.standaloneDeviceKey, this.app.standaloneAppPkg, {
+    const next = this.prefsStore.updatePref(this.app.standaloneDeviceKey, this.getCurrentStandaloneAppKey(), {
       compatibilityResolution: !cur?.compatibilityResolution,
     });
     const geo = resolvePopoutLaunchGeometry(next);
@@ -239,31 +289,39 @@ export class OpalStandaloneController {
     this.syncStandaloneToolbarPrefsUi();
     this.app.showToast(
       next.compatibilityResolution
-        ? '已启用兼容分辨率模式 (1080×1920 @ 400 DPI)'
-        : '已恢复自适应小窗分辨率'
+        ? t('standalone.compatOnToast')
+        : t('standalone.compatOffToast')
     );
   }
 
   async applyCurrentStandaloneDpi(dpi) {
     if (!this.app.standaloneAppPkg) return;
-    const next = this.prefsStore.updatePref(this.app.standaloneDeviceKey, this.app.standaloneAppPkg, {
+    const next = this.prefsStore.updatePref(this.app.standaloneDeviceKey, this.getCurrentStandaloneAppKey(), {
       customDpi: dpi,
     });
     const geo = resolvePopoutLaunchGeometry(next);
     this.app.applyStandaloneStreamGeometry?.(geo);
     this.syncStandaloneToolbarPrefsUi();
-    this.app.showToast(dpi > 0 ? `已将该应用 DPI 设为 ${dpi}` : '已恢复该应用自动 DPI');
+    this.app.showToast(dpi > 0 ? t('standalone.dpiSetToast', { dpi }) : t('standalone.dpiAutoToast'));
   }
 
   async createDesktopShortcutForApp(appItem, target) {
     if (!this.desktop.enabled || !target || !appItem?.pkg) return;
+    const userId = Math.max(0, Math.round(Number(appItem.userId) || 0));
+    const profileType = normalizeProfileType(appItem.profileType || '', userId);
+    const appKey = formatAppKey(appItem.pkg, userId);
     const deviceKey = target.deviceKey || `${target.host}:${target.port || 19878}`;
-    const pref = this.prefsStore.getPref(deviceKey, appItem.pkg);
+    const pref = this.prefsStore.getPref(deviceKey, appKey);
+    const badgeText = this.getProfileBadgeText(userId, profileType);
+    const rawLabel = appItem.label || appItem.pkg;
+    const shortcutLabel = badgeText && !rawLabel.includes(badgeText) ? `${rawLabel} (${badgeText})` : rawLabel;
     try {
       const res = await this.desktop.createAppShortcut({
         pkg: appItem.pkg,
         cls: appItem.cls || '',
-        appLabel: appItem.label || appItem.pkg,
+        appLabel: shortcutLabel,
+        userId,
+        profileType,
         host: target.host || '',
         port: Number(target.port || 19878),
         transport: target.transport || 'wifi',
@@ -275,14 +333,14 @@ export class OpalStandaloneController {
         compat: pref.compatibilityResolution,
         pinned: pref.pinnedOnTop,
       });
-      this.app.showToast(`已创建桌面快捷方式：${appItem.label || appItem.pkg}`, {
-        actionText: '打开位置',
+      this.app.showToast(t('standalone.shortcutCreatedToast', { name: shortcutLabel }), {
+        actionText: t('cast.openLocationAction'),
         actionFn: () => {
           if (res?.shortcutPath) void this.desktop.revealInExplorer(res.shortcutPath);
         },
       });
     } catch (err) {
-      this.app.showToast(`创建桌面快捷方式失败：${err?.message || err}`);
+      this.app.showToast(t('standalone.shortcutFailToast', { error: err?.message || err }));
     }
   }
 
@@ -321,11 +379,18 @@ export class OpalStandaloneController {
       }
     } else {
       const next = [];
-      for (const [pkg, rec] of this.webPopups.entries()) {
+      for (const [appKey, rec] of this.webPopups.entries()) {
         if (!rec.win || rec.win.closed) {
-          this.webPopups.delete(pkg);
+          this.webPopups.delete(appKey);
         } else {
-          next.push({ label: `standalone-${pkg}`, pkg, title: rec.title, alwaysOnTop: false });
+          next.push({
+            label: `standalone-${appKey}`,
+            pkg: rec.pkg || appKey,
+            appKey,
+            userId: rec.userId || 0,
+            title: rec.title,
+            alwaysOnTop: false,
+          });
         }
       }
       this.activeWindows = next;
@@ -341,8 +406,12 @@ export class OpalStandaloneController {
     }
   }
 
-  getActiveWindowForPkg(pkg) {
-    return this.activeWindows.find((w) => w.pkg === pkg) || null;
+  getActiveWindowForPkg(pkg, userId = 0) {
+    const targetKey = formatAppKey(pkg, userId);
+    return this.activeWindows.find((w) => {
+      const winKey = w.appKey || formatAppKey(w.pkg, w.userId || 0);
+      return winKey === targetKey;
+    }) || null;
   }
 
   getActiveCount() {
@@ -351,7 +420,7 @@ export class OpalStandaloneController {
 
   syncQuotaBadges() {
     const count = this.getActiveCount();
-    const text = `已开 ${count}/${MAX_STANDALONE_WINDOWS}`;
+    const text = t('standalone.quotaOpened', { count, max: MAX_STANDALONE_WINDOWS });
     const full = count >= MAX_STANDALONE_WINDOWS;
 
     for (const id of ['standaloneQuotaPill', 'lobbyAppsQuotaBadge']) {
@@ -362,7 +431,7 @@ export class OpalStandaloneController {
     }
     const popBadge = $('appsPopQuotaBadge');
     if (popBadge) {
-      popBadge.textContent = `小窗 ${count}/${MAX_STANDALONE_WINDOWS}`;
+      popBadge.textContent = t('standalone.quotaPop', { count, max: MAX_STANDALONE_WINDOWS });
       popBadge.className = `status-pill mono ${full ? 'warn' : count > 0 ? 'ok' : ''}`;
     }
     const closeAllBtn = $('closeAllStandaloneBtn');
@@ -380,10 +449,10 @@ export class OpalStandaloneController {
     }
     btn.hidden = false;
     btn.classList.toggle('pinned-active', this.currentWindowPinned);
-    btn.textContent = this.currentWindowPinned ? '已置顶' : '置顶';
+    btn.textContent = this.currentWindowPinned ? t('standalone.pinnedBtn') : t('standalone.pinBtn');
     btn.title = this.currentWindowPinned
-      ? '窗口已置顶 · 点击取消置顶 (Alt+Shift+T)'
-      : '将当前悬浮窗置顶显示 (Alt+Shift+T)';
+      ? t('standalone.pinOnTitle')
+      : t('standalone.pinOffTitle');
   }
 
   async applyInitialStandalonePin(pinFlag) {
@@ -406,7 +475,7 @@ export class OpalStandaloneController {
 
   async toggleCurrentWindowAlwaysOnTop() {
     if (!this.desktop.enabled) {
-      this.app.showToast('窗口置顶功能需在 OpalDesk Windows / macOS 桌面客户端中使用');
+      this.app.showToast(t('standalone.pinDesktopOnlyToast'));
       return;
     }
     const next = !this.currentWindowPinned;
@@ -414,19 +483,20 @@ export class OpalStandaloneController {
       this.currentWindowPinned = await this.desktop.setCurrentWindowAlwaysOnTop(next);
       this.syncPinButtonUi();
       if (this.app.sessionRole === SESSION_ROLE_STANDALONE_APP && this.app.standaloneAppPkg) {
+        const curKey = this.getCurrentStandaloneAppKey();
         this.historyEntries = updateStandalonePinPref(
-          this.app.standaloneAppPkg,
+          curKey,
           this.currentWindowPinned,
           this.app.standaloneDeviceKey || ''
         );
-        this.prefsStore.updatePref(this.app.standaloneDeviceKey || '', this.app.standaloneAppPkg, {
+        this.prefsStore.updatePref(this.app.standaloneDeviceKey || '', curKey, {
           pinnedOnTop: this.currentWindowPinned,
         });
       }
-      this.app.diagnostics?.log('I', 'Standalone', `窗口置顶已${this.currentWindowPinned ? '开启' : '关闭'}`);
-      this.app.showToast(this.currentWindowPinned ? '已开启悬浮窗置顶' : '已取消悬浮窗置顶');
+      this.app.diagnostics?.log('I', 'Standalone', `alwaysOnTop=${this.currentWindowPinned}`);
+      this.app.showToast(this.currentWindowPinned ? t('standalone.pinOnToast') : t('standalone.pinOffToast'));
     } catch (err) {
-      this.app.showToast(`切换置顶失败：${err?.message || err}`);
+      this.app.showToast(t('standalone.pinFailToast', { error: err?.message || err }));
     }
   }
 
@@ -434,11 +504,11 @@ export class OpalStandaloneController {
     if (!this.desktop.enabled) return;
     try {
       await this.desktop.closeAllStandaloneWindows();
-      this.app.diagnostics?.log('I', 'Standalone', '关闭了全部单应用悬浮小窗');
+      this.app.diagnostics?.log('I', 'Standalone', 'Closed all standalone windows');
       await this.refreshActiveWindows();
-      this.app.showToast('已关闭全部应用悬浮小窗');
+      this.app.showToast(t('standalone.closeAllToast'));
     } catch (err) {
-      this.app.showToast(`关闭小窗失败：${err?.message || err}`);
+      this.app.showToast(t('standalone.closeAllFailToast', { error: err?.message || err }));
     }
   }
 
@@ -451,8 +521,8 @@ export class OpalStandaloneController {
 
     this.syncQuotaBadges();
     const entries = [...this.historyEntries].sort((a, b) => {
-      const fa = this.prefsStore.getPref(a.deviceKey, a.pkg);
-      const fb = this.prefsStore.getPref(b.deviceKey, b.pkg);
+      const fa = this.prefsStore.getPref(a.deviceKey, a.appKey || formatAppKey(a.pkg, a.userId || 0));
+      const fb = this.prefsStore.getPref(b.deviceKey, b.appKey || formatAppKey(b.pkg, b.userId || 0));
       if (fa.isFavorite !== fb.isFavorite) return fa.isFavorite ? -1 : 1;
       if (fa.isFavorite && fb.isFavorite && fa.favoriteOrder !== fb.favoriteOrder) {
         return fa.favoriteOrder - fb.favoriteOrder;
@@ -465,28 +535,29 @@ export class OpalStandaloneController {
     if (!entries.length) {
       const empty = document.createElement('span');
       empty.className = 'hint-text';
-      empty.textContent = '暂无历史小窗记录：点击下方设备卡片的「应用小窗」或在投屏控制栏打开独立小窗后将自动保存。';
+      empty.textContent = t('standalone.historyEmpty');
       listEl.appendChild(empty);
       return;
     }
 
     for (const entry of entries) {
-      const liveWin = this.getActiveWindowForPkg(entry.pkg);
+      const entryKey = entry.appKey || formatAppKey(entry.pkg, entry.userId || 0);
+      const liveWin = this.getActiveWindowForPkg(entry.pkg, entry.userId || 0);
       const isRunning = Boolean(liveWin);
-      const pref = this.prefsStore.getPref(entry.deviceKey, entry.pkg);
+      const pref = this.prefsStore.getPref(entry.deviceKey, entryKey);
       const isPinned = isRunning ? Boolean(liveWin.alwaysOnTop) : Boolean(pref.pinnedOnTop || entry.pinnedOnTop);
       const badges = formatPopoutPrefBadges(pref);
 
       const card = document.createElement('div');
       card.className = `standalone-hist-card${isRunning ? ' running' : ''}${pref.isFavorite ? ' is-favorite' : ''}`;
       card.title = isRunning
-        ? `${entry.label}（运行中 · 点击可选择重载小窗+应用或聚焦）`
-        : `一键打开 ${entry.label} 悬浮小窗`;
+        ? t('standalone.histCardRunningTitle', { name: entry.label })
+        : t('standalone.histCardOpenTitle', { name: entry.label });
       card.addEventListener('click', () => this.launchFromHistoryEntry(entry));
 
       const avatar = document.createElement('div');
       avatar.className = 'app-avatar-badge';
-      avatar.style.background = getAppAvatarColor(entry.pkg);
+      avatar.style.background = getAppAvatarColor(entryKey);
       avatar.textContent = getAppAvatarInitial(entry.label, entry.pkg);
       if (isRunning) {
         const dot = document.createElement('span');
@@ -499,51 +570,64 @@ export class OpalStandaloneController {
       const name = document.createElement('div');
       name.className = 'standalone-hist-name';
       name.textContent = entry.label;
+      const profileBadge = this.createProfileBadgeEl(entry.userId, entry.profileType);
+      if (profileBadge) {
+        name.appendChild(document.createTextNode(' '));
+        name.appendChild(profileBadge);
+      }
       const sub = document.createElement('div');
       sub.className = 'standalone-hist-sub';
       const transportTag = entry.transport === 'usb' ? 'USB' : 'Wi-Fi';
       const badgeSuffix = badges.length ? ` · ${badges.join(' / ')}` : '';
-      sub.textContent = `${isRunning ? '运行中 · ' : ''}${entry.deviceName || entry.host || 'Android'} (${transportTag})${badgeSuffix}`;
+      sub.textContent = `${isRunning ? t('standalone.histRunningPrefix') : ''}${entry.deviceName || entry.host || 'Android'} (${transportTag})${badgeSuffix}`;
       meta.append(name, sub);
 
       const favBtn = document.createElement('button');
       favBtn.type = 'button';
       favBtn.className = `hist-icon-btn fav${pref.isFavorite ? ' active' : ''}`;
-      favBtn.title = pref.isFavorite ? '已收藏置顶 · 点击取消' : '收藏并置顶此应用';
+      favBtn.title = pref.isFavorite ? t('standalone.favRemoveTitle') : t('standalone.favAddTitle');
       favBtn.textContent = pref.isFavorite ? '★' : '☆';
       favBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        const next = this.prefsStore.toggleFavorite(entry.deviceKey, entry.pkg);
+        const next = this.prefsStore.toggleFavorite(entry.deviceKey, entryKey);
         this.renderLobbyHistoryBar();
-        this.app.showToast(next.isFavorite ? `已收藏「${entry.label}」` : `已取消收藏「${entry.label}」`);
+        this.app.showToast(
+          next.isFavorite
+            ? t('standalone.favAddedToast', { name: entry.label })
+            : t('standalone.favRemovedToast', { name: entry.label })
+        );
       });
 
       const pinBtn = document.createElement('button');
       pinBtn.type = 'button';
       pinBtn.className = `hist-icon-btn${isPinned ? ' pinned' : ''}`;
-      pinBtn.title = isPinned ? '已设为置顶 · 点击取消' : '点击预设或切换置顶';
+      pinBtn.title = isPinned ? t('standalone.histPinSetTitle') : t('standalone.histPinUnsetTitle');
       pinBtn.textContent = '📌';
       pinBtn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
         const nextPin = !isPinned;
-        this.historyEntries = updateStandalonePinPref(entry.pkg, nextPin, entry.deviceKey);
-        this.prefsStore.updatePref(entry.deviceKey, entry.pkg, { pinnedOnTop: nextPin });
+        this.historyEntries = updateStandalonePinPref(entryKey, nextPin, entry.deviceKey);
+        this.prefsStore.updatePref(entry.deviceKey, entryKey, { pinnedOnTop: nextPin });
         if (isRunning && this.desktop.enabled) {
           try {
-            await this.desktop.setStandaloneWindowAlwaysOnTop(entry.pkg, nextPin);
+            await this.desktop.setStandaloneWindowAlwaysOnTop(entryKey, nextPin);
             await this.refreshActiveWindows();
           } catch {
             // Ignore
           }
         }
         this.renderLobbyHistoryBar();
-        this.app.showToast(`${entry.label} ${nextPin ? '已开启置顶' : '已取消置顶'}`);
+        this.app.showToast(
+          nextPin
+            ? t('standalone.histPinOnToast', { name: entry.label })
+            : t('standalone.histPinOffToast', { name: entry.label })
+        );
       });
 
       const delBtn = document.createElement('button');
       delBtn.type = 'button';
       delBtn.className = 'hist-icon-btn remove';
-      delBtn.title = '移除此历史记录';
+      delBtn.title = t('standalone.histRemoveTitle');
       delBtn.textContent = '×';
       delBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
@@ -568,7 +652,13 @@ export class OpalStandaloneController {
       certFingerprint: entry.certFingerprint || '',
     };
     await this.requestLaunchStandaloneApp(
-      { pkg: entry.pkg, cls: entry.cls || '', label: entry.label || entry.pkg },
+      {
+        pkg: entry.pkg,
+        cls: entry.cls || '',
+        label: entry.label || entry.pkg,
+        userId: entry.userId || 0,
+        profileType: entry.profileType || '',
+      },
       target,
       { alwaysOnTop: Boolean(entry.pinnedOnTop) }
     );
@@ -579,17 +669,22 @@ export class OpalStandaloneController {
   async requestLaunchStandaloneApp(appInfo, target, { alwaysOnTop, forceReload = false } = {}) {
     const pkg = String(appInfo?.pkg || '').trim();
     if (!pkg) return;
+    const userId = Math.max(0, Math.round(Number(appInfo?.userId) || 0));
+    const profileType = normalizeProfileType(appInfo?.profileType || '', userId);
+    const appKey = formatAppKey(pkg, userId);
     const label = String(appInfo?.label || '').trim() || pkg;
     const cls = String(appInfo?.cls || '').trim();
+    const badgeText = this.getProfileBadgeText(userId, profileType);
+    const windowTitle = badgeText && !label.includes(badgeText) ? `${label} (${badgeText})` : label;
 
     const resolvedDeviceKey =
       target.deviceKey || (target.transport === 'usb' ? `usb:${target.adbSerial || 'default'}` : `${target.host}:${target.port || 19878}`);
-    const savedPref = this.prefsStore.getPref(resolvedDeviceKey, pkg);
+    const savedPref = this.prefsStore.getPref(resolvedDeviceKey, appKey);
     const resolvedGeo = resolvePopoutLaunchGeometry(savedPref);
     const resolvedPin =
       typeof alwaysOnTop === 'boolean'
         ? alwaysOnTop
-        : Boolean(savedPref.pinnedOnTop || getStandalonePinPref(pkg, resolvedDeviceKey));
+        : Boolean(savedPref.pinnedOnTop || getStandalonePinPref(appKey, resolvedDeviceKey));
 
     try {
       // Ensure underlying transport (USB ADB forward or Wi-Fi TLS tunnel) is ready before opening window
@@ -605,7 +700,7 @@ export class OpalStandaloneController {
               devices.find((d) => d.serial === serial && d.state === 'device') ||
               devices.find((d) => d.state === 'device');
             if (!chosen) {
-              throw new Error('未检测到已授权的 USB 调试手机，请检查数据线连接');
+              throw new Error(t('standalone.errNoUsb'));
             }
             const fwd = await this.desktop.bootstrapAndForwardUsb(chosen.serial);
             usbLocalPort = fwd.localPort;
@@ -613,7 +708,7 @@ export class OpalStandaloneController {
             target.usbLocalPort = usbLocalPort;
           }
         } else {
-          if (!target.host) throw new Error('缺少手机局域网 IP 地址');
+          if (!target.host) throw new Error(t('standalone.errNoIp'));
           if (!verifiedFp) {
             const tunnel = await this.app.ensureDesktopTlsTunnel(target.host, target.port || 19878, '/ws', '');
             if (!tunnel) return; // User cancelled TOFU
@@ -625,7 +720,9 @@ export class OpalStandaloneController {
         const res = await this.desktop.openStandaloneWindow({
           pkg,
           cls,
-          label,
+          label: windowTitle,
+          userId,
+          profileType,
           host: target.host,
           port: target.port || 19878,
           transport: target.transport,
@@ -644,14 +741,14 @@ export class OpalStandaloneController {
 
         if (res.status === 'already_open') {
           this.openReloadConfirmModal({
-            appInfo: { pkg, cls, label: res.existingTitle || label },
+            appInfo: { pkg, cls, label: res.existingTitle || windowTitle, userId, profileType, appKey },
             target,
             alwaysOnTop: resolvedPin,
           });
           return;
         }
         if (res.status === 'limit_reached') {
-          this.app.showToast(`最多同时打开 ${res.maxCount || MAX_STANDALONE_WINDOWS} 个单应用悬浮窗，请先关闭其中一个`);
+          this.app.showToast(t('standalone.limitReachedToast', { max: res.maxCount || MAX_STANDALONE_WINDOWS }));
           await this.refreshActiveWindows();
           return;
         }
@@ -660,6 +757,8 @@ export class OpalStandaloneController {
           pkg,
           cls,
           label,
+          userId,
+          profileType,
           deviceKey: resolvedDeviceKey,
           deviceName: target.deviceName || target.host || 'Android',
           transport: target.transport,
@@ -672,21 +771,23 @@ export class OpalStandaloneController {
         this.app.diagnostics?.log(
           'I',
           'Standalone',
-          `${forceReload ? '重载' : '打开'}悬浮小窗 ${label} (${pkg}) pinned=${resolvedPin} (${res.activeCount}/${res.maxCount})`
+          `${forceReload ? 'Reload' : 'Open'} standalone ${windowTitle} (${appKey}) pinned=${resolvedPin} (${res.activeCount}/${res.maxCount})`
         );
         await this.refreshActiveWindows();
         this.app.showToast(
-          `${forceReload ? '已重载' : '已打开'}「${label}」悬浮小窗 (${res.activeCount}/${res.maxCount})`
+          forceReload
+            ? t('standalone.reloadedToast', { name: windowTitle, count: res.activeCount, max: res.maxCount })
+            : t('standalone.launchedToast', { name: windowTitle, count: res.activeCount, max: res.maxCount })
         );
         return;
       }
 
       // Pure Web browser fallback (with max 3 + reload confirmation)
       await this.refreshActiveWindows();
-      const existingPopup = this.webPopups.get(pkg);
+      const existingPopup = this.webPopups.get(appKey);
       if (existingPopup && existingPopup.win && !existingPopup.win.closed && !forceReload) {
         this.openReloadConfirmModal({
-          appInfo: { pkg, cls, label },
+          appInfo: { pkg, cls, label: windowTitle, userId, profileType, appKey },
           target,
           alwaysOnTop: resolvedPin,
         });
@@ -694,10 +795,10 @@ export class OpalStandaloneController {
       }
       if (forceReload && existingPopup && existingPopup.win && !existingPopup.win.closed) {
         try { existingPopup.win.close(); } catch {}
-        this.webPopups.delete(pkg);
+        this.webPopups.delete(appKey);
       }
       if (this.webPopups.size >= MAX_STANDALONE_WINDOWS) {
-        this.app.showToast(`最多同时打开 ${MAX_STANDALONE_WINDOWS} 个单应用悬浮窗，请先关闭其中一个`);
+        this.app.showToast(t('standalone.limitReachedToast', { max: MAX_STANDALONE_WINDOWS }));
         return;
       }
 
@@ -711,15 +812,21 @@ export class OpalStandaloneController {
       u.searchParams.set('pkg', pkg);
       if (cls) u.searchParams.set('cls', cls);
       u.searchParams.set('appLabel', label);
+      if (userId > 0) {
+        u.searchParams.set('userId', String(userId));
+        if (profileType) u.searchParams.set('profileType', profileType);
+      }
 
-      const popup = window.open(u.toString(), `opal_app_${pkg}`, 'width=440,height=880');
+      const popup = window.open(u.toString(), `opal_app_${appKey.replace(/[^a-zA-Z0-9_]/g, '_')}`, 'width=440,height=880');
       if (popup) {
-        this.webPopups.set(pkg, { win: popup, title: label });
+        this.webPopups.set(appKey, { win: popup, title: windowTitle, pkg, userId });
       }
       this.historyEntries = recordStandaloneLaunch({
         pkg,
         cls,
         label,
+        userId,
+        profileType,
         deviceKey: resolvedDeviceKey,
         deviceName: target.deviceName || target.host || 'Android',
         transport: target.transport,
@@ -729,8 +836,8 @@ export class OpalStandaloneController {
       });
       await this.refreshActiveWindows();
     } catch (err) {
-      this.app.diagnostics?.log('W', 'Standalone', `打开小窗失败 ${pkg}: ${err?.message || err}`);
-      this.app.showToast(`打开独立小窗失败：${err?.message || err}`);
+      this.app.diagnostics?.log('W', 'Standalone', `Failed to open standalone ${appKey}: ${err?.message || err}`);
+      this.app.showToast(t('standalone.launchFailToast', { error: err?.message || err }));
     }
   }
 
@@ -738,10 +845,10 @@ export class OpalStandaloneController {
     this.pendingReloadRequest = request;
     const name = request.appInfo.label || request.appInfo.pkg;
     if ($('reloadModalTitle')) {
-      $('reloadModalTitle').textContent = `应用「${name}」的小窗已打开`;
+      $('reloadModalTitle').textContent = t('standalone.reloadTitleWithApp', { name });
     }
     if ($('reloadModalDesc')) {
-      $('reloadModalDesc').textContent = `「${name}」的单应用悬浮小窗正在运行。是否关闭现有窗口并重载小窗 + 应用？也可以选择仅聚焦到现有窗口。`;
+      $('reloadModalDesc').textContent = t('standalone.reloadDescWithApp', { name });
     }
     if ($('reloadStandaloneModalOverlay')) {
       $('reloadStandaloneModalOverlay').hidden = false;
@@ -757,13 +864,14 @@ export class OpalStandaloneController {
     if (!req || action === 'cancel') return;
 
     if (action === 'focus') {
+      const targetKey = req.appInfo.appKey || formatAppKey(req.appInfo.pkg, req.appInfo.userId || 0);
       if (this.desktop.enabled) {
-        await this.desktop.focusStandaloneWindow(req.appInfo.pkg);
+        await this.desktop.focusStandaloneWindow(targetKey);
       } else {
-        const rec = this.webPopups.get(req.appInfo.pkg);
+        const rec = this.webPopups.get(targetKey);
         rec?.win?.focus();
       }
-      this.app.showToast(`已聚焦「${req.appInfo.label}」悬浮小窗`);
+      this.app.showToast(t('standalone.focusedToast', { name: req.appInfo.label }));
       return;
     }
 
@@ -791,25 +899,28 @@ export class OpalStandaloneController {
     list.innerHTML = '';
 
     for (const entry of entries) {
-      const isRunning = Boolean(this.getActiveWindowForPkg(entry.pkg));
+      const entryKey = entry.appKey || formatAppKey(entry.pkg, entry.userId || 0);
+      const isRunning = Boolean(this.getActiveWindowForPkg(entry.pkg, entry.userId || 0));
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = `pop-history-chip${isRunning ? ' running' : ''}`;
-      chip.title = isRunning ? '运行中 · 点击可重载或聚焦' : '一键以悬浮小窗打开';
+      chip.title = isRunning ? t('standalone.popChipRunningTitle') : t('standalone.popChipOpenTitle');
 
       const dot = document.createElement('span');
       dot.className = 'app-avatar-badge sm';
-      dot.style.background = getAppAvatarColor(entry.pkg);
+      dot.style.background = getAppAvatarColor(entryKey);
       dot.textContent = getAppAvatarInitial(entry.label, entry.pkg);
 
       const txt = document.createElement('span');
       txt.textContent = entry.label;
 
       chip.append(dot, txt);
+      const profileBadge = this.createProfileBadgeEl(entry.userId, entry.profileType);
+      if (profileBadge) chip.appendChild(profileBadge);
       chip.addEventListener('click', () => {
         $('appsPopover').hidden = true;
         this.requestLaunchStandaloneApp(
-          { pkg: entry.pkg, cls: entry.cls, label: entry.label },
+          { pkg: entry.pkg, cls: entry.cls, label: entry.label, userId: entry.userId || 0, profileType: entry.profileType || '' },
           this.currentCastTarget(),
           { alwaysOnTop: entry.pinnedOnTop }
         );
@@ -843,18 +954,17 @@ export class OpalStandaloneController {
     const target = this.currentCastTarget();
     const baseSorted = sortAppsForLauncher(this.app.currentApps, this.historyEntries, this.inCastSortMode);
     const sorted = this.prefsStore.sortAppsWithFavorites(baseSorted, target.deviceKey);
-    const filtered = sorted.filter(
-      (a) => !q || (a.label || '').toLowerCase().includes(q) || (a.pkg || '').toLowerCase().includes(q)
-    );
+    const filtered = sorted.filter((a) => this.matchesAppSearch(a, q));
     if (!filtered.length) {
-      listEl.innerHTML = '<div class="hint-text" style="padding:10px;text-align:center">未找到匹配应用</div>';
+      listEl.innerHTML = `<div class="hint-text" style="padding:10px;text-align:center">${t('standalone.noMatch')}</div>`;
       return;
     }
 
     const activeCount = this.getActiveCount();
 
     for (const appItem of filtered.slice(0, 100)) {
-      const pref = this.prefsStore.getPref(target.deviceKey, appItem.pkg);
+      const appKey = appItem.appKey || formatAppKey(appItem.pkg, appItem.userId || 0);
+      const pref = this.prefsStore.getPref(target.deviceKey, appKey);
       const row = document.createElement('div');
       row.className = `app-row${pref.isFavorite ? ' is-favorite' : ''}`;
 
@@ -864,10 +974,10 @@ export class OpalStandaloneController {
       favBtn.type = 'button';
       favBtn.className = `app-fav-star${pref.isFavorite ? ' active' : ''}`;
       favBtn.textContent = pref.isFavorite ? '★' : '☆';
-      favBtn.title = pref.isFavorite ? '取消收藏' : '收藏置顶';
+      favBtn.title = pref.isFavorite ? t('standalone.favRemoveTitle') : t('standalone.favAddTitle');
       favBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.prefsStore.toggleFavorite(target.deviceKey, appItem.pkg);
+        this.prefsStore.toggleFavorite(target.deviceKey, appKey);
         this.renderInCastAppList();
       });
       info.appendChild(favBtn);
@@ -880,7 +990,7 @@ export class OpalStandaloneController {
       } else {
         const avatar = document.createElement('span');
         avatar.className = 'app-avatar-badge sm';
-        avatar.style.background = getAppAvatarColor(appItem.pkg);
+        avatar.style.background = getAppAvatarColor(appKey);
         avatar.textContent = getAppAvatarInitial(appItem.label, appItem.pkg);
         info.appendChild(avatar);
       }
@@ -888,6 +998,9 @@ export class OpalStandaloneController {
       lbl.className = 'app-label';
       lbl.textContent = appItem.label || appItem.pkg;
       info.appendChild(lbl);
+
+      const profileBadge = this.createProfileBadgeEl(appItem.userId, appItem.profileType);
+      if (profileBadge) info.appendChild(profileBadge);
 
       const badges = formatPopoutPrefBadges(pref);
       if (badges.length) {
@@ -903,28 +1016,26 @@ export class OpalStandaloneController {
       const openBtn = document.createElement('button');
       openBtn.type = 'button';
       openBtn.className = 'mini-btn';
-      openBtn.textContent = '打开';
+      openBtn.textContent = t('standalone.openBtn');
       openBtn.addEventListener('click', () => {
-        this.app.sendOpalFrame(
-          TYPE_WINDOW_ACTION,
-          0,
-          encodeWindowAction({ action: 'launch', pkg: appItem.pkg, cls: appItem.cls || '' })
-        );
+        const payload = { action: 'launch', pkg: appItem.pkg, cls: appItem.cls || '' };
+        if (Number(appItem.userId) > 0) payload.userId = Math.round(Number(appItem.userId));
+        this.app.sendOpalFrame(TYPE_WINDOW_ACTION, 0, encodeWindowAction(payload));
         $('appsPopover').hidden = true;
       });
       btns.appendChild(openBtn);
 
-      const isRunning = Boolean(this.getActiveWindowForPkg(appItem.pkg));
+      const isRunning = Boolean(this.getActiveWindowForPkg(appItem.pkg, appItem.userId || 0));
       const popBtn = document.createElement('button');
       popBtn.type = 'button';
       popBtn.className = 'mini-btn';
       if (isRunning) {
-        popBtn.textContent = '小窗已开';
+        popBtn.textContent = t('standalone.windowOpenBtn');
       } else if (activeCount >= MAX_STANDALONE_WINDOWS) {
-        popBtn.textContent = `已满 ${MAX_STANDALONE_WINDOWS}/${MAX_STANDALONE_WINDOWS}`;
+        popBtn.textContent = t('standalone.fullBtn', { max: MAX_STANDALONE_WINDOWS });
         popBtn.disabled = true;
       } else {
-        popBtn.textContent = '独立小窗';
+        popBtn.textContent = t('standalone.popoutBtn');
       }
       popBtn.addEventListener('click', () => {
         $('appsPopover').hidden = true;
@@ -945,12 +1056,12 @@ export class OpalStandaloneController {
     this.lobbyCatalogApps = [];
 
     if ($('lobbyAppsModalTitle')) {
-      $('lobbyAppsModalTitle').textContent = `${target.deviceName || target.host || 'Android'} · 应用小窗`;
+      $('lobbyAppsModalTitle').textContent = t('standalone.modalTitleWithDevice', { device: target.deviceName || target.host || 'Android' });
     }
     if ($('lobbyAppSearchInput')) $('lobbyAppSearchInput').value = '';
     if ($('lobbyAppsList')) $('lobbyAppsList').innerHTML = '';
     if ($('lobbyAppsStatusText')) {
-      $('lobbyAppsStatusText').textContent = '正在建立轻量通道获取手机已安装应用…';
+      $('lobbyAppsStatusText').textContent = t('standalone.modalStatusConnecting');
       $('lobbyAppsStatusText').hidden = false;
     }
     if ($('lobbyAppsModalOverlay')) $('lobbyAppsModalOverlay').hidden = false;
@@ -995,9 +1106,9 @@ export class OpalStandaloneController {
       this.fetchAppCatalogOverWs(wsUrl, isUsb, authToken);
     } catch (err) {
       if ($('lobbyAppsStatusText')) {
-        $('lobbyAppsStatusText').textContent = `获取应用列表失败：${err?.message || err}`;
+        $('lobbyAppsStatusText').textContent = t('standalone.modalStatusFetchFail', { error: err?.message || err });
       }
-      this.app.diagnostics?.log('W', 'AppCatalog', `大厅拉取应用目录失败: ${err?.message || err}`);
+      this.app.diagnostics?.log('W', 'AppCatalog', `Failed to fetch app catalog: ${err?.message || err}`);
     }
   }
 
@@ -1010,7 +1121,7 @@ export class OpalStandaloneController {
       if (this.lobbyCatalogWs === ws) {
         this.closeLobbyCatalogSocket();
         if ($('lobbyAppsStatusText')) {
-          $('lobbyAppsStatusText').textContent = '获取应用列表超时，请确认手机端已允许连接并开启共享服务。';
+          $('lobbyAppsStatusText').textContent = t('standalone.modalStatusTimeout');
         }
       }
     }, 20000);
@@ -1018,8 +1129,8 @@ export class OpalStandaloneController {
     ws.onopen = () => {
       if ($('lobbyAppsStatusText')) {
         $('lobbyAppsStatusText').textContent = !isUsb && !authToken
-          ? '请在手机弹窗点击「允许」以获取应用列表…'
-          : '已连接，正在读取应用目录…';
+          ? t('standalone.modalStatusAllowPhone')
+          : t('standalone.modalStatusReading');
       }
       const hello = encodeHello({
         clientName: 'OpalDesk Desktop',
@@ -1049,7 +1160,7 @@ export class OpalStandaloneController {
         const auth = decodeAuthResult(frame.payload);
         if (!auth.ok) {
           if ($('lobbyAppsStatusText')) {
-            $('lobbyAppsStatusText').textContent = auth.message || '手机端拒绝了应用列表请求';
+            $('lobbyAppsStatusText').textContent = auth.message || t('standalone.modalStatusRejected');
           }
           this.closeLobbyCatalogSocket();
           return;
@@ -1076,7 +1187,7 @@ export class OpalStandaloneController {
         this.lobbyCatalogApps = decodeAppList(frame.payload);
         this.closeLobbyCatalogSocket();
         if ($('lobbyAppsStatusText')) {
-          $('lobbyAppsStatusText').textContent = `已加载 ${this.lobbyCatalogApps.length} 个应用，点击任意应用即可以悬浮小窗打开。`;
+          $('lobbyAppsStatusText').textContent = t('standalone.modalStatusLoaded', { count: this.lobbyCatalogApps.length });
         }
         this.renderLobbyAppPickerList();
       }
@@ -1084,7 +1195,7 @@ export class OpalStandaloneController {
 
     ws.onerror = () => {
       if (this.lobbyCatalogWs === ws && $('lobbyAppsStatusText')) {
-        $('lobbyAppsStatusText').textContent = '连接手机应用目录失败，请确认设备在线。';
+        $('lobbyAppsStatusText').textContent = t('standalone.modalStatusConnectFail');
       }
       this.closeLobbyCatalogSocket();
     };
@@ -1104,20 +1215,23 @@ export class OpalStandaloneController {
     list.innerHTML = '';
 
     for (const entry of entries) {
-      const isRunning = Boolean(this.getActiveWindowForPkg(entry.pkg));
+      const entryKey = entry.appKey || formatAppKey(entry.pkg, entry.userId || 0);
+      const isRunning = Boolean(this.getActiveWindowForPkg(entry.pkg, entry.userId || 0));
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = `pop-history-chip${isRunning ? ' running' : ''}`;
 
       const dot = document.createElement('span');
       dot.className = 'app-avatar-badge sm';
-      dot.style.background = getAppAvatarColor(entry.pkg);
+      dot.style.background = getAppAvatarColor(entryKey);
       dot.textContent = getAppAvatarInitial(entry.label, entry.pkg);
 
       const txt = document.createElement('span');
       txt.textContent = entry.label;
 
       chip.append(dot, txt);
+      const profileBadge = this.createProfileBadgeEl(entry.userId, entry.profileType);
+      if (profileBadge) chip.appendChild(profileBadge);
       chip.addEventListener('click', () => {
         const target = this.lobbyCatalogTarget || {
           transport: entry.transport,
@@ -1130,7 +1244,7 @@ export class OpalStandaloneController {
         };
         this.closeLobbyAppPicker();
         this.requestLaunchStandaloneApp(
-          { pkg: entry.pkg, cls: entry.cls, label: entry.label },
+          { pkg: entry.pkg, cls: entry.cls, label: entry.label, userId: entry.userId || 0, profileType: entry.profileType || '' },
           target,
           { alwaysOnTop: entry.pinnedOnTop }
         );
@@ -1151,18 +1265,17 @@ export class OpalStandaloneController {
     const deviceKey = target?.deviceKey || (target?.host ? `${target.host}:${target.port || 19878}` : '');
     const baseSorted = sortAppsForLauncher(this.lobbyCatalogApps, this.historyEntries, this.lobbySortMode);
     const sorted = this.prefsStore.sortAppsWithFavorites(baseSorted, deviceKey);
-    const filtered = sorted.filter(
-      (a) => !q || (a.label || '').toLowerCase().includes(q) || (a.pkg || '').toLowerCase().includes(q)
-    );
+    const filtered = sorted.filter((a) => this.matchesAppSearch(a, q));
     if (!filtered.length) {
-      listEl.innerHTML = '<div class="hint-text" style="padding:10px;text-align:center">暂无匹配应用</div>';
+      listEl.innerHTML = `<div class="hint-text" style="padding:10px;text-align:center">${t('standalone.noMatch')}</div>`;
       return;
     }
 
     const activeCount = this.getActiveCount();
 
     for (const appItem of filtered.slice(0, 120)) {
-      const pref = this.prefsStore.getPref(deviceKey, appItem.pkg);
+      const appKey = appItem.appKey || formatAppKey(appItem.pkg, appItem.userId || 0);
+      const pref = this.prefsStore.getPref(deviceKey, appKey);
       const row = document.createElement('div');
       row.className = `app-row${pref.isFavorite ? ' is-favorite' : ''}`;
 
@@ -1172,22 +1285,25 @@ export class OpalStandaloneController {
       favBtn.type = 'button';
       favBtn.className = `app-fav-star${pref.isFavorite ? ' active' : ''}`;
       favBtn.textContent = pref.isFavorite ? '★' : '☆';
-      favBtn.title = pref.isFavorite ? '取消收藏' : '收藏置顶';
+      favBtn.title = pref.isFavorite ? t('standalone.favRemoveTitle') : t('standalone.favAddTitle');
       favBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.prefsStore.toggleFavorite(deviceKey, appItem.pkg);
+        this.prefsStore.toggleFavorite(deviceKey, appKey);
         this.renderLobbyAppPickerList();
       });
 
       const avatar = document.createElement('span');
       avatar.className = 'app-avatar-badge sm';
-      avatar.style.background = getAppAvatarColor(appItem.pkg);
+      avatar.style.background = getAppAvatarColor(appKey);
       avatar.textContent = getAppAvatarInitial(appItem.label, appItem.pkg);
 
       const lbl = document.createElement('span');
       lbl.className = 'app-label';
       lbl.textContent = appItem.label || appItem.pkg;
       info.append(favBtn, avatar, lbl);
+
+      const profileBadge = this.createProfileBadgeEl(appItem.userId, appItem.profileType);
+      if (profileBadge) info.appendChild(profileBadge);
 
       const badges = formatPopoutPrefBadges(pref);
       if (badges.length) {
@@ -1204,8 +1320,8 @@ export class OpalStandaloneController {
         const lnkBtn = document.createElement('button');
         lnkBtn.type = 'button';
         lnkBtn.className = 'mini-btn';
-        lnkBtn.title = '在 Windows 桌面创建一键启动此应用小窗的快捷方式 (.lnk)';
-        lnkBtn.textContent = '桌面快捷';
+        lnkBtn.title = t('standalone.desktopShortcutTitle');
+        lnkBtn.textContent = t('standalone.desktopShortcutBtn');
         lnkBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           void this.createDesktopShortcutForApp(appItem, target);
@@ -1213,17 +1329,17 @@ export class OpalStandaloneController {
         btns.appendChild(lnkBtn);
       }
 
-      const isRunning = Boolean(this.getActiveWindowForPkg(appItem.pkg));
+      const isRunning = Boolean(this.getActiveWindowForPkg(appItem.pkg, appItem.userId || 0));
       const openBtn = document.createElement('button');
       openBtn.type = 'button';
       openBtn.className = isRunning ? 'mini-btn' : 'primary-btn compact';
       if (isRunning) {
-        openBtn.textContent = '小窗已开 · 重载/聚焦';
+        openBtn.textContent = t('standalone.windowOpenActionBtn');
       } else if (activeCount >= MAX_STANDALONE_WINDOWS) {
-        openBtn.textContent = `已满 ${MAX_STANDALONE_WINDOWS}/${MAX_STANDALONE_WINDOWS}`;
+        openBtn.textContent = t('standalone.fullBtn', { max: MAX_STANDALONE_WINDOWS });
         openBtn.disabled = true;
       } else {
-        openBtn.textContent = '打开悬浮小窗';
+        openBtn.textContent = t('standalone.openWindowBtn');
       }
       openBtn.addEventListener('click', () => {
         if (!target) return;

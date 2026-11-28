@@ -22,6 +22,10 @@ pub struct CreateAppShortcutRequest {
     #[serde(default)]
     pub app_label: String,
     #[serde(default)]
+    pub user_id: u32,
+    #[serde(default)]
+    pub profile_type: String,
+    #[serde(default)]
     pub host: String,
     #[serde(default)]
     pub port: u16,
@@ -47,9 +51,21 @@ pub struct CreateAppShortcutRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AppShortcutRecord {
     pub pkg: String,
+    #[serde(default)]
+    pub user_id: u32,
     pub app_label: String,
     pub shortcut_path: String,
     pub deep_link_url: String,
+}
+
+impl AppShortcutRecord {
+    pub fn app_key(&self) -> String {
+        if self.user_id > 0 {
+            format!("{}#u{}", self.pkg, self.user_id)
+        } else {
+            self.pkg.clone()
+        }
+    }
 }
 
 pub struct ShortcutStore {
@@ -77,17 +93,18 @@ impl ShortcutStore {
 
     pub fn upsert(&self, rec: AppShortcutRecord) -> Result<AppShortcutRecord, String> {
         let mut guard = self.records.lock().map_err(|_| "快捷方式存储锁异常".to_string())?;
-        guard.retain(|r| r.pkg != rec.pkg);
+        let target_key = rec.app_key();
+        guard.retain(|r| r.app_key() != target_key);
         guard.push(rec.clone());
         self.save_locked(&guard)?;
         Ok(rec)
     }
 
-    pub fn remove(&self, pkg: &str) -> Result<bool, String> {
+    pub fn remove(&self, pkg_or_key: &str) -> Result<bool, String> {
         let mut guard = self.records.lock().map_err(|_| "快捷方式存储锁异常".to_string())?;
         let mut removed = false;
         guard.retain(|r| {
-            if r.pkg == pkg {
+            if r.app_key() == pkg_or_key || (r.user_id == 0 && r.pkg == pkg_or_key) {
                 let _ = fs::remove_file(&r.shortcut_path);
                 removed = true;
                 false
@@ -160,6 +177,12 @@ pub fn build_popout_deep_link(req: &CreateAppShortcutRequest) -> String {
         req.app_label.trim()
     };
     pairs.push(("appLabel", label.to_string()));
+    if req.user_id > 0 {
+        pairs.push(("userId", req.user_id.to_string()));
+        if !req.profile_type.trim().is_empty() {
+            pairs.push(("profileType", req.profile_type.trim().to_string()));
+        }
+    }
     if !req.host.trim().is_empty() {
         pairs.push(("host", req.host.trim().to_string()));
     }
@@ -330,6 +353,7 @@ $s.Save()
 
     store.upsert(AppShortcutRecord {
         pkg: req.pkg.trim().to_string(),
+        user_id: req.user_id,
         app_label: label,
         shortcut_path: shortcut_path.to_string_lossy().into_owned(),
         deep_link_url,
@@ -346,6 +370,8 @@ mod tests {
             pkg: "com.tencent.mm".into(),
             cls: ".ui.LauncherUI".into(),
             app_label: "微信".into(),
+            user_id: 0,
+            profile_type: String::new(),
             host: "192.168.31.88".into(),
             port: 19878,
             transport: "wifi".into(),
@@ -359,6 +385,7 @@ mod tests {
         };
         let url = build_popout_deep_link(&req);
         assert!(url.starts_with("opaldesk://popout?pkg=com.tencent.mm&"));
+        assert!(!url.contains("userId="));
         assert!(url.contains("preset=tablet"));
         assert!(url.contains("dpi=320"));
         assert!(url.contains("compat=1"));
@@ -367,5 +394,29 @@ mod tests {
         let args = vec!["OpalDesk.exe".to_string(), url.clone()];
         assert_eq!(extract_deep_link_arg(&args), Some(url));
         assert_eq!(sanitize_shortcut_filename("App: / Test*"), "App  Test");
+    }
+
+    #[test]
+    fn builds_deep_link_with_secondary_user_profile_and_isolates_records() {
+        let req = CreateAppShortcutRequest {
+            pkg: "com.tencent.mm".into(),
+            cls: ".ui.LauncherUI".into(),
+            app_label: "微信 (分身)".into(),
+            user_id: 999,
+            profile_type: "clone".into(),
+            host: "192.168.31.88".into(),
+            port: 19878,
+            transport: "wifi".into(),
+            device_key: "192.168.31.88:19878".into(),
+            device_name: "Xiaomi 15".into(),
+            cert_fingerprint: String::new(),
+            preset: String::new(),
+            dpi: 0,
+            compat: false,
+            pinned: false,
+        };
+        let url = build_popout_deep_link(&req);
+        assert!(url.contains("userId=999"));
+        assert!(url.contains("profileType=clone"));
     }
 }
