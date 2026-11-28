@@ -1,5 +1,7 @@
 package io.github.lengsukq.opaldesk.compositor
 
+import io.github.lengsukq.opaldesk.prefs.DockGlassStyle
+import io.github.lengsukq.opaldesk.prefs.DockSizePreset
 import io.github.lengsukq.opaldesk.protocol.CompositorGeometry
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -123,6 +125,27 @@ object DockAppearancePolicy {
         )
     }
 
+    fun sizePresetScale(preset: DockSizePreset): Float = when (preset) {
+        DockSizePreset.COMPACT -> 0.85f
+        DockSizePreset.STANDARD -> 1.00f
+        DockSizePreset.LARGE -> 1.18f
+    }
+
+    fun effectiveGlassOpacity(baseOpacity: Float, glassStyle: DockGlassStyle): Float {
+        val op = clampOpacity(baseOpacity)
+        return when (glassStyle) {
+            DockGlassStyle.CLEAR -> (op * 0.45f).coerceIn(0.14f, 0.38f)
+            DockGlassStyle.BALANCED -> op
+            DockGlassStyle.FROSTED -> max(op, 0.88f).coerceIn(0.84f, 0.98f)
+        }
+    }
+
+    fun glassRimBoost(glassStyle: DockGlassStyle): Float = when (glassStyle) {
+        DockGlassStyle.CLEAR -> 0.62f
+        DockGlassStyle.BALANCED -> 1.00f
+        DockGlassStyle.FROSTED -> 1.25f
+    }
+
     /**
      * Effective bottom workspace inset reserved for the Dock during tiling, edge snapping,
      * desktop shortcut layout, and App Drawer positioning.
@@ -131,10 +154,16 @@ object DockAppearancePolicy {
         visible: Boolean,
         scale: Float,
         isCompactWidth: Boolean,
+        sizePreset: DockSizePreset = DockSizePreset.STANDARD,
+        floatingStyle: Boolean = true,
+        autoHide: Boolean = false,
+        orbMode: Boolean = false,
     ): Float {
-        if (!visible) return HIDDEN_DOCK_INSET_DP
-        val metrics = computeMetrics(scale, isCompactWidth)
-        return (metrics.estimatedTotalHeightDp + 2f).coerceAtLeast(48f)
+        if (!visible || autoHide || orbMode) return HIDDEN_DOCK_INSET_DP
+        val combinedScale = clampScale(scale * sizePresetScale(sizePreset))
+        val metrics = computeMetrics(combinedScale, isCompactWidth)
+        val marginAdj = if (floatingStyle) 0f else metrics.bottomMarginDp
+        return (metrics.estimatedTotalHeightDp - marginAdj + 2f).coerceAtLeast(44f)
     }
 
     fun formatOpacityLabel(opacity: Float): String {

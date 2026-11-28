@@ -23,6 +23,7 @@ import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadPolicy
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
+import io.github.lengsukq.opaldesk.prefs.DockCustomizationStore
 import io.github.lengsukq.opaldesk.protocol.CompositorGeometry
 import io.github.lengsukq.opaldesk.search.DexCommandCatalog
 import io.github.lengsukq.opaldesk.search.DexSpotlightState
@@ -211,6 +212,7 @@ private fun BoxWithConstraintsScope.WorkspaceCanvasContent(
     val extSession by ExternalTrackpadBridge.sessionFlow.collectAsState()
     val dockVisible by AppPrefs.dockVisibleFlow.collectAsState()
     val dockScale by AppPrefs.dockScaleFlow.collectAsState()
+    val dockCustom by remember(ctx) { DockCustomizationStore.observe(ctx) }.collectAsState()
     val profileState by io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.stateFlow.collectAsState()
 
     val canControlPhoneTrackpad = ExternalTrackpadPolicy.canControlPhoneTrackpad(
@@ -228,6 +230,10 @@ private fun BoxWithConstraintsScope.WorkspaceCanvasContent(
         visible = dockVisible,
         scale = dockScale,
         isCompactWidth = isCompactWidth,
+        sizePreset = dockCustom.sizePreset,
+        floatingStyle = dockCustom.floatingStyle,
+        autoHide = dockCustom.autoHide,
+        orbMode = dockCustom.orbMode,
     )
     val usableHeightDp = (maxHeight - (CompositorGeometry.TOP_BAR_DP + effectiveDockInsetDp + 24f).dp)
         .coerceAtLeast(180.dp)
@@ -344,6 +350,7 @@ private fun BoxWithConstraintsScope.WorkspaceCanvasContent(
         virtualCursorPx = virtualCursorPx,
         onPickCustomWallpaper = onPickCustomWallpaper,
         onOpenConsole = onOpenConsole,
+        onOpenConsoleSection = onOpenConsoleSection,
         onExitDesktop = onExitDesktop,
     )
 

@@ -35,9 +35,12 @@ import io.github.lengsukq.opaldesk.BridgeClient
 import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.external.ExternalTrackpadBridge
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
-import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorGeometry
+import io.github.lengsukq.opaldesk.settings.DexSettingsCategory
+import io.github.lengsukq.opaldesk.settings.DexSettingsOverlay
+import io.github.lengsukq.opaldesk.ui.ConsoleSectionKeys
+import io.github.lengsukq.opaldesk.ui.OpalFaqModal
 import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.PairingConsentModal
 import io.github.lengsukq.opaldesk.widgets.DesktopWidgetStore
@@ -66,6 +69,7 @@ internal fun BoxScope.WorkspaceOverlayHost(
     virtualCursorPx: Offset?,
     onPickCustomWallpaper: () -> Unit,
     onOpenConsole: () -> Unit,
+    onOpenConsoleSection: ((tabIndex: Int, sectionKey: String) -> Unit)? = null,
     onExitDesktop: () -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -158,19 +162,12 @@ internal fun BoxScope.WorkspaceOverlayHost(
         WorkspaceControlCenterHost(
             ui = ui,
             trayInfo = trayInfo,
-            canvasW = canvasW,
-            canvasH = canvasH,
             maxHeight = maxHeight,
-            densityVal = densityVal,
-            effectiveDockInsetDp = effectiveDockInsetDp,
             bottomClearanceDp = ccBottomPadDp,
             displaySummary = displaySummary,
-            actualRefreshHz = actualRefreshHz,
-            maxSupportedRefreshHz = maxSupportedRefreshHz,
             isExternalMonitor = isExternalMonitor,
             hasFullscreenWindow = hasFullscreenWindow,
             canControlPhoneTrackpad = canControlPhoneTrackpad,
-            onPickCustomWallpaper = onPickCustomWallpaper,
             onOpenConsole = onOpenConsole,
         )
     }
@@ -203,6 +200,50 @@ internal fun BoxScope.WorkspaceOverlayHost(
             onDismiss = { ui.showWidgetStore = false },
             modifier = Modifier.zIndex(10_029f),
         )
+    }
+
+    // Dedicated Full-Featured DeX Settings App Overlay
+    if (ui.showDexSettings) {
+        Box(modifier = Modifier.fillMaxSize().zIndex(10_029f)) {
+            DexSettingsOverlay(
+                bridge = BridgeClient,
+                uiState = ui,
+                initialCategory = ui.dexSettingsInitialCategory,
+                onOpenWidgetStore = {
+                    ui.showDexSettings = false
+                    ui.showWidgetStore = true
+                },
+                onToggleWidgetEdit = {
+                    ui.showDexSettings = false
+                    ui.isWidgetEditMode = !ui.isWidgetEditMode
+                },
+                onOpenKeyBindings = {
+                    ui.showDexSettings = false
+                    ui.showShortcutsPopover = true
+                },
+                onOpenFaq = {
+                    ui.showDexSettings = false
+                    ui.showFaqModal = true
+                },
+                onUploadLogs = {
+                    ui.showDexSettings = false
+                    openConsoleSectionAction(
+                        ctx = ctx,
+                        isExternalMonitor = isExternalMonitor,
+                        onOpenConsoleSection = onOpenConsoleSection,
+                        tabIndex = 3,
+                        sectionKey = ConsoleSectionKeys.DIAGNOSTICS_LOGS,
+                    )
+                },
+                onDismiss = { ui.showDexSettings = false },
+            )
+        }
+    }
+
+    if (ui.showFaqModal) {
+        Box(modifier = Modifier.fillMaxSize().zIndex(10_035f)) {
+            OpalFaqModal(onDismiss = { ui.showFaqModal = false })
+        }
     }
 
     // Mission Control / Exposé Multi-Window Overview Overlay
@@ -320,43 +361,19 @@ private fun BoxScope.WorkspaceNotificationsHost(
 private fun WorkspaceControlCenterHost(
     ui: WorkspaceUiState,
     trayInfo: SystemTrayInfo,
-    canvasW: Int,
-    canvasH: Int,
     maxHeight: Dp,
-    densityVal: Float,
-    effectiveDockInsetDp: Float,
     bottomClearanceDp: Float,
     displaySummary: String,
-    actualRefreshHz: Int,
-    maxSupportedRefreshHz: Int,
     isExternalMonitor: Boolean,
     hasFullscreenWindow: Boolean,
     canControlPhoneTrackpad: Boolean,
-    onPickCustomWallpaper: () -> Unit,
     onOpenConsole: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
     val status by BridgeClient.statusFlow.collectAsState()
     val scene by BridgeClient.sceneFlow.collectAsState()
     val remote by BridgeClient.remoteStatusFlow.collectAsState()
-    val extDisplay by io.github.lengsukq.opaldesk.BridgeService.externalDisplayFlow.collectAsState()
     val phoneTrackpadVisible by ExternalTrackpadBridge.phoneTrackpadVisibleFlow.collectAsState()
-
-    val wallpaperPreset by AppPrefs.wallpaperPresetFlow.collectAsState()
-    val themeMode by AppPrefs.themeModeFlow.collectAsState()
-    val mouseTargetMode by AppPrefs.mouseTargetFlow.collectAsState()
-    val externalUiScale by AppPrefs.externalUiScaleFlow.collectAsState()
-    val autoBlackoutOnCast by AppPrefs.autoBlackoutOnCastFlow.collectAsState()
-    val autoShowPhoneTrackpad by AppPrefs.autoShowPhoneTrackpadFlow.collectAsState()
-    val dockVisible by AppPrefs.dockVisibleFlow.collectAsState()
-    val dockOpacity by AppPrefs.dockOpacityFlow.collectAsState()
-    val dockScale by AppPrefs.dockScaleFlow.collectAsState()
-    val globalShortcutsEnabled by AppPrefs.globalShortcutsEnabledFlow.collectAsState()
-    val disabledShortcutIds by AppPrefs.disabledShortcutIdsFlow.collectAsState()
-    val dexImeDisplayMode by AppPrefs.dexImeDisplayModeFlow.collectAsState()
-    val dexLockedImeId by AppPrefs.dexLockedImeIdFlow.collectAsState()
-    val showDesktopGuideIcon by AppPrefs.showDesktopGuideIconFlow.collectAsState()
 
     val verticalReserveDp = if (hasFullscreenWindow) {
         CompositorGeometry.TOP_BAR_DP + 56f
@@ -367,165 +384,33 @@ private fun WorkspaceControlCenterHost(
     MacControlCenterPopover(
         tray = trayInfo,
         totalWindows = scene.windows.size,
-        focusedWindowId = scene.focusedWindow?.windowId ?: -1,
-        canvasW = canvasW,
-        canvasH = canvasH,
         displaySummary = displaySummary,
         inputBackendLabel = status.injectBackendLabel,
-        targetFps = status.targetFps,
-        actualRefreshHz = actualRefreshHz,
-        maxSupportedRefreshHz = maxSupportedRefreshHz,
-        isRemoteCast = remote.connected,
-        windowDpiScalePct = status.windowDpiScalePct,
-        externalUiScale = externalUiScale,
-        themeMode = themeMode,
-        wallpaperPreset = wallpaperPreset,
-        mouseTargetMode = mouseTargetMode,
         isExternalMonitor = isExternalMonitor,
         hostScreenOff = status.hostScreenOff,
-        autoBlackoutOnCast = autoBlackoutOnCast,
-        rootEnhanced = status.rootEnhanced,
         showHostScreenToggle = isExternalMonitor || remote.connected || status.hostScreenOff,
-        showRemoteMediaSection = isExternalMonitor && (remote.connected || remote.hasActiveDesktopCast),
         showPhoneTrackpadSection = canControlPhoneTrackpad,
         phoneTrackpadVisible = phoneTrackpadVisible,
-        showAutoTrackpadSwitch = canControlPhoneTrackpad && !remote.hasActiveDesktopCast,
-        autoShowPhoneTrackpad = autoShowPhoneTrackpad,
-        dockVisible = dockVisible,
-        dockOpacity = dockOpacity,
-        dockScale = dockScale,
-        globalShortcutsEnabled = globalShortcutsEnabled,
-        disabledShortcutIds = disabledShortcutIds,
-        dexImeDisplayMode = dexImeDisplayMode,
-        dexLockedImeId = dexLockedImeId,
-        showDesktopGuideIcon = showDesktopGuideIcon,
         maxHeight = ccMaxH,
-        initialTab = ui.controlCenterInitialTab,
-        onToggleDockVisible = { enabled -> AppPrefs.setDockVisible(ctx, enabled) },
-        onChangeDockOpacity = { opacity -> AppPrefs.setDockOpacity(ctx, opacity) },
-        onChangeDockScale = { scale -> AppPrefs.setDockScale(ctx, scale) },
-        onResetDockStyle = {
-            AppPrefs.resetDockAppearance(ctx)
-            Toast.makeText(ctx, ctx.getString(R.string.workspace_dock_reset_toast), Toast.LENGTH_SHORT).show()
-        },
-        onOpenSystemSettings = { action ->
-            ui.dismissAllPopovers()
-            launchSystemSettingsInDex(ctx, scope, status.connected, action)
+        isWidgetEditMode = ui.isWidgetEditMode,
+        onOpenDexSettings = {
+            ui.openDexSettings(DexSettingsCategory.APPEARANCE)
         },
         onTogglePhoneTrackpad = {
             ui.showControlCenter = false
             togglePhoneTrackpadAction(ctx, phoneTrackpadVisible, onOpenConsole)
         },
-        onToggleAutoPhoneTrackpad = { enabled ->
-            AppPrefs.setAutoShowPhoneTrackpadEnabled(ctx, enabled)
-            Toast.makeText(
-                ctx,
-                ctx.getString(
-                    if (enabled) R.string.display_auto_trackpad_sub else R.string.taskbar_cc_auto_trackpad_sub,
-                ),
-                Toast.LENGTH_SHORT,
-            ).show()
-        },
-        onSelectTargetFps = { fps ->
-            BridgeClient.updateDisplayPrefsAsync(
-                targetFps = fps,
-                windowDpiScalePct = status.windowDpiScalePct,
-            )
-        },
-        onSelectWindowDpiPct = { pct ->
-            BridgeClient.updateDisplayPrefsAsync(
-                targetFps = status.targetFps,
-                windowDpiScalePct = pct,
-            )
-        },
-        onSelectUiScale = { scale -> AppPrefs.setExternalUiScale(ctx, scale) },
         onToggleHostScreenPower = { screenOn ->
             toggleHostScreenPowerAction(ctx, screenOn)
         },
-        onToggleAutoBlackout = { enabled ->
-            AppPrefs.setAutoBlackoutOnCast(ctx, enabled)
-            Toast.makeText(
-                ctx,
-                ctx.getString(
-                    if (enabled) R.string.display_auto_blackout_sub else R.string.common_disabled,
-                ),
-                Toast.LENGTH_SHORT,
-            ).show()
-        },
-        onSelectThemeMode = { mode -> AppPrefs.setThemeMode(ctx, mode) },
-        onSelectWallpaper = { idx ->
-            WallpaperStorage.clearCustomWallpaper(ctx)
-            AppPrefs.setWallpaperPreset(ctx, idx)
-        },
-        onPickCustomWallpaper = {
+        onOpenWidgetStore = {
             ui.showControlCenter = false
-            onPickCustomWallpaper()
+            ui.showWidgetStore = true
         },
-        onSelectMouseTarget = { mode ->
-            AppPrefs.setMouseTarget(ctx, mode)
-            val extId = ExternalTrackpadBridge.sessionFlow.value.displayId
-            BridgeClient.setMouseTargetAsync(mode, if (extId > 0) extId else -1)
-        },
-        onOpenDpiSettings = {
+        onToggleWidgetEditMode = {
             ui.showControlCenter = false
-            ui.showDpiPopover = true
+            ui.isWidgetEditMode = !ui.isWidgetEditMode
         },
-        onOpenResolutionSettings = if (isExternalMonitor || extDisplay != null || remote.connected) {
-            {
-                ui.showControlCenter = false
-                ui.showResolutionModal = true
-            }
-        } else {
-            null
-        },
-        onToggleExternalImeSync = { syncToExternal ->
-            val nextMode = if (syncToExternal) {
-                BridgeProtocol.DexImeDisplayMode.ALWAYS_LOCAL
-            } else {
-                BridgeProtocol.DexImeDisplayMode.AUTO
-            }
-            AppPrefs.setDexImeDisplayMode(ctx, nextMode)
-            BridgeClient.setDexImeConfigAsync(
-                ctx = ctx,
-                displayMode = nextMode,
-                lockedImeId = dexLockedImeId,
-                muteHostOnCast = AppPrefs.isMuteHostImeOnCastEnabled(ctx),
-                showWithHardKbd = AppPrefs.getHardKbdSoftImeMode(ctx),
-                autoBridgeImeOnCast = AppPrefs.isAutoBridgeImeOnCastEnabled(ctx),
-            )
-            Toast.makeText(
-                ctx,
-                ctx.getString(
-                    if (syncToExternal) R.string.taskbar_cc_ext_ime_local else R.string.taskbar_cc_ext_ime_auto,
-                ),
-                Toast.LENGTH_SHORT,
-            ).show()
-        },
-        onOpenImeSettings = {
-            ui.showControlCenter = false
-            ui.showImePopover = true
-        },
-        onOpenKeyboardShortcuts = {
-            ui.showControlCenter = false
-            ui.showShortcutsPopover = true
-        },
-        onOpenFeatureGuide = {
-            ui.showControlCenter = false
-            ui.showFeatureGuide = true
-        },
-        onApplyTilingLayout = { layout ->
-            ui.dismissAllPopovers()
-            applyWindowTilingLayout(layout, scene, canvasW, canvasH, densityVal, effectiveDockInsetDp)
-        },
-        onMinimizeAll = {
-            ui.showControlCenter = false
-            minimizeAllVisibleWindows(scene)
-        },
-        onCloseAll = {
-            ui.showControlCenter = false
-            BridgeClient.closeAllWindowsAsync(removeTasks = true)
-        },
-        onDismissPopover = { ui.showControlCenter = false },
         onOpenConsole = {
             ui.showControlCenter = false
             onOpenConsole()

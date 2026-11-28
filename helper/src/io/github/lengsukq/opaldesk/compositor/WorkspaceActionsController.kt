@@ -170,8 +170,7 @@ internal fun handleFeatureGuideAction(
         }
         io.github.lengsukq.opaldesk.guide.OpalGuidePolicy.ACTION_OPEN_DOCK_SETTINGS -> {
             ui.showFeatureGuide = false
-            ui.controlCenterInitialTab = 2
-            ui.showControlCenter = true
+            ui.openDexSettings(io.github.lengsukq.opaldesk.settings.DexSettingsCategory.DOCK)
         }
         io.github.lengsukq.opaldesk.guide.OpalGuidePolicy.ACTION_OPEN_CONTROL_CENTER -> {
             ui.showFeatureGuide = false

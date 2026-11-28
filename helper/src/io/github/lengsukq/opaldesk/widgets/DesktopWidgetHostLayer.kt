@@ -83,6 +83,7 @@ fun DesktopWidgetHostLayer(
     appShortcuts: List<WidgetAppShortcut>,
     callbacks: DesktopWidgetCallbacks,
     desktopShortcuts: List<DesktopGridShortcutItem> = emptyList(),
+    onOpenDexSettings: () -> Unit = {},
     onOpenGuide: () -> Unit = {},
     onContextGuide: (Offset) -> Unit = {},
     onLaunchDesktopApp: (InstalledAppEntry) -> Unit = {},
@@ -161,15 +162,18 @@ fun DesktopWidgetHostLayer(
         } else {
             availableGridHeightPx / DesktopWidgetGridMath.DEFAULT_GRID_ROWS.toFloat()
         }
-        val cardGapPx = with(density) { (if (isPortraitCompact) 10.dp else 10.dp).toPx() }
-        val totalGridHeightDp = with(density) { (contentRows * cellH + if (isPortraitCompact) 16.dp.toPx() else 0f).toDp() }
+        val hasLandscapeOverflow = !isPortraitCompact && contentRows > baseGridRows
+        val enableVerticalScroll = isPortraitCompact || hasLandscapeOverflow
+        val cardGapPx = with(density) { 10.dp.toPx() }
+        val bottomScrollPadPx = if (enableVerticalScroll) with(density) { 16.dp.toPx() } else 0f
+        val totalGridHeightDp = with(density) { (contentRows * cellH + bottomScrollPadPx).toDp() }
         val scrollState = rememberScrollState()
 
-        val gridContainerModifier = if (isPortraitCompact) {
+        val gridContainerModifier = if (enableVerticalScroll) {
             Modifier
                 .fillMaxSize()
                 .padding(top = topClearanceDp)
-                .verticalScroll(scrollState)
+                .verticalScroll(scrollState, enabled = activeGhost == null)
         } else {
             Modifier
                 .fillMaxSize()
@@ -178,7 +182,7 @@ fun DesktopWidgetHostLayer(
 
         Box(modifier = gridContainerModifier) {
             Box(
-                modifier = if (isPortraitCompact) {
+                modifier = if (enableVerticalScroll) {
                     Modifier
                         .fillMaxWidth()
                         .height(totalGridHeightDp)
@@ -242,6 +246,7 @@ fun DesktopWidgetHostLayer(
                         DesktopGridShortcutTile(
                             item = shortcutItem,
                             isEditMode = isEditMode,
+                            onOpenDexSettings = onOpenDexSettings,
                             onOpenGuide = onOpenGuide,
                             onContextGuide = onContextGuide,
                             onLaunchApp = onLaunchDesktopApp,
@@ -268,7 +273,7 @@ fun DesktopWidgetHostLayer(
                             cellH = cellH,
                             cardGapPx = cardGapPx,
                             gridCols = gridCols,
-                            gridRows = contentRows,
+                            gridRows = baseGridRows,
                             mediaSnapshot = mediaSnapshot,
                             workstationSnapshot = workstationSnapshot,
                             notifications = notifications,

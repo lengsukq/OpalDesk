@@ -44,6 +44,7 @@ import io.github.lengsukq.opaldesk.prefs.WallpaperStorage
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorGeometry
 import io.github.lengsukq.opaldesk.protocol.CompositorWindow
+import io.github.lengsukq.opaldesk.settings.DexSettingsCategory
 import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.OpalSpotlightController
 import io.github.lengsukq.opaldesk.ui.onTapOrContextAction
@@ -51,6 +52,7 @@ import io.github.lengsukq.opaldesk.widgets.DesktopGridShortcutItem
 import io.github.lengsukq.opaldesk.widgets.DesktopWidgetCallbacks
 import io.github.lengsukq.opaldesk.widgets.DesktopWidgetHostLayer
 import io.github.lengsukq.opaldesk.widgets.DesktopWidgetStore
+import io.github.lengsukq.opaldesk.widgets.buildDesktopGridShortcuts
 import io.github.lengsukq.opaldesk.widgets.WidgetAppShortcut
 import io.github.lengsukq.opaldesk.widgets.WidgetMediaSnapshot
 import io.github.lengsukq.opaldesk.widgets.WidgetNotificationItem
@@ -112,6 +114,7 @@ internal fun BoxScope.WorkspaceWindowLayer(
             .onTapOrContextAction(
                 ui.showSpotlight, ui.showAppDrawer, ui.showExposeOverview, ui.showControlCenter,
                 ui.showDpiPopover, ui.showResolutionModal, ui.showShortcutsPopover, ui.showFeatureGuide,
+                ui.showDexSettings, ui.showFaqModal,
                 ui.contextMenuTarget, ui.guideIconMenuPos, ui.wallpaperMenuPos,
                 onPrimaryTap = { ui.dismissAllPopovers() },
                 onContextAction = { pos ->
@@ -124,17 +127,14 @@ internal fun BoxScope.WorkspaceWindowLayer(
     // Unified Desktop Liquid Glass Widget & App Shortcut Grid Layer (above wallpaper, below live app windows)
     if (fullscreenWin == null) {
         val desktopGridShortcuts = remember(status.connected, showDesktopGuideIcon, ui.allApps, desktopPkgs) {
-            if (!status.connected || (!showDesktopGuideIcon && ui.allApps.isEmpty())) {
+            if (!status.connected) {
                 emptyList()
             } else {
-                val byKey = ui.allApps.associateBy { it.appKey }
-                buildList<DesktopGridShortcutItem>(16) {
-                    if (showDesktopGuideIcon) add(DesktopGridShortcutItem.BuiltinGuide)
-                    val maxApps = if (showDesktopGuideIcon) 14 else 15
-                    desktopPkgs.mapNotNull { byKey[it] }.take(maxApps).forEach { entry ->
-                        add(DesktopGridShortcutItem.App(entry))
-                    }
-                }
+                buildDesktopGridShortcuts(
+                    showGuideIcon = showDesktopGuideIcon,
+                    allApps = ui.allApps,
+                    desktopAppKeys = desktopPkgs,
+                )
             }
         }
         val mediaArtwork = remember(mediaSnap.artworkBase64) {
@@ -270,7 +270,7 @@ internal fun BoxScope.WorkspaceWindowLayer(
                     io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.refreshAccessState(ctx)
                     io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.requestSync()
                 },
-                onOpenSettings = onOpenConsole,
+                onOpenSettings = { ui.openDexSettings(DexSettingsCategory.APPEARANCE) },
             )
         }
         DesktopWidgetHostLayer(
@@ -282,6 +282,9 @@ internal fun BoxScope.WorkspaceWindowLayer(
             appShortcuts = widgetAppShortcuts,
             callbacks = widgetCallbacks,
             desktopShortcuts = desktopGridShortcuts,
+            onOpenDexSettings = {
+                ui.openDexSettings(DexSettingsCategory.APPEARANCE)
+            },
             onOpenGuide = {
                 ui.dismissAllPopovers()
                 ui.showFeatureGuide = true
@@ -421,14 +424,18 @@ internal fun BoxScope.WorkspaceWindowLayer(
 
     // Bottom Centered Floating Liquid Frosted Glass Dock (hidden during true app fullscreen or when disabled)
     if (fullscreenWin == null && dockVisible) {
-        DexMacTaskbar(
+        DesktopDockOrbHost(
             allApps = ui.allApps,
             dockPinnedPkgs = dockPinnedPkgs,
             windows = scene.windows,
+            canvasW = canvasW,
+            canvasH = canvasH,
             showAppDrawer = ui.showAppDrawer,
             showExpose = ui.showExposeOverview,
             showSpotlight = ui.showSpotlight,
             showControlCenter = ui.showControlCenter,
+            hasOpenOverlay = ui.hasAnyOpenOverlay(),
+            collapsePulse = ui.orbDockCollapsePulse,
             isCompactWidth = isCompactWidth,
             dockOpacity = dockOpacity,
             dockScale = dockScale,
@@ -482,9 +489,7 @@ internal fun BoxScope.WorkspaceWindowLayer(
                 ui.dismissAllPopovers()
                 ui.contextMenuTarget = Triple(appKey, win, rootPos)
             },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .zIndex(10_010f),
+            modifier = Modifier.zIndex(10_010f),
         )
     }
 }
@@ -566,6 +571,9 @@ internal fun WorkspaceContextMenusHost(
             showDesktopGuideIcon = showDesktopGuideIcon,
             isWidgetEditMode = ui.isWidgetEditMode,
             onOpenWidgetStore = { ui.showWidgetStore = true },
+            onOpenDexSettings = {
+                ui.openDexSettings(DexSettingsCategory.APPEARANCE)
+            },
             onToggleWidgetEditMode = { ui.isWidgetEditMode = !ui.isWidgetEditMode },
             onOpenSpotlight = {
                 ui.dismissAllPopovers()
@@ -598,8 +606,7 @@ internal fun WorkspaceContextMenusHost(
                 ui.showControlCenter = true
             },
             onOpenDockSettings = {
-                ui.controlCenterInitialTab = 2
-                ui.showControlCenter = true
+                ui.openDexSettings(DexSettingsCategory.DOCK)
             },
             onOpenAppDrawer = { ui.showAppDrawer = true },
             onOpenFeatureGuide = { ui.showFeatureGuide = true },

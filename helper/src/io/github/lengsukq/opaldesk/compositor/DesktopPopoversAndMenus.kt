@@ -310,6 +310,7 @@ fun DesktopWallpaperContextMenu(
     showDesktopGuideIcon: Boolean = true,
     isWidgetEditMode: Boolean = false,
     onOpenWidgetStore: () -> Unit = {},
+    onOpenDexSettings: () -> Unit = {},
     onToggleWidgetEditMode: () -> Unit = {},
     onOpenSpotlight: () -> Unit = {},
     onOpenControlCenter: () -> Unit = {},
@@ -429,6 +430,13 @@ fun DesktopWallpaperContextMenu(
         ) {
             onDismiss()
             onOpenControlCenter()
+        }
+        ContextMenuRow(
+            title = if (isZh) "DeX 设置" else "DeX Settings",
+            textColor = OpalPalette.AccentBlue,
+        ) {
+            onDismiss()
+            onOpenDexSettings()
         }
         ContextMenuRow(
             title = if (isZh) "通知中心" else "Notification Center",

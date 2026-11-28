@@ -2,6 +2,7 @@ package io.github.lengsukq.opaldesk.compositor
 
 import android.content.Context
 import android.media.AudioManager
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,7 +31,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -39,89 +44,53 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.R
-import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
-import io.github.lengsukq.opaldesk.protocol.WindowTilingLayout
+import io.github.lengsukq.opaldesk.ui.LocalOpalColors
 import io.github.lengsukq.opaldesk.ui.OpalButton
 import io.github.lengsukq.opaldesk.ui.OpalGlassSlider
 import io.github.lengsukq.opaldesk.ui.OpalPalette
-import io.github.lengsukq.opaldesk.ui.OpalSegmentedRow
 import io.github.lengsukq.opaldesk.ui.OpalText
 import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
+import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
- * Unified Top-Right macOS Control Center Popover consolidating former top-bar indicators
- * (virtual display pool, active output summary, all tiling layouts), host phone screen-off power
- * control, external keyboard & mouse target routing, appearance, and wallpapers.
+ * Streamlined High-Frequency Liquid Glass Control Center Popover:
+ * - Top status & battery header + prominent "DeX Settings ↗" glass pill
+ * - High-frequency quick tiles (host blackout, trackpad, mute, force phone speaker, widgets, edit)
+ * - Volume & brightness sliders
+ * Deep configuration lives in the dedicated DeX Settings app.
  */
 @Composable
 fun MacControlCenterPopover(
     tray: SystemTrayInfo,
     totalWindows: Int,
-    focusedWindowId: Int = -1,
-    canvasW: Int = 1920,
-    canvasH: Int = 1200,
     displaySummary: String,
     inputBackendLabel: String,
-    targetFps: Int,
-    actualRefreshHz: Int = 60,
-    maxSupportedRefreshHz: Int = 60,
-    isRemoteCast: Boolean = false,
-    windowDpiScalePct: Int,
-    externalUiScale: Float,
-    themeMode: Int,
-    wallpaperPreset: Int,
-    mouseTargetMode: Int,
     isExternalMonitor: Boolean,
     hostScreenOff: Boolean,
-    autoBlackoutOnCast: Boolean = false,
-    rootEnhanced: Boolean = false,
     showHostScreenToggle: Boolean,
-    showRemoteMediaSection: Boolean = false,
     showPhoneTrackpadSection: Boolean = false,
     phoneTrackpadVisible: Boolean = false,
-    showAutoTrackpadSwitch: Boolean = false,
-    autoShowPhoneTrackpad: Boolean = true,
-    dockVisible: Boolean = true,
-    dockOpacity: Float = DockAppearancePolicy.DEFAULT_OPACITY,
-    dockScale: Float = DockAppearancePolicy.DEFAULT_SCALE,
-    globalShortcutsEnabled: Boolean = true,
-    disabledShortcutIds: Set<String> = emptySet(),
-    dexImeDisplayMode: Int = BridgeProtocol.DexImeDisplayMode.AUTO,
-    dexLockedImeId: String = "",
-    showDesktopGuideIcon: Boolean = true,
-    maxHeight: Dp = 640.dp,
-    initialTab: Int = 0,
-    onToggleDockVisible: (Boolean) -> Unit = {},
-    onChangeDockOpacity: (Float) -> Unit = {},
-    onChangeDockScale: (Float) -> Unit = {},
-    onResetDockStyle: () -> Unit = {},
-    onOpenSystemSettings: ((String) -> Unit)? = null,
+    isWidgetEditMode: Boolean = false,
+    maxHeight: Dp = 520.dp,
+    onOpenDexSettings: () -> Unit = {},
     onTogglePhoneTrackpad: () -> Unit = {},
-    onToggleAutoPhoneTrackpad: (Boolean) -> Unit = {},
-    onSelectTargetFps: (Int) -> Unit,
-    onSelectWindowDpiPct: (Int) -> Unit,
-    onSelectUiScale: (Float) -> Unit,
     onToggleHostScreenPower: (Boolean) -> Unit,
-    onToggleAutoBlackout: (Boolean) -> Unit = {},
-    onSelectThemeMode: (Int) -> Unit,
-    onSelectWallpaper: (Int) -> Unit,
-    onPickCustomWallpaper: () -> Unit,
-    onSelectMouseTarget: (Int) -> Unit,
-    onOpenDpiSettings: () -> Unit = {},
-    onOpenResolutionSettings: (() -> Unit)? = null,
-    onToggleExternalImeSync: (Boolean) -> Unit = {},
-    onOpenImeSettings: () -> Unit = {},
-    onOpenKeyboardShortcuts: () -> Unit = {},
-    onOpenFeatureGuide: () -> Unit = {},
-    onApplyTilingLayout: (WindowTilingLayout) -> Unit,
-    onMinimizeAll: () -> Unit,
-    onCloseAll: () -> Unit,
-    onDismissPopover: () -> Unit = {},
+    onOpenWidgetStore: () -> Unit = {},
+    onToggleWidgetEditMode: () -> Unit = {},
     onOpenConsole: () -> Unit,
     onExitDesktop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val ctx = LocalContext.current
+    val isZh = remember(ctx) {
+        val lang = runCatching {
+            ctx.resources.configuration.locales.takeIf { !it.isEmpty }?.get(0)?.language
+        }.getOrNull() ?: Locale.getDefault().language
+        lang.equals("zh", ignoreCase = true)
+    }
     val audioMgr = remember(ctx) { ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }
     val maxVolume = remember(audioMgr) {
         (try { audioMgr?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) } catch (_: Throwable) { null } ?: 15).coerceAtLeast(1)
@@ -136,9 +105,6 @@ fun MacControlCenterPopover(
     var screenBrightness by remember(ctx) { mutableStateOf(ControlCenterActions.readInitialBrightness(ctx)) }
     var brightnessAuto by remember { mutableStateOf(true) }
     var orientationMode by remember(ctx) { mutableIntStateOf(ControlCenterActions.readOrientationMode(ctx)) }
-    var selectedTab by remember(initialTab) { mutableIntStateOf(initialTab.coerceIn(0, 2)) }
-    var showMoreTiling by remember { mutableStateOf(false) }
-    var showRemoteAdvanced by remember { mutableStateOf(false) }
 
     fun applyMediaVolume(target: Int) {
         val clamped = target.coerceIn(0, maxVolume)
@@ -154,9 +120,9 @@ fun MacControlCenterPopover(
     val infoCardShape = RoundedCornerShape(14.dp)
     Column(
         modifier = modifier
-            .widthIn(max = 352.dp)
+            .widthIn(max = 340.dp)
             .fillMaxWidth()
-            .heightIn(max = maxHeight)
+            .heightIn(max = maxHeight.coerceAtMost(520.dp))
             .liquidGlassSurface(
                 shape = shape,
                 fill = OpalPalette.LiquidPopoverFill,
@@ -216,17 +182,13 @@ fun MacControlCenterPopover(
         }
 
         Spacer(Modifier.height(8.dp))
-        OpalSegmentedRow(
-            options = listOf(
-                stringResource(R.string.taskbar_cc_tab_quick),
-                stringResource(R.string.taskbar_cc_tab_windows),
-                stringResource(R.string.taskbar_cc_tab_display),
-            ),
-            selectedIndex = selectedTab,
-            onSelect = { selectedTab = it },
+        DexSettingsCapsuleButton(
+            label = if (isZh) "DeX 设置 ↗" else "DeX Settings ↗",
+            subtitle = if (isZh) "外观 · Dock · 显示 · 音频 · 输入" else "Appearance · Dock · Display · Audio",
+            onClick = onOpenDexSettings,
         )
 
-        Spacer(Modifier.height(9.dp))
+        Spacer(Modifier.height(10.dp))
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -234,112 +196,44 @@ fun MacControlCenterPopover(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            when (selectedTab) {
-                0 -> ControlCenterQuickTab(
-                    tray = tray,
-                    selectedTabKey = selectedTab,
-                    focusedWindowId = focusedWindowId,
-                    audioMgr = audioMgr,
-                    mediaVolume = mediaVolume,
-                    maxVolume = maxVolume,
-                    lastNonZeroVolume = lastNonZeroVolume,
-                    screenBrightness = screenBrightness,
-                    brightnessAuto = brightnessAuto,
-                    orientationMode = orientationMode,
-                    isExternalMonitor = isExternalMonitor,
-                    hostScreenOff = hostScreenOff,
-                    rootEnhanced = rootEnhanced,
-                    showHostScreenToggle = showHostScreenToggle,
-                    showRemoteMediaSection = showRemoteMediaSection,
-                    showPhoneTrackpadSection = showPhoneTrackpadSection,
-                    phoneTrackpadVisible = phoneTrackpadVisible,
-                    showAutoTrackpadSwitch = showAutoTrackpadSwitch,
-                    autoShowPhoneTrackpad = autoShowPhoneTrackpad,
-                    dexImeDisplayMode = dexImeDisplayMode,
-                    showRemoteAdvanced = showRemoteAdvanced,
-                    infoCardShape = infoCardShape,
-                    onOpenSystemSettings = onOpenSystemSettings,
-                    onChangeOrientationMode = { next ->
-                        orientationMode = next
-                        ControlCenterActions.applyOrientationMode(ctx, next)
-                    },
-                    onToggleHostScreenPower = onToggleHostScreenPower,
-                    onTogglePhoneTrackpad = onTogglePhoneTrackpad,
-                    onToggleExternalImeSync = onToggleExternalImeSync,
-                    onApplyMediaVolume = ::applyMediaVolume,
-                    onSetBrightnessAuto = {
-                        brightnessAuto = true
-                        ControlCenterActions.applyWindowBrightness(ctx, -1f)
-                    },
-                    onChangeBrightness = { v ->
-                        brightnessAuto = false
-                        screenBrightness = v
-                        ControlCenterActions.applyWindowBrightness(ctx, v)
-                    },
-                    onToggleRemoteAdvanced = { showRemoteAdvanced = !showRemoteAdvanced },
-                    onToggleAutoPhoneTrackpad = onToggleAutoPhoneTrackpad,
-                    onDismissPopover = onDismissPopover,
-                )
-
-                1 -> ControlCenterWindowsTab(
-                    totalWindows = totalWindows,
-                    canvasW = canvasW,
-                    canvasH = canvasH,
-                    showMoreTiling = showMoreTiling,
-                    onToggleMoreTiling = { showMoreTiling = !showMoreTiling },
-                    onApplyTilingLayout = onApplyTilingLayout,
-                    onMinimizeAll = onMinimizeAll,
-                    onCloseAll = onCloseAll,
-                    onOpenDpiSettings = onOpenDpiSettings,
-                    onOpenImeSettings = onOpenImeSettings,
-                    onOpenKeyboardShortcuts = onOpenKeyboardShortcuts,
-                )
-
-                else -> ControlCenterDisplayTab(
-                    canvasW = canvasW,
-                    canvasH = canvasH,
-                    targetFps = targetFps,
-                    actualRefreshHz = actualRefreshHz,
-                    maxSupportedRefreshHz = maxSupportedRefreshHz,
-                    isRemoteCast = isRemoteCast,
-                    externalUiScale = externalUiScale,
-                    themeMode = themeMode,
-                    wallpaperPreset = wallpaperPreset,
-                    mouseTargetMode = mouseTargetMode,
-                    isExternalMonitor = isExternalMonitor,
-                    hostScreenOff = hostScreenOff,
-                    autoBlackoutOnCast = autoBlackoutOnCast,
-                    showHostScreenToggle = showHostScreenToggle,
-                    dockVisible = dockVisible,
-                    dockOpacity = dockOpacity,
-                    dockScale = dockScale,
-                    infoCardShape = infoCardShape,
-                    onSelectTargetFps = onSelectTargetFps,
-                    onOpenResolutionSettings = onOpenResolutionSettings,
-                    onToggleAutoBlackout = onToggleAutoBlackout,
-                    onToggleDockVisible = onToggleDockVisible,
-                    onChangeDockOpacity = onChangeDockOpacity,
-                    onChangeDockScale = onChangeDockScale,
-                    onResetDockStyle = onResetDockStyle,
-                    onSelectUiScale = onSelectUiScale,
-                    onSelectMouseTarget = onSelectMouseTarget,
-                    onSelectThemeMode = onSelectThemeMode,
-                    onSelectWallpaper = onSelectWallpaper,
-                    onPickCustomWallpaper = onPickCustomWallpaper,
-                )
-            }
+            ControlCenterQuickPanel(
+                isZh = isZh,
+                mediaVolume = mediaVolume,
+                maxVolume = maxVolume,
+                lastNonZeroVolume = lastNonZeroVolume,
+                screenBrightness = screenBrightness,
+                brightnessAuto = brightnessAuto,
+                orientationMode = orientationMode,
+                isExternalMonitor = isExternalMonitor,
+                hostScreenOff = hostScreenOff,
+                showHostScreenToggle = showHostScreenToggle,
+                showPhoneTrackpadSection = showPhoneTrackpadSection,
+                phoneTrackpadVisible = phoneTrackpadVisible,
+                isWidgetEditMode = isWidgetEditMode,
+                infoCardShape = infoCardShape,
+                onChangeOrientationMode = { next ->
+                    orientationMode = next
+                    ControlCenterActions.applyOrientationMode(ctx, next)
+                },
+                onToggleHostScreenPower = onToggleHostScreenPower,
+                onTogglePhoneTrackpad = onTogglePhoneTrackpad,
+                onOpenWidgetStore = onOpenWidgetStore,
+                onToggleWidgetEditMode = onToggleWidgetEditMode,
+                onApplyMediaVolume = ::applyMediaVolume,
+                onSetBrightnessAuto = {
+                    brightnessAuto = true
+                    ControlCenterActions.applyWindowBrightness(ctx, -1f)
+                },
+                onChangeBrightness = { v ->
+                    brightnessAuto = false
+                    screenBrightness = v
+                    ControlCenterActions.applyWindowBrightness(ctx, v)
+                },
+            )
         }
 
-        Spacer(Modifier.height(9.dp))
+        Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-            OpalButton(
-                label = stringResource(R.string.taskbar_cc_guide),
-                compact = true,
-                filled = false,
-                accent = OpalPalette.AccentCyan,
-                onClick = onOpenFeatureGuide,
-                modifier = Modifier.weight(0.95f),
-            )
             OpalButton(
                 label = stringResource(R.string.taskbar_cc_console),
                 compact = true,
@@ -354,6 +248,85 @@ fun MacControlCenterPopover(
                 accent = OpalPalette.AccentDanger,
                 onClick = onExitDesktop,
                 modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DexSettingsCapsuleButton(
+    label: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    val colors = LocalOpalColors.current
+    val pillShape = RoundedCornerShape(15.dp)
+    val bgBrush = Brush.horizontalGradient(
+        listOf(
+            colors.accentBlue.copy(alpha = if (colors.isDark) 0.28f else 0.16f),
+            colors.accentCyan.copy(alpha = if (colors.isDark) 0.20f else 0.12f),
+        ),
+    )
+    val borderBrush = Brush.linearGradient(
+        listOf(
+            Color.White.copy(alpha = if (colors.isDark) 0.36f else 0.86f),
+            colors.accentBlue.copy(alpha = 0.56f),
+        ),
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(pillShape)
+            .background(bgBrush)
+            .border(1.dp, borderBrush, pillShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.linearGradient(listOf(colors.accentBlue, colors.accentCyan)),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(modifier = Modifier.size(16.dp)) {
+                val cx = size.width * 0.5f
+                val cy = size.height * 0.5f
+                val sw = 1.55.dp.toPx()
+                val innerR = size.minDimension * 0.17f
+                val bodyR = size.minDimension * 0.33f
+                val toothOut = size.minDimension * 0.47f
+                drawCircle(color = Color.White, radius = innerR, center = Offset(cx, cy), style = Stroke(sw))
+                drawCircle(color = Color.White, radius = bodyR, center = Offset(cx, cy), style = Stroke(sw))
+                for (i in 0 until 8) {
+                    val rad = (i * 45.0) * PI / 180.0
+                    drawLine(
+                        color = Color.White,
+                        start = Offset(cx + (bodyR * cos(rad)).toFloat(), cy + (bodyR * sin(rad)).toFloat()),
+                        end = Offset(cx + (toothOut * cos(rad)).toFloat(), cy + (toothOut * sin(rad)).toFloat()),
+                        strokeWidth = sw,
+                        cap = StrokeCap.Round,
+                    )
+                }
+            }
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            OpalText(
+                text = label,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Bold,
+                color = colors.textPrimary,
+                maxLines = 1,
+            )
+            OpalText(
+                text = subtitle,
+                fontSize = 10.sp,
+                color = colors.textSecondary,
+                maxLines = 1,
             )
         }
     }

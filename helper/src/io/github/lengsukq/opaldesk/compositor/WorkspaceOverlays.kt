@@ -126,15 +126,14 @@ internal fun DesktopShortcutColumn(
     val ctx = LocalContext.current
     val gridItems = remember(allApps, desktopPkgs, showGuideIcon) {
         val byKey = allApps.associateBy { it.appKey }
-        val list = ArrayList<DesktopGridItem>(16)
-        if (showGuideIcon) {
-            list.add(DesktopGridItem.BuiltinGuide)
+        buildList<DesktopGridItem>(1 + desktopPkgs.size) {
+            if (showGuideIcon) {
+                add(DesktopGridItem.BuiltinGuide)
+            }
+            desktopPkgs.asSequence().distinct().mapNotNull { byKey[it] }.forEach { entry ->
+                add(DesktopGridItem.App(entry))
+            }
         }
-        val maxApps = if (showGuideIcon) 14 else 15
-        desktopPkgs.mapNotNull { byKey[it] }.take(maxApps).forEach { entry ->
-            list.add(DesktopGridItem.App(entry))
-        }
-        list
     }
 
     val columns = gridItems.chunked(rowsPerColumn.coerceIn(3, 8))

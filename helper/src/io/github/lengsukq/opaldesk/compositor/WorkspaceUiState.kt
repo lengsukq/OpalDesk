@@ -1,5 +1,6 @@
 package io.github.lengsukq.opaldesk.compositor
 
+import android.os.SystemClock
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -9,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import io.github.lengsukq.opaldesk.protocol.CompositorWindow
 import io.github.lengsukq.opaldesk.protocol.WindowRect
+import io.github.lengsukq.opaldesk.settings.DexSettingsCategory
 
 /**
  * Consolidated Compose state holder for transient desktop workspace overlays and menus.
@@ -16,7 +18,7 @@ import io.github.lengsukq.opaldesk.protocol.WindowRect
  * (which can exceed the 255-register DEX threshold under R8 full-mode optimization).
  */
 @Stable
-internal class WorkspaceUiState(initialSpotlightPulse: Long) {
+class WorkspaceUiState(initialSpotlightPulse: Long) {
     var allApps by mutableStateOf<List<InstalledAppEntry>>(emptyList())
     var lastSpotlightTogglePulse by mutableLongStateOf(initialSpotlightPulse)
     var showSpotlight by mutableStateOf(false)
@@ -24,11 +26,14 @@ internal class WorkspaceUiState(initialSpotlightPulse: Long) {
     var showExposeOverview by mutableStateOf(false)
     var showControlCenter by mutableStateOf(false)
     var controlCenterInitialTab by mutableIntStateOf(0)
+    var showDexSettings by mutableStateOf(false)
+    var dexSettingsInitialCategory by mutableStateOf(DexSettingsCategory.APPEARANCE)
     var showDpiPopover by mutableStateOf(false)
     var showResolutionModal by mutableStateOf(false)
     var showImePopover by mutableStateOf(false)
     var showShortcutsPopover by mutableStateOf(false)
     var showFeatureGuide by mutableStateOf(false)
+    var showFaqModal by mutableStateOf(false)
     var showNotificationCenter by mutableStateOf(false)
     var showWidgetStore by mutableStateOf(false)
     var isWidgetEditMode by mutableStateOf(false)
@@ -40,17 +45,26 @@ internal class WorkspaceUiState(initialSpotlightPulse: Long) {
     var guideIconMenuPos by mutableStateOf<Offset?>(null)
     var wallpaperMenuPos by mutableStateOf<Offset?>(null)
     var snapPreviewRect by mutableStateOf<WindowRect?>(null)
+    var orbDockCollapsePulse by mutableLongStateOf(0L)
     val dockLastTapMsByPkg = mutableMapOf<String, Long>()
+
+    fun openDexSettings(category: DexSettingsCategory = DexSettingsCategory.APPEARANCE) {
+        dismissAllPopovers()
+        dexSettingsInitialCategory = category
+        showDexSettings = true
+    }
 
     fun localOverlayNeedsFocus(hasPendingPairing: Boolean): Boolean =
         showSpotlight ||
             showAppDrawer ||
             showControlCenter ||
+            showDexSettings ||
             showDpiPopover ||
             showResolutionModal ||
             showImePopover ||
             showShortcutsPopover ||
             showFeatureGuide ||
+            showFaqModal ||
             showNotificationCenter ||
             showWidgetStore ||
             showExitSlotModal ||
@@ -62,11 +76,13 @@ internal class WorkspaceUiState(initialSpotlightPulse: Long) {
             showAppDrawer ||
             showExposeOverview ||
             showControlCenter ||
+            showDexSettings ||
             showDpiPopover ||
             showResolutionModal ||
             showImePopover ||
             showShortcutsPopover ||
             showFeatureGuide ||
+            showFaqModal ||
             showNotificationCenter ||
             showWidgetStore ||
             isWidgetEditMode ||
@@ -90,15 +106,18 @@ internal class WorkspaceUiState(initialSpotlightPulse: Long) {
         showAppDrawer = false
         showExposeOverview = false
         showControlCenter = false
+        showDexSettings = false
         showDpiPopover = false
         showResolutionModal = false
         showImePopover = false
         showShortcutsPopover = false
         showFeatureGuide = false
+        showFaqModal = false
         showNotificationCenter = false
         showWidgetStore = false
         contextMenuTarget = null
         guideIconMenuPos = null
         wallpaperMenuPos = null
+        orbDockCollapsePulse = SystemClock.uptimeMillis()
     }
 }

@@ -1,10 +1,19 @@
 package io.github.lengsukq.opaldesk.compositor
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,9 +30,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -34,6 +45,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -42,6 +56,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.R
 import io.github.lengsukq.opaldesk.prefs.AppPrefs
+import io.github.lengsukq.opaldesk.prefs.DockCustomizationStore
+import io.github.lengsukq.opaldesk.prefs.DockGlassStyle
+import io.github.lengsukq.opaldesk.prefs.DockSizePreset
 import io.github.lengsukq.opaldesk.protocol.AppProfileKey
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorWindow
@@ -55,9 +72,12 @@ import io.github.lengsukq.opaldesk.ui.UnifiedAppItem
 import io.github.lengsukq.opaldesk.ui.UnifiedAppLauncherPanel
 import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
 import io.github.lengsukq.opaldesk.ui.onTapOrContextAction
+import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+
+private const val DOCK_AUTO_HIDE_DELAY_MS = 2_600L
 
 private data class TaskbarAppSlot(
     val pkg: String,
@@ -82,6 +102,7 @@ fun DexMacTaskbar(
     showExpose: Boolean,
     showSpotlight: Boolean = false,
     showControlCenter: Boolean = false,
+    hasOpenOverlay: Boolean = false,
     isCompactWidth: Boolean = false,
     dockOpacity: Float = DockAppearancePolicy.DEFAULT_OPACITY,
     dockScale: Float = DockAppearancePolicy.DEFAULT_SCALE,
@@ -95,17 +116,22 @@ fun DexMacTaskbar(
     onShowDesktopToggle: () -> Unit,
     onLaunchOrToggleApp: (String, String, Int) -> Unit,
     onContextApp: (String, CompositorWindow?, Offset) -> Unit,
+    onCollapseToOrb: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val ctx = LocalContext.current
-    val taskbarEntries = remember(dockPinnedPkgs, windows, allApps) {
+    val dockCustom by remember(ctx) { DockCustomizationStore.observe(ctx) }.collectAsState()
+
+    val taskbarEntries = remember(dockPinnedPkgs, windows, allApps, dockCustom.showRunningApps) {
         val installedByKey = allApps.associateBy { it.appKey }
         val combined = LinkedHashSet<String>()
         dockPinnedPkgs
             .filter { installedByKey.containsKey(it) }
             .take(AppPrefs.MAX_DOCK_PINNED)
             .forEach { combined.add(it) }
-        windows.forEach { combined.add(it.appKey) }
+        if (dockCustom.showRunningApps) {
+            windows.forEach { combined.add(it.appKey) }
+        }
         if (combined.isEmpty()) {
             allApps.take(5).forEach { combined.add(it.appKey) }
         }
@@ -126,187 +152,312 @@ fun DexMacTaskbar(
         }
     }
 
-    val clampedScale = DockAppearancePolicy.clampScale(dockScale)
+    val presetScale = DockAppearancePolicy.sizePresetScale(dockCustom.sizePreset)
+    val clampedScale = DockAppearancePolicy.clampScale(dockScale * presetScale)
     val metrics = remember(clampedScale, isCompactWidth) {
         DockAppearancePolicy.computeMetrics(clampedScale, isCompactWidth)
     }
-    val effectScale = DockAppearancePolicy.rimAndEffectScale(dockOpacity)
-    val dockShape = RoundedCornerShape(metrics.cornerRadiusDp.dp)
+    val effectiveOpacity = DockAppearancePolicy.effectiveGlassOpacity(dockOpacity, dockCustom.glassStyle)
+    val baseEffectScale = DockAppearancePolicy.rimAndEffectScale(effectiveOpacity)
+    val rimBoost = DockAppearancePolicy.glassRimBoost(dockCustom.glassStyle)
+    val effectScale = (baseEffectScale * rimBoost).coerceIn(0f, 1.35f)
+    val isFloating = dockCustom.floatingStyle
+    val dockShape = if (isFloating) {
+        RoundedCornerShape(metrics.cornerRadiusDp.dp)
+    } else {
+        RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 0.dp, bottomEnd = 0.dp)
+    }
     val tileCorner = ((if (isCompactWidth) 11f else 14f) * clampedScale).coerceIn(8f, 18f).dp
     val iconCorner = ((if (isCompactWidth) 8f else 9f) * clampedScale).coerceIn(6f, 13f).dp
+    val presetPadBonus = when (dockCustom.sizePreset) {
+        DockSizePreset.COMPACT -> -1.5f
+        DockSizePreset.STANDARD -> 0f
+        DockSizePreset.LARGE -> 2f
+    }
+    val hPadDp = (metrics.horizontalPaddingDp + presetPadBonus).coerceAtLeast(5f).dp
+    val vPadDp = (metrics.verticalPaddingDp + presetPadBonus * 0.6f).coerceAtLeast(3.5f).dp
     val leadBtnSize = metrics.leadBtnDp.dp
     val searchBtnSize = metrics.searchBtnDp.dp
     val navBtnSize = metrics.navBtnDp.dp
     val appTileSize = metrics.appTileDp.dp
     val appIconSize = metrics.appIconDp.dp
+    val borderWidthDp = when {
+        effectScale <= 0.01f -> 0.dp
+        dockCustom.glassStyle == DockGlassStyle.FROSTED -> 1.25.dp
+        dockCustom.glassStyle == DockGlassStyle.CLEAR -> 0.75.dp
+        else -> 1.dp
+    }
+
+    var autoHideRevealed by remember { mutableStateOf(false) }
+    var isPointerHoveringDock by remember { mutableStateOf(false) }
+    val anyPopoverOpen = hasOpenOverlay || showAppDrawer || showControlCenter || showSpotlight || showExpose
+    val dockShown = !dockCustom.autoHide || anyPopoverOpen || autoHideRevealed || isPointerHoveringDock
+
+    LaunchedEffect(dockCustom.autoHide, autoHideRevealed, isPointerHoveringDock, anyPopoverOpen) {
+        if (!dockCustom.autoHide) {
+            autoHideRevealed = false
+            return@LaunchedEffect
+        }
+        if (autoHideRevealed && !isPointerHoveringDock && !anyPopoverOpen) {
+            delay(DOCK_AUTO_HIDE_DELAY_MS)
+            autoHideRevealed = false
+        }
+    }
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(
-                start = if (isCompactWidth) 8.dp else 14.dp,
-                end = if (isCompactWidth) 8.dp else 14.dp,
-                bottom = metrics.bottomMarginDp.dp,
+            .then(
+                if (isFloating && dockShown) {
+                    Modifier.padding(
+                        start = if (isCompactWidth) 8.dp else 14.dp,
+                        end = if (isCompactWidth) 8.dp else 14.dp,
+                        bottom = metrics.bottomMarginDp.dp,
+                    )
+                } else {
+                    Modifier
+                },
             ),
+        contentAlignment = Alignment.BottomCenter,
     ) {
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .widthIn(max = metrics.maxWidthDp.dp)
-                .liquidGlassSurface(
-                    shape = dockShape,
-                    fill = OpalPalette.dockGlassFill(dockOpacity),
-                    rim = OpalPalette.dockGlassRim(dockOpacity),
-                    elevation = (22f * effectScale).dp,
-                    borderWidth = if (effectScale > 0.01f) 1.dp else 0.dp,
-                    effectAlphaScale = effectScale,
-                )
-                .padding(
-                    horizontal = metrics.horizontalPaddingDp.dp,
-                    vertical = metrics.verticalPaddingDp.dp,
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(metrics.itemSpacingDp.dp),
-        ) {
-            GlassDockButton(
-                glyph = ChromeGlyph.APPS_GRID,
-                active = showAppDrawer,
-                size = leadBtnSize,
-                onClick = onToggleAppDrawer,
-            )
-            if (!isCompactWidth) {
-                GlassDockButton(
-                    glyph = ChromeGlyph.SEARCH,
-                    active = showSpotlight,
-                    size = searchBtnSize,
-                    onClick = onOpenSearch,
-                )
-            }
-            GlassDockSettingButton(
-                active = showControlCenter,
-                size = if (isCompactWidth) leadBtnSize else searchBtnSize,
-                onClick = onToggleControlCenter,
-            )
-
-            GlassDockDivider(height = metrics.dividerHeightDp.dp)
-
-            Row(
+        if (dockCustom.autoHide && !dockShown) {
+            Box(
                 modifier = Modifier
-                    .weight(1f, fill = false)
-                    .horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(metrics.itemSpacingDp.dp),
-            ) {
-                taskbarEntries.forEach { slot ->
-                    val icon = remember(slot.appKey) {
-                        AppCatalogRepository.getAppIcon(ctx, slot.pkg, slot.userId, slot.profileType)
+                    .fillMaxWidth()
+                    .height(16.dp)
+                    .pointerInput(Unit) {
+                        detectTapGestures { autoHideRevealed = true }
                     }
-                    val runningWin = windows.firstOrNull { it.pkg == slot.pkg && it.userId == slot.userId }
-                    val isFocused = runningWin != null && runningWin.focused && !runningWin.isMinimized
-
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                        modifier = Modifier
-                            .size(width = appTileSize, height = appTileSize)
-                            .clip(RoundedCornerShape(tileCorner))
-                            .background(
-                                when {
-                                    isFocused -> OpalPalette.ChipActiveFill
-                                    runningWin != null -> OpalPalette.ChipFill
-                                    else -> Color.Transparent
-                                },
-                            )
-                            .border(
-                                width = if (isFocused) 0.85.dp else 0.dp,
-                                color = if (isFocused) OpalPalette.BorderFocused else Color.Transparent,
-                                shape = RoundedCornerShape(tileCorner),
-                            )
-                            .onTapOrContextAction(
-                                slot.appKey, runningWin?.windowId, runningWin?.state, runningWin?.focused,
-                                onPrimaryTap = { onLaunchOrToggleApp(slot.pkg, slot.cls, slot.userId) },
-                                onContextAction = { rootPos -> onContextApp(slot.appKey, runningWin, rootPos) },
-                            ),
-                    ) {
-                        Box(
-                            modifier = Modifier.size(appIconSize + 2.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (icon != null) {
-                                Image(
-                                    bitmap = icon,
-                                    contentDescription = slot.label,
-                                    alpha = if (runningWin?.isMinimized == true) 0.56f else 1f,
-                                    modifier = Modifier
-                                        .size(appIconSize)
-                                        .clip(RoundedCornerShape(iconCorner)),
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .size(appIconSize)
-                                        .clip(RoundedCornerShape(iconCorner))
-                                        .background(OpalPalette.BgElevated),
-                                    contentAlignment = Alignment.Center,
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures { _, dragAmount ->
+                            if (dragAmount < -4f) autoHideRevealed = true
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                if ((ev.type == PointerEventType.Enter || ev.type == PointerEventType.Move) &&
+                                    ev.changes.any { it.type == PointerType.Mouse }
                                 ) {
-                                    OpalText(
-                                        text = slot.label.take(1),
-                                        fontSize = (12f * clampedScale).coerceIn(10f, 16f).sp,
-                                        fontWeight = FontWeight.Bold,
-                                    )
+                                    autoHideRevealed = true
                                 }
                             }
                         }
-                        Spacer(Modifier.height((2f * clampedScale).coerceIn(1.5f, 3f).dp))
-                        Box(
-                            modifier = Modifier
-                                .size(
-                                    width = ((if (isFocused) 11f else 4f) * clampedScale).dp,
-                                    height = (2.8f * clampedScale).coerceIn(2.2f, 3.8f).dp,
-                                )
-                                .clip(CircleShape)
-                                .background(
-                                    when {
-                                        runningWin == null -> Color.Transparent
-                                        runningWin.isMinimized -> OpalPalette.TextMuted
-                                        runningWin.isHibernated -> OpalPalette.AccentAmber
-                                        isFocused -> OpalPalette.AccentBlue
-                                        else -> OpalPalette.AccentCyan
-                                    },
-                                ),
-                        )
-                    }
-                }
-            }
-
-            GlassDockDivider(height = metrics.dividerHeightDp.dp)
-
-            if (onToggleSoftKeyboard != null) {
-                GlassDockButton(
-                    glyph = ChromeGlyph.KEYBOARD,
-                    active = imeActive,
-                    size = navBtnSize,
-                    onClick = onToggleSoftKeyboard,
+                    },
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .padding(bottom = 4.dp)
+                        .width(64.dp)
+                        .height(4.dp)
+                        .clip(CircleShape)
+                        .background(OpalPalette.TextPrimary.copy(alpha = 0.28f))
+                        .border(0.6.dp, Color.White.copy(alpha = 0.32f), CircleShape),
                 )
             }
-            GlassDockButton(
-                glyph = ChromeGlyph.BACK,
-                active = false,
-                size = navBtnSize,
-                onClick = onSendBackToFocused,
-            )
-            GlassDockButton(
-                glyph = ChromeGlyph.HOME_DESKTOP,
-                active = false,
-                size = navBtnSize,
-                onClick = onShowDesktopToggle,
-            )
-            GlassDockButton(
-                glyph = ChromeGlyph.EXPOSE,
-                active = showExpose,
-                size = navBtnSize,
-                onClick = onToggleExpose,
-            )
+        }
+
+        AnimatedVisibility(
+            visible = dockShown,
+            enter = fadeIn(tween(170)) + slideInVertically(tween(210, easing = FastOutSlowInEasing)) { it },
+            exit = fadeOut(tween(150)) + slideOutVertically(tween(190, easing = FastOutSlowInEasing)) { it },
+        ) {
+            Row(
+                modifier = Modifier
+                    .then(
+                        if (isFloating) {
+                            Modifier.widthIn(max = metrics.maxWidthDp.dp)
+                        } else {
+                            Modifier.fillMaxWidth()
+                        },
+                    )
+                    .pointerInput(dockCustom.autoHide) {
+                        if (!dockCustom.autoHide) return@pointerInput
+                        awaitPointerEventScope {
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                if (ev.changes.any { it.type == PointerType.Mouse }) {
+                                    when (ev.type) {
+                                        PointerEventType.Enter, PointerEventType.Move -> {
+                                            isPointerHoveringDock = true
+                                            autoHideRevealed = true
+                                        }
+                                        PointerEventType.Exit -> isPointerHoveringDock = false
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .liquidGlassSurface(
+                        shape = dockShape,
+                        fill = OpalPalette.dockGlassFill(effectiveOpacity),
+                        rim = OpalPalette.dockGlassRim(effectiveOpacity),
+                        elevation = ((if (isFloating) 22f else 12f) * baseEffectScale).dp,
+                        borderWidth = borderWidthDp,
+                        effectAlphaScale = effectScale,
+                    )
+                    .padding(horizontal = hPadDp, vertical = vPadDp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = if (isFloating) {
+                    Arrangement.spacedBy(metrics.itemSpacingDp.dp)
+                } else {
+                    Arrangement.spacedBy(metrics.itemSpacingDp.dp, Alignment.CenterHorizontally)
+                },
+            ) {
+                GlassDockButton(
+                    glyph = ChromeGlyph.APPS_GRID,
+                    active = showAppDrawer,
+                    size = leadBtnSize,
+                    onClick = onToggleAppDrawer,
+                )
+                if (!isCompactWidth && dockCustom.showSearchButton) {
+                    GlassDockButton(
+                        glyph = ChromeGlyph.SEARCH,
+                        active = showSpotlight,
+                        size = searchBtnSize,
+                        onClick = onOpenSearch,
+                    )
+                }
+                if (dockCustom.showSettingsButton) {
+                    GlassDockSettingButton(
+                        active = showControlCenter,
+                        size = if (isCompactWidth) leadBtnSize else searchBtnSize,
+                        onClick = onToggleControlCenter,
+                    )
+                }
+
+                GlassDockDivider(height = metrics.dividerHeightDp.dp)
+
+                Row(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(metrics.itemSpacingDp.dp),
+                ) {
+                    taskbarEntries.forEach { slot ->
+                        val icon = remember(slot.appKey) {
+                            AppCatalogRepository.getAppIcon(ctx, slot.pkg, slot.userId, slot.profileType)
+                        }
+                        val runningWin = windows.firstOrNull { it.pkg == slot.pkg && it.userId == slot.userId }
+                        val isFocused = runningWin != null && runningWin.focused && !runningWin.isMinimized
+
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .size(width = appTileSize, height = appTileSize)
+                                .clip(RoundedCornerShape(tileCorner))
+                                .background(
+                                    when {
+                                        isFocused -> OpalPalette.ChipActiveFill
+                                        runningWin != null -> OpalPalette.ChipFill
+                                        else -> Color.Transparent
+                                    },
+                                )
+                                .border(
+                                    width = if (isFocused) 0.85.dp else 0.dp,
+                                    color = if (isFocused) OpalPalette.BorderFocused else Color.Transparent,
+                                    shape = RoundedCornerShape(tileCorner),
+                                )
+                                .onTapOrContextAction(
+                                    slot.appKey, runningWin?.windowId, runningWin?.state, runningWin?.focused,
+                                    onPrimaryTap = { onLaunchOrToggleApp(slot.pkg, slot.cls, slot.userId) },
+                                    onContextAction = { rootPos -> onContextApp(slot.appKey, runningWin, rootPos) },
+                                ),
+                        ) {
+                            Box(
+                                modifier = Modifier.size(appIconSize + 2.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (icon != null) {
+                                    Image(
+                                        bitmap = icon,
+                                        contentDescription = slot.label,
+                                        alpha = if (runningWin?.isMinimized == true) 0.56f else 1f,
+                                        modifier = Modifier
+                                            .size(appIconSize)
+                                            .clip(RoundedCornerShape(iconCorner)),
+                                    )
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(appIconSize)
+                                            .clip(RoundedCornerShape(iconCorner))
+                                            .background(OpalPalette.BgElevated),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        OpalText(
+                                            text = slot.label.take(1),
+                                            fontSize = (12f * clampedScale).coerceIn(10f, 16f).sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    }
+                                }
+                            }
+                            if (dockCustom.showRunningDots) {
+                                Spacer(Modifier.height((2f * clampedScale).coerceIn(1.5f, 3f).dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(
+                                            width = ((if (isFocused) 11f else 4f) * clampedScale).dp,
+                                            height = (2.8f * clampedScale).coerceIn(2.2f, 3.8f).dp,
+                                        )
+                                        .clip(CircleShape)
+                                        .background(
+                                            when {
+                                                runningWin == null -> Color.Transparent
+                                                runningWin.isMinimized -> OpalPalette.TextMuted
+                                                runningWin.isHibernated -> OpalPalette.AccentAmber
+                                                isFocused -> OpalPalette.AccentBlue
+                                                else -> OpalPalette.AccentCyan
+                                            },
+                                        ),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                GlassDockDivider(height = metrics.dividerHeightDp.dp)
+
+                if (onToggleSoftKeyboard != null) {
+                    GlassDockButton(
+                        glyph = ChromeGlyph.KEYBOARD,
+                        active = imeActive,
+                        size = navBtnSize,
+                        onClick = onToggleSoftKeyboard,
+                    )
+                }
+                GlassDockButton(
+                    glyph = ChromeGlyph.BACK,
+                    active = false,
+                    size = navBtnSize,
+                    onClick = onSendBackToFocused,
+                )
+                GlassDockButton(
+                    glyph = ChromeGlyph.HOME_DESKTOP,
+                    active = false,
+                    size = navBtnSize,
+                    onClick = onShowDesktopToggle,
+                )
+                GlassDockButton(
+                    glyph = ChromeGlyph.EXPOSE,
+                    active = showExpose,
+                    size = navBtnSize,
+                    onClick = onToggleExpose,
+                )
+                if (onCollapseToOrb != null) {
+                    GlassDockButton(
+                        glyph = ChromeGlyph.CHEVRON_DOWN,
+                        active = false,
+                        size = navBtnSize,
+                        onClick = onCollapseToOrb,
+                    )
+                }
+            }
         }
     }
 }

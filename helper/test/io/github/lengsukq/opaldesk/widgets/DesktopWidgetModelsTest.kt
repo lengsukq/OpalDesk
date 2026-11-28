@@ -1,5 +1,6 @@
 package io.github.lengsukq.opaldesk.widgets
 
+import io.github.lengsukq.opaldesk.compositor.InstalledAppEntry
 import io.github.lengsukq.opaldesk.widgets.renderers.QuickNotesConfig
 import io.github.lengsukq.opaldesk.widgets.renderers.TodoChecklistConfig
 import io.github.lengsukq.opaldesk.widgets.renderers.TodoItemConfig
@@ -477,6 +478,94 @@ class DesktopWidgetModelsTest {
             isPortrait = false,
         )
         assertEquals(listOf(0 to 7, 1 to 7), spillSlots)
+    }
+
+    @Test
+    fun buildDesktopGridShortcutsPreservesAllUserShortcutsBeyondFifteen() {
+        val installed = (1..21).map { idx ->
+            InstalledAppEntry(
+                pkg = "com.example.app$idx",
+                activityClass = "com.example.app$idx.MainActivity",
+                label = "App $idx",
+            )
+        } + InstalledAppEntry(
+            pkg = "com.example.notes",
+            activityClass = "com.example.notes.NotesActivity",
+            label = "笔记",
+        )
+        val requestedKeys = installed.map { it.appKey } + listOf(
+            "com.example.notes", // duplicate should be ignored
+            "com.example.uninstalled", // missing app should be ignored
+        )
+
+        val withGuide = buildDesktopGridShortcuts(
+            showGuideIcon = true,
+            allApps = installed,
+            desktopAppKeys = requestedKeys,
+        )
+        assertEquals(24, withGuide.size)
+        assertEquals(DesktopGridShortcutItem.BuiltinDexSettings, withGuide[0])
+        assertEquals(DesktopGridShortcutItem.BuiltinGuide, withGuide[1])
+        val lastWithGuide = withGuide.last() as DesktopGridShortcutItem.App
+        assertEquals("com.example.notes", lastWithGuide.entry.pkg)
+        assertEquals("笔记", lastWithGuide.entry.label)
+
+        val withoutGuide = buildDesktopGridShortcuts(
+            showGuideIcon = false,
+            allApps = installed,
+            desktopAppKeys = requestedKeys,
+        )
+        assertEquals(23, withoutGuide.size)
+        assertEquals(DesktopGridShortcutItem.BuiltinDexSettings, withoutGuide[0])
+        assertFalse(withoutGuide.any { it is DesktopGridShortcutItem.BuiltinGuide })
+        assertEquals("com.example.notes", (withoutGuide.last() as DesktopGridShortcutItem.App).entry.pkg)
+    }
+
+    @Test
+    fun allocateShortcutSlotsLandscapeHandlesTwentyPlusShortcutsAndOverflowRows() {
+        // 24 shortcuts on an empty 12x7 landscape grid fit cleanly without truncation
+        val emptyLandscapeSlots = DesktopWidgetGridMath.allocateShortcutSlots(
+            iconCount = 24,
+            occupiedWidgets = emptyList(),
+            gridCols = DesktopWidgetGridMath.DEFAULT_GRID_COLS,
+            gridRows = DesktopWidgetGridMath.DEFAULT_GRID_ROWS,
+            isPortrait = false,
+        )
+        assertEquals(24, emptyLandscapeSlots.size)
+        assertEquals(24, emptyLandscapeSlots.toSet().size)
+        assertTrue(emptyLandscapeSlots.all { (c, r) -> c in 0 until 12 && r in 0 until 7 })
+
+        // Crowded landscape grid: widgets occupy cols 2..11 across all 7 rows (70 cells),
+        // leaving 14 free cells in cols 0..1; 24 shortcuts spill 10 items into overflow row 7.
+        val crowdedWidgets = listOf(
+            DesktopWidgetInstance("w_top", DesktopWidgetType.DESKTOP_HUB, col = 2, row = 0, colSpan = 10, rowSpan = 4),
+            DesktopWidgetInstance("w_bot", DesktopWidgetType.CLOCK_TIMER, col = 2, row = 4, colSpan = 10, rowSpan = 3),
+        )
+        val crowdedSlots = DesktopWidgetGridMath.allocateShortcutSlots(
+            iconCount = 24,
+            occupiedWidgets = crowdedWidgets,
+            gridCols = DesktopWidgetGridMath.DEFAULT_GRID_COLS,
+            gridRows = DesktopWidgetGridMath.DEFAULT_GRID_ROWS,
+            isPortrait = false,
+        )
+        assertEquals(24, crowdedSlots.size)
+        assertEquals(24, crowdedSlots.toSet().size)
+        for ((col, row) in crowdedSlots) {
+            assertFalse("Crowded shortcut ($col,$row) overlaps widget", overlapsAny(crowdedWidgets, col, row, 1, 1))
+        }
+        val overflowSlots = crowdedSlots.filter { (_, row) -> row >= DesktopWidgetGridMath.DEFAULT_GRID_ROWS }
+        assertEquals(10, overflowSlots.size)
+        assertEquals((0 until 10).map { it to 7 }, overflowSlots)
+
+        // More than 12x7=84 shortcuts spill into row 7 on an empty desktop
+        val ninetySlots = DesktopWidgetGridMath.allocateShortcutSlots(
+            iconCount = 90,
+            occupiedWidgets = emptyList(),
+            isPortrait = false,
+        )
+        assertEquals(90, ninetySlots.size)
+        assertEquals(90, ninetySlots.toSet().size)
+        assertEquals((0 until 6).map { it to 7 }, ninetySlots.drop(84))
     }
 
     private fun overlapsAny(
