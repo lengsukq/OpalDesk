@@ -54,10 +54,10 @@ extension AppModel {
         let connStr: String
         let transportStr: String
         if let conn = activeConnection {
-            connStr = isAuthenticated ? "已连接 (\(conn.deviceName))" : "连接中 (\(conn.deviceName))"
+            connStr = isAuthenticated ? OpalL10n.format("app.feedback.connected_fmt", conn.deviceName) : OpalL10n.format("app.feedback.connecting_fmt", conn.deviceName)
             transportStr = conn.transport.shortBadge
         } else {
-            connStr = "未连接"
+            connStr = OpalL10n.text("common.disconnected")
             transportStr = "-"
         }
         let videoStr = isAuthenticated
@@ -94,13 +94,13 @@ extension AppModel {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(report, forType: .string)
-        showToast("已复制完整诊断日志报告")
+        showToast(OpalL10n.text("app.feedback.copied_report"))
     }
 
     public func exportDiagnosticReport(warningsOnly: Bool = false, query: String = "") {
         let report = buildDiagnosticReportText(warningsOnly: warningsOnly, query: query)
         let panel = NSSavePanel()
-        panel.title = "导出 OpalDesk macOS 诊断日志"
+        panel.title = OpalL10n.text("app.feedback.export_title")
         panel.nameFieldStringValue = "opaldesk_mac_diag_\(Self.formatFileStamp()).txt"
         panel.allowedContentTypes = [.plainText]
         panel.canCreateDirectories = true
@@ -108,10 +108,10 @@ extension AppModel {
             do {
                 try report.write(to: url, atomically: true, encoding: .utf8)
                 OpalDeskLog.info("feedback", "Exported diagnostic log report to \(url.lastPathComponent)")
-                showToast("已导出诊断日志：\(url.lastPathComponent)")
+                showToast(OpalL10n.format("app.feedback.exported_fmt", url.lastPathComponent))
             } catch {
                 OpalDeskLog.warn("feedback", "Export diagnostic report failed: \(error.localizedDescription)")
-                bannerError = "导出诊断日志失败：\(error.localizedDescription)"
+                bannerError = OpalL10n.format("app.feedback.export_failed_fmt", error.localizedDescription)
             }
         }
     }
@@ -119,14 +119,14 @@ extension AppModel {
     public func clearClientLogs() {
         OpalLogStore.shared.clear()
         logEntries = []
-        showToast("已清空本地客户端日志")
+        showToast(OpalL10n.text("app.feedback.cleared_logs"))
     }
 
     public func copyQqGroupNumber() {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(FeedbackHistoryLogic.qqGroupNumber, forType: .string)
-        showToast("已复制交流反馈 QQ 群号 \(FeedbackHistoryLogic.qqGroupNumber)")
+        showToast(OpalL10n.format("app.feedback.copied_qq_fmt", FeedbackHistoryLogic.qqGroupNumber))
     }
 
     public func submitManualFeedback(
@@ -244,7 +244,7 @@ extension AppModel {
     public func refreshFeedbackStatuses(force: Bool = false) async -> MacFeedbackRefreshOutcome {
         let baseUrl = feedbackConfig.resolvedStatusBaseUrl
         guard !baseUrl.isEmpty else {
-            return MacFeedbackRefreshOutcome(success: false, updatedCount: 0, skippedByThrottle: false, message: "当前构建未配置状态查询服务")
+            return MacFeedbackRefreshOutcome(success: false, updatedCount: 0, skippedByThrottle: false, message: OpalL10n.text("app.feedback.unconfigured"))
         }
 
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -309,7 +309,7 @@ extension AppModel {
     public func lookupFeedbackByCode(_ rawCode: String) async -> MacFeedbackLookupOutcome {
         let baseUrl = feedbackConfig.resolvedStatusBaseUrl
         guard !baseUrl.isEmpty else {
-            return MacFeedbackLookupOutcome(success: false, found: false, item: nil, message: "当前构建未配置状态查询服务")
+            return MacFeedbackLookupOutcome(success: false, found: false, item: nil, message: OpalL10n.text("app.feedback.unconfigured"))
         }
         let res = await FeedbackStatusClient.lookupByShortCode(baseUrl: baseUrl, rawCode: rawCode)
         switch res {
@@ -319,7 +319,7 @@ extension AppModel {
             lastFeedbackSyncAtMs = checkedAt
             return MacFeedbackLookupOutcome(success: true, found: true, item: item, message: "")
         case .notFound:
-            return MacFeedbackLookupOutcome(success: true, found: false, item: nil, message: "未查到该反馈码记录，请检查输入是否正确")
+            return MacFeedbackLookupOutcome(success: true, found: false, item: nil, message: OpalL10n.text("app.feedback.lookup_not_found"))
         case let .failure(reason, _):
             return MacFeedbackLookupOutcome(success: false, found: false, item: nil, message: reason)
         }

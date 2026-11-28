@@ -9,9 +9,9 @@ public enum ActiveTransportKind: Sendable, Equatable {
 
     public var shortBadge: String {
         switch self {
-        case .wiredUSB: return "USB 有线"
-        case .wirelessADB: return "无线 ADB"
-        case .wirelessWiFi: return "Wi-Fi 直连"
+        case .wiredUSB: return OpalL10n.text("transport.usb")
+        case .wirelessADB: return OpalL10n.text("transport.wireless_adb")
+        case .wirelessWiFi: return OpalL10n.text("transport.wifi_direct")
         }
     }
 
@@ -164,30 +164,30 @@ extension OpalCastTilingTopology {
     public func slotDisplayName(for index: Int) -> String {
         switch self {
         case .split2H:
-            return index == 0 ? "左侧分屏" : "右侧分屏"
+            return index == 0 ? OpalL10n.text("layout.slot.left") : OpalL10n.text("layout.slot.right")
         case .split2V:
-            return index == 0 ? "上方分屏" : "下方分屏"
+            return index == 0 ? OpalL10n.text("layout.slot.top") : OpalL10n.text("layout.slot.bottom")
         case .split3Master:
             switch index {
-            case 0: return "左侧主屏"
-            case 1: return "右上分屏"
-            default: return "右下分屏"
+            case 0: return OpalL10n.text("layout.slot.left_main")
+            case 1: return OpalL10n.text("layout.slot.top_right")
+            default: return OpalL10n.text("layout.slot.bottom_right")
             }
         case .split3Cols:
             switch index {
-            case 0: return "左列分屏"
-            case 1: return "中列分屏"
-            default: return "右列分屏"
+            case 0: return OpalL10n.text("layout.slot.col_left")
+            case 1: return OpalL10n.text("layout.slot.col_mid")
+            default: return OpalL10n.text("layout.slot.col_right")
             }
         case .grid2x2:
             switch index {
-            case 0: return "左上格"
-            case 1: return "右上格"
-            case 2: return "左下格"
-            default: return "右下格"
+            case 0: return OpalL10n.text("layout.slot.top_left")
+            case 1: return OpalL10n.text("layout.slot.top_right")
+            case 2: return OpalL10n.text("layout.slot.bottom_left")
+            default: return OpalL10n.text("layout.slot.bottom_right")
             }
         case .exit:
-            return "窗口 \(index + 1)"
+            return OpalL10n.format("layout.slot.window_fmt", index + 1)
         }
     }
 }

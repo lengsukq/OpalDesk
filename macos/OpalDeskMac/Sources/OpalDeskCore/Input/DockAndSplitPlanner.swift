@@ -39,28 +39,34 @@ public enum DockAndSplitPlanner {
         runningDesktopApps: [RemoteAppInfo],
         poppedOutPackages: Set<String>
     ) -> DockPartition {
-        var metadataByPkg: [String: RemoteAppInfo] = [:]
+        var metadataByKey: [String: RemoteAppInfo] = [:]
         for app in remoteApps where !app.pkg.isEmpty {
-            metadataByPkg[app.pkg] = app
+            metadataByKey[app.appKey] = app
         }
-        var runningByPkg: [String: RemoteAppInfo] = [:]
-        for app in runningDesktopApps where !app.pkg.isEmpty && !poppedOutPackages.contains(app.pkg) {
-            runningByPkg[app.pkg] = app
-            if metadataByPkg[app.pkg] == nil {
-                metadataByPkg[app.pkg] = app
+        var runningByKey: [String: RemoteAppInfo] = [:]
+        for app in runningDesktopApps where !app.pkg.isEmpty && !poppedOutPackages.contains(app.appKey) {
+            runningByKey[app.appKey] = app
+            if metadataByKey[app.appKey] == nil {
+                metadataByKey[app.appKey] = app
             }
         }
 
         var pinned: [RemoteAppInfo] = []
         var pinnedSeen = Set<String>()
-        for rawPkg in pinnedPackages {
-            let pkg = rawPkg.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !pkg.isEmpty, pinnedSeen.insert(pkg).inserted else { continue }
-            var resolved = metadataByPkg[pkg] ?? RemoteAppInfo(pkg: pkg, label: pkg, runningOnExt: false)
-            if let live = runningByPkg[pkg] {
+        for rawKey in pinnedPackages {
+            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, pinnedSeen.insert(key).inserted else { continue }
+            let parsed = RemoteAppInfo.parseAppKey(key)
+            var resolved = metadataByKey[key] ?? RemoteAppInfo(
+                pkg: parsed.pkg,
+                label: parsed.pkg,
+                runningOnExt: false,
+                userId: parsed.userId
+            )
+            if let live = runningByKey[key] {
                 resolved.runningOnExt = true
                 if live.taskId > 0 { resolved.taskId = live.taskId }
-            } else if poppedOutPackages.contains(pkg) {
+            } else if poppedOutPackages.contains(key) {
                 resolved.runningOnExt = false
             }
             pinned.append(resolved)
@@ -69,11 +75,11 @@ public enum DockAndSplitPlanner {
         var running: [RemoteAppInfo] = []
         var runningSeen = Set<String>()
         for app in runningDesktopApps {
-            let pkg = app.pkg.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !pkg.isEmpty,
-                  !pinnedSeen.contains(pkg),
-                  !poppedOutPackages.contains(pkg),
-                  runningSeen.insert(pkg).inserted else {
+            let key = app.appKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty,
+                  !pinnedSeen.contains(key),
+                  !poppedOutPackages.contains(key),
+                  runningSeen.insert(key).inserted else {
                 continue
             }
             running.append(app)
@@ -118,17 +124,17 @@ public enum DockAndSplitPlanner {
         var recSeen = Set<String>()
 
         // 1. Running desktop apps not yet assigned to any split slot
-        for app in remoteApps where app.runningOnExt && !occupiedSet.contains(app.pkg) {
-            if recSeen.insert(app.pkg).inserted {
+        for app in remoteApps where app.runningOnExt && !occupiedSet.contains(app.appKey) && !occupiedSet.contains(app.pkg) {
+            if recSeen.insert(app.appKey).inserted {
                 recommended.append(app)
             }
         }
         // 2. Pinned Dock favorites not yet assigned
         let pinnedCandidates = remoteApps
-            .filter { pinnedRank[$0.pkg] != nil && !occupiedSet.contains($0.pkg) && !recSeen.contains($0.pkg) }
-            .sorted { (pinnedRank[$0.pkg] ?? Int.max) < (pinnedRank[$1.pkg] ?? Int.max) }
+            .filter { pinnedRank[$0.appKey] != nil && !occupiedSet.contains($0.appKey) && !recSeen.contains($0.appKey) }
+            .sorted { (pinnedRank[$0.appKey] ?? Int.max) < (pinnedRank[$1.appKey] ?? Int.max) }
         for app in pinnedCandidates {
-            if recSeen.insert(app.pkg).inserted {
+            if recSeen.insert(app.appKey).inserted {
                 recommended.append(app)
             }
         }
@@ -137,12 +143,12 @@ public enum DockAndSplitPlanner {
         }
 
         let orderedAll = remoteApps.sorted { lhs, rhs in
-            let lhsOccupied = occupiedSet.contains(lhs.pkg)
-            let rhsOccupied = occupiedSet.contains(rhs.pkg)
+            let lhsOccupied = occupiedSet.contains(lhs.appKey) || (lhs.userId == 0 && occupiedSet.contains(lhs.pkg))
+            let rhsOccupied = occupiedSet.contains(rhs.appKey) || (rhs.userId == 0 && occupiedSet.contains(rhs.pkg))
             if lhsOccupied != rhsOccupied { return !lhsOccupied }
             if lhs.runningOnExt != rhs.runningOnExt { return lhs.runningOnExt }
-            let lhsPinned = pinnedRank[lhs.pkg] != nil
-            let rhsPinned = pinnedRank[rhs.pkg] != nil
+            let lhsPinned = pinnedRank[lhs.appKey] != nil
+            let rhsPinned = pinnedRank[rhs.appKey] != nil
             if lhsPinned != rhsPinned { return lhsPinned }
             return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
         }

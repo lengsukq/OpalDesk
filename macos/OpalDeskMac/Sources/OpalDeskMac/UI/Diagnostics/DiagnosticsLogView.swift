@@ -55,7 +55,7 @@ public struct DiagnosticsLogView: View {
             HStack(alignment: .center, spacing: OpalSpacing.md) {
                 OpalIconBadge(systemName: "waveform.path.ecg.rectangle", tint: .accentColor, size: 40, iconSize: 18, cornerRadius: 12)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("反馈、需求与诊断")
+                    Text(OpalL10n.text("diag.title"))
                         .font(.title3.weight(.semibold))
                     Text("\(model.macDeviceSummary) · v\(model.appVersionString)")
                         .font(.caption)
@@ -63,16 +63,16 @@ public struct DiagnosticsLogView: View {
                 }
                 Spacer()
                 StatusBadgeView(
-                    text: model.isAuthenticated ? "投屏已连接" : "未连接投屏",
+                    text: model.isAuthenticated ? OpalL10n.text("diag.badge.connected") : OpalL10n.text("diag.badge.disconnected"),
                     color: model.isAuthenticated ? .green : .orange
                 )
             }
 
             HStack(spacing: OpalSpacing.sm) {
-                metricTile(title: "悬浮小窗", value: "\(model.activePopoutCount)/\(PopoutWindowManager.maxConcurrentWindows)")
-                metricTile(title: "本地日志", value: "\(model.logEntries.count) 条")
+                metricTile(title: OpalL10n.text("diag.metric.popouts"), value: "\(model.activePopoutCount)/\(PopoutWindowManager.maxConcurrentWindows)")
+                metricTile(title: OpalL10n.text("diag.metric.logs"), value: OpalL10n.format("diag.metric.logs_fmt", model.logEntries.count))
                 metricTile(
-                    title: "今日配额",
+                    title: OpalL10n.text("diag.metric.quota"),
                     value: quota.remainingLabel.replacingOccurrences(of: "今日剩余 ", with: "")
                 )
             }
@@ -82,22 +82,20 @@ public struct DiagnosticsLogView: View {
                     model.refreshFeedbackQuota()
                     if !model.feedbackQuota.isExhausted { activeModalKind = .bug }
                 } label: {
-                    Label(quota.isExhausted ? "今日上报已达上限" : "上报问题与日志", systemImage: "ant.fill")
+                    Label(quota.isExhausted ? OpalL10n.text("diag.btn.quota_reached") : OpalL10n.text("diag.btn.report_bug"), systemImage: "ant.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .large, isPill: true))
                 .disabled(quota.isExhausted)
 
                 Button {
                     model.refreshFeedbackQuota()
                     if !model.feedbackQuota.isExhausted { activeModalKind = .feature }
                 } label: {
-                    Label("提功能需求", systemImage: "lightbulb.fill")
+                    Label(OpalL10n.text("diag.btn.request_feature"), systemImage: "lightbulb.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .large, isPill: true))
                 .disabled(quota.isExhausted)
             }
 
@@ -108,16 +106,15 @@ public struct DiagnosticsLogView: View {
             HStack(spacing: OpalSpacing.md) {
                 OpalIconBadge(systemName: "bubble.left.and.bubble.right.fill", tint: .accentColor, size: 34, iconSize: 14, cornerRadius: 10)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("交流反馈 QQ 群 · \(FeedbackHistoryLogic.qqGroupNumber)")
+                    Text(OpalL10n.format("diag.qq.title_fmt", FeedbackHistoryLogic.qqGroupNumber))
                         .font(.subheadline.weight(.semibold))
-                    Text("问题解答、最新版本与需求改动都会在群内第一时间同步")
+                    Text(OpalL10n.text("diag.qq.subtitle"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("复制群号") { model.copyQqGroupNumber() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                Button(OpalL10n.text("diag.qq.copy")) { model.copyQqGroupNumber() }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .small, isPill: true))
             }
             .padding(.horizontal, OpalSpacing.md)
             .padding(.vertical, 10)
@@ -127,26 +124,23 @@ public struct DiagnosticsLogView: View {
                 Button {
                     model.copyDiagnosticReport(warningsOnly: warningsOnly, query: searchQuery)
                 } label: {
-                    Label("复制报告", systemImage: "doc.on.doc").frame(maxWidth: .infinity)
+                    Label(OpalL10n.text("diag.btn.copy_report"), systemImage: "doc.on.doc").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small))
 
                 Button {
                     model.exportDiagnosticReport(warningsOnly: warningsOnly, query: searchQuery)
                 } label: {
-                    Label("导出日志文件", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
+                    Label(OpalL10n.text("diag.btn.export_logs"), systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small))
 
                 Button(role: .destructive) {
                     model.clearClientLogs()
                 } label: {
-                    Label("清空日志", systemImage: "trash")
+                    Label(OpalL10n.text("diag.btn.clear_logs"), systemImage: "trash")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .destructive, size: .small))
             }
         }
         .padding(OpalSpacing.xl)
@@ -168,22 +162,21 @@ public struct DiagnosticsLogView: View {
 
     private var logStreamSection: some View {
         VStack(alignment: .leading, spacing: OpalSpacing.md) {
-            OpalSectionHeader(title: "实时日志流 (\(filteredEntries.count))", systemImage: "terminal") {
-                Toggle("仅警告/错误", isOn: $warningsOnly)
-                    .toggleStyle(.checkbox)
+            OpalSectionHeader(title: OpalL10n.format("diag.stream.title_fmt", filteredEntries.count), systemImage: "terminal") {
+                Toggle(OpalL10n.text("diag.stream.warnings_only"), isOn: $warningsOnly)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
                     .font(.caption)
                 Button {
                     newestFirst.toggle()
                 } label: {
-                    Label(newestFirst ? "最新在前" : "时间正序", systemImage: "arrow.up.arrow.down")
-                        .font(.caption)
+                    Label(newestFirst ? OpalL10n.text("diag.stream.newest_first") : OpalL10n.text("diag.stream.oldest_first"), systemImage: "arrow.up.arrow.down")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
             }
 
             OpalSearchField(
-                placeholder: "按关键字筛选（如 ADB / TLS / popout / video / feedback）",
+                placeholder: OpalL10n.text("diag.stream.search"),
                 text: $searchQuery
             )
 
@@ -191,8 +184,8 @@ public struct DiagnosticsLogView: View {
                 if visibleEntries.isEmpty {
                     Text(
                         searchQuery.isEmpty && !warningsOnly
-                            ? "暂无客户端日志，连接设备或打开悬浮窗后将在此实时记录。"
-                            : "当前筛选条件下没有匹配的日志记录。"
+                            ? OpalL10n.text("diag.stream.empty")
+                            : OpalL10n.text("diag.stream.empty_filtered")
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -213,9 +206,8 @@ public struct DiagnosticsLogView: View {
                     .frame(minHeight: 180, maxHeight: 300)
 
                     if !showAllLines && filteredEntries.count > Self.defaultDisplayLimit {
-                        Button("展开全部 \(filteredEntries.count) 条日志") { showAllLines = true }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                        Button(OpalL10n.format("diag.stream.expand_fmt", filteredEntries.count)) { showAllLines = true }
+                            .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
                             .padding([.horizontal, .bottom], 10)
                     }
                 }

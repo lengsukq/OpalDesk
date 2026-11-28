@@ -20,6 +20,7 @@ public struct DisplayWindowView: View {
     }
 
     public var body: some View {
+        let _ = model.preferences.appLanguage
         canvasStage
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
@@ -37,7 +38,7 @@ public struct DisplayWindowView: View {
                 }
             }
             .confirmationDialog(
-                "应用「\(model.pendingPopoutReloadPrompt?.appLabel ?? "")」的小窗已打开",
+                OpalL10n.format("hub.popout_open_title_fmt", model.pendingPopoutReloadPrompt?.appLabel ?? ""),
                 isPresented: Binding(
                     get: { model.pendingPopoutReloadPrompt != nil },
                     set: { if !$0 { model.pendingPopoutReloadPrompt = nil } }
@@ -45,20 +46,20 @@ public struct DisplayWindowView: View {
                 titleVisibility: .visible
             ) {
                 if let prompt = model.pendingPopoutReloadPrompt {
-                    Button("重载小窗+应用") {
+                    Button(OpalL10n.text("hub.popout_reload_btn")) {
                         model.pendingPopoutReloadPrompt = nil
                         prompt.onReloadWindowAndApp()
                     }
-                    Button("仅聚焦现有窗口") {
+                    Button(OpalL10n.text("hub.popout_focus_btn")) {
                         model.pendingPopoutReloadPrompt = nil
                         prompt.onFocusExisting()
                     }
-                    Button("取消", role: .cancel) {
+                    Button(OpalL10n.text("common.cancel"), role: .cancel) {
                         model.pendingPopoutReloadPrompt = nil
                     }
                 }
             } message: {
-                Text("该应用当前已有运行中的独立悬浮小窗。选择「重载小窗+应用」将断开并重新拉起全新悬浮窗与应用实例。")
+                Text(OpalL10n.text("hub.popout_open_message"))
             }
     }
 
@@ -132,8 +133,8 @@ public struct DisplayWindowView: View {
             if isDragOverCanvas {
                 OpalDropZoneOverlay(
                     icon: "arrow.down.doc.fill",
-                    title: "松开鼠标发送文件或安装 APK",
-                    subtitle: "普通文件将保存到 Download/OpalDesk · 单个 .apk/.xapk 将打开安装预览"
+                    title: OpalL10n.text("display.drop.title"),
+                    subtitle: OpalL10n.text("display.drop.subtitle")
                 )
             }
 
@@ -202,20 +203,20 @@ public struct DisplayWindowView: View {
             systemName: model.isMicEnabled ? "mic.fill" : "mic.slash",
             tint: model.isMicEnabled ? .green : .white,
             isActive: model.isMicEnabled,
-            helpText: model.isMicEnabled ? "关闭麦克风" : "开启麦克风"
+            helpText: model.isMicEnabled ? OpalL10n.text("display.mic.off_help") : OpalL10n.text("display.mic.on_help")
         ) { model.toggleMicrophone() }
 
         OpalGlassIconButton(
             systemName: model.isCameraEnabled ? "video.fill" : "video.slash",
             tint: model.isCameraEnabled ? .green : .white,
             isActive: model.isCameraEnabled,
-            helpText: model.isCameraEnabled ? "关闭摄像头" : "开启摄像头"
+            helpText: model.isCameraEnabled ? OpalL10n.text("display.cam.off_help") : OpalL10n.text("display.cam.on_help")
         ) { model.toggleCamera() }
 
         OpalGlassIconButton(
             systemName: "camera",
             tint: .white,
-            helpText: "一键截图到桌面并复制到剪贴板 (⌘⇧S)"
+            helpText: OpalL10n.text("display.screenshot_help")
         ) { model.captureMainWindowScreenshot() }
             .disabled(!model.isAuthenticated || model.videoMetrics.totalFramesDecoded == 0)
 
@@ -241,13 +242,13 @@ public struct DisplayWindowView: View {
         }
         .buttonStyle(.plain)
         .disabled(!model.isAuthenticated || (!model.isMainWindowRecording && model.videoMetrics.totalFramesDecoded == 0))
-        .help(model.isMainWindowRecording ? "停止录屏并保存 MP4 (⌘⇧V)" : "录制投屏画面为 MP4 视频 (⌘⇧V)")
-        .accessibilityLabel(model.isMainWindowRecording ? "停止录屏" : "开始录屏")
+        .help(model.isMainWindowRecording ? OpalL10n.text("display.rec.stop_help") : OpalL10n.text("display.rec.start_help"))
+        .accessibilityLabel(model.isMainWindowRecording ? OpalL10n.text("display.rec.stop_a11y") : OpalL10n.text("display.rec.start_a11y"))
 
         OpalGlassIconButton(
             systemName: "folder",
             tint: .white,
-            helpText: "手机文件与存储管理 (⌘⇧F)"
+            helpText: OpalL10n.text("hub.tool.files_help")
         ) {
             openWindow(id: WindowID.fileBrowser)
             NSApp.activate(ignoringOtherApps: true)
@@ -261,64 +262,62 @@ public struct DisplayWindowView: View {
             Button {
                 model.sendAndroidHome()
             } label: {
-                Label("退出全屏", systemImage: "arrow.down.right.and.arrow.up.left")
-                    .font(.system(size: 11, weight: .semibold))
+                Label(OpalL10n.text("display.exit_fullscreen"), systemImage: "arrow.down.right.and.arrow.up.left")
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .help("退出远程应用全屏（\(model.deviceState.fullscreenWindowTitle)）")
+            .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .mini, isPill: true))
+            .help(OpalL10n.format("display.exit_fullscreen_help_fmt", model.deviceState.fullscreenWindowTitle))
         }
 
         floatingTextPillButton(
             title: model.activePopoutCount > 0
-                ? "小窗 \(model.activePopoutCount)/\(PopoutWindowManager.maxConcurrentWindows)"
-                : "应用小窗",
+                ? OpalL10n.format("display.popout_count_fmt", model.activePopoutCount, PopoutWindowManager.maxConcurrentWindows)
+                : OpalL10n.text("hub.row.standalone_window"),
             systemImage: "macwindow.on.rectangle",
             isActive: model.activePopoutCount > 0,
             tint: .cyan,
-            help: "打开手机应用或弹出独立悬浮小窗（最多 3 个）"
+            help: OpalL10n.text("display.popout_help")
         ) { model.openRemoteAppPicker(for: .activeDesktop) }
             .disabled(!model.isAuthenticated)
 
         floatingTextPillButton(
-            title: model.displayMode == .dex ? "融合镜像" : "电脑桌面",
+            title: model.displayMode == .dex ? OpalL10n.text("hub.mode.mirror") : OpalL10n.text("hub.mode.dex"),
             systemImage: model.displayMode == .dex ? "rectangle.on.rectangle" : "macwindow",
             isActive: false,
             tint: .white,
-            help: model.displayMode == .dex ? "切换为融合镜像 (⌘⇧D)" : "切换为电脑桌面 (⌘⇧D)"
+            help: model.displayMode == .dex ? OpalL10n.text("display.mode.to_mirror_help") : OpalL10n.text("display.mode.to_dex_help")
         ) { model.toggleDisplayMode() }
 
         floatingTextPillButton(
-            title: model.isBlackoutActive ? "亮屏" : "黑屏",
+            title: model.isBlackoutActive ? OpalL10n.text("display.screen_on_short") : OpalL10n.text("display.screen_off_short"),
             systemImage: model.isBlackoutActive ? "iphone" : "iphone.slash",
             isActive: model.isBlackoutActive,
             tint: .blue,
-            help: model.isBlackoutActive ? "点亮手机屏幕 (⌘⇧B)" : "熄灭手机屏幕 (⌘⇧B)"
+            help: model.isBlackoutActive ? OpalL10n.text("display.screen_on_help") : OpalL10n.text("display.screen_off_help")
         ) { model.toggleBlackout() }
 
         floatingTextPillButton(
-            title: model.preferences.hideLocalCursor ? "单指针" : "本机指针",
+            title: model.preferences.hideLocalCursor ? OpalL10n.text("display.cursor.single") : OpalL10n.text("display.cursor.local"),
             systemImage: model.preferences.hideLocalCursor ? "cursorarrow.slash" : "cursorarrow",
             isActive: model.preferences.hideLocalCursor,
             tint: .cyan,
-            help: "隐藏投屏画布上的 Mac 本机光标，避免与 Android 端指针重叠显示"
+            help: OpalL10n.text("display.cursor.help")
         ) { model.preferences.hideLocalCursor.toggle() }
     }
 
     @ViewBuilder
     private var sessionExitControls: some View {
         floatingTextPillButton(
-            title: "断开",
+            title: OpalL10n.text("display.disconnect"),
             systemImage: nil,
             isActive: false,
             tint: .white,
-            help: "断开连接并返回主界面 (⌘⇧W)"
+            help: OpalL10n.text("display.disconnect_help")
         ) { model.forceDisconnectAndReturnHome() }
 
         Button(role: .destructive) {
             model.forceTerminateApp()
         } label: {
-            Text("退出")
+            Text(OpalL10n.text("display.quit"))
                 .font(.system(size: 11, weight: .semibold))
                 .padding(.horizontal, 9)
                 .frame(height: OpalControlSize.iconButtonCompact)
@@ -326,7 +325,7 @@ public struct DisplayWindowView: View {
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
-        .help("强制退出 OpalDesk (⌘⌥Q)")
+        .help(OpalL10n.text("display.quit_help"))
     }
 
     private func floatingTextPillButton(
@@ -383,7 +382,7 @@ public struct DisplayWindowView: View {
             .opalFloatingGlassCapsule(strokeColor: Color.red.opacity(0.68))
         }
         .buttonStyle(.plain)
-        .help("点击停止录制并保存 MP4")
+        .help(OpalL10n.text("display.rec.pill_help"))
     }
 
     // MARK: - Optional Top-Right Performance HUD
@@ -469,7 +468,7 @@ public struct DisplayWindowView: View {
                 .foregroundStyle(.white)
 
             if let detail = model.disconnectReason, !detail.isEmpty, model.isReconnecting {
-                Text("原因：\(detail)")
+                Text(OpalL10n.format("display.reason_fmt", detail))
                     .font(.caption)
                     .foregroundStyle(.orange.opacity(0.95))
                     .multilineTextAlignment(.center)
@@ -483,13 +482,11 @@ public struct DisplayWindowView: View {
             }
 
             HStack(spacing: OpalSpacing.md) {
-                Button("断开并返回") { model.forceDisconnectAndReturnHome() }
-                    .buttonStyle(.bordered)
-                    .tint(.white)
+                Button(OpalL10n.text("display.disconnect_return")) { model.forceDisconnectAndReturnHome() }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .regular, isPill: true))
 
-                Button("强制退出 App", role: .destructive) { model.forceTerminateApp() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red.opacity(0.88))
+                Button(OpalL10n.text("display.force_quit"), role: .destructive) { model.forceTerminateApp() }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .destructive, size: .regular, isPill: true))
             }
             .padding(.top, OpalSpacing.xxs)
         }
@@ -499,12 +496,12 @@ public struct DisplayWindowView: View {
 
     private var connectionStatusCaption: String {
         switch model.sessionState {
-        case .connecting: return "正在建立低延迟连接…"
-        case .reconnecting(let attempt): return "投屏连接已中断，正在尝试第 \(attempt)/5 次重连…"
-        case .connected: return model.isAuthenticated ? "正在等待 Android 首个关键帧…" : "正在等待手机端确认连接…"
-        case .failed(let msg): return "连接失败：\(msg)"
-        case .disconnected: return "投屏连接已断开"
-        default: return "准备显示画面…"
+        case .connecting: return OpalL10n.text("display.status.connecting")
+        case .reconnecting(let attempt): return OpalL10n.format("display.status.reconnecting_fmt", attempt)
+        case .connected: return model.isAuthenticated ? OpalL10n.text("display.status.waiting_frame") : OpalL10n.text("display.status.waiting_approval")
+        case .failed(let msg): return OpalL10n.format("display.status.failed_fmt", msg)
+        case .disconnected: return OpalL10n.text("display.status.disconnected")
+        default: return OpalL10n.text("display.status.preparing")
         }
     }
 }

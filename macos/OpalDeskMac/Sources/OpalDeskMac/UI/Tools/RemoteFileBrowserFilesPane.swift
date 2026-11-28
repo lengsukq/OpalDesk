@@ -19,7 +19,7 @@ extension RemoteFileBrowserWindowView {
     private var quickLocationsSidebar: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: OpalSpacing.xxs) {
-                Text("常用目录")
+                Text(OpalL10n.text("files.sidebar.title"))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
@@ -96,7 +96,7 @@ extension RemoteFileBrowserWindowView {
             if isDropTargeted {
                 OpalDropZoneOverlay(
                     icon: "arrow.up.doc.fill",
-                    title: "松开即可上传到当前手机目录",
+                    title: OpalL10n.text("files.drop.title"),
                     subtitle: currentPath,
                     cornerRadius: OpalRadius.panel,
                     insetPadding: OpalSpacing.md
@@ -121,7 +121,7 @@ extension RemoteFileBrowserWindowView {
                 systemName: "chevron.up",
                 size: 26,
                 iconSize: 11.5,
-                helpText: "返回上一级目录"
+                helpText: OpalL10n.text("files.up_help")
             ) {
                 if let parent { actions.onNavigateToPath(parent) }
             }
@@ -158,7 +158,7 @@ extension RemoteFileBrowserWindowView {
 
             Spacer(minLength: OpalSpacing.sm)
 
-            Text("\(visibleItems.count) 项")
+            Text(OpalL10n.format("files.item_count_fmt", visibleItems.count))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
 
@@ -168,23 +168,25 @@ extension RemoteFileBrowserWindowView {
                 isActive: showHiddenFiles,
                 size: 26,
                 iconSize: 11.5,
-                helpText: showHiddenFiles ? "隐藏以 . 开头的隐藏文件" : "显示隐藏文件"
+                helpText: showHiddenFiles ? OpalL10n.text("files.hidden.hide_help") : OpalL10n.text("files.hidden.show_help")
             ) {
                 showHiddenFiles.toggle()
             }
 
             sortMenu
 
-            Picker("布局", selection: $viewMode) {
-                ForEach(RemoteFileViewMode.allCases) { mode in
-                    Image(systemName: mode.sfSymbolName)
-                        .tag(mode)
-                        .accessibilityLabel(mode.rawValue)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 68)
+            OpalSegmentedControl(
+                selection: $viewMode,
+                options: RemoteFileViewMode.allCases.map { mode in
+                    OpalSegmentOption(
+                        value: mode,
+                        label: "",
+                        icon: mode.sfSymbolName,
+                        accessibilityLabel: mode.title
+                    )
+                },
+                compact: true
+            )
         }
         .padding(.horizontal, OpalSpacing.lg)
         .padding(.vertical, 10)
@@ -215,12 +217,12 @@ extension RemoteFileBrowserWindowView {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("排序方式")
+        .help(OpalL10n.text("files.sort.help"))
     }
 
     private var batchSelectionBar: some View {
         HStack(spacing: OpalSpacing.sm) {
-            Text("已选中 \(selectedItems.count) 项")
+            Text(OpalL10n.format("files.selected_count_fmt", selectedItems.count))
                 .font(.caption.weight(.semibold))
             Spacer()
             let downloadable = selectedItems.filter { !$0.isDirectory }
@@ -231,37 +233,31 @@ extension RemoteFileBrowserWindowView {
                     if quickLookLoadingPath == single.path {
                         HStack(spacing: 4) {
                             ProgressView().controlSize(.mini)
-                            Text("准备预览…").font(.caption.weight(.medium))
+                            Text(OpalL10n.text("files.quicklook.loading"))
                         }
                     } else {
-                        Label("快速查看 (空格)", systemImage: "eye")
-                            .font(.caption.weight(.medium))
+                        Label(OpalL10n.text("files.quicklook"), systemImage: "eye")
                     }
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
                 .disabled(quickLookLoadingPath == single.path)
             }
             if !downloadable.isEmpty {
                 Button {
                     actions.onDownloadItems(downloadable)
                 } label: {
-                    Label("下载到 Mac (\(downloadable.count))", systemImage: "arrow.down.circle")
-                        .font(.caption.weight(.medium))
+                    Label(OpalL10n.format("files.download_count_fmt", downloadable.count), systemImage: "arrow.down.circle")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
             }
             Button(role: .destructive) {
                 pendingDeleteItems = selectedItems
             } label: {
-                Label("删除所选", systemImage: "trash")
-                    .font(.caption.weight(.medium))
+                Label(OpalL10n.text("files.delete_selected"), systemImage: "trash")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(OpalLiquidButtonStyle(variant: .destructive, size: .small, isPill: true))
 
-            Button("取消选择") { selectedFilePaths.removeAll() }
+            Button(OpalL10n.text("common.deselect")) { selectedFilePaths.removeAll() }
                 .buttonStyle(.borderless)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -277,9 +273,9 @@ extension RemoteFileBrowserWindowView {
     private var fileContentArea: some View {
         if !isConnected {
             ContentUnavailableView(
-                "尚未连接 Android 设备",
+                OpalL10n.text("files.empty.disconnected_title"),
                 systemImage: "iphone.slash",
-                description: Text("连接或唤醒后台伴侣会话后，即可双向浏览手机文件并互传资料。")
+                description: Text(OpalL10n.text("files.empty.disconnected_desc"))
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let filesError, visibleItems.isEmpty {
@@ -290,14 +286,14 @@ extension RemoteFileBrowserWindowView {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 420)
-                Button("重试加载") { actions.onRefreshDirectory(currentPath) }
-                    .buttonStyle(.borderedProminent)
+                Button(OpalL10n.text("files.retry_load")) { actions.onRefreshDirectory(currentPath) }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .regular, isPill: true))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if isLoadingFiles && items.isEmpty {
             VStack(spacing: OpalSpacing.md) {
                 ProgressView()
-                Text("正在读取手机目录…")
+                Text(OpalL10n.text("files.loading_dir"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -305,17 +301,18 @@ extension RemoteFileBrowserWindowView {
         } else if visibleItems.isEmpty {
             ContentUnavailableView {
                 Label(
-                    searchQuery.isEmpty ? "此文件夹为空" : "没有匹配的文件",
+                    searchQuery.isEmpty ? OpalL10n.text("files.empty.folder_title") : OpalL10n.text("files.empty.search_title"),
                     systemImage: searchQuery.isEmpty ? "folder" : "magnifyingglass"
                 )
             } description: {
-                Text(searchQuery.isEmpty ? "可直接从 Finder 拖入文件上传到当前目录，或点击右上角「上传文件…」。" : "尝试修改搜索关键字或开启显示隐藏文件。")
+                Text(searchQuery.isEmpty ? OpalL10n.text("files.empty.folder_desc") : OpalL10n.text("files.empty.search_desc"))
             } actions: {
                 if !searchQuery.isEmpty {
-                    Button("清除搜索") { searchQuery = "" }
+                    Button(OpalL10n.text("files.clear_search")) { searchQuery = "" }
+                        .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .regular, isPill: true))
                 } else {
-                    Button("上传文件…") { openUploadFilePanel() }
-                        .buttonStyle(.borderedProminent)
+                    Button(OpalL10n.text("files.upload")) { openUploadFilePanel() }
+                        .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .regular, isPill: true))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -347,13 +344,13 @@ extension RemoteFileBrowserWindowView {
 
     private var listColumnHeaders: some View {
         HStack(spacing: OpalSpacing.md) {
-            sortableColumnHeader("名称", option: .name)
+            sortableColumnHeader(OpalL10n.text("files.col.name"), option: .name)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            sortableColumnHeader("大小", option: .size)
+            sortableColumnHeader(OpalL10n.text("files.col.size"), option: .size)
                 .frame(width: 92, alignment: .trailing)
-            sortableColumnHeader("修改时间", option: .modifiedDate)
+            sortableColumnHeader(OpalL10n.text("files.col.modified"), option: .modifiedDate)
                 .frame(width: 146, alignment: .trailing)
-            Text("操作")
+            Text(OpalL10n.text("files.col.actions"))
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 138, alignment: .trailing)
@@ -401,7 +398,7 @@ extension RemoteFileBrowserWindowView {
                         .truncationMode(.middle)
 
                     if item.isAndroidPackage {
-                        StatusBadgeView(text: "安装包", color: .green, horizontalPadding: 6, verticalPadding: 1.5)
+                        StatusBadgeView(text: OpalL10n.text("files.badge.apk"), color: .green, horizontalPadding: 6, verticalPadding: 1.5)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -432,13 +429,10 @@ extension RemoteFileBrowserWindowView {
                     Button {
                         actions.onInstallApk(item)
                     } label: {
-                        Text("安装")
-                            .font(.caption2.weight(.semibold))
+                        Text(OpalL10n.text("files.action.install"))
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.green)
-                    .controlSize(.small)
-                    .help("解析并安装此 Android 安装包")
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .emerald, size: .mini, isPill: true))
+                    .help(OpalL10n.text("files.action.install_help"))
                 }
 
                 if !item.isDirectory {
@@ -452,7 +446,7 @@ extension RemoteFileBrowserWindowView {
                             tint: .secondary,
                             size: 24,
                             iconSize: 12.5,
-                            helpText: "快速查看 (空格)"
+                            helpText: OpalL10n.text("files.quicklook")
                         ) { actions.onQuickLookItem(item) }
                     }
 
@@ -461,7 +455,7 @@ extension RemoteFileBrowserWindowView {
                         tint: .secondary,
                         size: 24,
                         iconSize: 13,
-                        helpText: "下载到 Mac"
+                        helpText: OpalL10n.text("files.action.download_help")
                     ) { actions.onDownloadItems([item]) }
                 }
 
@@ -474,7 +468,7 @@ extension RemoteFileBrowserWindowView {
                 }
                 .menuStyle(.borderlessButton)
                 .frame(width: 24)
-                .accessibilityLabel("更多操作：\(item.name)")
+                .accessibilityLabel(OpalL10n.format("files.action.more_a11y_fmt", item.name))
             }
             .frame(width: 138, alignment: .trailing)
         }
@@ -525,7 +519,7 @@ extension RemoteFileBrowserWindowView {
                     .lineLimit(2)
                     .truncationMode(.middle)
                     .multilineTextAlignment(.center)
-                Text(item.isDirectory ? "文件夹" : item.formattedSize)
+                Text(item.isDirectory ? OpalL10n.text("files.grid.folder") : item.formattedSize)
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -550,31 +544,32 @@ extension RemoteFileBrowserWindowView {
     @ViewBuilder
     private func itemContextMenu(for item: RemoteFileItem) -> some View {
         if item.isDirectory {
-            Button("打开文件夹", systemImage: "folder") { actions.onNavigateToPath(item.path) }
+            Button(OpalL10n.text("files.ctx.open_folder"), systemImage: "folder") { actions.onNavigateToPath(item.path) }
         } else {
-            Button("快速查看 (空格)", systemImage: "eye") { actions.onQuickLookItem(item) }
+            Button(OpalL10n.text("files.ctx.direct_open"), systemImage: "arrow.up.forward.app") { actions.onOpenItem(item) }
+            Button(OpalL10n.text("files.quicklook"), systemImage: "eye") { actions.onQuickLookItem(item) }
             if item.isAndroidPackage {
-                Button("安装到手机…", systemImage: "shippingbox") { actions.onInstallApk(item) }
+                Button(OpalL10n.text("files.ctx.install_ellipsis"), systemImage: "shippingbox") { actions.onInstallApk(item) }
             }
-            Button("下载到 Mac", systemImage: "arrow.down.circle") { actions.onDownloadItems([item]) }
+            Button(OpalL10n.text("files.ctx.download"), systemImage: "arrow.down.circle") { actions.onDownloadItems([item]) }
         }
 
         Divider()
 
-        Button("重命名…", systemImage: "pencil") {
+        Button(OpalL10n.text("files.ctx.rename_ellipsis"), systemImage: "pencil") {
             renameInput = item.name
             renamingItem = item
         }
 
-        Button("复制手机路径", systemImage: "doc.on.doc") {
+        Button(OpalL10n.text("files.ctx.copy_path"), systemImage: "doc.on.doc") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(item.path, forType: .string)
-            localNoticeMessage = "已复制路径：\(item.path)"
+            localNoticeMessage = OpalL10n.format("files.copied_path_fmt", item.path)
         }
 
         Divider()
 
-        Button("删除…", systemImage: "trash", role: .destructive) {
+        Button(OpalL10n.text("files.ctx.delete_ellipsis"), systemImage: "trash", role: .destructive) {
             pendingDeleteItems = [item]
         }
     }
@@ -586,6 +581,8 @@ extension RemoteFileBrowserWindowView {
             actions.onNavigateToPath(item.path)
         } else if item.isAndroidPackage {
             actions.onInstallApk(item)
+        } else if FileBrowserPresentation.shouldDirectOpen(item, maxSizeMB: directOpenMaxMB) {
+            actions.onOpenItem(item)
         } else {
             actions.onDownloadItems([item])
         }

@@ -31,12 +31,12 @@ public enum ApkInstallState: Sendable, Equatable {
 
     public var stageTitle: String {
         switch self {
-        case .idle: return "就绪"
-        case .uploading: return "正在传输安装包到手机…"
-        case .extracting: return "正在手机端解包分包资源…"
-        case .installing: return "正在调用系统安装器安装…"
-        case .succeeded: return "安装完成"
-        case .failed: return "安装失败"
+        case .idle: return OpalL10n.text("apk.stage.ready")
+        case .uploading: return OpalL10n.text("apk.stage.uploading")
+        case .extracting: return OpalL10n.text("apk.stage.extracting")
+        case .installing: return OpalL10n.text("apk.stage.installing")
+        case .succeeded: return OpalL10n.text("apk.stage.succeeded")
+        case .failed: return OpalL10n.text("apk.stage.failed")
         }
     }
 
@@ -93,13 +93,13 @@ public struct ApkInstallerSheet: View {
             if isLoading {
                 OpalNoticeBanner(
                     tone: .loading,
-                    title: "正在解析安装包…",
+                    title: OpalL10n.text("apk.loading.title"),
                     message: packageURL.lastPathComponent
                 )
             } else if let parseError {
                 OpalNoticeBanner(
                     tone: .error,
-                    title: "无法解析安装包",
+                    title: OpalL10n.text("apk.parse_error.title"),
                     message: parseError
                 )
             } else if let info = packageInfo {
@@ -169,7 +169,7 @@ public struct ApkInstallerSheet: View {
                     }
                 }
 
-                Text(info.packageName.isEmpty ? "未知包名" : info.packageName)
+                Text(info.packageName.isEmpty ? OpalL10n.text("apk.unknown_pkg") : info.packageName)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -199,23 +199,23 @@ public struct ApkInstallerSheet: View {
         ) {
             metadataTile(
                 icon: "cpu",
-                title: "原生架构 (ABI)",
-                value: info.supportedAbis.isEmpty ? "通用 / 纯 Java" : info.supportedAbis.joined(separator: ", ")
+                title: OpalL10n.text("apk.meta.abi"),
+                value: info.supportedAbis.isEmpty ? OpalL10n.text("apk.meta.abi_universal") : info.supportedAbis.joined(separator: ", ")
             )
             metadataTile(
                 icon: "slider.horizontal.3",
-                title: "Android SDK",
+                title: OpalL10n.text("apk.meta.sdk"),
                 value: sdkSummary(info)
             )
             metadataTile(
                 icon: info.signature.isSigned ? "checkmark.seal.fill" : "exclamationmark.shield.fill",
-                title: "应用签名",
+                title: OpalL10n.text("apk.meta.signature"),
                 value: info.signature.summaryText,
                 tint: info.signature.isSigned ? .green : .orange
             )
             metadataTile(
                 icon: "square.stack.3d.up.fill",
-                title: "安装包结构",
+                title: OpalL10n.text("apk.meta.structure"),
                 value: structureSummary(info)
             )
         }
@@ -287,7 +287,7 @@ public struct ApkInstallerSheet: View {
             .padding(.top, OpalSpacing.sm)
         } label: {
             HStack(spacing: OpalSpacing.sm) {
-                Label("分包与扩展文件", systemImage: "shippingbox")
+                Label(OpalL10n.text("apk.splits.title"), systemImage: "shippingbox")
                     .font(.callout.weight(.medium))
                 Spacer()
                 StatusBadgeView(
@@ -304,7 +304,7 @@ public struct ApkInstallerSheet: View {
     private func permissionsDisclosure(_ info: AndroidPackageInfo) -> some View {
         DisclosureGroup(isExpanded: $showPermissions) {
             if info.permissionGroups.isEmpty {
-                Text("此安装包未声明特殊系统权限")
+                Text(OpalL10n.text("apk.perms.none"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.top, OpalSpacing.xs)
@@ -319,7 +319,7 @@ public struct ApkInstallerSheet: View {
                                 Text(group.category.displayName)
                                     .font(.caption.weight(.semibold))
                                 if group.isSensitive {
-                                    StatusBadgeView(text: "敏感", color: .orange, horizontalPadding: 6, verticalPadding: 1)
+                                    StatusBadgeView(text: OpalL10n.text("apk.perms.sensitive"), color: .orange, horizontalPadding: 6, verticalPadding: 1)
                                 }
                             }
                             ForEach(group.permissions) { perm in
@@ -341,13 +341,13 @@ public struct ApkInstallerSheet: View {
             }
         } label: {
             HStack(spacing: OpalSpacing.sm) {
-                Label("申请权限（\(info.permissions.count) 项）", systemImage: "hand.raised.fill")
+                Label(OpalL10n.format("apk.perms.title_fmt", info.permissions.count), systemImage: "hand.raised.fill")
                     .font(.callout.weight(.medium))
                 Spacer()
                 if info.sensitivePermissionCount > 0 {
-                    StatusBadgeView(text: "含 \(info.sensitivePermissionCount) 项敏感权限", color: .orange)
+                    StatusBadgeView(text: OpalL10n.format("apk.perms.sensitive_count_fmt", info.sensitivePermissionCount), color: .orange)
                 } else {
-                    StatusBadgeView(text: "无敏感权限", color: .green)
+                    StatusBadgeView(text: OpalL10n.text("apk.perms.no_sensitive"), color: .green)
                 }
             }
         }
@@ -360,9 +360,9 @@ public struct ApkInstallerSheet: View {
         VStack(alignment: .leading, spacing: OpalSpacing.sm) {
             Toggle(isOn: $replaceExisting) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("覆盖安装已有应用 (-r)")
+                    Text(OpalL10n.text("apk.opt.replace_title"))
                         .font(.callout)
-                    Text("保留现有应用数据并直接更新")
+                    Text(OpalL10n.text("apk.opt.replace_sub"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -373,9 +373,9 @@ public struct ApkInstallerSheet: View {
 
             Toggle(isOn: $allowDowngrade) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("允许降级安装 (-d)")
+                    Text(OpalL10n.text("apk.opt.downgrade_title"))
                         .font(.callout)
-                    Text("允许安装版本号低于当前已安装版本的安装包")
+                    Text(OpalL10n.text("apk.opt.downgrade_sub"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -421,18 +421,19 @@ public struct ApkInstallerSheet: View {
         case let .succeeded(message):
             OpalNoticeBanner(
                 tone: .success,
-                title: "安装成功",
-                message: (message?.isEmpty == false) ? message! : "已成功安装到目标 Android 设备。"
+                title: OpalL10n.text("apk.succeeded.title"),
+                message: (message?.isEmpty == false) ? message! : OpalL10n.text("apk.succeeded.default")
             )
 
         case let .failed(message):
-            OpalNoticeBanner(tone: .error, title: "安装失败", message: message)
+            OpalNoticeBanner(tone: .error, title: OpalL10n.text("apk.stage.failed"), message: message)
         }
     }
 
     private var footerBar: some View {
         HStack {
-            Button(isSucceeded ? "完成" : "取消", role: .cancel, action: onCancel)
+            Button(isSucceeded ? OpalL10n.text("common.done") : OpalL10n.text("common.cancel"), role: .cancel, action: onCancel)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .regular, isPill: true))
                 .keyboardShortcut(.cancelAction)
 
             Spacer()
@@ -441,7 +442,7 @@ public struct ApkInstallerSheet: View {
                 Button(primaryActionTitle) {
                     onInstall(info, replaceExisting, allowDowngrade)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .regular, isPill: true))
                 .disabled(installState.isInProgress)
                 .keyboardShortcut(.defaultAction)
             }
@@ -457,10 +458,10 @@ public struct ApkInstallerSheet: View {
 
     private var primaryActionTitle: String {
         switch installState {
-        case .uploading, .extracting, .installing: return "正在安装…"
-        case .failed: return "重新安装"
-        case .succeeded: return "再次安装"
-        case .idle: return "安装到手机"
+        case .uploading, .extracting, .installing: return OpalL10n.text("apk.btn.installing")
+        case .failed: return OpalL10n.text("apk.btn.reinstall")
+        case .succeeded: return OpalL10n.text("apk.btn.install_again")
+        case .idle: return OpalL10n.text("apk.btn.install")
         }
     }
 
@@ -492,7 +493,7 @@ public struct ApkInstallerSheet: View {
     }
 
     private func versionSummary(_ info: AndroidPackageInfo) -> String {
-        let name = info.versionName ?? "未知版本"
+        let name = info.versionName ?? OpalL10n.text("apk.version.unknown")
         if let code = info.versionCode {
             return "v\(name) (\(code))"
         }
@@ -502,13 +503,13 @@ public struct ApkInstallerSheet: View {
     private func sdkSummary(_ info: AndroidPackageInfo) -> String {
         let minText = info.minSdkVersion.map { "API \($0)" } ?? "—"
         let targetText = info.targetSdkVersion.map { "API \($0)" } ?? "—"
-        return "最低 \(minText) · 目标 \(targetText)"
+        return OpalL10n.format("apk.sdk.summary_fmt", minText, targetText)
     }
 
     private func structureSummary(_ info: AndroidPackageInfo) -> String {
-        if info.splits.isEmpty { return "独立单包 APK" }
-        if info.obbFiles.isEmpty { return "\(info.splits.count) 个 Split APK" }
-        return "\(info.splits.count) 个分包 + \(info.obbFiles.count) 个 OBB"
+        if info.splits.isEmpty { return OpalL10n.text("apk.struct.single") }
+        if info.obbFiles.isEmpty { return OpalL10n.format("apk.struct.splits_fmt", info.splits.count) }
+        return OpalL10n.format("apk.struct.splits_obb_fmt", info.splits.count, info.obbFiles.count)
     }
 
     private func formattedBytes(_ bytes: UInt64) -> String {

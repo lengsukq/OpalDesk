@@ -57,7 +57,7 @@ public final class FinderServicesProvider: NSObject {
 
         if !inspection.directoryURLs.isEmpty && inspection.imageData == nil && inspection.plainText == nil {
             let folderName = inspection.directoryURLs[0].lastPathComponent
-            error.pointee = "暂不支持直接发送文件夹「\(folderName)」，请选择具体文件后再试。" as NSString
+            error.pointee = OpalL10n.format("app.finder.folder_unsupported_fmt", folderName) as NSString
             return
         }
 
@@ -75,18 +75,18 @@ public final class FinderServicesProvider: NSObject {
                     into: temporaryDirectory
                 )
                 guard !materializedURLs.isEmpty else {
-                    error.pointee = "无法生成待发送的临时文件。" as NSString
+                    error.pointee = OpalL10n.text("app.finder.temp_file_failed") as NSString
                     return
                 }
                 onFilesReceived(materializedURLs)
             } catch let materializeError {
                 let reason = materializeError.localizedDescription
                 OpalDeskLog.file.error("Finder service failed to materialize pasteboard payload: \(reason, privacy: .public)")
-                error.pointee = "准备发送内容失败：\(reason)" as NSString
+                error.pointee = OpalL10n.format("app.finder.prepare_failed_fmt", reason) as NSString
             }
             return
         }
 
-        error.pointee = "未在所选内容中找到可发送到 Android 的文件、图片或文本。" as NSString
+        error.pointee = OpalL10n.text("app.finder.no_content") as NSString
     }
 }

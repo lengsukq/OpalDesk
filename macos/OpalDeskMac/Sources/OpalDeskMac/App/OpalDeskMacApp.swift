@@ -67,21 +67,25 @@ struct OpalDeskMacApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
+        let resolvedLocale = model.preferences.resolvedLocale
         WindowGroup("OpalDesk", id: WindowID.main) {
             MainWindowRootView(model: model, appDelegate: appDelegate)
+                .environment(\.locale, resolvedLocale)
         }
         .defaultSize(width: 1180, height: 740)
         .commands {
             OpalDeskCommands(model: model)
         }
 
-        Window("手机文件与存储", id: WindowID.fileBrowser) {
+        Window(OpalL10n.text("window.file_browser"), id: WindowID.fileBrowser) {
             FileBrowserWindowHostView(model: model)
+                .environment(\.locale, resolvedLocale)
         }
         .defaultSize(width: 980, height: 640)
 
         MenuBarExtra {
             MenuBarHostView(model: model, appDelegate: appDelegate)
+                .environment(\.locale, resolvedLocale)
         } label: {
             Image(systemName: menuBarIconName)
                 .symbolRenderingMode(.hierarchical)
@@ -90,6 +94,7 @@ struct OpalDeskMacApp: App {
 
         Settings {
             SettingsView(model: model)
+                .environment(\.locale, resolvedLocale)
         }
     }
 
@@ -185,9 +190,10 @@ private struct MainWindowRootView: View {
             } else {
                 DeviceHubView(model: model)
                     .navigationTitle("OpalDesk")
+                    .modifier(OpalTitleFreeToolbar())
             }
         }
-        .frame(minWidth: 680, minHeight: 480)
+        .frame(minWidth: 820, minHeight: 540)
         .onAppear {
             wireSharedAppIntegration(model: model, appDelegate: appDelegate, openWindow: openWindow)
         }
@@ -216,6 +222,17 @@ private struct MainWindowRootView: View {
     }
 }
 
+/// Removes the redundant macOS 15+ titlebar text when our borderless fluid canvas renders its own header.
+private struct OpalTitleFreeToolbar: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.toolbar(removing: .title)
+        } else {
+            content
+        }
+    }
+}
+
 private struct FileBrowserWindowHostView: View {
     @Bindable var model: AppModel
 
@@ -233,8 +250,10 @@ private struct FileBrowserWindowHostView: View {
             transfers: model.fileBrowserTransfers,
             finderMountState: model.finderMountState,
             quickLookLoadingPath: model.quickLookLoadingPath,
+            directOpenMaxMB: model.preferences.fileDirectOpenMaxMB,
             actions: model.makeFileBrowserActions()
         )
+        .modifier(OpalTitleFreeToolbar())
         .background(WindowChromeConfigurator(isImmersiveCanvas: false))
         .onAppear {
             model.ensureFileBrowserInitialLoad()
@@ -268,25 +287,26 @@ private struct OpalDeskCommands: Commands {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
-        CommandMenu("投屏控制") {
-            Button("返回") { model.sendAndroidBack() }
+        let _ = model.preferences.appLanguage
+        CommandMenu(OpalL10n.text("menu.cast_controls")) {
+            Button(OpalL10n.text("menu.back")) { model.sendAndroidBack() }
                 .keyboardShortcut("[", modifiers: [.command])
                 .disabled(!model.isAuthenticated)
 
-            Button("桌面") { model.sendAndroidHome() }
+            Button(OpalL10n.text("menu.home")) { model.sendAndroidHome() }
                 .keyboardShortcut("h", modifiers: [.command, .shift])
                 .disabled(!model.isAuthenticated)
 
-            Button("多任务") { model.sendAndroidRecents() }
+            Button(OpalL10n.text("menu.recents")) { model.sendAndroidRecents() }
                 .disabled(!model.isAuthenticated)
 
             Divider()
 
-            Button("一键截图（保存桌面并复制）") { model.captureMainWindowScreenshot() }
+            Button(OpalL10n.text("menu.screenshot")) { model.captureMainWindowScreenshot() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
                 .disabled(!model.isAuthenticated || model.videoMetrics.totalFramesDecoded == 0)
 
-            Button(model.isMainWindowRecording ? "停止屏幕录制 (\(model.formattedRecordingDuration))" : "开始录制 MP4 视频") {
+            Button(model.isMainWindowRecording ? OpalL10n.format("menu.stop_recording_fmt", model.formattedRecordingDuration) : OpalL10n.text("menu.start_recording")) {
                 model.toggleMainWindowRecording()
             }
             .keyboardShortcut("v", modifiers: [.command, .shift])
@@ -294,13 +314,13 @@ private struct OpalDeskCommands: Commands {
 
             Divider()
 
-            Button("手机文件与存储…") {
+            Button(OpalL10n.text("menu.phone_files_ellipsis")) {
                 openWindow(id: WindowID.fileBrowser)
                 NSApp.activate(ignoringOtherApps: true)
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
 
-            Button(model.finderMountState.isMounted ? "在 Finder 中打开手机磁盘" : "挂载手机存储到 Finder") {
+            Button(model.finderMountState.isMounted ? OpalL10n.text("menu.open_finder_disk") : OpalL10n.text("menu.mount_finder")) {
                 if model.finderMountState.isMounted {
                     model.openMountedFinderVolume()
                 } else {
@@ -310,46 +330,46 @@ private struct OpalDeskCommands: Commands {
             .keyboardShortcut("f", modifiers: [.command, .option])
             .disabled(!model.isAnyChannelConnected)
 
-            Button("安装 Android 安装包 (.apk/.xapk)…") {
+            Button(OpalL10n.text("menu.install_apk_ellipsis")) {
                 model.presentApkFileChooser(targetWindow: .main)
             }
             .keyboardShortcut("i", modifiers: [.command, .shift])
 
-            Button("Spotlight 快捷方式管理…") { model.openShortcutManager() }
+            Button(OpalL10n.text("menu.shortcuts_ellipsis")) { model.openShortcutManager() }
 
             Divider()
 
-            Button("重载当前应用 DPI") { model.reloadCurrentAppDPI() }
+            Button(OpalL10n.text("menu.reload_dpi")) { model.reloadCurrentAppDPI() }
                 .disabled(!model.isAuthenticated || model.deviceState.topAppPackage.isEmpty)
 
             Divider()
 
-            Button(model.isBlackoutActive ? "点亮手机主屏" : "熄灭手机主屏") { model.toggleBlackout() }
+            Button(model.isBlackoutActive ? OpalL10n.text("menu.screen_on") : OpalL10n.text("menu.screen_off")) { model.toggleBlackout() }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
                 .disabled(!model.isAuthenticated)
 
-            Button(model.isAudioMuted ? "取消静音" : "静音音频") { model.toggleAudio() }
+            Button(model.isAudioMuted ? OpalL10n.text("menu.unmute") : OpalL10n.text("menu.mute")) { model.toggleAudio() }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
                 .disabled(!model.isAuthenticated)
 
-            Button("切换 DeX / 镜像") { model.toggleDisplayMode() }
+            Button(OpalL10n.text("menu.toggle_mode")) { model.toggleDisplayMode() }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
                 .disabled(!model.isAuthenticated)
 
-            Button("顺时针旋转 90°") { model.rotateClockwise() }
+            Button(OpalL10n.text("menu.rotate_cw")) { model.rotateClockwise() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(!model.isAuthenticated)
 
-            Button("强制刷新关键帧 (IDR)") { model.requestIDR() }
+            Button(OpalL10n.text("menu.request_idr")) { model.requestIDR() }
                 .disabled(!model.isAuthenticated)
 
             Divider()
 
-            Button("断开并返回列表") { model.forceDisconnectAndReturnHome() }
+            Button(OpalL10n.text("menu.disconnect_home")) { model.forceDisconnectAndReturnHome() }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
                 .disabled(model.activeConnection == nil && !model.isConnectingFlow)
 
-            Button("强制退出 OpalDesk") { model.forceTerminateApp() }
+            Button(OpalL10n.text("menu.quit_opaldesk")) { model.forceTerminateApp() }
                 .keyboardShortcut("q", modifiers: [.command, .option])
         }
     }

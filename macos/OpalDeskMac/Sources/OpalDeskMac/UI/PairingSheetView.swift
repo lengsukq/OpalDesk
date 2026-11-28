@@ -22,12 +22,12 @@ public struct PairingSheetView: View {
             OpalSheetHeader(
                 icon: "lock.shield.fill",
                 iconTint: .accentColor,
-                title: "请求与手机配对",
+                title: OpalL10n.text("pairing.title"),
                 subtitle: "\(context.displayName)\(context.model.isEmpty ? "" : " · \(context.model)")"
             )
 
             VStack(alignment: .leading, spacing: OpalSpacing.sm) {
-                Label("请核对手机端显示的 TLS 证书短指纹", systemImage: "checkmark.seal")
+                Label(OpalL10n.text("pairing.verify_label"), systemImage: "checkmark.seal")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
@@ -42,7 +42,7 @@ public struct PairingSheetView: View {
                 .padding(.vertical, 11)
                 .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
 
-                Text("确认与 Android 端「共享本机」页面上的证书指纹一致后，点击下方按钮向手机发送连接请求，并在手机弹窗中点击「永久允许」或「仅本次允许」。")
+                Text(OpalL10n.text("pairing.instructions"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -51,8 +51,8 @@ public struct PairingSheetView: View {
             if context.isSubmitting {
                 OpalNoticeBanner(
                     tone: .loading,
-                    title: "已发送配对请求，等待手机端确认…",
-                    message: "请在手机通知栏或 OpalDesk 弹窗中点击「永久允许」或「仅本次允许」。"
+                    title: OpalL10n.text("pairing.submitting_title"),
+                    message: OpalL10n.text("pairing.submitting_msg")
                 )
             }
 
@@ -61,13 +61,14 @@ public struct PairingSheetView: View {
             }
 
             HStack {
-                Button(context.isSubmitting ? "取消请求" : "取消", role: .cancel, action: onCancel)
+                Button(context.isSubmitting ? OpalL10n.text("pairing.cancel_request") : OpalL10n.text("common.cancel"), role: .cancel, action: onCancel)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .regular, isPill: true))
                     .keyboardShortcut(.cancelAction)
 
                 Spacer()
 
                 Button(primaryActionTitle, action: onRequestPairing)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .regular, isPill: true))
                     .disabled(context.isSubmitting)
                     .keyboardShortcut(.defaultAction)
             }
@@ -77,7 +78,7 @@ public struct PairingSheetView: View {
     }
 
     private var primaryActionTitle: String {
-        if context.isSubmitting { return "等待手机确认…" }
-        return context.errorMessage == nil ? "信任指纹并请求配对" : "重新发送配对请求"
+        if context.isSubmitting { return OpalL10n.text("pairing.waiting") }
+        return context.errorMessage == nil ? OpalL10n.text("pairing.trust_and_pair") : OpalL10n.text("pairing.resend")
     }
 }

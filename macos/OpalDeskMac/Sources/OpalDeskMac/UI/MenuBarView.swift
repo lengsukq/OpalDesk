@@ -25,6 +25,7 @@ public struct MenuBarView: View {
     }
 
     public var body: some View {
+        let _ = model.preferences.appLanguage
         let favoriteApps = model.favoriteAppItems()
 
         return VStack(alignment: .leading, spacing: OpalSpacing.md) {
@@ -115,7 +116,7 @@ public struct MenuBarView: View {
                 tint: .red,
                 size: 26,
                 iconSize: 14,
-                helpText: "断开当前投屏连接"
+                helpText: OpalL10n.text("menubar.disconnect_help")
             ) {
                 model.forceDisconnectAndReturnHome()
             }
@@ -131,42 +132,42 @@ public struct MenuBarView: View {
                 spacing: OpalSpacing.xs
             ) {
                 controlTileButton(
-                    title: model.displayMode == .dex ? "电脑桌面" : "融合镜像",
+                    title: model.displayMode == .dex ? OpalL10n.text("hub.mode.dex") : OpalL10n.text("hub.mode.mirror"),
                     systemImage: model.displayMode == .dex ? "macwindow" : "rectangle.on.rectangle",
                     isActive: true,
                     tint: .accentColor
                 ) { model.toggleDisplayMode() }
 
                 controlTileButton(
-                    title: model.isBlackoutActive ? "已熄屏" : "熄灭主屏",
+                    title: model.isBlackoutActive ? OpalL10n.text("menubar.blackout_on") : OpalL10n.text("menubar.blackout_off"),
                     systemImage: model.isBlackoutActive ? "iphone.slash" : "iphone",
                     isActive: model.isBlackoutActive,
                     tint: .blue
                 ) { model.toggleBlackout() }
 
                 controlTileButton(
-                    title: model.isAudioMuted ? "已静音" : "音频回传",
+                    title: model.isAudioMuted ? OpalL10n.text("menubar.audio_muted") : OpalL10n.text("menubar.audio_on"),
                     systemImage: model.isAudioMuted ? "speaker.slash" : "speaker.wave.2.fill",
                     isActive: !model.isAudioMuted,
                     tint: .green
                 ) { model.toggleAudio() }
 
                 controlTileButton(
-                    title: model.isMicEnabled ? "麦克风开" : "麦克风关",
+                    title: model.isMicEnabled ? OpalL10n.text("menubar.mic_on") : OpalL10n.text("menubar.mic_off"),
                     systemImage: model.isMicEnabled ? "mic.fill" : "mic.slash",
                     isActive: model.isMicEnabled,
                     tint: .green
                 ) { model.toggleMicrophone() }
 
                 controlTileButton(
-                    title: model.isCameraEnabled ? "摄像头开" : "摄像头",
+                    title: model.isCameraEnabled ? OpalL10n.text("menubar.cam_on") : OpalL10n.text("menubar.cam_off"),
                     systemImage: model.isCameraEnabled ? "video.fill" : "video.slash",
                     isActive: model.isCameraEnabled,
                     tint: .green
                 ) { model.toggleCamera() }
 
                 controlTileButton(
-                    title: model.isMainWindowRecording ? "停录 \(model.formattedRecordingDuration)" : "录制 MP4",
+                    title: model.isMainWindowRecording ? OpalL10n.format("menubar.stop_rec_fmt", model.formattedRecordingDuration) : OpalL10n.text("menubar.rec_mp4"),
                     systemImage: model.isMainWindowRecording ? "stop.circle.fill" : "record.circle",
                     isActive: model.isMainWindowRecording,
                     tint: .red,
@@ -175,7 +176,7 @@ public struct MenuBarView: View {
             }
 
             OpalMenuActionRow(
-                title: "一键截图（保存桌面并复制）",
+                title: OpalL10n.text("menu.screenshot"),
                 systemImage: "camera",
                 isDisabled: !model.isAuthenticated || model.videoMetrics.totalFramesDecoded == 0
             ) {
@@ -237,7 +238,7 @@ public struct MenuBarView: View {
                         Text(deviceName)
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
-                        Text("后台伴侣已连接 · 通知/剪贴板/文件就绪")
+                        Text(OpalL10n.text("menubar.companion_ready"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -247,7 +248,7 @@ public struct MenuBarView: View {
                         tint: .secondary,
                         size: 24,
                         iconSize: 11,
-                        helpText: "断开后台伴侣连接"
+                        helpText: OpalL10n.text("hub.companion.disconnect_help")
                     ) {
                         model.disconnectCompanion()
                     }
@@ -256,9 +257,9 @@ public struct MenuBarView: View {
                 HStack(spacing: OpalSpacing.sm) {
                     OpalIconBadge(systemName: "display", tint: .secondary, size: 32, iconSize: 14, cornerRadius: 10)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("OpalDesk 就绪")
+                        Text(OpalL10n.text("menubar.ready_title"))
                             .font(.subheadline.weight(.semibold))
-                        Text("选择下方设备或打开主窗口开始连接")
+                        Text(OpalL10n.text("menubar.ready_subtitle"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -267,7 +268,7 @@ public struct MenuBarView: View {
 
             if !usbDevices.isEmpty {
                 Divider()
-                Text("ADB 设备（USB / 无线调试）")
+                Text(OpalL10n.text("menubar.section.adb"))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
@@ -286,7 +287,7 @@ public struct MenuBarView: View {
 
             if !bonjourDevices.isEmpty {
                 Divider()
-                Text("无线局域网设备")
+                Text(OpalL10n.text("menubar.section.lan"))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
@@ -304,7 +305,7 @@ public struct MenuBarView: View {
 
             if !bleDevices.isEmpty {
                 Divider()
-                Text("蓝牙近场设备（一键开热点）")
+                Text(OpalL10n.text("menubar.section.ble"))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
@@ -336,12 +337,10 @@ public struct MenuBarView: View {
                             if isTriggering {
                                 ProgressView().controlSize(.mini)
                             } else {
-                                Text(device.isHotspotActive ? "连接热点" : "开热点")
-                                    .font(.caption2.weight(.semibold))
+                                Text(device.isHotspotActive ? OpalL10n.text("menubar.ble.connect_hotspot") : OpalL10n.text("menubar.ble.open_hotspot"))
                             }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.mini)
+                        .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .mini, isPill: true))
                         .disabled(model.triggeringBleDeviceId != nil)
                     }
                     .padding(.horizontal, OpalSpacing.sm)
@@ -357,9 +356,9 @@ public struct MenuBarView: View {
     private func bleCompactSubtitle(for device: DiscoveredBleDevice) -> String {
         var parts: [String] = []
         if let battery = device.batteryPercent {
-            parts.append("电量 \(battery)%")
+            parts.append(OpalL10n.format("hub.ble.battery_fmt", battery))
         }
-        parts.append(device.isHotspotActive ? "热点已开启" : "附近可唤醒热点")
+        parts.append(device.isHotspotActive ? OpalL10n.text("menubar.ble.hotspot_on") : OpalL10n.text("menubar.ble.hotspot_wake"))
         return parts.joined(separator: " · ")
     }
 
@@ -368,11 +367,11 @@ public struct MenuBarView: View {
     private var notificationsCard: some View {
         VStack(alignment: .leading, spacing: OpalSpacing.sm) {
             HStack {
-                Label("手机通知 (\(model.remoteNotifications.count))", systemImage: "bell.badge.fill")
+                Label(OpalL10n.format("menubar.notif.header_fmt", model.remoteNotifications.count), systemImage: "bell.badge.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("清空全部") {
+                Button(OpalL10n.text("common.clear_all")) {
                     replyingNotificationKey = nil
                     replyDraftText = ""
                     model.clearAllRemoteNotifications()
@@ -437,7 +436,7 @@ public struct MenuBarView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .onTapGesture { model.openNotificationApp(item) }
-            .help("点击在 Mac 小窗打开「\(item.displayAppLabel)」")
+            .help(OpalL10n.format("hub.notif.open_help_fmt", item.displayAppLabel))
 
             if item.clearable {
                 OpalGlassIconButton(
@@ -445,7 +444,7 @@ public struct MenuBarView: View {
                     tint: .secondary,
                     size: 20,
                     iconSize: 9,
-                    helpText: "忽略此通知"
+                    helpText: OpalL10n.text("hub.notif.dismiss_help")
                 ) {
                     if replyingNotificationKey == item.key {
                         replyingNotificationKey = nil
@@ -467,12 +466,10 @@ public struct MenuBarView: View {
                     Button {
                         model.copyNotificationOtp(item)
                     } label: {
-                        Label("复制 \(item.otpCode)", systemImage: "doc.on.doc")
+                        Label(OpalL10n.format("menubar.notif.copy_otp_fmt", item.otpCode), systemImage: "doc.on.doc")
                             .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-                    .controlSize(.mini)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .emerald, size: .mini, isPill: true))
                 }
 
                 if item.canReply {
@@ -485,11 +482,9 @@ public struct MenuBarView: View {
                             replyDraftText = ""
                         }
                     } label: {
-                        Label(item.replyLabel.isEmpty ? "回复" : item.replyLabel, systemImage: "arrowshape.turn.up.left")
-                            .font(.caption2)
+                        Label(item.replyLabel.isEmpty ? OpalL10n.text("menubar.notif.reply") : item.replyLabel, systemImage: "arrowshape.turn.up.left")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .mini, isPill: true))
                 }
 
                 ForEach(actions) { action in
@@ -497,11 +492,9 @@ public struct MenuBarView: View {
                         model.invokeNotificationAction(item, actionIndex: action.index)
                     } label: {
                         Text(action.label)
-                            .font(.caption2.weight(.medium))
                             .lineLimit(1)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .mini, isPill: true))
                 }
             }
         }
@@ -509,14 +502,13 @@ public struct MenuBarView: View {
 
     private func notificationInlineReplyBar(for item: RemoteNotificationItem) -> some View {
         HStack(spacing: OpalSpacing.xs) {
-            TextField("输入回复内容…", text: $replyDraftText)
-                .textFieldStyle(.roundedBorder)
+            TextField(OpalL10n.text("menubar.notif.reply_placeholder"), text: $replyDraftText)
                 .font(.caption)
+                .opalLiquidInput(cornerRadius: 8)
                 .onSubmit { submitInlineReply(for: item) }
 
-            Button("发送") { submitInlineReply(for: item) }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.mini)
+            Button(OpalL10n.text("common.send")) { submitInlineReply(for: item) }
+                .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .mini, isPill: true))
                 .disabled(replyDraftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(.top, 2)
@@ -534,7 +526,7 @@ public struct MenuBarView: View {
 
     private func favoriteAppsCard(_ favorites: [FavoritePopoutAppItem]) -> some View {
         VStack(alignment: .leading, spacing: OpalSpacing.xs) {
-            Label("常用置顶小窗", systemImage: "star.fill")
+            Label(OpalL10n.text("menubar.favorites.title"), systemImage: "star.fill")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.orange)
                 .padding(.horizontal, 6)
@@ -544,12 +536,14 @@ public struct MenuBarView: View {
                 spacing: OpalSpacing.xs
             ) {
                 ForEach(favorites.prefix(6)) { fav in
-                    let isOpen = model.isPopoutActive(pkg: fav.pkg)
+                    let isOpen = model.isPopoutActive(pkg: fav.pkg, userId: fav.userId)
                     Button {
                         model.openAppPopoutForRemotePackage(
                             packageName: fav.pkg,
                             activityClass: fav.cls,
                             appLabel: fav.label,
+                            userId: fav.userId,
+                            profileType: fav.profileType,
                             preferredDeviceKey: fav.deviceKey.isEmpty ? nil : fav.deviceKey,
                             preferredDeviceName: fav.deviceName.isEmpty ? nil : fav.deviceName
                         )
@@ -557,7 +551,7 @@ public struct MenuBarView: View {
                         HStack(spacing: OpalSpacing.xs) {
                             OpalAppMonogram(
                                 label: fav.label,
-                                packageKey: fav.pkg,
+                                packageKey: fav.appKey,
                                 size: 22,
                                 cornerRadius: 6,
                                 showActiveIndicator: isOpen
@@ -565,6 +559,15 @@ public struct MenuBarView: View {
                             Text(fav.label)
                                 .font(.system(size: 11.5, weight: .medium))
                                 .lineLimit(1)
+                            if let badge = fav.profileBadgeText {
+                                StatusBadgeView(
+                                    text: badge,
+                                    color: .opalProfileTint(fav.profileType),
+                                    horizontalPadding: 4.5,
+                                    verticalPadding: 0.5,
+                                    backgroundOpacity: 0.18
+                                )
+                            }
                             Spacer(minLength: 0)
                         }
                         .padding(.horizontal, 8)
@@ -574,7 +577,7 @@ public struct MenuBarView: View {
                         .opalInteractiveHover(cornerRadius: OpalRadius.control, tint: isOpen ? .green : .orange)
                     }
                     .buttonStyle(.plain)
-                    .help("一键弹出「\(fav.label)」独立小窗")
+                    .help(OpalL10n.format("menubar.favorites.open_help_fmt", fav.label))
                 }
             }
         }
@@ -584,7 +587,7 @@ public struct MenuBarView: View {
 
     private var activePopoutsCard: some View {
         VStack(alignment: .leading, spacing: OpalSpacing.xs) {
-            Text("已开悬浮小窗 (\(model.activePopoutCount)/\(PopoutWindowManager.maxConcurrentWindows))")
+            Text(OpalL10n.format("menubar.popouts.active_fmt", model.activePopoutCount, PopoutWindowManager.maxConcurrentWindows))
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
@@ -592,7 +595,7 @@ public struct MenuBarView: View {
             ForEach(model.popoutManager.controllers) { ctrl in
                 HStack(spacing: OpalSpacing.xs) {
                     OpalMenuActionRow(
-                        title: ctrl.appLabel,
+                        title: ctrl.profileBadgeText.map { "\(ctrl.appLabel) (\($0))" } ?? ctrl.appLabel,
                         systemImage: ctrl.isPinnedOnTop ? "pin.fill" : "macwindow",
                         tint: ctrl.isPinnedOnTop ? .orange : .accentColor
                     ) {
@@ -605,7 +608,7 @@ public struct MenuBarView: View {
                         isActive: ctrl.isFavorite,
                         size: 24,
                         iconSize: 10.5,
-                        helpText: ctrl.isFavorite ? "取消常用置顶" : "设为常用置顶"
+                        helpText: ctrl.isFavorite ? OpalL10n.text("hub.history.unfav_help") : OpalL10n.text("hub.history.fav_help")
                     ) { ctrl.toggleFavorite() }
 
                     OpalGlassIconButton(
@@ -613,7 +616,7 @@ public struct MenuBarView: View {
                         tint: ctrl.isPinnedOnTop ? .orange : .secondary,
                         size: 24,
                         iconSize: 10.5,
-                        helpText: ctrl.isPinnedOnTop ? "取消置顶" : "窗口置顶"
+                        helpText: ctrl.isPinnedOnTop ? OpalL10n.text("hub.history.unpin_help") : OpalL10n.text("hub.history.pin_help")
                     ) { ctrl.togglePinnedOnTop() }
 
                     OpalGlassIconButton(
@@ -621,7 +624,7 @@ public struct MenuBarView: View {
                         tint: .secondary,
                         size: 24,
                         iconSize: 10,
-                        helpText: "关闭小窗"
+                        helpText: OpalL10n.text("hub.history.close_help")
                     ) { model.popoutManager.closeWindow(id: ctrl.id, sendDisconnect: true) }
                 }
             }
@@ -632,7 +635,7 @@ public struct MenuBarView: View {
 
     private var recentPopoutsCard: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("历史 APP 小窗")
+            Text(OpalL10n.text("hub.history.title"))
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
@@ -640,7 +643,7 @@ public struct MenuBarView: View {
 
             ForEach(model.popoutHistory.prefix(Layout.maxVisibleHistory)) { entry in
                 OpalMenuActionRow(
-                    title: entry.displayLabel,
+                    title: entry.profileBadgeText.map { "\(entry.displayLabel) (\($0))" } ?? entry.displayLabel,
                     systemImage: entry.pinnedOnTop ? "pin.fill" : "clock",
                     subtitle: entry.deviceName,
                     tint: entry.pinnedOnTop ? .orange : .secondary
@@ -657,7 +660,7 @@ public struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 2) {
             if model.isAnyChannelConnected {
                 OpalMenuActionRow(
-                    title: "快捷拨号（手机呼出）…",
+                    title: OpalL10n.text("menubar.tools.quick_dial"),
                     systemImage: "phone.badge.waveform.fill",
                     tint: .green
                 ) {
@@ -671,7 +674,7 @@ public struct MenuBarView: View {
                 }
             }
 
-            OpalMenuActionRow(title: "手机文件与存储", systemImage: "folder", tint: .accentColor) {
+            OpalMenuActionRow(title: OpalL10n.text("window.file_browser"), systemImage: "folder", tint: .accentColor) {
                 openWindow(id: WindowID.fileBrowser)
                 NSApp.activate(ignoringOtherApps: true)
             }
@@ -680,9 +683,9 @@ public struct MenuBarView: View {
                 if model.finderMountState.isMounted {
                     HStack(spacing: OpalSpacing.xs) {
                         OpalMenuActionRow(
-                            title: "在访达中打开手机磁盘",
+                            title: OpalL10n.text("menu.open_finder_disk"),
                             systemImage: "externaldrive.fill.badge.checkmark",
-                            subtitle: "已挂载",
+                            subtitle: OpalL10n.text("menubar.tools.mounted"),
                             tint: .green
                         ) {
                             model.openMountedFinderVolume()
@@ -693,14 +696,14 @@ public struct MenuBarView: View {
                             tint: .secondary,
                             size: 24,
                             iconSize: 10,
-                            helpText: "卸载手机磁盘"
+                            helpText: OpalL10n.text("hub.companion.eject_disk")
                         ) {
                             model.toggleFinderMount()
                         }
                     }
                 } else {
                     OpalMenuActionRow(
-                        title: model.finderMountState == .mounting ? "正在挂载手机到访达…" : "挂载手机存储到访达",
+                        title: model.finderMountState == .mounting ? OpalL10n.text("menubar.tools.mounting_finder") : OpalL10n.text("menubar.tools.mount_finder"),
                         systemImage: "externaldrive.badge.plus",
                         tint: .blue,
                         isDisabled: model.finderMountState == .mounting
@@ -710,10 +713,10 @@ public struct MenuBarView: View {
                 }
             }
 
-            OpalMenuActionRow(title: "安装 Android 安装包 (.apk/.xapk)…", systemImage: "shippingbox", tint: .green) {
+            OpalMenuActionRow(title: OpalL10n.text("menu.install_apk_ellipsis"), systemImage: "shippingbox", tint: .green) {
                 model.presentApkFileChooser(targetWindow: .main)
             }
-            OpalMenuActionRow(title: "Spotlight 快捷方式管理", systemImage: "sparkles.rectangle.stack", tint: .purple) {
+            OpalMenuActionRow(title: OpalL10n.text("menubar.tools.shortcuts"), systemImage: "sparkles.rectangle.stack", tint: .purple) {
                 model.openShortcutManager()
             }
         }
@@ -723,7 +726,7 @@ public struct MenuBarView: View {
 
     private var footerActionsCard: some View {
         VStack(alignment: .leading, spacing: 2) {
-            OpalMenuActionRow(title: "显示主窗口", systemImage: "macwindow") { openMainWindow() }
+            OpalMenuActionRow(title: OpalL10n.text("menubar.footer.show_main"), systemImage: "macwindow") { openMainWindow() }
 
             SettingsLink {
                 HStack(spacing: OpalSpacing.sm) {
@@ -731,7 +734,7 @@ public struct MenuBarView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(width: 20)
-                    Text("偏好设置…")
+                    Text(OpalL10n.text("common.settings_ellipsis"))
                         .font(.system(size: 12.5, weight: .medium))
                     Spacer()
                 }
@@ -745,7 +748,7 @@ public struct MenuBarView: View {
             Divider().padding(.vertical, 2)
 
             OpalMenuActionRow(
-                title: "断开当前连接",
+                title: OpalL10n.text("menubar.footer.disconnect"),
                 systemImage: "wifi.slash",
                 isDisabled: model.activeConnection == nil && !model.isConnectingFlow
             ) {
@@ -753,7 +756,7 @@ public struct MenuBarView: View {
             }
 
             OpalMenuActionRow(
-                title: "强制退出 OpalDesk",
+                title: OpalL10n.text("menu.quit_opaldesk"),
                 systemImage: "power",
                 isDestructive: true
             ) {

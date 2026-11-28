@@ -28,7 +28,7 @@ extension AppModel {
                 isCameraEnabled = false
                 audioPlayer.stop()
                 if let hadConn, !wasExplicit {
-                    let msg = "与手机「\(hadConn.deviceName)」的投屏连接已断开"
+                    let msg = OpalL10n.format("app.session.disconnected_fmt", hadConn.deviceName)
                     bannerError = msg
                     disconnectReason = msg
                     showToast(msg)
@@ -54,7 +54,7 @@ extension AppModel {
                     ctx.errorMessage = message
                     pairingContext = ctx
                 } else {
-                    bannerError = "投屏连接中断：\(message)"
+                    bannerError = OpalL10n.format("app.session.interrupted_fmt", message)
                     activeConnection = nil
                 }
             case .reconnecting(let attempt):
@@ -64,8 +64,8 @@ extension AppModel {
                 isMicEnabled = false
                 cameraCapturer.stop()
                 isCameraEnabled = false
-                if disconnectReason == nil { disconnectReason = "网络或手机守护进程无响应" }
-                showToast("连接中断，正在尝试第 \(attempt) 次重连...", durationSeconds: 2.2)
+                if disconnectReason == nil { disconnectReason = OpalL10n.text("app.session.unresponsive") }
+                showToast(OpalL10n.format("app.session.reconnecting_fmt", attempt), durationSeconds: 2.2)
             default:
                 break
             }
@@ -143,7 +143,7 @@ extension AppModel {
                 handleAuthResult(try AuthResultPayload.decode(from: frame.payload))
             } catch {
                 OpalDeskLog.app.error("Failed to decode AUTH_RESULT: \(error.localizedDescription, privacy: .public)")
-                bannerError = "认证响应解析失败：\(error.localizedDescription)"
+                bannerError = OpalL10n.format("app.session.auth_parse_err_fmt", error.localizedDescription)
             }
 
         case .fileTransferAck:
@@ -277,11 +277,11 @@ extension AppModel {
 
         if wifiUpgrade.finalizeUpgradeIfInProgress(adbManager: discovery.adbManager) {
             activeAdbForward = nil
-            showToast("已自动无缝切换至原生 Wi-Fi TLS 直连")
+            showToast(OpalL10n.text("app.session.wifi_upgraded"))
         } else {
             wifiUpgrade.requestUpgradeIfEligible(transport: activeConnection?.transport, session: session)
             if wasInteractivePairing {
-                showToast(auth.permanent ? "已获手机端永久信任并建立连接" : "已获手机端本次临时允许")
+                showToast(auth.permanent ? OpalL10n.text("app.session.trusted_perm") : OpalL10n.text("app.session.trusted_once"))
             }
         }
 
@@ -301,7 +301,7 @@ extension AppModel {
         }
 
         isAuthenticated = false
-        let failureText = auth.message.isEmpty ? "配对请求被手机端拒绝或已超时，请重试" : auth.message
+        let failureText = auth.message.isEmpty ? OpalL10n.text("app.session.pair_rejected") : auth.message
 
         if var ctx = pairingContext {
             ctx.isSubmitting = false
@@ -317,7 +317,7 @@ extension AppModel {
                 displayName: pendingAuth.deviceName,
                 model: pendingAuth.deviceModel,
                 expectedFingerprint: fp,
-                errorMessage: "原有授权已失效或已在手机端撤销，请重新向手机发起配对请求"
+                errorMessage: OpalL10n.text("app.session.trust_revoked")
             )
         } else {
             bannerError = failureText

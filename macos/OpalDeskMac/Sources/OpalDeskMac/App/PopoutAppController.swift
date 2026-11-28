@@ -57,9 +57,23 @@ public final class PopoutAppController: Identifiable {
     public let appPackage: String
     public let appActivity: String
     public var appLabel: String
+    public let appUserId: Int
+    public let appProfileType: String
     public let deviceKey: String
     public var deviceName: String
     public var taskId: Int
+
+    public var appKey: String {
+        RemoteAppInfo.formatAppKey(pkg: appPackage, userId: appUserId)
+    }
+
+    public var isSecondaryProfile: Bool {
+        appUserId > 0
+    }
+
+    public var profileBadgeText: String? {
+        RemoteAppInfo.profileBadgeText(userId: appUserId, profileType: appProfileType)
+    }
 
     public let session: OpalCastSession
     public let streamBridge: StreamSessionBridge
@@ -112,6 +126,8 @@ public final class PopoutAppController: Identifiable {
         appPackage: String,
         appActivity: String,
         appLabel: String,
+        appUserId: Int = 0,
+        appProfileType: String = "",
         deviceKey: String,
         deviceName: String,
         taskId: Int = -1,
@@ -123,9 +139,12 @@ public final class PopoutAppController: Identifiable {
         trustStore: TrustStore
     ) {
         let castSession = OpalCastSession(trustStore: trustStore)
+        let normalizedUid = max(0, appUserId)
         self.appPackage = appPackage
         self.appActivity = appActivity
         self.appLabel = appLabel.isEmpty ? appPackage : appLabel
+        self.appUserId = normalizedUid
+        self.appProfileType = RemoteAppInfo.normalizeProfileType(appProfileType, userId: normalizedUid)
         self.deviceKey = deviceKey
         self.deviceName = deviceName
         self.taskId = taskId
@@ -247,7 +266,7 @@ public final class PopoutAppController: Identifiable {
         guard isFavorite != favorite else { return }
         isFavorite = favorite
         onPreferenceChanged?(.favorite(favorite))
-        showToast(favorite ? "已设为常用置顶应用" : "已取消常用置顶")
+        showToast(favorite ? OpalL10n.text("app.popout.fav_added") : OpalL10n.text("app.popout.fav_removed"))
         OpalDeskLog.info("popout", "Set favorite=\(favorite) for pkg=\(appPackage)")
     }
 
@@ -271,9 +290,9 @@ public final class PopoutAppController: Identifiable {
             sendResizeIfNeeded(geom, force: true)
         }
         if let clamped {
-            showToast("已设置自定义 DPI：\(clamped)")
+            showToast(OpalL10n.format("app.popout.custom_dpi_fmt", clamped))
         } else {
-            showToast("已恢复自动 DPI")
+            showToast(OpalL10n.text("app.popout.auto_dpi"))
         }
     }
 
@@ -285,7 +304,7 @@ public final class PopoutAppController: Identifiable {
             let geom = computeStreamGeometry(viewSize: lastCanvasSize, backingScale: lastBackingScale)
             sendResizeIfNeeded(geom, force: true)
         }
-        showToast(enabled ? "已开启兼容分辨率模式" : "已恢复自适应分辨率")
+        showToast(enabled ? OpalL10n.text("app.popout.compat_on") : OpalL10n.text("app.popout.compat_off"))
     }
 
     public func applyAspectPreset(_ preset: PopoutAspectPreset) {
@@ -354,7 +373,7 @@ public final class PopoutAppController: Identifiable {
     }
 
     public func reloadAppDPI() {
-        streamBridge.sendWindowAction(.reloadAppDpi(pkg: appPackage), isAuthenticated: isAuthenticated)
+        streamBridge.sendWindowAction(.reloadAppDpi(pkg: appPackage, userId: appUserId), isAuthenticated: isAuthenticated)
     }
 
     public func sendAndroidBack() {
@@ -382,15 +401,15 @@ public final class PopoutAppController: Identifiable {
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard let image = await renderer.captureCurrentFrameCGImageAsync(timeoutSeconds: 2.0) else {
-                self.showToast("当前暂无可截取画面")
+                self.showToast(OpalL10n.text("app.popout.no_frame"))
                 return
             }
             do {
                 let savedURL = try WindowMediaCapture.saveImageToFile(image, prefix: prefix)
                 _ = try? WindowMediaCapture.writeImageToClipboard(image)
-                self.showToast("已截图至桌面并复制", revealURL: savedURL)
+                self.showToast(OpalL10n.text("app.popout.screenshot_saved"), revealURL: savedURL)
             } catch {
-                self.showToast("截图失败：\(error.localizedDescription)")
+                self.showToast(OpalL10n.format("app.popout.screenshot_failed_fmt", error.localizedDescription))
             }
         }
     }
@@ -424,10 +443,10 @@ public final class PopoutAppController: Identifiable {
             )
             isRecording = true
             recordingDurationSeconds = 0
-            showToast("开始录制小窗 MP4")
+            showToast(OpalL10n.text("app.popout.rec_started"))
         } catch {
             isRecording = false
-            showToast("录屏启动失败：\(error.localizedDescription)")
+            showToast(OpalL10n.format("app.popout.rec_start_failed_fmt", error.localizedDescription))
         }
     }
 
@@ -444,11 +463,11 @@ public final class PopoutAppController: Identifiable {
                 self.isRecording = false
                 self.recordingDurationSeconds = 0
                 let dur = AppModel.formatRecordingDuration(result.durationSeconds)
-                self.showToast("录屏已保存（\(dur)）", revealURL: result.url)
+                self.showToast(OpalL10n.format("app.popout.rec_saved_fmt", dur), revealURL: result.url)
             } catch {
                 self.isRecording = false
                 self.recordingDurationSeconds = 0
-                self.showToast("录屏停止失败：\(error.localizedDescription)")
+                self.showToast(OpalL10n.format("app.popout.rec_stop_failed_fmt", error.localizedDescription))
             }
         }
     }
@@ -471,7 +490,7 @@ public final class PopoutAppController: Identifiable {
             guard let self else { return }
             if self.isAuthenticated {
                 self.streamBridge.sendWindowAction(
-                    .returnToDesktop(pkg: self.appPackage, taskId: self.taskId),
+                    .returnToDesktop(pkg: self.appPackage, taskId: self.taskId, userId: self.appUserId),
                     isAuthenticated: true
                 )
                 guard await sleepCancellable(nanoseconds: Tuning.returnToDesktopFlushNs) else { return }
@@ -584,7 +603,8 @@ public final class PopoutAppController: Identifiable {
             transportHint: connectionContext.transportHint.rawValue,
             sessionRole: OpalCastSessionRole.standaloneApp.rawValue,
             appPackage: appPackage,
-            appActivity: appActivity
+            appActivity: appActivity,
+            appUserId: appUserId > 0 ? appUserId : nil
         ))
     }
 
@@ -615,7 +635,7 @@ public final class PopoutAppController: Identifiable {
             } else {
                 isAuthenticated = false
                 isMigratingConnection = false
-                errorMessage = auth.message.isEmpty ? "悬浮窗连接鉴权失败" : auth.message
+                errorMessage = auth.message.isEmpty ? OpalL10n.text("app.popout.auth_failed") : auth.message
                 OpalDeskLog.warn("popout", "Standalone auth rejected pkg=\(appPackage): \(errorMessage ?? "")")
             }
 
@@ -643,7 +663,7 @@ public final class PopoutAppController: Identifiable {
             }
             guard await sleepCancellable(nanoseconds: Tuning.firstFrameTimeoutNs),
                   let self, self.isAuthenticated, self.videoMetrics.totalFramesDecoded == 0 else { return }
-            self.errorMessage = "应用启动超时或未能渲染首帧，请点击重试"
+            self.errorMessage = OpalL10n.text("app.popout.start_timeout")
         }
     }
 

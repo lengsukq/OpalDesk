@@ -2,28 +2,78 @@ import AppKit
 import OpalDeskCore
 import SwiftUI
 
-enum HubTab: String, CaseIterable, Identifiable {
-    case devices = "设备连接"
-    case logs = "日志与反馈"
+enum HubSection: String, CaseIterable, Identifiable {
+    case devices
+    case popouts
+    case settings
+    case diagnostics
 
     var id: String { rawValue }
+
+    var navLabel: String {
+        switch self {
+        case .devices: return OpalL10n.text("hub.nav.devices")
+        case .popouts: return OpalL10n.text("hub.nav.popouts")
+        case .settings: return OpalL10n.text("hub.nav.settings")
+        case .diagnostics: return OpalL10n.text("hub.nav.diagnostics")
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .devices: return OpalL10n.text("hub.nav.devices.title")
+        case .popouts: return OpalL10n.text("hub.nav.popouts")
+        case .settings: return OpalL10n.text("hub.nav.settings")
+        case .diagnostics: return OpalL10n.text("hub.nav.diagnostics")
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .devices: return OpalL10n.text("hub.nav.devices.sub")
+        case .popouts: return OpalL10n.text("hub.nav.popouts.sub")
+        case .settings: return OpalL10n.text("hub.nav.settings.sub")
+        case .diagnostics: return OpalL10n.text("hub.nav.diagnostics.sub")
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .devices: return "macbook.and.iphone"
+        case .popouts: return "square.grid.2x2"
+        case .settings: return "slider.horizontal.3"
+        case .diagnostics: return "waveform.path.ecg"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .devices: return OpalFluidPalette.brandBlue
+        case .popouts: return OpalFluidPalette.brandCyan
+        case .settings: return OpalFluidPalette.brandIndigo
+        case .diagnostics: return OpalFluidPalette.brandViolet
+        }
+    }
 }
 
-/// Native macOS Liquid Glass connection hub hosting desktop workstation launch,
-/// background companion continuity (handoff, media remote, OTP), independent floating apps,
-/// and the diagnostic logs & feedback console.
+/// LightIsle-inspired iOS-refined macOS workstation hub featuring a continuous fluid canvas,
+/// floating Liquid Glass icon rail, fixed breathable page header, and luminous top-lit content cards.
 public struct DeviceHubView: View {
     private enum Layout {
-        static let maxContentWidth: CGFloat = 880
-        static let displayModePickerWidth: CGFloat = 166
-        static let tabPickerWidth: CGFloat = 296
+        static let maxContentWidth: CGFloat = 940
+        static let collapsedRailWidth: CGFloat = 68
+        static let expandedRailWidth: CGFloat = 186
     }
 
     @Bindable public var model: AppModel
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var activeTab: HubTab = .devices
+    @AppStorage("opaldesk.hub.sidebarExpanded") private var sidebarExpanded: Bool = false
+    @State private var activeSection: HubSection = .devices
+    @State private var showingStatusPopover: Bool = false
+    @Namespace private var railSelectionNamespace
+
     @State var manualHost: String = ""
     @State var manualPortText: String = String(OpalCastProtocol.defaultWifiPort)
     @State var showManualConnect: Bool = false
@@ -34,47 +84,18 @@ public struct DeviceHubView: View {
     }
 
     public var body: some View {
+        let _ = model.preferences.appLanguage
         ZStack(alignment: .bottom) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: OpalSpacing.xl) {
-                    headerCard
+            HStack(alignment: .top, spacing: 0) {
+                floatingSidebarRail
+                    .padding(.leading, 18)
+                    .padding(.trailing, 4)
+                    .padding(.top, 14)
+                    .padding(.bottom, 18)
 
-                    if let status = model.statusMessage {
-                        OpalNoticeBanner(tone: .loading, message: status)
-                    }
-                    if let error = model.bannerError {
-                        OpalNoticeBanner(
-                            tone: .error,
-                            message: error,
-                            isSelectable: true,
-                            onDismiss: { model.bannerError = nil }
-                        )
-                    }
-
-                    if activeTab == .devices {
-                        if shouldShowCompanionCard {
-                            companionOnlineCardSection
-                        }
-                        standaloneHistorySection
-                        adbDevicesSection
-                        if model.preferences.usbTetherDiscoveryEnabled {
-                            usbTetherSection
-                        }
-                        wirelessLANSection
-                        if shouldShowBleNearbySection {
-                            bleNearbySection
-                        }
-                        manualConnectSection
-                    } else {
-                        DiagnosticsLogView(model: model)
-                    }
-                }
-                .padding(.horizontal, OpalSpacing.xxl)
-                .padding(.top, OpalSpacing.lg)
-                .padding(.bottom, OpalSpacing.xxl)
-                .frame(maxWidth: Layout.maxContentWidth, alignment: .leading)
-                .frame(maxWidth: .infinity)
+                detailWorkspace
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             if let toast = model.toastNotice {
                 ToastPillView(
@@ -88,8 +109,11 @@ public struct DeviceHubView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .environment(\.opalAccent, activeSection.tint)
+        .tint(activeSection.tint)
         .animation(OpalMotion.animation(OpalMotion.smooth, reduceMotion: reduceMotion), value: model.toastNotice)
-        .background(OpalAmbientBackdrop())
+        .animation(OpalMotion.animation(OpalMotion.navigation, reduceMotion: reduceMotion), value: sidebarExpanded)
+        .background(OpalAmbientBackdrop(accent: activeSection.tint))
         .background(WindowChromeConfigurator(isImmersiveCanvas: false))
         .sheet(item: $model.pairingContext) { ctx in
             PairingSheetView(
@@ -104,7 +128,7 @@ public struct DeviceHubView: View {
             }
         }
         .confirmationDialog(
-            "应用「\(model.pendingPopoutReloadPrompt?.appLabel ?? "")」的小窗已打开",
+            OpalL10n.format("hub.popout_open_title_fmt", model.pendingPopoutReloadPrompt?.appLabel ?? ""),
             isPresented: Binding(
                 get: { model.pendingPopoutReloadPrompt != nil },
                 set: { if !$0 { model.pendingPopoutReloadPrompt = nil } }
@@ -112,134 +136,342 @@ public struct DeviceHubView: View {
             titleVisibility: .visible
         ) {
             if let prompt = model.pendingPopoutReloadPrompt {
-                Button("重载小窗+应用") {
+                Button(OpalL10n.text("hub.popout_reload_btn")) {
                     model.pendingPopoutReloadPrompt = nil
                     prompt.onReloadWindowAndApp()
                 }
-                Button("仅聚焦现有窗口") {
+                Button(OpalL10n.text("hub.popout_focus_btn")) {
                     model.pendingPopoutReloadPrompt = nil
                     prompt.onFocusExisting()
                 }
-                Button("取消", role: .cancel) {
+                Button(OpalL10n.text("common.cancel"), role: .cancel) {
                     model.pendingPopoutReloadPrompt = nil
                 }
             }
         } message: {
-            Text("该应用当前已有运行中的独立悬浮小窗。选择「重载小窗+应用」将断开并重新拉起全新悬浮窗与应用实例。")
+            Text(OpalL10n.text("hub.popout_open_message"))
         }
     }
 
-    // MARK: - Unified Liquid Glass Header
+    // MARK: - Floating Liquid Glass Sidebar Rail (LightIsle Pattern)
 
-    private var headerCard: some View {
-        @Bindable var prefs = model.preferences
-
-        return VStack(alignment: .leading, spacing: OpalSpacing.lg) {
-            HStack(alignment: .center, spacing: OpalSpacing.md) {
-                OpalIconBadge(
-                    systemName: "macbook.and.iphone",
-                    tint: .accentColor,
-                    size: OpalControlSize.badgeIconHero,
-                    iconSize: 22,
-                    cornerRadius: 15
-                )
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("OpalDesk 桌面中心")
-                        .font(.title2.weight(.semibold))
-                    Text("连接 Android 设备，体验电脑多窗口、独立置顶小窗与全天候跨端伴侣联动")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: OpalSpacing.md)
-
-                headerQuickToolBar
+    private var floatingSidebarRail: some View {
+        VStack(spacing: 8) {
+            ForEach(Array(HubSection.allCases.enumerated()), id: \.element.id) { index, section in
+                railNavItem(section, shortcutDigit: index + 1)
             }
 
-            HStack(alignment: .center, spacing: OpalSpacing.md) {
-                Picker("视图", selection: $activeTab) {
-                    ForEach(HubTab.allCases) { tab in
-                        Text(tab.rawValue).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: Layout.tabPickerWidth)
-
-                Spacer(minLength: OpalSpacing.sm)
-
-                if activeTab == .devices {
-                    HStack(spacing: OpalSpacing.sm) {
-                        Text("默认模式")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-
-                        Picker("模式", selection: $prefs.defaultDisplayMode) {
-                            Text("电脑桌面").tag(OpalCastDisplayMode.dex)
-                            Text("融合镜像").tag(OpalCastDisplayMode.mirror)
-                        }
-                        .onChange(of: prefs.defaultDisplayMode) { _, mode in model.displayMode = mode }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: Layout.displayModePickerWidth)
-                        .help("选择连接后默认进入电脑多窗口桌面或融合边栏镜像")
-                    }
-                }
-            }
-        }
-        .padding(OpalSpacing.xl)
-        .opalGlassSurface(.panel)
-    }
-
-    private var headerQuickToolBar: some View {
-        HStack(spacing: OpalSpacing.xxs) {
-            OpalGlassIconButton(
-                systemName: "folder",
-                size: OpalControlSize.iconButtonRegular,
-                iconSize: 13.5,
-                helpText: "手机文件与存储管理 (⌘⇧F)"
-            ) {
-                openWindow(id: WindowID.fileBrowser)
-                NSApp.activate(ignoringOtherApps: true)
-            }
-
-            OpalGlassIconButton(
-                systemName: "shippingbox",
-                size: OpalControlSize.iconButtonRegular,
-                iconSize: 13.5,
-                helpText: "安装 Android 安装包 (.apk/.xapk) (⌘⇧I)"
-            ) {
-                model.presentApkFileChooser(targetWindow: .main)
-            }
-
-            OpalGlassIconButton(
-                systemName: "sparkles.rectangle.stack",
-                size: OpalControlSize.iconButtonRegular,
-                iconSize: 13.5,
-                helpText: "管理 Spotlight 与桌面应用快捷方式"
-            ) {
-                model.openShortcutManager()
-            }
+            Spacer(minLength: 16)
 
             Divider()
-                .frame(height: 16)
-                .padding(.horizontal, 3)
+                .opacity(0.45)
+                .padding(.horizontal, 6)
 
-            SettingsLink {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .frame(width: OpalControlSize.iconButtonRegular, height: OpalControlSize.iconButtonRegular)
-                    .contentShape(Capsule())
+            Button {
+                withAnimation(OpalMotion.animation(OpalMotion.navigation, reduceMotion: reduceMotion)) {
+                    sidebarExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: sidebarExpanded ? "sidebar.left" : "sidebar.right")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(OpalFluidPalette.secondaryText)
+                        .frame(width: 24)
+                    if sidebarExpanded {
+                        Text(OpalL10n.text("hub.nav.collapse"))
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(OpalFluidPalette.secondaryText)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                }
+                .padding(.horizontal, sidebarExpanded ? 12 : 0)
+                .frame(maxWidth: .infinity)
+                .frame(height: 36)
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-            .buttonStyle(.plain)
-            .help("打开偏好设置 (⌘,)")
-            .accessibilityLabel("打开偏好设置")
+            .buttonStyle(OpalPressStyle())
+            .help(sidebarExpanded ? OpalL10n.text("hub.nav.collapse_help") : OpalL10n.text("hub.nav.expand_help"))
+            .accessibilityLabel(sidebarExpanded ? OpalL10n.text("hub.nav.collapse_help") : OpalL10n.text("hub.nav.expand_help"))
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
-        .opalGlassSurface(.inset, cornerRadius: OpalRadius.card)
+        .padding(9)
+        .frame(width: sidebarExpanded ? Layout.expandedRailWidth : Layout.collapsedRailWidth)
+        .opalGlassSurface(.floatingBar, cornerRadius: 24)
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private func railNavItem(_ section: HubSection, shortcutDigit: Int) -> some View {
+        let isSelected = activeSection == section
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+        return Button {
+            withAnimation(OpalMotion.animation(OpalMotion.navigation, reduceMotion: reduceMotion)) {
+                activeSection = section
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: section.icon)
+                    .font(.system(size: 17, weight: isSelected ? .semibold : .medium))
+                    .symbolRenderingMode(.hierarchical)
+                    .frame(width: 24)
+                    .foregroundStyle(isSelected ? OpalFluidPalette.onAccent : section.tint)
+
+                if sidebarExpanded {
+                    Text(section.navLabel)
+                        .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(isSelected ? OpalFluidPalette.onAccent : .primary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.horizontal, sidebarExpanded ? 12 : 0)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+            .background {
+                if isSelected {
+                    shape
+                        .fill(
+                            LinearGradient(
+                                colors: [section.tint.opacity(0.92), section.tint],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .overlay {
+                            shape.strokeBorder(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.38), Color.white.opacity(0.08)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                lineWidth: 1
+                            )
+                        }
+                        .matchedGeometryEffect(id: "hub-nav-pill", in: railSelectionNamespace)
+                        .shadow(color: section.tint.opacity(0.28), radius: 10, y: 4)
+                }
+            }
+            .contentShape(shape)
+        }
+        .buttonStyle(OpalPressStyle())
+        .keyboardShortcut(KeyEquivalent(Character("\(shortcutDigit)")), modifiers: [.command])
+        .help("\(section.title) (⌘\(shortcutDigit))")
+        .accessibilityLabel(section.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    // MARK: - Detail Workspace (Fixed Header + Scrollable Content)
+
+    private var detailWorkspace: some View {
+        VStack(spacing: 0) {
+            fixedPageHeader
+                .padding(.horizontal, 26)
+                .padding(.top, 14)
+                .padding(.bottom, 12)
+                .frame(maxWidth: Layout.maxContentWidth + 52, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .top)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: OpalSpacing.xl) {
+                    if let status = model.statusMessage {
+                        OpalNoticeBanner(tone: .loading, message: status)
+                    }
+                    if let error = model.bannerError {
+                        OpalNoticeBanner(
+                            tone: .error,
+                            message: error,
+                            isSelectable: true,
+                            onDismiss: { model.bannerError = nil }
+                        )
+                    }
+
+                    activeSectionContent
+                        .id(activeSection)
+                        .transition(.opacity)
+                }
+                .padding(.horizontal, 26)
+                .padding(.top, 8)
+                .padding(.bottom, 28)
+                .frame(maxWidth: Layout.maxContentWidth + 52, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+            .clipped()
+        }
+    }
+
+    private var fixedPageHeader: some View {
+        HStack(alignment: .center, spacing: 14) {
+            OpalIconBadge(
+                systemName: activeSection.icon,
+                tint: activeSection.tint,
+                size: 40,
+                iconSize: 18,
+                cornerRadius: 12
+            )
+
+            VStack(alignment: .leading, spacing: 2.5) {
+                Text(activeSection.title)
+                    .font(.system(size: 21, weight: .semibold))
+                    .lineLimit(1)
+                Text(activeSection.subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(OpalFluidPalette.secondaryText)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 14)
+
+            headerStatusCapsule
+
+            Button {
+                openFileBrowserWindow()
+            } label: {
+                Label(OpalL10n.text("hub.companion.files"), systemImage: "folder.fill")
+            }
+            .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .regular, isPill: true))
+            .help(OpalL10n.text("hub.tool.files_help"))
+        }
+    }
+
+    private var headerStatusCapsule: some View {
+        @Bindable var prefs = model.preferences
+        let online = model.isAnyChannelConnected
+        let dotColor = online ? OpalFluidPalette.brandEmerald : OpalFluidPalette.brandAmber
+        let statusLabel: String = {
+            if model.isAuthenticated {
+                return OpalL10n.format("hub.status.casting_fmt", model.activeChannelDeviceName)
+            }
+            if model.companionState.isConnected {
+                return OpalL10n.format("hub.status.companion_fmt", model.activeChannelDeviceName)
+            }
+            return prefs.defaultDisplayMode == .dex ? OpalL10n.text("hub.status.dex_mode") : OpalL10n.text("hub.status.mirror_mode")
+        }()
+
+        return Button {
+            showingStatusPopover.toggle()
+        } label: {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(dotColor)
+                    .frame(width: 7, height: 7)
+                Text(statusLabel)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(OpalFluidPalette.secondaryText)
+                    .rotationEffect(.degrees(showingStatusPopover ? 180 : 0))
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 32)
+            .opalFloatingGlassCapsule()
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(OpalPressStyle())
+        .help(OpalL10n.text("hub.status.popover_help"))
+        .popover(isPresented: $showingStatusPopover, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: OpalSpacing.md) {
+                Text(OpalL10n.text("hub.status.default_mode_title"))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(OpalFluidPalette.secondaryText)
+
+                OpalSegmentedControl(
+                    selection: Binding(
+                        get: { prefs.defaultDisplayMode },
+                        set: { newMode in
+                            prefs.defaultDisplayMode = newMode
+                            model.displayMode = newMode
+                        }
+                    ),
+                    options: [
+                        OpalSegmentOption(value: OpalCastDisplayMode.dex, label: OpalL10n.text("hub.mode.dex"), icon: "macwindow"),
+                        OpalSegmentOption(value: OpalCastDisplayMode.mirror, label: OpalL10n.text("hub.mode.mirror"), icon: "iphone"),
+                    ]
+                )
+
+                Divider()
+
+                VStack(spacing: 4) {
+                    OpalMenuActionRow(
+                        title: OpalL10n.text("menu.install_apk_ellipsis"),
+                        systemImage: "shippingbox"
+                    ) {
+                        showingStatusPopover = false
+                        model.presentApkFileChooser(targetWindow: .main)
+                    }
+
+                    OpalMenuActionRow(
+                        title: OpalL10n.text("hub.tool.shortcuts_help"),
+                        systemImage: "sparkles.rectangle.stack"
+                    ) {
+                        showingStatusPopover = false
+                        model.openShortcutManager()
+                    }
+                }
+            }
+            .padding(14)
+            .frame(width: 280)
+        }
+    }
+
+    @ViewBuilder
+    private var activeSectionContent: some View {
+        switch activeSection {
+        case .devices:
+            if shouldShowCompanionCard {
+                companionOnlineCardSection
+            }
+            if !model.popoutHistory.isEmpty || !model.popoutManager.controllers.isEmpty {
+                standaloneHistorySection
+            }
+            adbDevicesSection
+            if model.preferences.usbTetherDiscoveryEnabled {
+                usbTetherSection
+            }
+            wirelessLANSection
+            if shouldShowBleNearbySection {
+                bleNearbySection
+            }
+            manualConnectSection
+
+        case .popouts:
+            standaloneHistorySection
+            shortcutManagerQuickCard
+
+        case .settings:
+            OpalSettingsContentView(model: model, isEmbeddedInHub: true)
+
+        case .diagnostics:
+            DiagnosticsLogView(model: model)
+        }
+    }
+
+    private var shortcutManagerQuickCard: some View {
+        HStack(spacing: OpalSpacing.md) {
+            OpalIconBadge(
+                systemName: "sparkles.rectangle.stack.fill",
+                tint: OpalFluidPalette.brandCyan,
+                size: 40,
+                iconSize: 18,
+                cornerRadius: 12
+            )
+            VStack(alignment: .leading, spacing: 3) {
+                Text(OpalL10n.text("hub.shortcuts.card_title"))
+                    .font(.system(size: 14, weight: .semibold))
+                Text(OpalL10n.text("hub.shortcuts.card_sub"))
+                    .font(.system(size: 12))
+                    .foregroundStyle(OpalFluidPalette.secondaryText)
+            }
+            Spacer(minLength: 12)
+            Button(OpalL10n.text("hub.shortcuts.manage_btn")) {
+                model.openShortcutManager()
+            }
+            .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .regular, isPill: true))
+        }
+        .padding(OpalSpacing.lg)
+        .opalGlassSurface(.panel)
     }
 
     func openFileBrowserWindow() {

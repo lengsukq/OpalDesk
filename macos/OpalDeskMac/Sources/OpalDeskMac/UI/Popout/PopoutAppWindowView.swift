@@ -66,7 +66,7 @@ public struct PopoutAppWindowView: View {
             if isDragOverCanvas {
                 OpalDropZoneOverlay(
                     icon: "arrow.down.doc.fill",
-                    title: "发送文件",
+                    title: OpalL10n.text("popout.drop.title"),
                     subtitle: nil,
                     cornerRadius: OpalRadius.card,
                     insetPadding: 10,
@@ -91,7 +91,7 @@ public struct PopoutAppWindowView: View {
                 if let toast = controller.toastNotice {
                     ToastPillView(
                         message: toast,
-                        actionTitle: controller.toastRevealURL != nil ? "在 Finder 显示" : nil,
+                        actionTitle: controller.toastRevealURL != nil ? OpalL10n.text("common.reveal_in_finder") : nil,
                         onAction: controller.toastRevealURL.map { url in
                             { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                         }
@@ -146,7 +146,7 @@ public struct PopoutAppWindowView: View {
                 .buttonStyle(.plain)
                 .padding(.leading, 10)
                 .padding(.top, 8)
-                .help("点击停止录屏")
+                .help(OpalL10n.text("popout.rec.stop_help"))
             }
             Spacer()
         }
@@ -171,6 +171,15 @@ public struct PopoutAppWindowView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
+                if let badge = controller.profileBadgeText {
+                    StatusBadgeView(
+                        text: badge,
+                        color: .opalProfileTint(controller.appProfileType),
+                        horizontalPadding: 5,
+                        verticalPadding: 1,
+                        backgroundOpacity: 0.22
+                    )
+                }
                 if controller.isFavorite {
                     Image(systemName: "star.fill")
                         .font(.system(size: 8.5, weight: .semibold))
@@ -181,7 +190,7 @@ public struct PopoutAppWindowView: View {
             .padding(.trailing, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay { PopoutWindowDragArea() }
-            .help("按住拖动移动悬浮小窗")
+            .help(OpalL10n.text("popout.drag_help"))
 
             OpalGlassIconButton(
                 systemName: controller.isPinnedOnTop ? "pin.fill" : "pin",
@@ -189,7 +198,7 @@ public struct PopoutAppWindowView: View {
                 isActive: controller.isPinnedOnTop,
                 size: 24,
                 iconSize: 11,
-                helpText: controller.isPinnedOnTop ? "取消置顶 (⌘⇧T)" : "窗口置顶 (⌘⇧T)"
+                helpText: controller.isPinnedOnTop ? OpalL10n.text("popout.unpin_shortcut") : OpalL10n.text("popout.pin_shortcut")
             ) { controller.togglePinnedOnTop() }
 
             Button { isOpacityPopoverShown.toggle() } label: {
@@ -201,8 +210,8 @@ public struct PopoutAppWindowView: View {
                     .foregroundStyle(tinted ? Color.accentColor : Color.white)
             }
             .buttonStyle(.plain)
-            .help("调节窗口透明度 (\(Int((controller.windowOpacity * 100).rounded()))%)")
-            .accessibilityLabel("调节窗口透明度")
+            .help(OpalL10n.format("popout.opacity_help_fmt", Int((controller.windowOpacity * 100).rounded())))
+            .accessibilityLabel(OpalL10n.text("popout.opacity_a11y"))
             .popover(isPresented: $isOpacityPopoverShown, arrowEdge: .bottom) { opacityPopoverContent }
 
             aspectPresetMenu
@@ -213,7 +222,7 @@ public struct PopoutAppWindowView: View {
                 isActive: !controller.isAudioMuted,
                 size: 24,
                 iconSize: 11,
-                helpText: controller.isAudioMuted ? "已静音 · 点击恢复音频回传" : "静音此小窗音频回传"
+                helpText: controller.isAudioMuted ? OpalL10n.text("popout.audio_unmute_help") : OpalL10n.text("popout.audio_mute_help")
             ) { controller.toggleAudioMute() }
 
             OpalGlassIconButton(
@@ -221,7 +230,7 @@ public struct PopoutAppWindowView: View {
                 tint: .white,
                 size: 24,
                 iconSize: 11,
-                helpText: "一键截图到桌面并复制剪贴板"
+                helpText: OpalL10n.text("popout.screenshot_help")
             ) { controller.captureScreenshot() }
 
             recordingButton
@@ -231,7 +240,7 @@ public struct PopoutAppWindowView: View {
                 tint: .white,
                 size: 24,
                 iconSize: 11,
-                helpText: "重载 App DPI（修复字体过大或缩放异常）"
+                helpText: OpalL10n.text("popout.dpi_reload_help")
             ) { controller.reloadAppDPI() }
 
             OpalGlassIconButton(
@@ -239,7 +248,7 @@ public struct PopoutAppWindowView: View {
                 tint: .white,
                 size: 24,
                 iconSize: 11,
-                helpText: "Android 返回"
+                helpText: OpalL10n.text("popout.back_help")
             ) { controller.sendAndroidBack() }
 
             if controller.canReturnToDesktop {
@@ -248,7 +257,7 @@ public struct PopoutAppWindowView: View {
                     tint: .accentColor,
                     size: 24,
                     iconSize: 11,
-                    helpText: "收回主大屏并关闭小窗"
+                    helpText: OpalL10n.text("popout.return_desktop_help")
                 ) { controller.returnToDesktop() }
             }
 
@@ -257,7 +266,7 @@ public struct PopoutAppWindowView: View {
                 tint: .red,
                 size: 24,
                 iconSize: 12,
-                helpText: "关闭悬浮小窗"
+                helpText: OpalL10n.text("popout.close_help")
             ) { controller.close(sendDisconnect: true) }
         }
         .padding(.horizontal, 8)
@@ -287,13 +296,13 @@ public struct PopoutAppWindowView: View {
             }
         }
         .buttonStyle(.plain)
-        .help(controller.isRecording ? "停止录屏并保存 MP4" : "录制小窗 MP4 视频")
-        .accessibilityLabel(controller.isRecording ? "停止录屏" : "录制视频")
+        .help(controller.isRecording ? OpalL10n.text("popout.rec.stop_mp4_help") : OpalL10n.text("popout.rec.start_mp4_help"))
+        .accessibilityLabel(controller.isRecording ? OpalL10n.text("display.rec.stop_a11y") : OpalL10n.text("popout.rec.start_a11y"))
     }
 
     private var aspectPresetMenu: some View {
         Menu {
-            Section("窗口形态比例") {
+            Section(OpalL10n.text("popout.menu.aspect_section")) {
                 ForEach(PopoutAspectPreset.allCases) { preset in
                     Button { controller.applyAspectPreset(preset) } label: {
                         HStack {
@@ -306,12 +315,12 @@ public struct PopoutAppWindowView: View {
 
             Divider()
 
-            Menu("自定义 DPI") {
+            Menu(OpalL10n.text("popout.menu.custom_dpi")) {
                 Button {
                     controller.setCustomDpi(nil)
                 } label: {
                     HStack {
-                        Text("自动")
+                        Text(OpalL10n.text("common.auto"))
                         if controller.customDpi == nil { Image(systemName: "checkmark") }
                     }
                 }
@@ -334,7 +343,7 @@ public struct PopoutAppWindowView: View {
                 controller.setCompatibilityResolution(!controller.isCompatibilityResolution)
             } label: {
                 HStack {
-                    Text("兼容分辨率模式（修复拉伸/错位）")
+                    Text(OpalL10n.text("popout.menu.compat_res"))
                     if controller.isCompatibilityResolution { Image(systemName: "checkmark") }
                 }
             }
@@ -345,19 +354,19 @@ public struct PopoutAppWindowView: View {
                 controller.toggleFavorite()
             } label: {
                 Label(
-                    controller.isFavorite ? "已设为常用置顶" : "设为常用置顶应用",
+                    controller.isFavorite ? OpalL10n.text("popout.menu.pinned_fav") : OpalL10n.text("popout.menu.pin_fav"),
                     systemImage: controller.isFavorite ? "star.fill" : "star"
                 )
             }
 
             Divider()
-            Button("重载悬浮小窗", systemImage: "arrow.clockwise") { controller.retryStart() }
-            Button("刷新关键帧 (IDR)", systemImage: "arrow.triangle.2.circlepath") { controller.requestIDR() }
+            Button(OpalL10n.text("popout.menu.reload_window"), systemImage: "arrow.clockwise") { controller.retryStart() }
+            Button(OpalL10n.text("popout.menu.refresh_idr"), systemImage: "arrow.triangle.2.circlepath") { controller.requestIDR() }
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: controller.activePreset?.systemImage ?? "aspectratio")
                     .font(.system(size: 10, weight: .semibold))
-                Text(controller.activePreset?.title ?? "自由")
+                Text(controller.activePreset?.title ?? OpalL10n.text("common.free"))
                     .font(.system(size: 10, weight: .medium))
                 if controller.isCompatibilityResolution || controller.customDpi != nil {
                     Circle()
@@ -371,13 +380,13 @@ public struct PopoutAppWindowView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("快选手机 / 折叠 / 平板比例、自定义 DPI 与兼容分辨率模式")
+        .help(OpalL10n.text("popout.menu.preset_help"))
     }
 
     private var opacityPopoverContent: some View {
         VStack(alignment: .leading, spacing: OpalSpacing.sm) {
             HStack {
-                Text("窗口透明度").font(.caption.weight(.semibold))
+                Text(OpalL10n.text("popout.opacity_title")).font(.caption.weight(.semibold))
                 Spacer()
                 Text("\(Int((controller.windowOpacity * 100).rounded()))%")
                     .font(.caption.monospacedDigit())
@@ -405,15 +414,14 @@ public struct PopoutAppWindowView: View {
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 240)
-                Button("重试启动") { controller.retryStart() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                Button(OpalL10n.text("popout.loading.retry")) { controller.retryStart() }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .small, isPill: true))
             } else {
                 ProgressView().controlSize(.regular).tint(.white)
                 Text(
                     controller.isWaitingForApproval
-                        ? "请在手机端点击「允许」…"
-                        : "正在独立启动 \(controller.appLabel)…"
+                        ? OpalL10n.text("popout.loading.waiting_approval")
+                        : OpalL10n.format("popout.loading.starting_fmt", controller.appLabel)
                 )
                 .font(.callout.weight(.medium))
                 .foregroundStyle(.white)
@@ -433,5 +441,16 @@ private struct PopoutWindowDragArea: NSViewRepresentable {
     @MainActor
     final class DragHandleNSView: NSView {
         override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+    }
+}
+
+extension Color {
+    static func opalProfileTint(_ profileType: String) -> Color {
+        switch profileType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "clone": return .orange
+        case "work": return .blue
+        case "private": return .purple
+        default: return .teal
+        }
     }
 }

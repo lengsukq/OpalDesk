@@ -346,15 +346,15 @@ public final class AppModel {
 
     public func connectWiredUSB(_ device: AdbDevice) async {
         guard device.isReady else {
-            bannerError = "设备 \(device.displayName) 当前状态为「\(device.state.displayLabel)」，请先在手机上允许 USB 调试"
+            bannerError = OpalL10n.format("app.adb.device_state_err_fmt", device.displayName, device.state.displayLabel)
             return
         }
         guard !isConnectingFlow else { return }
 
         bannerError = nil
         statusMessage = device.isWirelessAdb
-            ? "正在通过无线 ADB 拉起守护进程并准备升级 Wi-Fi 直连..."
-            : "正在拉起手机端 OpalDesk 守护进程并建立 USB 隧道..."
+            ? OpalL10n.text("app.adb.bootstrapping_wireless")
+            : OpalL10n.text("app.adb.bootstrapping_usb")
         isConnectingFlow = true
 
         await teardownCurrentSession(sendRemoteDisconnect: false)
@@ -428,7 +428,7 @@ public final class AppModel {
         pairingContext = PairingPromptContext(
             source: source,
             displayName: device.displayName,
-            model: "USB 网络共享 · \(device.interfaceLabel) (Beta)",
+            model: OpalL10n.format("app.tether.model_fmt", device.interfaceLabel),
             expectedFingerprint: device.certFingerprint
         )
     }
@@ -436,7 +436,7 @@ public final class AppModel {
     public func connectManualHost(host: String, port: UInt16) async {
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedHost.isEmpty else {
-            bannerError = "请输入有效的局域网 IP 地址或主机名"
+            bannerError = OpalL10n.text("app.manual.invalid_host")
             return
         }
         bannerError = nil
@@ -447,7 +447,7 @@ public final class AppModel {
         }
 
         isProbingManualHost = true
-        statusMessage = "正在安全探测 \(trimmedHost):\(port) 的 TLS 证书指纹..."
+        statusMessage = OpalL10n.format("app.manual.probing_fmt", trimmedHost, Int(port))
         defer {
             isProbingManualHost = false
             statusMessage = nil
@@ -461,7 +461,7 @@ public final class AppModel {
             pairingContext = PairingPromptContext(
                 source: source,
                 displayName: "\(trimmedHost):\(port)",
-                model: "手动无线主机",
+                model: OpalL10n.text("app.manual.model"),
                 expectedFingerprint: fingerprint
             )
         } catch {
@@ -531,7 +531,7 @@ public final class AppModel {
         fileBrowserDownloadTasks.removeAll()
         activeApkInstallTask?.cancel()
         activeApkInstallTask = nil
-        cancelPendingFileTransferWaiters(reason: "应用正在退出")
+        cancelPendingFileTransferWaiters(reason: OpalL10n.text("app.terminating"))
 
         quickLookCoordinator.closeIfVisible()
         callHudCoordinator.close()
@@ -554,7 +554,7 @@ public final class AppModel {
         companionManager.disconnect()
         notificationBridge.stop(clearDelivered: false)
         mediaBridge.stop()
-        fileBrowserClient.handleSessionDisconnected(reason: "应用正在退出")
+        fileBrowserClient.handleSessionDisconnected(reason: OpalL10n.text("app.terminating"))
 
         micCapturer.stop()
         isMicEnabled = false
@@ -626,7 +626,7 @@ public final class AppModel {
 
     private func probeAndPromptBonjour(_ device: DiscoveredBonjourDevice) async {
         isProbingManualHost = true
-        statusMessage = "正在探测 \(device.displayName) 的证书指纹..."
+        statusMessage = OpalL10n.format("app.bonjour.probing_fmt", device.displayName)
         defer {
             isProbingManualHost = false
             statusMessage = nil

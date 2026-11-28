@@ -54,6 +54,16 @@ public enum AppFuzzyMatcher {
         if label.hasPrefix(needle) { return Score.labelPrefix }
         if label.contains(needle) { return Score.labelContains }
         if pkg.contains(needle) { return Score.packageContains }
+        if app.isSecondaryProfile {
+            if let badge = app.profileBadgeText?.lowercased(), badge.contains(needle) {
+                return Score.packageContains
+            }
+            if RemoteAppInfo.profileSearchKeywords(userId: app.userId, profileType: app.profileType)
+                .contains(where: { $0.lowercased().contains(needle) })
+            {
+                return Score.packageContains
+            }
+        }
         if isSubsequence(needle, of: label) { return Score.labelSubsequence }
         if isSubsequence(needle, of: pkg) { return Score.packageSubsequence }
         return 0

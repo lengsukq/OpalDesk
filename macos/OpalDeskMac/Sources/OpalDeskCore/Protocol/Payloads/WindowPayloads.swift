@@ -9,13 +9,95 @@ public struct RemoteAppInfo: Decodable, Sendable, Equatable, Identifiable, Hasha
     public var taskId: Int
     public let iconBase64: String?
     public var openCount: Int
+    public var userId: Int
+    public var profileType: String
 
     public var id: String {
-        cls.isEmpty ? pkg : "\(pkg)/\(cls)"
+        let base = cls.isEmpty ? pkg : "\(pkg)/\(cls)"
+        return userId > 0 ? "\(base)#u\(userId)" : base
+    }
+
+    public var appKey: String {
+        Self.formatAppKey(pkg: pkg, userId: userId)
+    }
+
+    public var isSecondaryProfile: Bool {
+        userId > 0
+    }
+
+    public var normalizedProfileType: String {
+        Self.normalizeProfileType(profileType, userId: userId)
+    }
+
+    public var profileBadgeText: String? {
+        Self.profileBadgeText(userId: userId, profileType: profileType)
     }
 
     public var displayLabel: String {
         label.isEmpty ? pkg : label
+    }
+
+    public var displayLabelWithProfile: String {
+        if let badge = profileBadgeText {
+            return "\(displayLabel) (\(badge))"
+        }
+        return displayLabel
+    }
+
+    public static func formatAppKey(pkg: String, userId: Int) -> String {
+        let clean = pkg.trimmingCharacters(in: .whitespacesAndNewlines)
+        return userId > 0 ? "\(clean)#u\(userId)" : clean
+    }
+
+    public static func parseAppKey(_ appKey: String) -> (pkg: String, userId: Int) {
+        let trimmed = appKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let marker = trimmed.range(of: "#u", options: .backwards) else {
+            return (trimmed, 0)
+        }
+        let rawId = trimmed[marker.upperBound...]
+        guard let parsed = Int(rawId), parsed > 0 else {
+            return (trimmed, 0)
+        }
+        return (String(trimmed[..<marker.lowerBound]), parsed)
+    }
+
+    public static func normalizeProfileType(_ raw: String, userId: Int) -> String {
+        guard userId > 0 else { return "" }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch trimmed {
+        case "clone", "work", "private", "profile":
+            return trimmed
+        default:
+            return (userId == 999 || userId == 95 || userId == 128) ? "clone" : "profile"
+        }
+    }
+
+    public static func profileBadgeText(userId: Int, profileType: String = "") -> String? {
+        guard userId > 0 else { return nil }
+        switch normalizeProfileType(profileType, userId: userId) {
+        case "clone":
+            return OpalL10n.text("profile.badge.clone")
+        case "work":
+            return OpalL10n.text("profile.badge.work")
+        case "private":
+            return OpalL10n.text("profile.badge.private")
+        default:
+            return OpalL10n.format("profile.badge.secondary_fmt", userId)
+        }
+    }
+
+    public static func profileSearchKeywords(userId: Int, profileType: String = "") -> [String] {
+        guard userId > 0 else { return [] }
+        var words = ["u\(userId)", "user \(userId)", "分身", "多开", "双开", "clone", "dual"]
+        switch normalizeProfileType(profileType, userId: userId) {
+        case "work":
+            words.append(contentsOf: ["工作", "work", "企业"])
+        case "private":
+            words.append(contentsOf: ["隐私", "私密", "private"])
+        default:
+            break
+        }
+        return words
     }
 
     public init(
@@ -25,8 +107,11 @@ public struct RemoteAppInfo: Decodable, Sendable, Equatable, Identifiable, Hasha
         runningOnExt: Bool = false,
         taskId: Int = -1,
         iconBase64: String? = nil,
-        openCount: Int = 0
+        openCount: Int = 0,
+        userId: Int = 0,
+        profileType: String = ""
     ) {
+        let normalizedUid = max(0, userId)
         self.pkg = pkg
         self.cls = cls
         self.label = label
@@ -34,10 +119,12 @@ public struct RemoteAppInfo: Decodable, Sendable, Equatable, Identifiable, Hasha
         self.taskId = taskId
         self.iconBase64 = iconBase64
         self.openCount = openCount
+        self.userId = normalizedUid
+        self.profileType = Self.normalizeProfileType(profileType, userId: normalizedUid)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case pkg, cls, label, runningOnExt, taskId, openCount
+        case pkg, cls, label, runningOnExt, taskId, openCount, userId, profileType
         case iconBase64 = "icon"
     }
 
@@ -50,6 +137,10 @@ public struct RemoteAppInfo: Decodable, Sendable, Equatable, Identifiable, Hasha
         taskId = try c.decodeIfPresent(Int.self, forKey: .taskId) ?? -1
         iconBase64 = try c.decodeIfPresent(String.self, forKey: .iconBase64)
         openCount = try c.decodeIfPresent(Int.self, forKey: .openCount) ?? 0
+        let decodedUid = max(0, try c.decodeIfPresent(Int.self, forKey: .userId) ?? 0)
+        userId = decodedUid
+        let rawProfile = try c.decodeIfPresent(String.self, forKey: .profileType) ?? ""
+        profileType = Self.normalizeProfileType(rawProfile, userId: decodedUid)
     }
 }
 
@@ -106,6 +197,7 @@ public struct WindowActionPayload: Encodable, Sendable, Equatable {
     public var pkgs: [String]?
     public var ratios: [Int]?
     public var backend: String?
+    public var userId: Int?
 
     public init(
         action: WindowActionKind,
@@ -121,7 +213,8 @@ public struct WindowActionPayload: Encodable, Sendable, Equatable {
         topology: String? = nil,
         pkgs: [String]? = nil,
         ratios: [Int]? = nil,
-        backend: String? = nil
+        backend: String? = nil,
+        userId: Int? = nil
     ) {
         self.action = action
         self.enabled = enabled
@@ -137,6 +230,7 @@ public struct WindowActionPayload: Encodable, Sendable, Equatable {
         self.pkgs = pkgs
         self.ratios = ratios
         self.backend = backend
+        self.userId = (userId ?? 0) > 0 ? userId : nil
     }
 
     public static func setAdaptiveSingle(enabled: Bool, defaultWidthDp: Int) -> WindowActionPayload {
@@ -160,14 +254,16 @@ public struct WindowActionPayload: Encodable, Sendable, Equatable {
         pkg: String,
         cls: String = "",
         mode: OpalCastLaunchMode = .adaptive,
-        slot: Int = 0
+        slot: Int = 0,
+        userId: Int = 0
     ) -> WindowActionPayload {
         WindowActionPayload(
             action: .launchApp,
             pkg: pkg,
             cls: cls,
             mode: mode.rawValue,
-            slot: slot
+            slot: slot,
+            userId: userId > 0 ? userId : nil
         )
     }
 
@@ -184,12 +280,12 @@ public struct WindowActionPayload: Encodable, Sendable, Equatable {
         )
     }
 
-    public static func reloadAppDpi(pkg: String) -> WindowActionPayload {
-        WindowActionPayload(action: .reloadAppDpi, pkg: pkg)
+    public static func reloadAppDpi(pkg: String, userId: Int = 0) -> WindowActionPayload {
+        WindowActionPayload(action: .reloadAppDpi, pkg: pkg, userId: userId > 0 ? userId : nil)
     }
 
-    public static func returnToDesktop(pkg: String, taskId: Int = -1) -> WindowActionPayload {
-        WindowActionPayload(action: .returnToDesktop, pkg: pkg, taskId: taskId)
+    public static func returnToDesktop(pkg: String, taskId: Int = -1, userId: Int = 0) -> WindowActionPayload {
+        WindowActionPayload(action: .returnToDesktop, pkg: pkg, taskId: taskId, userId: userId > 0 ? userId : nil)
     }
 
     public static func setInputBackend(_ backend: OpalCastInputBackend) -> WindowActionPayload {

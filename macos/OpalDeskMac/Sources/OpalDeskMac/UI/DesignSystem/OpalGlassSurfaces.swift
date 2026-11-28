@@ -2,9 +2,13 @@ import SwiftUI
 
 // MARK: - Surface Tiers
 
-/// Two-layer Apple HIG surface hierarchy:
-/// - Content layer surfaces (`.panel`, `.card`, `.inset`) use refined macOS materials + subtle dual-edge depth.
-/// - Functional floating layers (`.floatingBar`, `.stageOverlay`) use Liquid Glass vibrancy + luminous 45° specular rims.
+/// Strict two-layer Apple HIG + LightIsle surface architecture:
+/// - **Content Layer** (`.panel`, `.card`, `.inset`): Crisp top-lit luminous solid surfaces
+///   (never muddy frosted gray boxes!) with continuous squircle geometry, delicate specular
+///   highlight rim, and airy ambient shadow.
+/// - **Functional Floating Layer** (`.floatingBar`, `.stageOverlay`): True Liquid Glass
+///   (`.ultraThinMaterial` / `.regularMaterial` + translucent tint wash + specular rim) reserved
+///   strictly for floating sidebars, floating status capsules, toasts, and video stage controls.
 enum OpalGlassSurfaceTier {
     case panel
     case card
@@ -13,10 +17,8 @@ enum OpalGlassSurfaceTier {
     case stageOverlay
 }
 
-// MARK: - Adaptive Liquid Glass Surface Modifier
+// MARK: - Adaptive Two-Layer Surface Modifier
 
-/// Unified Liquid Glass continuous-squircle surface with 45° specular rim, depth hairline,
-/// and automatic Light/Dark, Reduce Transparency, and Increase Contrast adaptation.
 private struct OpalGlassSurfaceModifier: ViewModifier {
     let tier: OpalGlassSurfaceTier
     let cornerRadius: CGFloat
@@ -34,15 +36,19 @@ private struct OpalGlassSurfaceModifier: ViewModifier {
     func body(content: Content) -> some View {
         if isCapsule {
             content
-                .background(capsuleBackground)
+                .background {
+                    capsuleBackground
+                        .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
+                }
                 .overlay(capsuleSpecularRim)
-                .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
         } else {
             let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             content
-                .background(rectBackground(shape: shape))
+                .background {
+                    rectBackground(shape: shape)
+                        .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
+                }
                 .overlay(rectSpecularRim(shape: shape))
-                .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
         }
     }
 
@@ -51,11 +57,11 @@ private struct OpalGlassSurfaceModifier: ViewModifier {
     @ViewBuilder
     private var capsuleBackground: some View {
         ZStack {
-            if reduceTransparency {
-                Capsule().fill(opaqueFillColor)
+            if reduceTransparency || isHighContrast || isSolidContentTier {
+                Capsule().fill(solidGradient)
             } else {
-                Capsule().fill(surfaceMaterial)
-                Capsule().fill(glassWashColor)
+                Capsule().fill(floatingMaterial)
+                Capsule().fill(floatingWashGradient)
             }
             if let tint {
                 Capsule().fill(tint.opacity(tintFillOpacity))
@@ -66,11 +72,11 @@ private struct OpalGlassSurfaceModifier: ViewModifier {
     @ViewBuilder
     private func rectBackground(shape: RoundedRectangle) -> some View {
         ZStack {
-            if reduceTransparency {
-                shape.fill(opaqueFillColor)
+            if reduceTransparency || isHighContrast || isSolidContentTier {
+                shape.fill(solidGradient)
             } else {
-                shape.fill(surfaceMaterial)
-                shape.fill(glassWashColor)
+                shape.fill(floatingMaterial)
+                shape.fill(floatingWashGradient)
             }
             if let tint {
                 shape.fill(tint.opacity(tintFillOpacity))
@@ -78,140 +84,149 @@ private struct OpalGlassSurfaceModifier: ViewModifier {
         }
     }
 
+    private var isSolidContentTier: Bool {
+        switch tier {
+        case .panel, .card, .inset: return true
+        case .floatingBar, .stageOverlay: return false
+        }
+    }
+
+    private var solidGradient: LinearGradient {
+        switch tier {
+        case .panel:
+            return LinearGradient(
+                colors: [OpalFluidPalette.cardTop, OpalFluidPalette.cardBottom],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        case .card:
+            return LinearGradient(
+                colors: [OpalFluidPalette.cardItemTop, OpalFluidPalette.cardItemBottom],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .inset:
+            let fill = isDark
+                ? Color.white.opacity(0.048)
+                : OpalFluidPalette.canvasTop.opacity(0.85)
+            return LinearGradient(colors: [fill, fill], startPoint: .top, endPoint: .bottom)
+        case .floatingBar, .stageOverlay:
+            return LinearGradient(
+                colors: [OpalFluidPalette.cardTop, OpalFluidPalette.cardBottom],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+    }
+
+    private var floatingMaterial: Material {
+        tier == .floatingBar ? .ultraThinMaterial : .regularMaterial
+    }
+
+    private var floatingWashGradient: LinearGradient {
+        switch tier {
+        case .floatingBar:
+            return LinearGradient(
+                colors: isDark
+                    ? [OpalFluidPalette.cardTop.opacity(0.56), OpalFluidPalette.cardBottom.opacity(0.36)]
+                    : [OpalFluidPalette.cardTop.opacity(0.68), OpalFluidPalette.cardBottom.opacity(0.46)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .stageOverlay:
+            return LinearGradient(
+                colors: isDark
+                    ? [Color.black.opacity(0.34), OpalFluidPalette.cardBottom.opacity(0.48)]
+                    : [OpalFluidPalette.cardTop.opacity(0.76), OpalFluidPalette.cardBottom.opacity(0.58)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        default:
+            return solidGradient
+        }
+    }
+
     // MARK: - Specular Rim
 
     private var capsuleSpecularRim: some View {
-        ZStack {
-            Capsule()
-                .strokeBorder(specularGradient, lineWidth: rimLineWidth)
-            if !isDark || isHighContrast {
-                Capsule()
-                    .strokeBorder(outerHairlineColor, lineWidth: 0.5)
-            }
-        }
-        .allowsHitTesting(false)
+        Capsule()
+            .strokeBorder(specularGradient, lineWidth: rimLineWidth)
+            .allowsHitTesting(false)
     }
 
     private func rectSpecularRim(shape: RoundedRectangle) -> some View {
-        ZStack {
-            shape
-                .strokeBorder(specularGradient, lineWidth: rimLineWidth)
-            if !isDark || isHighContrast {
-                shape
-                    .strokeBorder(outerHairlineColor, lineWidth: 0.5)
-            }
-        }
-        .allowsHitTesting(false)
-    }
-
-    // MARK: - Adaptive Token Calculations
-
-    private var surfaceMaterial: Material {
-        switch tier {
-        case .panel: return isDark ? .regularMaterial : .thickMaterial
-        case .card: return isDark ? .thinMaterial : .regularMaterial
-        case .inset: return .ultraThinMaterial
-        case .floatingBar: return .ultraThinMaterial
-        case .stageOverlay: return .regularMaterial
-        }
-    }
-
-    private var opaqueFillColor: Color {
-        switch tier {
-        case .panel, .card:
-            return Color(nsColor: .controlBackgroundColor)
-        case .inset:
-            return Color(nsColor: .underPageBackgroundColor)
-        case .floatingBar, .stageOverlay:
-            return isDark
-                ? Color(nsColor: .windowBackgroundColor)
-                : Color(nsColor: .controlBackgroundColor)
-        }
-    }
-
-    private var glassWashColor: Color {
-        switch tier {
-        case .panel:
-            return isDark ? Color.white.opacity(0.035) : Color.white.opacity(0.46)
-        case .card:
-            return isDark ? Color.white.opacity(0.03) : Color.white.opacity(0.36)
-        case .inset:
-            return isDark ? Color.white.opacity(0.035) : Color.black.opacity(0.025)
-        case .floatingBar:
-            return isDark ? Color.black.opacity(0.28) : Color.white.opacity(0.42)
-        case .stageOverlay:
-            return isDark ? Color.black.opacity(0.32) : Color.white.opacity(0.55)
-        }
+        shape
+            .strokeBorder(specularGradient, lineWidth: rimLineWidth)
+            .allowsHitTesting(false)
     }
 
     private var tintFillOpacity: Double {
-        if isHighContrast { return isDark ? 0.22 : 0.16 }
+        if isHighContrast { return isDark ? 0.18 : 0.12 }
         switch tier {
-        case .inset, .card: return isDark ? 0.13 : 0.085
-        case .panel, .floatingBar, .stageOverlay: return isDark ? 0.14 : 0.10
+        case .inset: return isDark ? 0.11 : 0.068
+        case .card: return isDark ? 0.09 : 0.055
+        case .panel, .floatingBar, .stageOverlay: return isDark ? 0.10 : 0.055
         }
     }
 
     private var specularGradient: LinearGradient {
         if let strokeOverride {
             return LinearGradient(
-                colors: [
-                    strokeOverride,
-                    strokeOverride.opacity(0.36),
-                    strokeOverride.opacity(0.78),
-                ],
+                colors: [strokeOverride, strokeOverride.opacity(0.45), strokeOverride.opacity(0.80)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
         }
-
-        if let tint {
-            let lead = isHighContrast ? 0.65 : (isDark ? 0.42 : 0.34)
-            return LinearGradient(
-                colors: [
-                    tint.opacity(lead),
-                    tint.opacity(lead * 0.32),
-                    tint.opacity(lead * 0.65),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
-
-        if isDark {
-            let topLead = isHighContrast ? 0.42 : (tier == .floatingBar ? 0.34 : 0.24)
-            return LinearGradient(
-                colors: [
-                    Color.white.opacity(topLead),
-                    Color.white.opacity(topLead * 0.22),
-                    Color.white.opacity(topLead * 0.48),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        } else {
-            let topLead = isHighContrast ? 0.85 : 0.92
-            return LinearGradient(
-                colors: [
-                    Color.white.opacity(topLead),
-                    Color.white.opacity(0.28),
-                    Color.black.opacity(isHighContrast ? 0.22 : 0.07),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
-    }
-
-    private var outerHairlineColor: Color {
         if isHighContrast {
-            return Color.primary.opacity(0.38)
+            return LinearGradient(
+                colors: [Color.primary.opacity(0.48), Color.primary.opacity(0.42)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
         }
-        return isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.08)
+        if let tint {
+            let lead = isDark ? 0.36 : 0.28
+            return LinearGradient(
+                colors: [tint.opacity(lead), tint.opacity(lead * 0.45), OpalFluidPalette.rim.opacity(0.45)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+        switch tier {
+        case .floatingBar, .stageOverlay:
+            return LinearGradient(
+                colors: [
+                    Color.white.opacity(isDark ? 0.32 : 0.65),
+                    OpalFluidPalette.rim.opacity(0.58),
+                    Color.primary.opacity(0.08),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .panel, .card:
+            return LinearGradient(
+                colors: [
+                    Color.white.opacity(isDark ? 0.22 : 0.72),
+                    OpalFluidPalette.rim.opacity(isDark ? 0.56 : 0.68),
+                    Color.primary.opacity(0.06),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .inset:
+            return LinearGradient(
+                colors: [
+                    OpalFluidPalette.rim.opacity(isDark ? 0.44 : 0.55),
+                    OpalFluidPalette.rim.opacity(isDark ? 0.28 : 0.35),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
     }
 
     private var rimLineWidth: CGFloat {
-        isHighContrast ? 1.25 : (tier == .floatingBar ? 1.0 : 0.9)
+        isHighContrast ? 1.15 : 0.9
     }
 
     private var shadowColor: Color {
@@ -219,23 +234,23 @@ private struct OpalGlassSurfaceModifier: ViewModifier {
         case .inset:
             return .clear
         case .card:
-            return Color.black.opacity(isDark ? 0.18 : 0.05)
+            return Color.black.opacity(isDark ? 0.20 : 0.048)
         case .panel:
-            return Color.black.opacity(isDark ? 0.26 : 0.07)
+            return Color.black.opacity(isDark ? 0.28 : OpalFluidPalette.cardShadowOpacity)
         case .floatingBar:
-            return Color.black.opacity(isDark ? 0.42 : 0.16)
+            return Color.black.opacity(isDark ? 0.36 : OpalFluidPalette.cardShadowOpacity * 1.25)
         case .stageOverlay:
-            return Color.black.opacity(isDark ? 0.48 : 0.18)
+            return Color.black.opacity(isDark ? 0.44 : 0.14)
         }
     }
 
     private var shadowRadius: CGFloat {
         switch tier {
         case .inset: return 0
-        case .card: return 10
-        case .panel: return 18
-        case .floatingBar: return 16
-        case .stageOverlay: return 24
+        case .card: return 11
+        case .panel: return OpalFluidPalette.cardShadowRadius
+        case .floatingBar: return OpalFluidPalette.cardShadowRadius + 4
+        case .stageOverlay: return 22
         }
     }
 
@@ -243,69 +258,73 @@ private struct OpalGlassSurfaceModifier: ViewModifier {
         switch tier {
         case .inset: return 0
         case .card: return 4
-        case .panel: return 7
-        case .floatingBar: return 6
-        case .stageOverlay: return 10
+        case .panel: return OpalFluidPalette.cardShadowY
+        case .floatingBar: return OpalFluidPalette.cardShadowY + 2
+        case .stageOverlay: return 9
         }
     }
 }
 
-// MARK: - Ambient Opalescent Window Backdrop
+// MARK: - Ambient Fluid Canvas Backdrop (LightIsle Style)
 
-/// Subtle macOS Light/Dark adaptive opalescent backdrop that gives frosted Liquid Glass surfaces
-/// natural luminance and depth without competing with foreground content.
+/// Continuous cool-alabaster / deep-slate fluid backdrop with restrained static luminescence.
+/// Uses `.drawingGroup(opaque: true)` so scroll frames stay locked at 120fps.
 struct OpalAmbientBackdrop: View {
     var intensity: Double = 1.0
+    var accent: Color? = nil
 
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.opalAccent) private var envAccent
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
+    private var resolvedAccent: Color { accent ?? envAccent }
 
     var body: some View {
         ZStack {
-            Color(nsColor: .windowBackgroundColor)
+            OpalFluidPalette.canvasTop
 
-            if !reduceTransparency {
+            if !reduceTransparency && colorSchemeContrast != .increased {
+                LinearGradient(
+                    colors: [OpalFluidPalette.canvasTop, OpalFluidPalette.canvasBottom],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+
                 RadialGradient(
-                    colors: [
-                        Color.accentColor.opacity((colorScheme == .dark ? 0.14 : 0.09) * intensity),
-                        Color.clear,
-                    ],
+                    colors: [resolvedAccent.opacity(0.095 * intensity), .clear],
                     center: .topLeading,
-                    startRadius: 24,
+                    startRadius: 10,
                     endRadius: 560
                 )
 
                 RadialGradient(
-                    colors: [
-                        Color.cyan.opacity((colorScheme == .dark ? 0.09 : 0.065) * intensity),
-                        Color.clear,
-                    ],
+                    colors: [OpalFluidPalette.brandCyan.opacity(0.075 * intensity), .clear],
                     center: .topTrailing,
-                    startRadius: 40,
-                    endRadius: 480
+                    startRadius: 0,
+                    endRadius: 620
                 )
 
                 RadialGradient(
-                    colors: [
-                        Color.indigo.opacity((colorScheme == .dark ? 0.11 : 0.06) * intensity),
-                        Color.clear,
-                    ],
-                    center: .bottomTrailing,
-                    startRadius: 30,
+                    colors: [OpalFluidPalette.brandViolet.opacity(0.06 * intensity), .clear],
+                    center: .bottomLeading,
+                    startRadius: 0,
                     endRadius: 540
                 )
             }
         }
+        .drawingGroup(opaque: true)
         .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
-// MARK: - Subtle Pointer Hover Highlight
+// MARK: - Subtle Pointer Hover Lift & Glow (LightIsle Style)
 
-/// macOS-native pointer hover feedback for interactive tiles, cards, and rows.
 private struct OpalInteractiveHoverModifier: ViewModifier {
     let cornerRadius: CGFloat
     let activeTint: Color?
+    let liftOnHover: Bool
     @State private var isHovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -323,6 +342,7 @@ private struct OpalInteractiveHoverModifier: ViewModifier {
                     .strokeBorder(hoverStroke, lineWidth: 1)
                     .allowsHitTesting(false)
             )
+            .offset(y: (isHovered && liftOnHover && !reduceMotion) ? -1.5 : 0)
             .onHover { hovering in
                 if reduceMotion {
                     isHovered = hovering
@@ -337,23 +357,22 @@ private struct OpalInteractiveHoverModifier: ViewModifier {
     private var hoverFill: Color {
         guard isHovered else { return .clear }
         if let activeTint {
-            return activeTint.opacity(colorScheme == .dark ? 0.09 : 0.06)
+            return activeTint.opacity(colorScheme == .dark ? 0.08 : 0.045)
         }
-        return Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.03)
+        return OpalFluidPalette.brandBlue.opacity(colorScheme == .dark ? 0.06 : 0.035)
     }
 
     private var hoverStroke: Color {
         guard isHovered else { return .clear }
         if let activeTint {
-            return activeTint.opacity(0.38)
+            return activeTint.opacity(0.36)
         }
-        return Color.accentColor.opacity(colorScheme == .dark ? 0.34 : 0.28)
+        return OpalFluidPalette.rim.opacity(colorScheme == .dark ? 0.85 : 0.95)
     }
 }
 
 // MARK: - Unified Drag & Drop Overlay
 
-/// Shared Liquid Glass file drop overlay for Display Canvas, Popout Window, and Remote File Browser.
 struct OpalDropZoneOverlay: View {
     let icon: String
     let title: String
@@ -366,22 +385,22 @@ struct OpalDropZoneOverlay: View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         shape
             .strokeBorder(
-                Color.accentColor.opacity(0.9),
+                OpalFluidPalette.brandBlue.opacity(0.88),
                 style: StrokeStyle(lineWidth: isCompact ? 2.2 : 2.6, dash: [10, 6])
             )
-            .background(Color.accentColor.opacity(0.11), in: shape)
+            .background(OpalFluidPalette.brandBlue.opacity(0.10), in: shape)
             .overlay {
                 if !isCompact {
                     VStack(spacing: OpalSpacing.sm) {
                         Image(systemName: icon)
                             .font(.system(size: 36, weight: .semibold))
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(OpalFluidPalette.brandBlue)
                         Text(title)
                             .font(.title3.weight(.semibold))
                         if let subtitle, !subtitle.isEmpty {
                             Text(subtitle)
                                 .font(.callout)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(OpalFluidPalette.secondaryText)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.center)
                         }
@@ -399,7 +418,7 @@ struct OpalDropZoneOverlay: View {
 // MARK: - View Extensions
 
 extension View {
-    /// Applies the unified OpalDesk Liquid Glass surface treatment for a given semantic tier.
+    /// Applies the unified OpalDesk two-layer surface treatment for a given semantic tier.
     func opalGlassSurface(
         _ tier: OpalGlassSurfaceTier,
         cornerRadius: CGFloat? = nil,
@@ -424,7 +443,7 @@ extension View {
         ))
     }
 
-    /// Applies the unified Liquid Glass floating capsule chrome (control bars, HUD pills, recording badges, toasts).
+    /// Applies the unified Liquid Glass floating capsule chrome (status pills, toasts, stage pills).
     func opalFloatingGlassCapsule(
         tint: Color? = nil,
         strokeColor: Color? = nil
@@ -438,15 +457,23 @@ extension View {
         ))
     }
 
-    /// Applies macOS pointer hover highlight feedback on interactive continuous-squircle containers.
-    func opalInteractiveHover(cornerRadius: CGFloat = OpalRadius.tile, tint: Color? = nil) -> some View {
-        modifier(OpalInteractiveHoverModifier(cornerRadius: cornerRadius, activeTint: tint))
+    /// Applies LightIsle-style smooth pointer hover lift & luminous highlight on continuous-squircle tiles.
+    func opalInteractiveHover(
+        cornerRadius: CGFloat = OpalRadius.tile,
+        tint: Color? = nil,
+        lift: Bool = true
+    ) -> some View {
+        modifier(OpalInteractiveHoverModifier(
+            cornerRadius: cornerRadius,
+            activeTint: tint,
+            liftOnHover: lift
+        ))
     }
 
-    /// Applies the standard OpalDesk modal sheet backdrop and width/height framing.
+    /// Applies the standard OpalDesk modal sheet fluid backdrop and framing.
     func opalModalSheetChrome(width: CGFloat? = nil, height: CGFloat? = nil) -> some View {
         self
             .frame(width: width, height: height)
-            .background(OpalAmbientBackdrop(intensity: 0.7))
+            .background(OpalAmbientBackdrop(intensity: 0.72))
     }
 }

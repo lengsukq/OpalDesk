@@ -17,26 +17,24 @@ struct InjectDeniedSmartBanner: View {
             )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("手机系统阻止了默认输入注入（如安全限制 / 未开模拟点击）")
+                Text(OpalL10n.text("display.inject.title"))
                     .font(.system(size: 12, weight: .semibold))
-                Text("切换至 UHID 虚拟键鼠外设可原生绕过限制，获得低延迟完整控屏体验。")
+                Text(OpalL10n.text("display.inject.subtitle"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
 
             Button(action: onSwitchToUHID) {
-                Label("一键切换 UHID", systemImage: "keyboard.badge.ellipsis")
-                    .font(.system(size: 11, weight: .semibold))
+                Label(OpalL10n.text("display.inject.switch_uhid"), systemImage: "keyboard.badge.ellipsis")
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .small, isPill: true))
 
             OpalGlassIconButton(
                 systemName: "xmark",
                 tint: .secondary,
                 size: 24,
                 iconSize: 10.5,
-                helpText: "暂时隐藏此提示",
+                helpText: OpalL10n.text("display.inject.dismiss_help"),
                 action: onDismiss
             )
         }
@@ -85,7 +83,7 @@ struct FileTransferToastStack: View {
                     tint: .secondary,
                     size: 24,
                     iconSize: 10.5,
-                    helpText: "取消传输"
+                    helpText: OpalL10n.text("display.transfer.cancel_help")
                 ) { onCancel(transfer.transferId) }
             } else {
                 OpalGlassIconButton(
@@ -93,7 +91,7 @@ struct FileTransferToastStack: View {
                     tint: .secondary,
                     size: 24,
                     iconSize: 10.5,
-                    helpText: "关闭提示"
+                    helpText: OpalL10n.text("common.dismiss_tip")
                 ) { onDismiss(transfer.transferId) }
             }
         }
@@ -109,21 +107,21 @@ struct FileTransferToastStack: View {
             ProgressView(value: transfer.fractionCompleted)
                 .frame(width: 170)
         case .awaitingAck:
-            Text("等待手机端落盘确认…")
+            Text(OpalL10n.text("display.transfer.awaiting_ack"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         case .completed(let remotePath):
-            Text(remotePath.isEmpty ? "已发送到手机" : "已保存：\(remotePath)")
+            Text(remotePath.isEmpty ? OpalL10n.text("display.transfer.sent") : OpalL10n.format("display.transfer.saved_fmt", remotePath))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         case .failed(let reason):
-            Text("失败：\(reason)")
+            Text(OpalL10n.format("display.transfer.failed_fmt", reason))
                 .font(.caption)
                 .foregroundStyle(.red)
                 .lineLimit(2)
         case .cancelled:
-            Text("已取消")
+            Text(OpalL10n.text("display.transfer.cancelled"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

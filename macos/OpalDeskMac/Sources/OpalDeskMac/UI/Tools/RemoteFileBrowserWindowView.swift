@@ -7,25 +7,47 @@ import os
 // MARK: - View Modes & Injected Action Callbacks
 
 public enum RemoteFileBrowserTab: String, CaseIterable, Identifiable, Sendable {
-    case files = "文件浏览"
-    case storage = "存储分析"
+    case files
+    case storage
 
     public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .files: return OpalL10n.text("files.tab.files")
+        case .storage: return OpalL10n.text("files.tab.storage")
+        }
+    }
 }
 
 public enum RemoteStorageSubTab: String, CaseIterable, Identifiable, Sendable {
-    case categories = "分类概览"
-    case folders = "文件夹占用"
-    case apps = "应用空间排行"
+    case categories
+    case folders
+    case apps
 
     public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .categories: return OpalL10n.text("files.storage.tab.categories")
+        case .folders: return OpalL10n.text("files.storage.tab.folders")
+        case .apps: return OpalL10n.text("files.storage.tab.apps")
+        }
+    }
 }
 
 public enum RemoteFileViewMode: String, CaseIterable, Identifiable, Sendable {
-    case list = "列表"
-    case grid = "网格"
+    case list
+    case grid
 
     public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .list: return OpalL10n.text("files.view.list")
+        case .grid: return OpalL10n.text("files.view.grid")
+        }
+    }
 
     var sfSymbolName: String {
         switch self {
@@ -54,6 +76,7 @@ public struct RemoteFileBrowserActions {
     public var onOpenFinderMount: @MainActor () -> Void
     public var onUnmountFinder: @MainActor () -> Void
     public var onQuickLookItem: @MainActor (RemoteFileItem) -> Void
+    public var onOpenItem: @MainActor (RemoteFileItem) -> Void
     public var onOpenAppPopout: (@MainActor (AppStorageEntry) -> Void)?
     public var onPullFileForDrag: RemoteFileDragPullHandler?
 
@@ -75,6 +98,7 @@ public struct RemoteFileBrowserActions {
         onOpenFinderMount: @escaping @MainActor () -> Void = {},
         onUnmountFinder: @escaping @MainActor () -> Void = {},
         onQuickLookItem: @escaping @MainActor (RemoteFileItem) -> Void = { _ in },
+        onOpenItem: @escaping @MainActor (RemoteFileItem) -> Void = { _ in },
         onOpenAppPopout: (@MainActor (AppStorageEntry) -> Void)? = nil,
         onPullFileForDrag: RemoteFileDragPullHandler? = nil
     ) {
@@ -95,6 +119,7 @@ public struct RemoteFileBrowserActions {
         self.onOpenFinderMount = onOpenFinderMount
         self.onUnmountFinder = onUnmountFinder
         self.onQuickLookItem = onQuickLookItem
+        self.onOpenItem = onOpenItem
         self.onOpenAppPopout = onOpenAppPopout
         self.onPullFileForDrag = onPullFileForDrag
     }
@@ -116,6 +141,7 @@ public struct RemoteFileBrowserWindowView: View {
     public let transfers: [RemoteFileTransferItem]
     public let finderMountState: FinderMountState
     public let quickLookLoadingPath: String?
+    public let directOpenMaxMB: Int
     public let quickLocations: [RemoteQuickLocation]
     public let actions: RemoteFileBrowserActions
 
@@ -150,6 +176,7 @@ public struct RemoteFileBrowserWindowView: View {
         transfers: [RemoteFileTransferItem] = [],
         finderMountState: FinderMountState = .unmounted,
         quickLookLoadingPath: String? = nil,
+        directOpenMaxMB: Int = FileBrowserPresentation.defaultDirectOpenMaxMB,
         quickLocations: [RemoteQuickLocation] = RemoteQuickLocation.defaultLocations,
         initialTab: RemoteFileBrowserTab = .files,
         actions: RemoteFileBrowserActions = RemoteFileBrowserActions()
@@ -166,6 +193,7 @@ public struct RemoteFileBrowserWindowView: View {
         self.transfers = transfers
         self.finderMountState = finderMountState
         self.quickLookLoadingPath = quickLookLoadingPath
+        self.directOpenMaxMB = directOpenMaxMB
         self.quickLocations = quickLocations
         self.actions = actions
         _activeTab = State(initialValue: initialTab)
@@ -253,14 +281,14 @@ public struct RemoteFileBrowserWindowView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("永久删除", role: .destructive) {
+            Button(OpalL10n.text("files.delete.confirm"), role: .destructive) {
                 let targets = pendingDeleteItems
                 pendingDeleteItems = []
                 selectedFilePaths.subtract(targets.map(\.path))
                 selectedLargeFilePaths.subtract(targets.map(\.path))
                 actions.onDeleteItems(targets)
             }
-            Button("取消", role: .cancel) { pendingDeleteItems = [] }
+            Button(OpalL10n.text("common.cancel"), role: .cancel) { pendingDeleteItems = [] }
         } message: {
             Text(deleteDialogMessage)
         }
@@ -287,7 +315,7 @@ public struct RemoteFileBrowserWindowView: View {
                         Circle()
                             .fill(isConnected ? Color.green : Color.orange)
                             .frame(width: 6, height: 6)
-                        Text(isConnected ? "已连接" : "未连接")
+                        Text(isConnected ? OpalL10n.text("common.connected") : OpalL10n.text("common.disconnected"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -296,21 +324,21 @@ public struct RemoteFileBrowserWindowView: View {
 
             Spacer(minLength: OpalSpacing.sm)
 
-            Picker("视图模式", selection: $activeTab) {
-                ForEach(RemoteFileBrowserTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 176)
+            OpalSegmentedControl(
+                selection: $activeTab,
+                options: [
+                    OpalSegmentOption(value: RemoteFileBrowserTab.files, label: RemoteFileBrowserTab.files.title, icon: "folder"),
+                    OpalSegmentOption(value: RemoteFileBrowserTab.storage, label: RemoteFileBrowserTab.storage.title, icon: "chart.pie"),
+                ],
+                compact: true
+            )
 
             Spacer(minLength: OpalSpacing.xs)
 
             OpalSearchField(
-                placeholder: activeTab == .files ? "筛选当前目录…" : "筛选文件夹 / 应用 / 大文件…",
+                placeholder: activeTab == .files ? OpalL10n.text("files.search.files") : OpalL10n.text("files.search.storage"),
                 text: $searchQuery,
-                accessibilityClearLabel: "清除搜索关键字"
+                accessibilityClearLabel: OpalL10n.text("files.search.clear_a11y")
             )
             .frame(minWidth: 150, idealWidth: 185, maxWidth: 210)
 
@@ -329,7 +357,7 @@ public struct RemoteFileBrowserWindowView: View {
                 systemName: "arrow.clockwise",
                 size: 28,
                 iconSize: 12.5,
-                helpText: activeTab == .files ? "刷新目录 (⌘R)" : "重新扫描存储空间 (⌘R)"
+                helpText: activeTab == .files ? OpalL10n.text("files.refresh_dir_help") : OpalL10n.text("files.rescan_storage_help")
             ) {
                 if activeTab == .files {
                     actions.onRefreshDirectory(currentPath)
@@ -345,23 +373,21 @@ public struct RemoteFileBrowserWindowView: View {
                     newFolderName = ""
                     isNewFolderPresented = true
                 } label: {
-                    Label("新建文件夹", systemImage: "folder.badge.plus")
-                        .font(.system(size: 12, weight: .medium))
+                    Label(OpalL10n.text("files.new_folder"), systemImage: "folder.badge.plus")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
                 .disabled(!isConnected)
                 .keyboardShortcut("n", modifiers: [.command, .shift])
-                .help("在当前目录新建文件夹 (⌘⇧N)")
+                .help(OpalL10n.text("files.new_folder_help"))
 
                 Button {
                     openUploadFilePanel()
                 } label: {
-                    Label("上传文件…", systemImage: "arrow.up.doc")
-                        .font(.system(size: 12, weight: .semibold))
+                    Label(OpalL10n.text("files.upload"), systemImage: "arrow.up.doc")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .small, isPill: true))
                 .disabled(!isConnected)
-                .help("选择 Mac 本地文件上传到当前目录")
+                .help(OpalL10n.text("files.upload_help"))
             }
         }
     }
@@ -371,44 +397,50 @@ public struct RemoteFileBrowserWindowView: View {
         switch finderMountState {
         case .mounted:
             Menu {
-                Button("在 Finder 中打开", systemImage: "folder") {
+                Button(OpalL10n.text("files.finder.open"), systemImage: "folder") {
                     actions.onOpenFinderMount()
                 }
                 Divider()
-                Button("卸载 Finder 卷", systemImage: "eject.fill", role: .destructive) {
+                Button(OpalL10n.text("files.finder.unmount"), systemImage: "eject.fill", role: .destructive) {
                     actions.onUnmountFinder()
                 }
             } label: {
-                Label("已挂载 Finder", systemImage: "externaldrive.fill.badge.checkmark")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.green)
+                HStack(spacing: 5) {
+                    Image(systemName: "externaldrive.fill.badge.checkmark")
+                        .font(.system(size: 11.5, weight: .semibold))
+                    Text(OpalL10n.text("files.finder.mounted"))
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(OpalFluidPalette.brandEmerald)
+                .padding(.horizontal, 11)
+                .frame(height: 28)
+                .background(OpalFluidPalette.brandEmerald.opacity(0.12), in: Capsule())
+                .overlay(Capsule().strokeBorder(OpalFluidPalette.brandEmerald.opacity(0.28), lineWidth: 0.85))
             }
-            .menuStyle(.borderedButton)
-            .tint(.green)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
             .fixedSize()
-            .help("手机存储已通过本地 WebDAV 挂载到 macOS 访达，点击可打开或卸载")
+            .help(OpalL10n.text("files.finder.mounted_help"))
 
         case .mounting:
             Button {} label: {
                 HStack(spacing: 5) {
                     ProgressView().controlSize(.mini)
-                    Text("挂载中…")
-                        .font(.system(size: 12, weight: .medium))
+                    Text(OpalL10n.text("hub.companion.mounting"))
                 }
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
             .disabled(true)
 
         case .unmounted, .failed:
             Button {
                 actions.onToggleFinderMount()
             } label: {
-                Label("在 Finder 中挂载", systemImage: "externaldrive.badge.plus")
-                    .font(.system(size: 12, weight: .medium))
+                Label(OpalL10n.text("files.finder.mount"), systemImage: "externaldrive.badge.plus")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
             .disabled(!isConnected)
-            .help("通过本地加密回环 WebDAV 将手机存储直接挂载到 macOS 访达")
+            .help(OpalL10n.text("files.finder.mount_help"))
         }
     }
 
@@ -422,7 +454,7 @@ public struct RemoteFileBrowserWindowView: View {
 
     func openUploadFilePanel() {
         let panel = NSOpenPanel()
-        panel.title = "选择要上传到「\(currentPath)」的文件"
+        panel.title = OpalL10n.format("files.upload_panel_title_fmt", currentPath)
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
@@ -464,7 +496,7 @@ public struct RemoteFileBrowserWindowView: View {
                 let validFiles = FileBrowserPresentation.filterUploadableLocalFiles(rawURLs)
                 guard !validFiles.isEmpty else {
                     if !rawURLs.isEmpty {
-                        localNoticeMessage = "暂不支持直接拖入文件夹，请拖入具体文件上传。"
+                        localNoticeMessage = OpalL10n.text("files.drop.folder_unsupported")
                     }
                     return
                 }
@@ -476,16 +508,16 @@ public struct RemoteFileBrowserWindowView: View {
 
     private var deleteDialogTitle: String {
         if pendingDeleteItems.count == 1, let first = pendingDeleteItems.first {
-            return "确定永久删除「\(first.name)」吗？"
+            return OpalL10n.format("files.delete.single_title_fmt", first.name)
         }
-        return "确定永久删除选中的 \(pendingDeleteItems.count) 个项目吗？"
+        return OpalL10n.format("files.delete.multi_title_fmt", pendingDeleteItems.count)
     }
 
     private var deleteDialogMessage: String {
         let totalBytes = pendingDeleteItems.reduce(Int64(0)) { $0 + max($1.sizeBytes, 0) }
         if totalBytes > 0 {
-            return "此操作不可恢复，将从 Android 设备删除约 \(FileBrowserPresentation.formatByteCount(totalBytes)) 数据。"
+            return OpalL10n.format("files.delete.msg_bytes_fmt", FileBrowserPresentation.formatByteCount(totalBytes))
         }
-        return "此操作不可恢复，将从 Android 设备永久删除所选文件或文件夹。"
+        return OpalL10n.text("files.delete.msg_generic")
     }
 }

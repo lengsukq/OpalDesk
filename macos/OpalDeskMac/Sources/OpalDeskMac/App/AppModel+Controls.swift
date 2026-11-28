@@ -23,33 +23,36 @@ extension AppModel {
             .setSingleWidth(pkg: deviceState.topAppPackage, widthPct: clampedPct, remember: remember),
             isAuthenticated: isAuthenticated
         )
-        showToast("已调整单应用宽度为 \(clampedPct)%")
+        showToast(OpalL10n.format("app.controls.width_fmt", clampedPct))
     }
 
     public func launchApp(_ app: RemoteAppInfo, mode: OpalCastLaunchMode = .adaptive, slot: Int = 0) {
-        streamBridge.sendWindowAction(.launchApp(pkg: app.pkg, cls: app.cls, mode: mode, slot: slot), isAuthenticated: isAuthenticated)
+        streamBridge.sendWindowAction(
+            .launchApp(pkg: app.pkg, cls: app.cls, mode: mode, slot: slot, userId: app.userId),
+            isAuthenticated: isAuthenticated
+        )
     }
 
     public func setTilingTopology(_ topology: OpalCastTilingTopology, pkgs: [String] = [], ratios: [Int]? = nil) {
         streamBridge.sendWindowAction(.setTiling(topology: topology, pkgs: pkgs, ratios: ratios), isAuthenticated: isAuthenticated)
-        showToast(topology == .exit ? "已退出分屏布局" : "已切换为「\(topology.displayName)」")
+        showToast(topology == .exit ? OpalL10n.text("app.controls.exit_split") : OpalL10n.format("app.controls.switched_layout_fmt", topology.displayName))
     }
 
     public func reloadCurrentAppDPI() {
         let pkg = deviceState.topAppPackage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !pkg.isEmpty else {
-            showToast("当前未检测到可重载 DPI 的前台应用")
+            showToast(OpalL10n.text("app.controls.no_dpi_app"))
             return
         }
         streamBridge.sendWindowAction(.reloadAppDpi(pkg: pkg), isAuthenticated: isAuthenticated)
         let name = deviceState.topAppLabel.isEmpty ? pkg : deviceState.topAppLabel
-        showToast("正在重载「\(name)」的显示 DPI...")
+        showToast(OpalL10n.format("app.controls.reloading_dpi_fmt", name))
     }
 
     public func setInputBackend(_ backend: OpalCastInputBackend) {
         preferences.inputBackend = backend
         streamBridge.sendWindowAction(.setInputBackend(backend), isAuthenticated: isAuthenticated)
-        if isAuthenticated { showToast("输入引擎已切换为：\(backend.displayName)") }
+        if isAuthenticated { showToast(OpalL10n.format("app.controls.input_switched_fmt", backend.displayName)) }
     }
 
     // MARK: - Display & System Controls
@@ -115,7 +118,7 @@ extension AppModel {
 
     public func toggleMicrophone() {
         guard isAuthenticated else {
-            showToast("请等待投屏连接完成后再开启麦克风")
+            showToast(OpalL10n.text("app.controls.mic_wait_connect"))
             return
         }
         if isMicEnabled {
@@ -126,7 +129,7 @@ extension AppModel {
             guard let self else { return }
             let granted = await MicrophoneStreamCapturer.requestPermission()
             guard granted else {
-                self.showToast("请在系统设置 → 隐私与安全性 → 麦克风 中允许 OpalDesk")
+                self.showToast(OpalL10n.text("app.controls.mic_perm"))
                 return
             }
             guard self.isAuthenticated else { return }
@@ -141,7 +144,7 @@ extension AppModel {
                 }
             } catch {
                 self.isMicEnabled = false
-                self.showToast("无法开启麦克风：\(error.localizedDescription)")
+                self.showToast(OpalL10n.format("app.controls.mic_err_fmt", error.localizedDescription))
             }
         }
     }
@@ -159,7 +162,7 @@ extension AppModel {
 
     public func toggleCamera() {
         guard isAuthenticated else {
-            showToast("请等待投屏连接完成后再开启摄像头映射")
+            showToast(OpalL10n.text("app.controls.cam_wait_connect"))
             return
         }
         if isCameraEnabled {
@@ -170,7 +173,7 @@ extension AppModel {
             guard let self else { return }
             let granted = await CameraStreamCapturer.requestPermission()
             guard granted else {
-                self.showToast("请在系统设置 → 隐私与安全性 → 摄像头 中允许 OpalDesk")
+                self.showToast(OpalL10n.text("app.controls.cam_perm"))
                 return
             }
             guard self.isAuthenticated else { return }
@@ -185,7 +188,7 @@ extension AppModel {
                 }
             } catch {
                 self.isCameraEnabled = false
-                self.showToast("无法开启摄像头：\(error.localizedDescription)")
+                self.showToast(OpalL10n.format("app.controls.cam_err_fmt", error.localizedDescription))
             }
         }
     }
@@ -226,7 +229,7 @@ extension AppModel {
 
     public func sendFiles(_ urls: [URL], remoteDirectory: String? = nil) {
         guard isAnyChannelConnected else {
-            let msg = "未连接到 Android 设备，无法发送文件"
+            let msg = OpalL10n.text("app.controls.file_disconnected")
             bannerError = msg
             showToast(msg)
             return

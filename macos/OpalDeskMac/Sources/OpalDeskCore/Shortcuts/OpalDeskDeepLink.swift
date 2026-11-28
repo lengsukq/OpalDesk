@@ -18,19 +18,22 @@ public enum OpalDeskDeepLink {
         public let label: String?
         public let deviceKey: String?
         public let deviceName: String?
+        public let userId: Int
 
         public init(
             packageName: String,
             activityClass: String? = nil,
             label: String? = nil,
             deviceKey: String? = nil,
-            deviceName: String? = nil
+            deviceName: String? = nil,
+            userId: Int = 0
         ) {
             self.packageName = packageName
             self.activityClass = activityClass
             self.label = label
             self.deviceKey = deviceKey
             self.deviceName = deviceName
+            self.userId = max(0, userId)
         }
     }
 
@@ -48,6 +51,7 @@ public enum OpalDeskDeepLink {
         case invalidPackageName(String)
         case invalidActivityClass(String)
         case invalidDeviceKey(String)
+        case invalidUserId(String)
         case containsForbiddenControlCharacters(field: String)
         case valueTooLong(field: String, maxLength: Int)
 
@@ -67,6 +71,8 @@ public enum OpalDeskDeepLink {
                 return "非法的 Android Activity 类名：\(cls)"
             case let .invalidDeviceKey(key):
                 return "非法的设备标识：\(key)"
+            case let .invalidUserId(raw):
+                return "非法的 Android 用户空间 ID：\(raw)"
             case let .containsForbiddenControlCharacters(field):
                 return "参数 \(field) 包含非法的控制字符"
             case let .valueTooLong(field, maxLength):
@@ -81,13 +87,17 @@ public enum OpalDeskDeepLink {
         activityClass: String? = nil,
         label: String? = nil,
         deviceKey: String? = nil,
-        deviceName: String? = nil
+        deviceName: String? = nil,
+        userId: Int = 0
     ) throws -> URL {
         let cleanPkg = try validatePackageName(packageName)
         let cleanCls = try validateOptionalActivityClass(activityClass)
         let cleanLabel = try validateOptionalDisplayText(label, field: "label", maxLength: maxLabelLength)
         let cleanDevice = try validateOptionalDeviceKey(deviceKey)
         let cleanDeviceName = try validateOptionalDisplayText(deviceName, field: "deviceName", maxLength: maxDeviceNameLength)
+        guard userId >= 0 && userId <= 100_000 else {
+            throw ValidationError.invalidUserId(String(userId))
+        }
 
         var components = URLComponents()
         components.scheme = scheme
@@ -108,6 +118,9 @@ public enum OpalDeskDeepLink {
         if let cleanDeviceName {
             items.append(URLQueryItem(name: "deviceName", value: cleanDeviceName))
         }
+        if userId > 0 {
+            items.append(URLQueryItem(name: "userId", value: String(userId)))
+        }
 
         // Encode query items strictly so `&`, `=`, `+`, `#`, `;`, and non-ASCII text round-trip safely.
         components.percentEncodedQuery = items
@@ -127,7 +140,8 @@ public enum OpalDeskDeepLink {
             activityClass: request.activityClass,
             label: request.label,
             deviceKey: request.deviceKey,
-            deviceName: request.deviceName
+            deviceName: request.deviceName,
+            userId: request.userId
         )
     }
 
@@ -171,6 +185,7 @@ public enum OpalDeskDeepLink {
         let cleanLabel = try validateOptionalDisplayText(params["label"], field: "label", maxLength: maxLabelLength)
         let cleanDevice = try validateOptionalDeviceKey(params["device"])
         let cleanDeviceName = try validateOptionalDisplayText(params["deviceName"], field: "deviceName", maxLength: maxDeviceNameLength)
+        let cleanUserId = try validateOptionalUserId(params["userId"] ?? params["u"])
 
         return .popout(
             PopoutRequest(
@@ -178,7 +193,8 @@ public enum OpalDeskDeepLink {
                 activityClass: cleanCls,
                 label: cleanLabel,
                 deviceKey: cleanDevice,
-                deviceName: cleanDeviceName
+                deviceName: cleanDeviceName,
+                userId: cleanUserId
             )
         )
     }
@@ -300,6 +316,19 @@ public enum OpalDeskDeepLink {
             throw ValidationError.valueTooLong(field: field, maxLength: maxLength)
         }
         return trimmed
+    }
+
+    private static func validateOptionalUserId(_ value: String?) throws -> Int {
+        guard let value else { return 0 }
+        if containsControlCharacters(value) {
+            throw ValidationError.containsForbiddenControlCharacters(field: "userId")
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        guard let parsed = Int(trimmed), parsed >= 0, parsed <= 100_000 else {
+            throw ValidationError.invalidUserId(trimmed)
+        }
+        return parsed
     }
 
     private static func containsControlCharacters(_ string: String) -> Bool {

@@ -240,28 +240,28 @@ public final class DiscoveryCoordinator {
         guard !normalizedFp.isEmpty, !authToken.isEmpty else { return nil }
         let record = TrustedDevice(
             id: String(normalizedFp.prefix(FingerprintUtil.minimumPrefixHexLength)),
-            deviceName: deviceName.isEmpty ? "Android 设备" : deviceName,
+            deviceName: deviceName.isEmpty ? OpalL10n.text("common.android_device") : deviceName,
             model: model,
             certFingerprint: normalizedFp,
             authToken: authToken,
             lastHost: lastHost,
             lastPort: lastPort
         )
-        return mutateTrustStore(context: "persist trusted device \(record.deviceName)", userMessagePrefix: "保存信任设备失败") {
+        return mutateTrustStore(context: "persist trusted device \(record.deviceName)", userMessagePrefix: OpalL10n.text("app.trust.save_failed")) {
             _ = try trustStore.upsert(record)
         }
     }
 
     @discardableResult
     public func revokeTrustedDevice(_ device: TrustedDevice) -> String? {
-        mutateTrustStore(context: "revoke trusted device \(device.id)", userMessagePrefix: "撤销信任设备失败") {
+        mutateTrustStore(context: "revoke trusted device \(device.id)", userMessagePrefix: OpalL10n.text("app.trust.revoke_failed")) {
             try trustStore.revoke(id: device.id)
         }
     }
 
     @discardableResult
     public func revokeAllTrustedDevices() -> String? {
-        mutateTrustStore(context: "revoke all trusted devices", userMessagePrefix: "清除全部信任设备失败") {
+        mutateTrustStore(context: "revoke all trusted devices", userMessagePrefix: OpalL10n.text("app.trust.clear_failed")) {
             try trustStore.revokeAll()
         }
     }

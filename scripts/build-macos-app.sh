@@ -106,6 +106,14 @@ cp -f "$BINARY_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 printf 'APPL????' > "$APP_BUNDLE/Contents/PkgInfo"
 
+# Copy SwiftPM resource bundles (e.g. OpalDeskMac_OpalDeskCore.bundle) into Contents/Resources/.
+shopt -s nullglob
+for res_bundle in "$BIN_DIR"/*.bundle; do
+    echo "==> Bundling resource: $(basename "$res_bundle")"
+    cp -R "$res_bundle" "$APP_BUNDLE/Contents/Resources/"
+done
+shopt -u nullglob
+
 # Generate native vector AppIcon.icns when macOS icon tools are available.
 ICON_KEY_XML=""
 if command -v iconutil >/dev/null 2>&1 && command -v swift >/dev/null 2>&1; then
@@ -157,7 +165,12 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>zh_CN</string>
+    <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>zh-Hans</string>
+    </array>
     <key>CFBundleDisplayName</key>
     <string>${APP_NAME}</string>
     <key>CFBundleExecutable</key>

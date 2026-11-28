@@ -4,26 +4,34 @@ import SwiftUI
 
 // MARK: - Status Pill & Toast
 
-/// Compact Liquid Glass status pill with subtle tinted rim.
+/// Crisp iOS-style status pill with optional live dot and subtle rim.
 struct StatusBadgeView: View {
     let text: String
     let color: Color
-    var font: Font = .caption2.weight(.semibold)
-    var horizontalPadding: CGFloat = 8
-    var verticalPadding: CGFloat = 2.5
-    var backgroundOpacity: Double = 0.14
+    var font: Font = .system(size: 11, weight: .semibold)
+    var horizontalPadding: CGFloat = 8.5
+    var verticalPadding: CGFloat = 3
+    var backgroundOpacity: Double = 0.12
+    var showDot: Bool = false
 
     var body: some View {
-        Text(text)
-            .font(font)
-            .padding(.horizontal, horizontalPadding)
-            .padding(.vertical, verticalPadding)
-            .background(color.opacity(backgroundOpacity), in: Capsule())
-            .overlay(
-                Capsule()
-                    .strokeBorder(color.opacity(0.24), lineWidth: 0.65)
-            )
-            .foregroundStyle(color)
+        HStack(spacing: 5) {
+            if showDot {
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+            }
+            Text(text)
+                .font(font)
+        }
+        .padding(.horizontal, horizontalPadding)
+        .padding(.vertical, verticalPadding)
+        .background(color.opacity(backgroundOpacity), in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(color.opacity(0.22), lineWidth: 0.7)
+        )
+        .foregroundStyle(color)
     }
 }
 
@@ -35,17 +43,16 @@ struct ToastPillView: View {
 
     var body: some View {
         HStack(spacing: OpalSpacing.sm) {
-            Image(systemName: "sparkles")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(OpalFluidPalette.brandBlue)
             Text(message)
                 .font(.system(size: 12.5, weight: .medium))
                 .lineLimit(2)
 
             if let actionTitle, let onAction {
                 Button(actionTitle, action: onAction)
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .mini, isPill: true))
             }
         }
         .padding(.horizontal, OpalSpacing.lg)
@@ -138,8 +145,8 @@ struct OpalNoticeBanner: View {
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
-                .help("关闭提示")
-                .accessibilityLabel("关闭提示")
+                .help(OpalL10n.text("common.dismiss_tip"))
+                .accessibilityLabel(OpalL10n.text("common.dismiss_tip"))
             }
         }
         .padding(.horizontal, OpalSpacing.md)
@@ -258,7 +265,7 @@ struct OpalSectionHeader<Trailing: View>: View {
 struct OpalSearchField: View {
     let placeholder: String
     @Binding var text: String
-    var accessibilityClearLabel: String = "清除搜索内容"
+    var accessibilityClearLabel: String = OpalL10n.text("common.clear_search")
 
     var body: some View {
         HStack(spacing: OpalSpacing.xs) {
@@ -543,10 +550,10 @@ struct OpalHandoffCard: View {
             )
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("正在手机上使用：\(appLabel)")
+                Text(OpalL10n.format("handoff.using_fmt", appLabel))
                     .font((isCompact ? Font.caption : Font.subheadline).weight(.semibold))
                     .lineLimit(1)
-                Text(isCompact ? "在 Mac 悬浮小窗继续" : packageName)
+                Text(isCompact ? OpalL10n.text("handoff.continue_sub") : packageName)
                     .font(isCompact ? .caption2 : .caption2.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -554,13 +561,12 @@ struct OpalHandoffCard: View {
 
             Spacer(minLength: OpalSpacing.xs)
 
-            Button(isCompact ? "继续" : "在 Mac 小窗继续", action: onContinue)
-                .buttonStyle(.borderedProminent)
-                .controlSize(isCompact ? .mini : .small)
+            Button(isCompact ? OpalL10n.text("handoff.continue_short") : OpalL10n.text("handoff.continue_full"), action: onContinue)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: isCompact ? .mini : .small, isPill: true))
         }
         .padding(.horizontal, isCompact ? 10 : OpalSpacing.md)
         .padding(.vertical, isCompact ? 8 : 10)
-        .opalGlassSurface(.inset, cornerRadius: isCompact ? OpalRadius.tile : OpalRadius.card, tint: .accentColor)
+        .opalGlassSurface(.inset, cornerRadius: isCompact ? OpalRadius.tile : OpalRadius.card, tint: OpalFluidPalette.brandBlue)
     }
 }
 
@@ -575,44 +581,42 @@ struct OpalMediaPlayerCard: View {
             artworkThumbnail
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(media.title.isEmpty ? (media.appLabel.isEmpty ? "正在播放媒体" : media.appLabel) : media.title)
+                Text(media.title.isEmpty ? (media.appLabel.isEmpty ? OpalL10n.text("media.playing_fallback") : media.appLabel) : media.title)
                     .font((isCompact ? Font.caption : Font.subheadline).weight(.semibold))
                     .lineLimit(1)
                 Text(subtitleText)
                     .font(isCompact ? .caption2 : .caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(OpalFluidPalette.secondaryText)
                     .lineLimit(1)
             }
 
             Spacer(minLength: OpalSpacing.xs)
 
-            HStack(spacing: isCompact ? 3 : 6) {
-                OpalGlassIconButton(
+            HStack(spacing: isCompact ? 5 : 7) {
+                OpalCircularActionButton(
                     systemName: "backward.fill",
-                    size: isCompact ? 24 : 28,
-                    iconSize: isCompact ? 10.5 : 12,
-                    helpText: "上一首"
+                    size: isCompact ? 26 : 30,
+                    iconSize: isCompact ? 10 : 11.5,
+                    helpText: OpalL10n.text("media.prev_help")
                 ) {
                     onAction(.previous())
                 }
 
-                Button {
+                OpalCircularActionButton(
+                    systemName: media.playing ? "pause.fill" : "play.fill",
+                    fill: OpalFluidPalette.brandBlue,
+                    size: isCompact ? 28 : 32,
+                    iconSize: isCompact ? 11 : 12.5,
+                    helpText: media.playing ? OpalL10n.text("media.pause_help") : OpalL10n.text("media.play_help")
+                ) {
                     onAction(.toggle())
-                } label: {
-                    Image(systemName: media.playing ? "pause.fill" : "play.fill")
-                        .font(.system(size: isCompact ? 11.5 : 12.5, weight: .semibold))
-                        .frame(width: isCompact ? 24 : 28, height: isCompact ? 22 : 26)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(isCompact ? .mini : .small)
-                .help(media.playing ? "暂停" : "播放")
-                .accessibilityLabel(media.playing ? "暂停" : "播放")
 
-                OpalGlassIconButton(
+                OpalCircularActionButton(
                     systemName: "forward.fill",
-                    size: isCompact ? 24 : 28,
-                    iconSize: isCompact ? 10.5 : 12,
-                    helpText: "下一首"
+                    size: isCompact ? 26 : 30,
+                    iconSize: isCompact ? 10 : 11.5,
+                    helpText: OpalL10n.text("media.next_help")
                 ) {
                     onAction(.next())
                 }
@@ -652,7 +656,7 @@ struct OpalMediaPlayerCard: View {
         case (false, false): return "\(media.artist) · \(media.appLabel)"
         case (false, true): return media.artist
         case (true, false): return media.appLabel
-        case (true, true): return media.playing ? "播放中" : "已暂停"
+        case (true, true): return media.playing ? OpalL10n.text("media.state.playing") : OpalL10n.text("media.state.paused")
         }
     }
 }
@@ -700,68 +704,67 @@ struct OpalCallBannerCard: View {
 
     @ViewBuilder
     private var callActionButtons: some View {
+        let btnSize: CGFloat = isCompact ? 28 : 34
+        let iconSz: CGFloat = isCompact ? 11 : 13
         switch callState.state {
         case .ringing:
-            HStack(spacing: isCompact ? 4 : 6) {
-                if callState.canAnswer {
-                    Button {
-                        onAction(.answer())
-                    } label: {
-                        Image(systemName: "phone.fill")
-                            .font(.system(size: isCompact ? 10.5 : 12, weight: .semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-                    .controlSize(isCompact ? .mini : .small)
-                    .help("接听来电")
-                }
+            HStack(spacing: isCompact ? 6 : 8) {
                 if callState.canReject {
-                    Button {
+                    OpalCircularActionButton(
+                        systemName: "phone.down.fill",
+                        fill: OpalFluidPalette.iosCallRed,
+                        size: btnSize,
+                        iconSize: iconSz,
+                        helpText: OpalL10n.text("call.action.decline_help")
+                    ) {
                         onAction(.reject())
-                    } label: {
-                        Image(systemName: "phone.down.fill")
-                            .font(.system(size: isCompact ? 10.5 : 12, weight: .semibold))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
-                    .controlSize(isCompact ? .mini : .small)
-                    .help("拒接来电")
+                }
+                if callState.canAnswer {
+                    OpalCircularActionButton(
+                        systemName: "phone.fill",
+                        fill: OpalFluidPalette.iosCallGreen,
+                        size: btnSize,
+                        iconSize: iconSz,
+                        helpText: OpalL10n.text("call.action.answer_help")
+                    ) {
+                        onAction(.answer())
+                    }
                 }
             }
         case .offhook, .dialing:
-            HStack(spacing: isCompact ? 4 : 6) {
-                OpalGlassIconButton(
+            HStack(spacing: isCompact ? 6 : 8) {
+                OpalCircularActionButton(
                     systemName: callState.isMuted ? "mic.slash.fill" : "mic.fill",
-                    tint: callState.isMuted ? .orange : .secondary,
+                    fill: callState.isMuted ? OpalFluidPalette.brandAmber : nil,
+                    size: btnSize,
+                    iconSize: iconSz,
                     isActive: callState.isMuted,
-                    size: isCompact ? 24 : 28,
-                    iconSize: isCompact ? 10.5 : 12,
-                    helpText: callState.isMuted ? "取消静音" : "静音"
+                    helpText: callState.isMuted ? OpalL10n.text("call.action.unmute_help") : OpalL10n.text("call.action.mute_help")
                 ) {
                     onAction(.toggleMute())
                 }
 
-                OpalGlassIconButton(
-                    systemName: callState.isSpeakerOn ? "speaker.wave.3.fill" : "speaker.wave.2",
-                    tint: callState.isSpeakerOn ? .accentColor : .secondary,
+                OpalCircularActionButton(
+                    systemName: callState.isSpeakerOn ? "speaker.wave.3.fill" : "speaker.wave.2.fill",
+                    fill: callState.isSpeakerOn ? OpalFluidPalette.brandBlue : nil,
+                    size: btnSize,
+                    iconSize: iconSz,
                     isActive: callState.isSpeakerOn,
-                    size: isCompact ? 24 : 28,
-                    iconSize: isCompact ? 10.5 : 12,
-                    helpText: callState.isSpeakerOn ? "关闭免提" : "开启免提"
+                    helpText: callState.isSpeakerOn ? OpalL10n.text("call.action.speaker_off_help") : OpalL10n.text("call.action.speaker_on_help")
                 ) {
                     onAction(.toggleSpeaker())
                 }
 
-                Button {
+                OpalCircularActionButton(
+                    systemName: "phone.down.fill",
+                    fill: OpalFluidPalette.iosCallRed,
+                    size: btnSize,
+                    iconSize: iconSz,
+                    helpText: OpalL10n.text("call.action.hangup_help")
+                ) {
                     onAction(.hangup())
-                } label: {
-                    Image(systemName: "phone.down.fill")
-                        .font(.system(size: isCompact ? 10.5 : 12, weight: .semibold))
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .controlSize(isCompact ? .mini : .small)
-                .help("挂断通话")
             }
         case .idle:
             EmptyView()
@@ -791,25 +794,24 @@ struct OpalQuickDialPopoverView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: OpalSpacing.md) {
             HStack(spacing: OpalSpacing.xs) {
-                OpalIconBadge(systemName: "phone.badge.waveform.fill", tint: .green, size: 24, iconSize: 11.5, cornerRadius: 7)
-                Text("通过「\(deviceName)」快捷拨号")
-                    .font(.caption.weight(.semibold))
+                OpalIconBadge(systemName: "phone.badge.waveform.fill", tint: OpalFluidPalette.iosCallGreen, size: 26, iconSize: 12, cornerRadius: 8)
+                Text(OpalL10n.format("call.dialer.title_fmt", deviceName))
+                    .font(.system(size: 12.5, weight: .semibold))
                     .lineLimit(1)
             }
 
             HStack(spacing: OpalSpacing.xs) {
-                TextField("输入或粘贴号码…", text: $phoneNumber)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.body.monospaced())
+                TextField(OpalL10n.text("call.dialer.placeholder"), text: $phoneNumber)
+                    .opalLiquidInput(cornerRadius: 11)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
                     .onSubmit { triggerDial() }
 
                 if !phoneNumber.isEmpty {
-                    OpalGlassIconButton(
-                        systemName: "delete.left",
-                        tint: .secondary,
-                        size: 24,
-                        iconSize: 12,
-                        helpText: "退格"
+                    OpalCircularActionButton(
+                        systemName: "delete.left.fill",
+                        size: 30,
+                        iconSize: 12.5,
+                        helpText: OpalL10n.text("call.dialer.backspace_help")
                     ) {
                         phoneNumber.removeLast()
                     }
@@ -825,17 +827,17 @@ struct OpalQuickDialPopoverView: View {
                             } label: {
                                 VStack(spacing: 0) {
                                     Text(key.digit)
-                                        .font(.system(size: 14.5, weight: .semibold, design: .rounded))
+                                        .font(.system(size: 16, weight: .semibold, design: .rounded))
                                     Text(key.letters.isEmpty ? " " : key.letters)
-                                        .font(.system(size: 8, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(.secondary)
-                                        .tracking(0.6)
+                                        .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(OpalFluidPalette.secondaryText)
+                                        .tracking(0.8)
                                 }
-                                .frame(maxWidth: .infinity, minHeight: 34)
-                                .opalGlassSurface(.inset, cornerRadius: OpalRadius.control)
-                                .opalInteractiveHover(cornerRadius: OpalRadius.control, tint: .green)
+                                .frame(maxWidth: .infinity, minHeight: 40)
+                                .opalGlassSurface(.card, cornerRadius: 12)
+                                .opalInteractiveHover(cornerRadius: 12, tint: OpalFluidPalette.iosCallGreen, lift: false)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(OpalPressStyle())
                         }
                     }
                 }
@@ -844,16 +846,14 @@ struct OpalQuickDialPopoverView: View {
             Button {
                 triggerDial()
             } label: {
-                Label("立即在手机端拨打", systemImage: "phone.fill")
-                    .font(.callout.weight(.semibold))
+                Label(OpalL10n.text("call.dialer.call_now"), systemImage: "phone.fill")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
+            .buttonStyle(OpalLiquidButtonStyle(variant: .emerald, size: .large, isPill: true))
             .disabled(sanitizedNumber.isEmpty)
         }
-        .padding(OpalSpacing.md)
-        .frame(width: 252)
+        .padding(OpalSpacing.lg)
+        .frame(width: 268)
     }
 
     private var sanitizedNumber: String {

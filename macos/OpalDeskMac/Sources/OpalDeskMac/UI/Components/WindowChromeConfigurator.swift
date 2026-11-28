@@ -41,14 +41,17 @@ struct WindowChromeConfigurator: NSViewRepresentable {
             }
             lastAppliedMode = isImmersiveCanvas
 
-            // Seamless macOS translucent titlebar lets the ambient opalescent backdrop flow behind
-            // system traffic lights while keeping native window controls and title positioning intact.
+            // LightIsle-inspired seamless fluid canvas: hide macOS title bar chrome so the continuous
+            // backdrop flows uninterrupted behind the traffic lights.
             window.titlebarAppearsTransparent = true
-            window.titleVisibility = .visible
+            window.titleVisibility = isImmersiveCanvas ? .visible : .hidden
             window.toolbarStyle = .unified
-            window.backgroundColor = isImmersiveCanvas ? DeXTheme.canvasNSColor : .windowBackgroundColor
+            if !isImmersiveCanvas {
+                window.styleMask.insert(.fullSizeContentView)
+            }
+            window.backgroundColor = isImmersiveCanvas ? DeXTheme.canvasNSColor : .clear
             window.appearance = isImmersiveCanvas ? NSAppearance(named: .darkAqua) : nil
-            window.isMovableByWindowBackground = false
+            window.isMovableByWindowBackground = !isImmersiveCanvas
         }
     }
 }

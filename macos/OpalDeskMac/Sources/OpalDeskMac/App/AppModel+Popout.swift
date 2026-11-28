@@ -35,17 +35,38 @@ public struct RemoteAppPickerContext: Identifiable, Sendable {
 
 /// Lightweight quick-launch item for a user-pinned favorite Android app.
 public struct FavoritePopoutAppItem: Identifiable, Sendable, Equatable {
-    public var id: String { "\(deviceKey)::\(pkg)" }
+    public var id: String { "\(deviceKey)::\(appKey)" }
     public let pkg: String
     public let cls: String
     public let label: String
+    public let userId: Int
+    public let profileType: String
     public let deviceKey: String
     public let deviceName: String
 
-    public init(pkg: String, cls: String = "", label: String, deviceKey: String, deviceName: String = "") {
+    public var appKey: String {
+        RemoteAppInfo.formatAppKey(pkg: pkg, userId: userId)
+    }
+
+    public var profileBadgeText: String? {
+        RemoteAppInfo.profileBadgeText(userId: userId, profileType: profileType)
+    }
+
+    public init(
+        pkg: String,
+        cls: String = "",
+        label: String,
+        userId: Int = 0,
+        profileType: String = "",
+        deviceKey: String,
+        deviceName: String = ""
+    ) {
+        let normalizedUid = max(0, userId)
         self.pkg = pkg
         self.cls = cls
         self.label = label.isEmpty ? pkg : label
+        self.userId = normalizedUid
+        self.profileType = RemoteAppInfo.normalizeProfileType(profileType, userId: normalizedUid)
         self.deviceKey = deviceKey
         self.deviceName = deviceName
     }
@@ -56,9 +77,26 @@ public struct PendingPopoutReloadPrompt: Identifiable {
     public let id = UUID()
     public let appPackage: String
     public let appLabel: String
+    public let appUserId: Int
     public let existingWindowId: UUID
     public let onFocusExisting: @MainActor () -> Void
     public let onReloadWindowAndApp: @MainActor () -> Void
+
+    public init(
+        appPackage: String,
+        appLabel: String,
+        appUserId: Int = 0,
+        existingWindowId: UUID,
+        onFocusExisting: @escaping @MainActor () -> Void,
+        onReloadWindowAndApp: @escaping @MainActor () -> Void
+    ) {
+        self.appPackage = appPackage
+        self.appLabel = appLabel
+        self.appUserId = max(0, appUserId)
+        self.existingWindowId = existingWindowId
+        self.onFocusExisting = onFocusExisting
+        self.onReloadWindowAndApp = onReloadWindowAndApp
+    }
 }
 
 // MARK: - Standalone Floating Windows (Up to 3 Concurrent + Pin + History + Reload Confirmation)
@@ -95,8 +133,8 @@ extension AppModel {
         popoutManager.controllers.count
     }
 
-    public func isPopoutActive(pkg: String) -> Bool {
-        popoutManager.existingController(for: pkg) != nil
+    public func isPopoutActive(pkg: String, userId: Int = 0) -> Bool {
+        popoutManager.existingController(for: pkg, userId: userId) != nil
     }
 
     public func refreshPopoutHistory() {
@@ -136,53 +174,54 @@ extension AppModel {
         return ""
     }
 
-    public func toggleFavoriteApp(pkg: String, deviceKey: String) {
-        let updated = popoutAppPrefsStore.toggleFavorite(appPackage: pkg, deviceKey: deviceKey)
+    public func toggleFavoriteApp(pkg: String, userId: Int = 0, deviceKey: String) {
+        let appKey = RemoteAppInfo.formatAppKey(pkg: pkg, userId: userId)
+        let updated = popoutAppPrefsStore.toggleFavorite(appPackage: appKey, deviceKey: deviceKey)
         refreshPopoutAppPrefs()
-        if let ctrl = popoutManager.existingController(for: pkg) {
+        if let ctrl = popoutManager.existingController(for: pkg, userId: userId) {
             ctrl.isFavorite = updated.isFavorite
         }
     }
 
-    /// Returns a compact Chinese summary of non-default remembered window preferences (preset/DPI/compat),
+    /// Returns a compact summary of non-default remembered window preferences (preset/DPI/compat),
     /// or `nil` when the app uses all default adaptive settings.
-    public func popoutPreferenceSummary(pkg: String, deviceKey: String) -> String? {
-        let cleanPkg = pkg.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanPkg.isEmpty else { return nil }
+    public func popoutPreferenceSummary(pkg: String, userId: Int = 0, deviceKey: String) -> String? {
+        let appKey = RemoteAppInfo.formatAppKey(pkg: pkg, userId: userId)
+        guard !appKey.isEmpty else { return nil }
         let snapshot = popoutAppPrefs
-        let exactKey = PopoutAppPreferencesStore.compositeKey(deviceKey: deviceKey, appPackage: cleanPkg)
-        let globalKey = PopoutAppPreferencesStore.compositeKey(deviceKey: "", appPackage: cleanPkg)
+        let exactKey = PopoutAppPreferencesStore.compositeKey(deviceKey: deviceKey, appPackage: appKey)
+        let globalKey = PopoutAppPreferencesStore.compositeKey(deviceKey: "", appPackage: appKey)
         guard let pref = snapshot[exactKey] ?? snapshot[globalKey] else { return nil }
 
         var parts: [String] = []
         switch pref.preferredPreset?.lowercased() {
         case "fold", "foldable":
-            parts.append("折叠")
+            parts.append(OpalL10n.text("app.popout.pref.foldable"))
         case "tablet":
-            parts.append("平板")
+            parts.append(OpalL10n.text("app.popout.pref.tablet"))
         case "custom":
-            if pref.customWindowSize != nil { parts.append("自定义尺寸") }
+            if pref.customWindowSize != nil { parts.append(OpalL10n.text("app.popout.pref.custom_size")) }
         default:
-            if pref.customWindowSize != nil { parts.append("自定义尺寸") }
+            if pref.customWindowSize != nil { parts.append(OpalL10n.text("app.popout.pref.custom_size")) }
         }
         if let dpi = pref.customDpi {
             parts.append("\(dpi) DPI")
         }
         if pref.compatibilityResolution {
-            parts.append("兼容模式")
+            parts.append(OpalL10n.text("app.popout.pref.compat"))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    public func isFavoriteApp(pkg: String, deviceKey: String) -> Bool {
-        let cleanPkg = pkg.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanPkg.isEmpty else { return false }
+    public func isFavoriteApp(pkg: String, userId: Int = 0, deviceKey: String) -> Bool {
+        let appKey = RemoteAppInfo.formatAppKey(pkg: pkg, userId: userId)
+        guard !appKey.isEmpty else { return false }
         let snapshot = popoutAppPrefs
-        let exactKey = PopoutAppPreferencesStore.compositeKey(deviceKey: deviceKey, appPackage: cleanPkg)
+        let exactKey = PopoutAppPreferencesStore.compositeKey(deviceKey: deviceKey, appPackage: appKey)
         if let exact = snapshot[exactKey] {
             return exact.isFavorite
         }
-        let globalKey = PopoutAppPreferencesStore.compositeKey(deviceKey: "", appPackage: cleanPkg)
+        let globalKey = PopoutAppPreferencesStore.compositeKey(deviceKey: "", appPackage: appKey)
         return snapshot[globalKey]?.isFavorite ?? false
     }
 
@@ -232,17 +271,23 @@ extension AppModel {
         }
 
         return orderedEntries.map { item in
-            let catalogMatch = cachedDesktopApps.first(where: { $0.pkg == item.pkg })
-                ?? cachedCompanionApps.first(where: { $0.pkg == item.pkg })
-            let historyMatch = popoutHistory.first(where: { $0.appPackage == item.pkg && $0.deviceKey == item.deviceKey })
-                ?? popoutHistory.first(where: { $0.appPackage == item.pkg })
-            let label = catalogMatch?.displayLabel ?? historyMatch?.displayLabel ?? item.pkg
+            let parsed = RemoteAppInfo.parseAppKey(item.pkg)
+            let catalogMatch = cachedDesktopApps.first(where: { $0.pkg == parsed.pkg && $0.userId == parsed.userId })
+                ?? cachedCompanionApps.first(where: { $0.pkg == parsed.pkg && $0.userId == parsed.userId })
+                ?? cachedDesktopApps.first(where: { $0.pkg == parsed.pkg })
+                ?? cachedCompanionApps.first(where: { $0.pkg == parsed.pkg })
+            let historyMatch = popoutHistory.first(where: { $0.appPackage == parsed.pkg && $0.appUserId == parsed.userId && $0.deviceKey == item.deviceKey })
+                ?? popoutHistory.first(where: { $0.appPackage == parsed.pkg && $0.appUserId == parsed.userId })
+            let label = catalogMatch?.displayLabel ?? historyMatch?.displayLabel ?? parsed.pkg
             let cls = catalogMatch?.cls ?? historyMatch?.appActivity ?? ""
+            let profileType = catalogMatch?.profileType ?? historyMatch?.appProfileType ?? ""
             let devName = historyMatch?.deviceName ?? (isAnyChannelConnected ? activeChannelDeviceName : "")
             return FavoritePopoutAppItem(
-                pkg: item.pkg,
+                pkg: parsed.pkg,
                 cls: cls,
                 label: label,
+                userId: parsed.userId,
+                profileType: profileType,
                 deviceKey: item.deviceKey,
                 deviceName: devName
             )
@@ -299,7 +344,7 @@ extension AppModel {
         remoteAppCatalogFetcher.cancel()
         var ctx = makeInitialPickerContext(for: target)
         ctx.isLoading = true
-        ctx.statusMessage = "正在读取「\(ctx.deviceName)」的应用列表…"
+        ctx.statusMessage = OpalL10n.format("app.popout.loading_apps_fmt", ctx.deviceName)
         remoteAppPickerContext = ctx
         loadAppsForCurrentPicker()
     }
@@ -308,7 +353,7 @@ extension AppModel {
         guard var ctx = remoteAppPickerContext else { return }
         ctx.isLoading = true
         ctx.errorMessage = nil
-        ctx.statusMessage = "正在刷新应用列表…"
+        ctx.statusMessage = OpalL10n.text("app.popout.refreshing_apps")
         remoteAppPickerContext = ctx
         loadAppsForCurrentPicker()
     }
@@ -335,13 +380,16 @@ extension AppModel {
         pkg: String,
         cls: String,
         label: String,
+        userId: Int = 0,
+        profileType: String = "",
         pickerContext: RemoteAppPickerContext
     ) {
         let cleanPkg = pkg.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanPkg.isEmpty else { return }
+        let normalizedUid = max(0, userId)
 
         guard let endpoint = pickerContext.resolvedEndpoint else {
-            showToast("当前设备连接上下文未就绪，请先刷新应用列表")
+            showToast(OpalL10n.text("app.popout.context_not_ready"))
             return
         }
 
@@ -364,7 +412,11 @@ extension AppModel {
             certFingerprint: pickerContext.resolvedFingerprint.isEmpty ? nil : pickerContext.resolvedFingerprint,
             bonjourServiceName: pickerContext.resolvedBonjourServiceName,
             bonjourDomain: pickerContext.resolvedBonjourDomain,
-            pinnedOnTop: popoutHistory.first(where: { $0.appPackage == cleanPkg && $0.deviceKey == pickerContext.deviceKey })?.pinnedOnTop ?? false
+            pinnedOnTop: popoutHistory.first(where: {
+                $0.appPackage == cleanPkg && $0.appUserId == normalizedUid && $0.deviceKey == pickerContext.deviceKey
+            })?.pinnedOnTop ?? false,
+            appUserId: normalizedUid,
+            appProfileType: profileType
         )
 
         performPopoutOpenOrPromptReload(
@@ -376,10 +428,11 @@ extension AppModel {
 
     /// One-click launch from the Device Hub / Picker「历史 APP 小窗」bar without opening the full desktop.
     public func openPopoutFromHistory(_ entry: PopoutHistoryEntry) {
-        if let existing = popoutManager.existingController(for: entry.appPackage) {
+        if let existing = popoutManager.existingController(for: entry.appPackage, userId: entry.appUserId) {
             pendingPopoutReloadPrompt = PendingPopoutReloadPrompt(
                 appPackage: entry.appPackage,
                 appLabel: entry.displayLabel,
+                appUserId: entry.appUserId,
                 existingWindowId: existing.id,
                 onFocusExisting: { [weak self] in
                     self?.popoutManager.focusWindow(id: existing.id)
@@ -393,7 +446,7 @@ extension AppModel {
         }
 
         if popoutManager.controllers.count >= PopoutWindowManager.maxConcurrentWindows {
-            let msg = "最多同时打开 \(PopoutWindowManager.maxConcurrentWindows) 个悬浮小窗，请先关闭一个已有小窗"
+            let msg = OpalL10n.format("app.popout.limit_fmt", PopoutWindowManager.maxConcurrentWindows)
             bannerError = msg
             showToast(msg)
             return
@@ -419,27 +472,30 @@ extension AppModel {
         packageName: String,
         activityClass: String = "",
         appLabel: String = "",
+        userId: Int = 0,
+        profileType: String = "",
         preferredDeviceKey: String? = nil,
         preferredDeviceName: String? = nil,
         waitForDiscoveryIfNeeded: Bool = false
     ) async {
         let cleanPkg = packageName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanPkg.isEmpty else { return }
+        let normalizedUid = max(0, userId)
         let displayLabel = appLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? cleanPkg : appLabel
 
-        if let existing = popoutManager.existingController(for: cleanPkg) {
+        if let existing = popoutManager.existingController(for: cleanPkg, userId: normalizedUid) {
             popoutManager.focusWindow(id: existing.id)
             return
         }
 
         if popoutManager.controllers.count >= PopoutWindowManager.maxConcurrentWindows {
-            let msg = "最多同时打开 \(PopoutWindowManager.maxConcurrentWindows) 个悬浮小窗，请先关闭一个已有小窗"
+            let msg = OpalL10n.format("app.popout.limit_fmt", PopoutWindowManager.maxConcurrentWindows)
             bannerError = msg
             showToast(msg)
             return
         }
 
-        statusMessage = "正在定位在线手机并打开「\(displayLabel)」…"
+        statusMessage = OpalL10n.format("app.popout.locating_fmt", displayLabel)
         defer { statusMessage = nil }
 
         let maxAttempts = waitForDiscoveryIfNeeded ? 10 : 1
@@ -448,21 +504,23 @@ extension AppModel {
                 packageName: cleanPkg,
                 activityClass: activityClass,
                 appLabel: displayLabel,
+                userId: normalizedUid,
+                profileType: profileType,
                 preferredDeviceKey: preferredDeviceKey,
                 preferredDeviceName: preferredDeviceName
             ) {
                 let result = openPopoutImmediate(entry: resolved.entry, context: resolved.context, forceReload: false)
                 switch result {
                 case .opened:
-                    showToast("已打开「\(displayLabel)」悬浮小窗（\(popoutManager.controllers.count)/\(PopoutWindowManager.maxConcurrentWindows)）")
+                    showToast(OpalL10n.format("app.popout.opened_fmt", displayLabel, popoutManager.controllers.count, PopoutWindowManager.maxConcurrentWindows))
                 case .alreadyOpen(let existingId, _):
                     popoutManager.focusWindow(id: existingId)
                 case .limitReached(let maxCount):
-                    let msg = "最多同时打开 \(maxCount) 个悬浮小窗，请先关闭一个已有小窗"
+                    let msg = OpalL10n.format("app.popout.limit_fmt", maxCount)
                     bannerError = msg
                     showToast(msg)
                 case .invalidPackage:
-                    showToast("无效的应用包名")
+                    showToast(OpalL10n.text("app.popout.invalid_pkg"))
                 }
                 return
             }
@@ -471,8 +529,8 @@ extension AppModel {
             }
         }
 
-        let targetHint = preferredDeviceName ?? "Android 设备"
-        let msg = "未找到在线的「\(targetHint)」，无法启动「\(displayLabel)」悬浮小窗"
+        let targetHint = preferredDeviceName ?? OpalL10n.text("common.android_device")
+        let msg = OpalL10n.format("app.popout.not_found_fmt", targetHint, displayLabel)
         onRequestOpenMainWindow?()
         NSApp.activate(ignoringOtherApps: true)
         bannerError = msg
@@ -483,6 +541,8 @@ extension AppModel {
         packageName: String,
         activityClass: String,
         appLabel: String,
+        userId: Int,
+        profileType: String,
         preferredDeviceKey: String?,
         preferredDeviceName: String?
     ) async -> (context: PopoutConnectionContext, entry: PopoutHistoryEntry)? {
@@ -538,7 +598,9 @@ extension AppModel {
                     adbSerial: serial,
                     host: host,
                     port: port,
-                    certFingerprint: conn.fingerprint.isEmpty ? nil : conn.fingerprint
+                    certFingerprint: conn.fingerprint.isEmpty ? nil : conn.fingerprint,
+                    appUserId: userId,
+                    appProfileType: profileType
                 )
                 return (ctx, entry)
             }
@@ -564,7 +626,9 @@ extension AppModel {
                 transportKind: "bonjour",
                 host: target.lastHost,
                 port: target.lastPort,
-                certFingerprint: target.certFingerprint.isEmpty ? nil : target.certFingerprint
+                certFingerprint: target.certFingerprint.isEmpty ? nil : target.certFingerprint,
+                appUserId: userId,
+                appProfileType: profileType
             )
             return (ctx, entry)
         }
@@ -592,7 +656,9 @@ extension AppModel {
                     deviceKey: PopoutDeviceKey.adb(usbDev.serial),
                     deviceName: usbDev.displayName,
                     transportKind: "usb",
-                    adbSerial: usbDev.serial
+                    adbSerial: usbDev.serial,
+                    appUserId: userId,
+                    appProfileType: profileType
                 )
                 return (ctx, entry)
             }
@@ -630,7 +696,9 @@ extension AppModel {
                     transportKind: "bonjour",
                     certFingerprint: pin,
                     bonjourServiceName: bonjour.serviceName,
-                    bonjourDomain: bonjour.domain
+                    bonjourDomain: bonjour.domain,
+                    appUserId: userId,
+                    appProfileType: profileType
                 )
                 return (ctx, entry)
             }
@@ -651,7 +719,9 @@ extension AppModel {
                     deviceKey: conn.deviceName,
                     deviceName: conn.deviceName,
                     transportKind: "wifi",
-                    certFingerprint: conn.fingerprint.isEmpty ? nil : conn.fingerprint
+                    certFingerprint: conn.fingerprint.isEmpty ? nil : conn.fingerprint,
+                    appUserId: userId,
+                    appProfileType: profileType
                 )
                 return (ctx, entry)
             }
@@ -669,7 +739,9 @@ extension AppModel {
                     deviceKey: PopoutDeviceKey.fingerprint(target.certFingerprint),
                     deviceName: target.deviceName,
                     transportKind: "bonjour",
-                    certFingerprint: target.certFingerprint
+                    certFingerprint: target.certFingerprint,
+                    appUserId: userId,
+                    appProfileType: profileType
                 )
                 return (ctx, entry)
             }
@@ -705,11 +777,12 @@ extension AppModel {
         switch result {
         case .opened:
             if closePickerOnOpen { closeRemoteAppPicker() }
-            showToast("已弹出「\(entry.displayLabel)」悬浮小窗（\(popoutManager.controllers.count)/\(PopoutWindowManager.maxConcurrentWindows)）")
+            showToast(OpalL10n.format("app.popout.opened_fmt", entry.displayLabel, popoutManager.controllers.count, PopoutWindowManager.maxConcurrentWindows))
         case let .alreadyOpen(existingId, existingLabel):
             pendingPopoutReloadPrompt = PendingPopoutReloadPrompt(
                 appPackage: entry.appPackage,
                 appLabel: existingLabel,
+                appUserId: entry.appUserId,
                 existingWindowId: existingId,
                 onFocusExisting: { [weak self] in
                     self?.popoutManager.focusWindow(id: existingId)
@@ -723,17 +796,17 @@ extension AppModel {
                         _ = await sleepCancellable(nanoseconds: PopoutTuning.reloadGapNs)
                         let reopened = self.openPopoutImmediate(entry: entry, context: context, forceReload: true)
                         if case .opened = reopened {
-                            self.showToast("已重载「\(entry.displayLabel)」小窗与应用")
+                            self.showToast(OpalL10n.format("app.popout.reloaded_fmt", entry.displayLabel))
                         }
                     }
                 }
             )
         case .limitReached(let maxCount):
-            let msg = "最多同时打开 \(maxCount) 个悬浮小窗，请先关闭一个已有小窗"
+            let msg = OpalL10n.format("app.popout.limit_fmt", maxCount)
             bannerError = msg
             showToast(msg)
         case .invalidPackage:
-            showToast("无效的应用包名")
+            showToast(OpalL10n.text("app.popout.invalid_pkg"))
         }
     }
 
@@ -743,7 +816,8 @@ extension AppModel {
         context: PopoutConnectionContext,
         forceReload: Bool
     ) -> PopoutOpenResult {
-        let savedPref = popoutAppPrefsStore.preference(for: entry.appPackage, deviceKey: entry.deviceKey)
+        let prefKey = entry.appKey
+        let savedPref = popoutAppPrefsStore.preference(for: prefKey, deviceKey: entry.deviceKey)
         let savedPinned = savedPref?.pinnedOnTop
             ?? popoutHistory.first(where: { $0.id == entry.id })?.pinnedOnTop
             ?? entry.pinnedOnTop
@@ -751,6 +825,8 @@ extension AppModel {
             appPackage: entry.appPackage,
             appActivity: entry.appActivity,
             appLabel: entry.displayLabel,
+            appUserId: entry.appUserId,
+            appProfileType: entry.appProfileType,
             deviceKey: entry.deviceKey,
             deviceName: entry.deviceName,
             initialPinnedOnTop: savedPinned,
@@ -764,13 +840,14 @@ extension AppModel {
                 self.popoutHistory = self.popoutHistoryStore.updatePinPreference(
                     appPackage: entry.appPackage,
                     deviceKey: entry.deviceKey,
-                    pinnedOnTop: pinned
+                    pinnedOnTop: pinned,
+                    appUserId: entry.appUserId
                 )
             },
             onPreferenceChanged: { [weak self] change in
                 self?.applyPopoutPreferenceChange(
                     change,
-                    appPackage: entry.appPackage,
+                    appPackage: prefKey,
                     deviceKey: entry.deviceKey
                 )
             },
@@ -796,12 +873,12 @@ extension AppModel {
     }
 
     private func resolveAndOpenHistoryEntry(_ entry: PopoutHistoryEntry, forceReload: Bool) async {
-        statusMessage = "正在拉起「\(entry.displayLabel)」悬浮小窗…"
+        statusMessage = OpalL10n.format("app.popout.launching_fmt", entry.displayLabel)
         defer { statusMessage = nil }
 
         do {
             let (connCtx, updatedEntry) = try await resolveConnectionContextForHistory(entry)
-            if forceReload, let existing = popoutManager.existingController(for: entry.appPackage) {
+            if forceReload, let existing = popoutManager.existingController(for: entry.appPackage, userId: entry.appUserId) {
                 popoutManager.closeWindow(id: existing.id, sendDisconnect: true)
                 _ = await sleepCancellable(nanoseconds: PopoutTuning.reloadGapNs)
             }
@@ -810,11 +887,11 @@ extension AppModel {
             case .opened:
                 showToast(
                     forceReload
-                        ? "已重载「\(entry.displayLabel)」小窗与应用"
-                        : "已打开「\(entry.displayLabel)」悬浮小窗（\(popoutManager.controllers.count)/\(PopoutWindowManager.maxConcurrentWindows)）"
+                        ? OpalL10n.format("app.popout.reloaded_fmt", entry.displayLabel)
+                        : OpalL10n.format("app.popout.opened_fmt", entry.displayLabel, popoutManager.controllers.count, PopoutWindowManager.maxConcurrentWindows)
                 )
             case .limitReached(let maxCount):
-                bannerError = "最多同时打开 \(maxCount) 个悬浮小窗，请先关闭一个已有小窗"
+                bannerError = OpalL10n.format("app.popout.limit_fmt", maxCount)
             case .alreadyOpen(let existingId, _):
                 popoutManager.focusWindow(id: existingId)
             case .invalidPackage:
@@ -822,7 +899,7 @@ extension AppModel {
             }
         } catch {
             OpalDeskLog.warn("popout", "Failed to launch history popout \(entry.appPackage): \(error.localizedDescription)")
-            bannerError = "拉起「\(entry.displayLabel)」失败：\(error.localizedDescription)"
+            bannerError = OpalL10n.format("app.popout.launch_failed_fmt", entry.displayLabel, error.localizedDescription)
         }
     }
 
@@ -880,7 +957,7 @@ extension AppModel {
             let pin = trusted?.certFingerprint ?? entry.certFingerprint ?? bonjour.fingerprintPrefix
             guard pin.count >= FingerprintUtil.minimumPrefixHexLength else {
                 throw NSError(domain: "OpalDeskPopout", code: -10, userInfo: [
-                    NSLocalizedDescriptionKey: "设备证书指纹不完整，请先从设备列表点击「应用小窗」重新建立信任"
+                    NSLocalizedDescriptionKey: OpalL10n.text("app.popout.bad_fp")
                 ])
             }
             let ep = OpalCastEndpoint(
@@ -918,7 +995,7 @@ extension AppModel {
         }
 
         throw NSError(domain: "OpalDeskPopout", code: -11, userInfo: [
-            NSLocalizedDescriptionKey: "未找到在线设备「\(entry.deviceName)」，请确认手机已连接 USB 或开启无线共享服务"
+            NSLocalizedDescriptionKey: OpalL10n.format("app.popout.device_offline_fmt", entry.deviceName)
         ])
     }
 
@@ -946,7 +1023,7 @@ extension AppModel {
             return RemoteAppPickerContext(
                 target: target,
                 deviceKey: devKey,
-                deviceName: conn?.deviceName ?? "Android 设备",
+                deviceName: conn?.deviceName ?? OpalL10n.text("common.android_device"),
                 allowLaunchInDesktop: true,
                 apps: cachedDesktopApps,
                 resolvedEndpoint: activeSessionEndpoint,
@@ -1022,7 +1099,7 @@ extension AppModel {
             guard isAuthenticated else {
                 var failed = currentCtx
                 failed.isLoading = false
-                failed.errorMessage = "当前主投屏会话未认证完成"
+                failed.errorMessage = OpalL10n.text("app.popout.main_unauth")
                 remoteAppPickerContext = failed
                 return
             }
@@ -1093,7 +1170,7 @@ extension AppModel {
         switch target {
         case .activeDesktop:
             guard let ep = activeSessionEndpoint else {
-                throw NSError(domain: "OpalDeskCatalog", code: -1, userInfo: [NSLocalizedDescriptionKey: "当前无活动连接"])
+                throw NSError(domain: "OpalDeskCatalog", code: -1, userInfo: [NSLocalizedDescriptionKey: OpalL10n.text("app.popout.no_conn")])
             }
             return (ep, activeConnection?.transport.transportHint ?? .wifiTls, pendingAuth.authToken, activeConnection?.fingerprint ?? "", nil, nil, nil)
 
@@ -1132,7 +1209,7 @@ extension AppModel {
 
         case .trusted(let dev):
             guard let host = dev.lastHost, !host.isEmpty else {
-                throw NSError(domain: "OpalDeskCatalog", code: -2, userInfo: [NSLocalizedDescriptionKey: "该已信任设备未记录局域网 IP，请等待局域网自动发现"])
+                throw NSError(domain: "OpalDeskCatalog", code: -2, userInfo: [NSLocalizedDescriptionKey: OpalL10n.text("app.popout.no_lan_ip")])
             }
             let port = dev.lastPort ?? OpalCastProtocol.defaultWifiPort
             let ep = OpalCastEndpoint(

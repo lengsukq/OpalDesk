@@ -56,7 +56,7 @@ extension AppModel {
         if case let .connected(name) = companionState, !name.isEmpty {
             return name
         }
-        return "Android 设备"
+        return OpalL10n.text("common.android_device")
     }
 
     /// Configures `CompanionConnectionManager`, `NotificationBridgeManager`, `MediaRemoteBridge`,
@@ -111,7 +111,7 @@ extension AppModel {
             },
             onOtpCopied: { [weak self] code, item in
                 Task { @MainActor [weak self] in
-                    self?.showToast("已复制「\(item.displayAppLabel)」验证码：\(code)")
+                    self?.showToast(OpalL10n.format("app.companion.otp_copied_fmt", item.displayAppLabel, code))
                 }
             },
             onInvokeAction: { [weak self] key, actionIndex in
@@ -271,7 +271,7 @@ extension AppModel {
         if companionManager.connect(to: device) {
             companionTarget = companionManager.activeTarget
         } else {
-            showToast("「\(device.displayName)」尚未建立永久信任，请先完成一次配对")
+            showToast(OpalL10n.format("app.companion.not_trusted_fmt", device.displayName))
         }
     }
 
@@ -302,7 +302,7 @@ extension AppModel {
         } else {
             updateClipboardSyncLifecycle()
             if !companionManager.isAuthenticated {
-                resetSharedCompanionPayloads(reason: "主投屏会话已断开")
+                resetSharedCompanionPayloads(reason: OpalL10n.text("app.companion.main_disconnected"))
             } else {
                 // Restore companion's reported host top app when main session ends.
                 hostTopApp = companionManager.hostTopApp
@@ -371,7 +371,7 @@ extension AppModel {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         notificationBridge.handleLocalAction(.inlineReply(key: item.key, pkg: item.pkg, replyText: trimmed))
-        showToast("已回复「\(item.displayAppLabel)」")
+        showToast(OpalL10n.format("app.companion.replied_fmt", item.displayAppLabel))
     }
 
     public func invokeNotificationAction(_ item: RemoteNotificationItem, actionIndex: Int) {
@@ -379,10 +379,10 @@ extension AppModel {
         if sent {
             let label = item.actions.first(where: { $0.index == actionIndex })?.label ?? ""
             if !label.isEmpty {
-                showToast("已触发通知操作「\(label)」")
+                showToast(OpalL10n.format("app.companion.action_sent_fmt", label))
             }
         } else {
-            showToast("未连接到 Android 设备，无法触发通知操作")
+            showToast(OpalL10n.text("app.companion.action_disconnected"))
         }
     }
 
@@ -399,7 +399,7 @@ extension AppModel {
 
     public func sendCallAction(_ action: CallActionPayload) {
         guard isAnyChannelConnected else {
-            showToast("未连接到 Android 设备，无法控制手机通话")
+            showToast(OpalL10n.text("app.companion.call_disconnected"))
             return
         }
         if !callBridge.sendAction(action) {
@@ -411,16 +411,24 @@ extension AppModel {
         let trimmed = number.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard isAnyChannelConnected else {
-            showToast("未连接到 Android 设备，无法发起快捷拨号")
+            showToast(OpalL10n.text("app.companion.dial_disconnected"))
             return
         }
         sendCallAction(.dial(number: trimmed))
-        showToast("正在手机端拨打 \(trimmed)…")
+        showToast(OpalL10n.format("app.companion.dialing_fmt", trimmed))
     }
 
     func handleCallStateChanged(_ incoming: CallStatePayload) {
         callState = incoming
         syncCallControlHud()
+    }
+
+    public func previewCallHud() {
+        guard !callState.isActive else {
+            showToast(OpalL10n.text("app.call.preview_busy"))
+            return
+        }
+        callHudCoordinator.previewDemo()
     }
 
     private func syncCallControlHud() {
@@ -450,8 +458,8 @@ extension AppModel {
         triggeringBleDeviceId = device.id
         bleHotspotBanner = BleHotspotBannerState(
             kind: .loading,
-            title: "正在通过蓝牙唤起「\(deviceName)」个人热点…",
-            message: "正在执行安全挑战签名并等待手机端响应。"
+            title: OpalL10n.format("app.ble.waking_title_fmt", deviceName),
+            message: OpalL10n.text("app.ble.waking_msg")
         )
 
         Task { @MainActor [weak self] in
@@ -473,7 +481,7 @@ extension AppModel {
                 let msg = error.localizedDescription
                 self.bleHotspotBanner = BleHotspotBannerState(
                     kind: .error,
-                    title: "蓝牙开启热点失败",
+                    title: OpalL10n.text("app.ble.failed_title"),
                     message: msg
                 )
                 self.showToast(msg)
@@ -493,16 +501,16 @@ extension AppModel {
         switch response.status {
         case .started, .alreadyActive:
             let title = response.status == .alreadyActive
-                ? "「\(deviceName)」个人热点已开启"
-                : "已为「\(deviceName)」开启个人热点"
+                ? OpalL10n.format("app.ble.already_on_fmt", deviceName)
+                : OpalL10n.format("app.ble.enabled_fmt", deviceName)
             var parts: [String] = []
             if !ssid.isEmpty {
-                parts.append("热点名称：\(ssid)")
+                parts.append(OpalL10n.format("app.ble.ssid_fmt", ssid))
             }
             if !gatewayIp.isEmpty {
-                parts.append("服务地址：\(gatewayIp):\(port)")
+                parts.append(OpalL10n.format("app.ble.addr_fmt", gatewayIp, Int(port)))
             }
-            parts.append("请在 Mac 顶部 Wi-Fi 菜单连入该热点，OpalDesk 正在 20 秒内自动探测并连接。")
+            parts.append(OpalL10n.text("app.ble.join_hint"))
             let message = parts.joined(separator: " · ")
 
             bleHotspotBanner = BleHotspotBannerState(
@@ -519,39 +527,39 @@ extension AppModel {
             }
 
         case .needsUserToggle:
-            let base = "手机 ROM 限制后台自动开热点，已尝试在手机端唤起热点开关，请在手机确认开启后连入热点。"
+            let base = OpalL10n.text("app.ble.confirm_default")
             let fullMessage = detailMsg.isEmpty ? base : "\(base)（\(detailMsg)）"
             bleHotspotBanner = BleHotspotBannerState(
                 kind: .warning,
-                title: "需要在手机端确认开启热点",
+                title: OpalL10n.text("app.ble.confirm_title"),
                 message: fullMessage,
                 ssid: ssid.isEmpty ? nil : ssid,
                 gatewayIp: gatewayIp.isEmpty ? nil : gatewayIp,
                 port: port
             )
-            showToast("请在手机端确认开启个人热点", durationSeconds: 5.0)
+            showToast(OpalL10n.text("app.ble.confirm_toast"), durationSeconds: 5.0)
             if !gatewayIp.isEmpty {
                 startHotspotAutoConnectProbe(device: device, gatewayIp: gatewayIp, port: port, ssid: ssid)
             }
 
         case .unauthorized:
             let msg = detailMsg.isEmpty
-                ? "手机端拒绝了蓝牙热点鉴权，信任凭证可能已失效，请重新完成一次无线配对。"
+                ? OpalL10n.text("app.ble.auth_failed_default")
                 : detailMsg
             bleHotspotBanner = BleHotspotBannerState(
                 kind: .error,
-                title: "蓝牙鉴权未通过",
+                title: OpalL10n.text("app.ble.auth_failed_title"),
                 message: msg
             )
             showToast(msg)
 
         case .error:
             let msg = detailMsg.isEmpty
-                ? "手机端无法启动个人热点，请在手机设置中手动开启热点。"
+                ? OpalL10n.text("app.ble.start_failed_default")
                 : detailMsg
             bleHotspotBanner = BleHotspotBannerState(
                 kind: .error,
-                title: "手机端热点启动失败",
+                title: OpalL10n.text("app.ble.start_failed_title"),
                 message: msg
             )
             showToast(msg)
@@ -595,13 +603,13 @@ extension AppModel {
                         self.companionManager.connect(to: trusted, endpoint: endpoint)
                         self.bleHotspotBanner = BleHotspotBannerState(
                             kind: .success,
-                            title: "已检测到热点并自动连接「\(trusted.deviceName)」",
-                            message: "正在通过 \(gatewayIp):\(port) 建立伴侣通道，您也可直接进入大屏桌面。",
+                            title: OpalL10n.format("app.ble.joined_title_fmt", trusted.deviceName),
+                            message: OpalL10n.format("app.ble.joined_msg_fmt", gatewayIp, Int(port)),
                             ssid: ssid.isEmpty ? nil : ssid,
                             gatewayIp: gatewayIp,
                             port: port
                         )
-                        self.showToast("已自动连入「\(trusted.deviceName)」热点")
+                        self.showToast(OpalL10n.format("app.ble.joined_toast_fmt", trusted.deviceName))
                         return
                     }
                 } catch {
@@ -611,11 +619,11 @@ extension AppModel {
             }
 
             guard !Task.isCancelled, !self.isAnyChannelConnected else { return }
-            let ssidHint = ssid.isEmpty ? "手机个人热点" : "热点「\(ssid)」"
+            let ssidHint = ssid.isEmpty ? OpalL10n.text("app.ble.ssid_generic") : OpalL10n.format("app.ble.ssid_named_fmt", ssid)
             self.bleHotspotBanner = BleHotspotBannerState(
                 kind: .info,
-                title: "等待 Mac 连入\(ssidHint)",
-                message: "20 秒自动探测已结束。请在 Mac Wi-Fi 菜单连入\(ssidHint)，设备将自动出现在附近无线设备列表中。",
+                title: OpalL10n.format("app.ble.timeout_title_fmt", ssidHint),
+                message: OpalL10n.format("app.ble.timeout_msg_fmt", ssidHint),
                 ssid: ssid.isEmpty ? nil : ssid,
                 gatewayIp: gatewayIp,
                 port: port
@@ -626,7 +634,7 @@ extension AppModel {
     /// Launches the Android phone's current Display 0 foreground app inside a standalone macOS floating popout window.
     public func handoffHostTopApp() {
         guard !hostTopApp.isEmpty else {
-            showToast("当前未检测到手机前台应用")
+            showToast(OpalL10n.text("app.handoff.none"))
             return
         }
         openAppPopoutForRemotePackage(packageName: hostTopApp.packageName, appLabel: hostTopApp.displayLabel)
@@ -638,20 +646,23 @@ extension AppModel {
         packageName: String,
         activityClass: String = "",
         appLabel: String = "",
+        userId: Int = 0,
+        profileType: String = "",
         preferredDeviceKey: String? = nil,
         preferredDeviceName: String? = nil
     ) {
         let cleanPkg = packageName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanPkg.isEmpty else { return }
+        let normalizedUid = max(0, userId)
         let displayLabel = appLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? cleanPkg : appLabel
 
-        if let existing = popoutManager.existingController(for: cleanPkg) {
+        if let existing = popoutManager.existingController(for: cleanPkg, userId: normalizedUid) {
             popoutManager.focusWindow(id: existing.id)
             return
         }
 
         if popoutManager.controllers.count >= PopoutWindowManager.maxConcurrentWindows {
-            let msg = "最多同时打开 \(PopoutWindowManager.maxConcurrentWindows) 个悬浮小窗，请先关闭一个已有小窗"
+            let msg = OpalL10n.format("app.popout.limit_fmt", PopoutWindowManager.maxConcurrentWindows)
             bannerError = msg
             showToast(msg)
             return
@@ -663,6 +674,8 @@ extension AppModel {
                 packageName: cleanPkg,
                 activityClass: activityClass,
                 appLabel: displayLabel,
+                userId: normalizedUid,
+                profileType: profileType,
                 preferredDeviceKey: preferredDeviceKey,
                 preferredDeviceName: preferredDeviceName,
                 waitForDiscoveryIfNeeded: false
@@ -680,21 +693,21 @@ extension AppModel {
         if isAuthenticated {
             companionManager.recordExternalClipboardDigest(ClipboardSyncManager.textDigest(trimmed))
             session.send(.inputText(InputTextPayload(mode: .setClipboardOnly, seq: seq, text: trimmed)))
-            showToast("已发送文本到「\(activeChannelDeviceName)」剪贴板")
+            showToast(OpalL10n.format("app.clipboard.sent_fmt", activeChannelDeviceName))
         } else if companionManager.isAuthenticated {
             if companionManager.sendClipboardText(seq: seq, text: trimmed) {
-                showToast("已通过后台伴侣发送到「\(activeChannelDeviceName)」剪贴板")
+                showToast(OpalL10n.format("app.clipboard.sent_companion_fmt", activeChannelDeviceName))
             } else {
                 // Even if deduped against identical digest, force push explicitly requested by user action.
                 _ = companionManager.sendFrame(
                     .inputText(InputTextPayload(mode: .setClipboardOnly, seq: seq, text: trimmed)),
                     allowDropOnCongestion: false
                 )
-                showToast("已发送到「\(activeChannelDeviceName)」剪贴板")
+                showToast(OpalL10n.format("app.clipboard.sent_fmt", activeChannelDeviceName))
             }
         } else {
             onRequestOpenMainWindow?()
-            let msg = "未连接到 Android 设备，无法发送文本至手机剪贴板"
+            let msg = OpalL10n.text("app.clipboard.disconnected")
             bannerError = msg
             showToast(msg)
         }
@@ -743,7 +756,7 @@ extension AppModel {
         case .disconnected, .failed:
             updateClipboardSyncLifecycle()
             if !isAuthenticated {
-                resetSharedCompanionPayloads(reason: "后台伴侣已断开")
+                resetSharedCompanionPayloads(reason: OpalL10n.text("app.companion.disconnected"))
             }
         case .reconnecting:
             updateClipboardSyncLifecycle()

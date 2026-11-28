@@ -7,6 +7,8 @@ public struct PopoutHistoryEntry: Codable, Sendable, Equatable, Identifiable {
     public var appPackage: String
     public var appActivity: String
     public var appLabel: String
+    public var appUserId: Int
+    public var appProfileType: String
     public var deviceKey: String
     public var deviceName: String
     public var transportKind: String // "usb" | "wifi" | "bonjour"
@@ -35,15 +37,21 @@ public struct PopoutHistoryEntry: Codable, Sendable, Equatable, Identifiable {
         bonjourDomain: String? = nil,
         lastOpenedAtMs: Int64 = Int64(Date().timeIntervalSince1970 * 1000),
         openCount: Int = 1,
-        pinnedOnTop: Bool = false
+        pinnedOnTop: Bool = false,
+        appUserId: Int = 0,
+        appProfileType: String = ""
     ) {
         let cleanPkg = appPackage.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanDevice = deviceKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.id = "\(cleanDevice)::\(cleanPkg)"
+        let normalizedUid = max(0, appUserId)
+        let key = RemoteAppInfo.formatAppKey(pkg: cleanPkg, userId: normalizedUid)
+        self.id = "\(cleanDevice)::\(key)"
         self.appPackage = cleanPkg
         self.appActivity = appActivity.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanLabel = appLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         self.appLabel = cleanLabel.isEmpty ? cleanPkg : cleanLabel
+        self.appUserId = normalizedUid
+        self.appProfileType = RemoteAppInfo.normalizeProfileType(appProfileType, userId: normalizedUid)
         self.deviceKey = cleanDevice
         self.deviceName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
         self.transportKind = transportKind
@@ -56,6 +64,52 @@ public struct PopoutHistoryEntry: Codable, Sendable, Equatable, Identifiable {
         self.lastOpenedAtMs = lastOpenedAtMs
         self.openCount = max(1, openCount)
         self.pinnedOnTop = pinnedOnTop
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, appPackage, appActivity, appLabel, appUserId, appProfileType
+        case deviceKey, deviceName, transportKind, adbSerial, host, port
+        case certFingerprint, bonjourServiceName, bonjourDomain
+        case lastOpenedAtMs, openCount, pinnedOnTop
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let pkg = try c.decodeIfPresent(String.self, forKey: .appPackage) ?? ""
+        let devKey = try c.decodeIfPresent(String.self, forKey: .deviceKey) ?? ""
+        let uid = max(0, try c.decodeIfPresent(Int.self, forKey: .appUserId) ?? 0)
+        let rawProfile = try c.decodeIfPresent(String.self, forKey: .appProfileType) ?? ""
+        let canonicalKey = RemoteAppInfo.formatAppKey(pkg: pkg, userId: uid)
+        self.id = try c.decodeIfPresent(String.self, forKey: .id) ?? "\(devKey)::\(canonicalKey)"
+        self.appPackage = pkg
+        self.appActivity = try c.decodeIfPresent(String.self, forKey: .appActivity) ?? ""
+        self.appLabel = try c.decodeIfPresent(String.self, forKey: .appLabel) ?? pkg
+        self.appUserId = uid
+        self.appProfileType = RemoteAppInfo.normalizeProfileType(rawProfile, userId: uid)
+        self.deviceKey = devKey
+        self.deviceName = try c.decodeIfPresent(String.self, forKey: .deviceName) ?? ""
+        self.transportKind = try c.decodeIfPresent(String.self, forKey: .transportKind) ?? "wifi"
+        self.adbSerial = try c.decodeIfPresent(String.self, forKey: .adbSerial)
+        self.host = try c.decodeIfPresent(String.self, forKey: .host)
+        self.port = try c.decodeIfPresent(UInt16.self, forKey: .port)
+        self.certFingerprint = try c.decodeIfPresent(String.self, forKey: .certFingerprint)
+        self.bonjourServiceName = try c.decodeIfPresent(String.self, forKey: .bonjourServiceName)
+        self.bonjourDomain = try c.decodeIfPresent(String.self, forKey: .bonjourDomain)
+        self.lastOpenedAtMs = try c.decodeIfPresent(Int64.self, forKey: .lastOpenedAtMs) ?? 0
+        self.openCount = max(1, try c.decodeIfPresent(Int.self, forKey: .openCount) ?? 1)
+        self.pinnedOnTop = try c.decodeIfPresent(Bool.self, forKey: .pinnedOnTop) ?? false
+    }
+
+    public var appKey: String {
+        RemoteAppInfo.formatAppKey(pkg: appPackage, userId: appUserId)
+    }
+
+    public var isSecondaryProfile: Bool {
+        appUserId > 0
+    }
+
+    public var profileBadgeText: String? {
+        RemoteAppInfo.profileBadgeText(userId: appUserId, profileType: appProfileType)
     }
 
     public var displayLabel: String {
@@ -81,6 +135,7 @@ public enum PopoutHistoryLogic {
             // Preserve user's remembered always-on-top preference unless explicitly overridden.
             updated.pinnedOnTop = prev.pinnedOnTop || incoming.pinnedOnTop
             if updated.appActivity.isEmpty { updated.appActivity = prev.appActivity }
+            if updated.appProfileType.isEmpty { updated.appProfileType = prev.appProfileType }
             if updated.host == nil { updated.host = prev.host }
             if updated.port == nil { updated.port = prev.port }
             if (updated.certFingerprint ?? "").isEmpty { updated.certFingerprint = prev.certFingerprint }
@@ -96,12 +151,14 @@ public enum PopoutHistoryLogic {
         existing: [PopoutHistoryEntry],
         appPackage: String,
         deviceKey: String?,
-        pinnedOnTop: Bool
+        pinnedOnTop: Bool,
+        appUserId: Int = 0
     ) -> [PopoutHistoryEntry] {
         let cleanPkg = appPackage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedUid = max(0, appUserId)
         guard !cleanPkg.isEmpty else { return existing }
         return existing.map { entry in
-            let matchesPkg = entry.appPackage == cleanPkg
+            let matchesPkg = entry.appPackage == cleanPkg && entry.appUserId == normalizedUid
             let matchesDevice = deviceKey == nil || entry.deviceKey == deviceKey
             guard matchesPkg && matchesDevice else { return entry }
             var copy = entry
@@ -161,13 +218,19 @@ public final class PopoutHistoryStore: Sendable {
     }
 
     @discardableResult
-    public func updatePinPreference(appPackage: String, deviceKey: String? = nil, pinnedOnTop: Bool) -> [PopoutHistoryEntry] {
+    public func updatePinPreference(
+        appPackage: String,
+        deviceKey: String? = nil,
+        pinnedOnTop: Bool,
+        appUserId: Int = 0
+    ) -> [PopoutHistoryEntry] {
         mutateAndPersist { current in
             PopoutHistoryLogic.updatePinPreference(
                 existing: current,
                 appPackage: appPackage,
                 deviceKey: deviceKey,
-                pinnedOnTop: pinnedOnTop
+                pinnedOnTop: pinnedOnTop,
+                appUserId: appUserId
             )
         }
     }

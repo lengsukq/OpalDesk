@@ -273,6 +273,7 @@ public struct HelloPayload: Encodable, Sendable, Equatable {
     public var appPackage: String
     public var appActivity: String
     public var companionEvents: Bool
+    public var appUserId: Int?
 
     public init(
         protocolVersion: Int = OpalCastProtocol.version,
@@ -293,7 +294,8 @@ public struct HelloPayload: Encodable, Sendable, Equatable {
         sessionRole: String = OpalCastSessionRole.desktop.rawValue,
         appPackage: String = "",
         appActivity: String = "",
-        companionEvents: Bool = false
+        companionEvents: Bool = false,
+        appUserId: Int? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.clientName = clientName
@@ -314,6 +316,7 @@ public struct HelloPayload: Encodable, Sendable, Equatable {
         self.appPackage = appPackage
         self.appActivity = appActivity
         self.companionEvents = companionEvents
+        self.appUserId = (appUserId ?? 0) > 0 ? appUserId : nil
     }
 
     public func encode() throws -> Data {

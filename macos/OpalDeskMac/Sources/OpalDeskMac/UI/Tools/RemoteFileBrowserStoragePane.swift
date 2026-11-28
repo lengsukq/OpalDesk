@@ -8,9 +8,9 @@ extension RemoteFileBrowserWindowView {
     var storageWorkspace: some View {
         if !isConnected {
             ContentUnavailableView(
-                "尚未连接 Android 设备",
+                OpalL10n.text("files.empty.disconnected_title"),
                 systemImage: "internaldrive",
-                description: Text("连接手机后可分析各文件类别的空间占用，并按体积清理大文件。")
+                description: Text(OpalL10n.text("files.storage.disconnected_desc"))
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .opalGlassSurface(.panel, cornerRadius: OpalRadius.panel)
@@ -20,8 +20,8 @@ extension RemoteFileBrowserWindowView {
                 Text(storageError)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Button("重新扫描") { actions.onScanStorage() }
-                    .buttonStyle(.borderedProminent)
+                Button(OpalL10n.text("files.storage.rescan")) { actions.onScanStorage() }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .regular, isPill: true))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .opalGlassSurface(.panel, cornerRadius: OpalRadius.panel)
@@ -29,7 +29,7 @@ extension RemoteFileBrowserWindowView {
             ScrollView {
                 VStack(alignment: .leading, spacing: OpalSpacing.lg) {
                     if isScanningStorage {
-                        OpalNoticeBanner(tone: .loading, message: "正在更新存储空间分析…")
+                        OpalNoticeBanner(tone: .loading, message: OpalL10n.text("files.storage.updating"))
                     }
 
                     storageSummaryCard(report)
@@ -51,7 +51,7 @@ extension RemoteFileBrowserWindowView {
         } else if isScanningStorage {
             VStack(spacing: OpalSpacing.md) {
                 ProgressView()
-                Text("正在扫描手机存储空间与大文件…")
+                Text(OpalL10n.text("files.storage.scanning"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -59,12 +59,12 @@ extension RemoteFileBrowserWindowView {
             .opalGlassSurface(.panel, cornerRadius: OpalRadius.panel)
         } else {
             ContentUnavailableView {
-                Label("分析手机存储空间", systemImage: "chart.bar.xaxis")
+                Label(OpalL10n.text("files.storage.empty_title"), systemImage: "chart.bar.xaxis")
             } description: {
-                Text("统计图片、视频、音频、文档、安装包体积分布，并找出占用空间的大文件。")
+                Text(OpalL10n.text("files.storage.empty_desc"))
             } actions: {
-                Button("开始扫描") { actions.onScanStorage() }
-                    .buttonStyle(.borderedProminent)
+                Button(OpalL10n.text("files.storage.start_scan")) { actions.onScanStorage() }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .regular, isPill: true))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .opalGlassSurface(.panel, cornerRadius: OpalRadius.panel)
@@ -80,15 +80,15 @@ extension RemoteFileBrowserWindowView {
         return VStack(alignment: .leading, spacing: OpalSpacing.md) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("设备存储概览")
+                    Text(OpalL10n.text("files.storage.overview_title"))
                         .font(.headline)
-                    Text("已用 \(FileBrowserPresentation.formatByteCount(report.usedBytes)) / 总计 \(FileBrowserPresentation.formatByteCount(report.totalBytes))")
+                    Text(OpalL10n.format("files.storage.used_total_fmt", FileBrowserPresentation.formatByteCount(report.usedBytes), FileBrowserPresentation.formatByteCount(report.totalBytes)))
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 StatusBadgeView(
-                    text: "可用 \(FileBrowserPresentation.formatByteCount(report.freeBytes))",
+                    text: OpalL10n.format("files.storage.free_fmt", FileBrowserPresentation.formatByteCount(report.freeBytes)),
                     color: .green,
                     font: .caption.weight(.semibold).monospacedDigit()
                 )
@@ -102,15 +102,15 @@ extension RemoteFileBrowserWindowView {
                             Rectangle()
                                 .fill(swiftUIColor(for: slice.category.colorHint))
                                 .frame(width: width)
-                                .help("\(slice.category.name)：\(FileBrowserPresentation.formatByteCount(slice.category.bytes))（\(slice.percentageText)）")
-                                .accessibilityLabel("\(slice.category.name) 占用 \(FileBrowserPresentation.formatByteCount(slice.category.bytes))，占比 \(slice.percentageText)")
+                                .help(OpalL10n.format("files.storage.slice_help_fmt", slice.category.name, FileBrowserPresentation.formatByteCount(slice.category.bytes), slice.percentageText))
+                                .accessibilityLabel(OpalL10n.format("files.storage.slice_a11y_fmt", slice.category.name, FileBrowserPresentation.formatByteCount(slice.category.bytes), slice.percentageText))
                         }
                     }
                     if uncategorizedFraction > 0.005 {
                         Rectangle()
                             .fill(Color.secondary.opacity(0.45))
                             .frame(width: max(proxy.size.width * uncategorizedFraction, 4))
-                            .help("系统与应用数据：\(FileBrowserPresentation.formatByteCount(report.uncategorizedUsedBytes))")
+                            .help(OpalL10n.format("files.storage.system_help_fmt", FileBrowserPresentation.formatByteCount(report.uncategorizedUsedBytes)))
                     }
                     Spacer(minLength: 0)
                 }
@@ -136,7 +136,7 @@ extension RemoteFileBrowserWindowView {
                 if report.uncategorizedUsedBytes > 0 {
                     HStack(spacing: 7) {
                         Circle().fill(Color.secondary.opacity(0.45)).frame(width: 9, height: 9)
-                        Text("系统及其他").font(.caption.weight(.medium))
+                        Text(OpalL10n.text("files.storage.system_other")).font(.caption.weight(.medium))
                         Text(FileBrowserPresentation.formatByteCount(report.uncategorizedUsedBytes))
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
@@ -177,7 +177,7 @@ extension RemoteFileBrowserWindowView {
                     ProgressView(value: min(max(slice.fractionOfUsed, 0), 1))
                         .tint(tint)
 
-                    Text("\(slice.category.fileCount) 个文件")
+                    Text(OpalL10n.format("files.storage.file_count_fmt", slice.category.fileCount))
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -189,14 +189,13 @@ extension RemoteFileBrowserWindowView {
 
     private func storageSubTabBar(_ report: RemoteStorageReport) -> some View {
         HStack(spacing: OpalSpacing.md) {
-            Picker("存储维度", selection: $activeStorageSubTab) {
-                ForEach(RemoteStorageSubTab.allCases) { tab in
-                    Text(storageSubTabTitle(tab, report: report)).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 440)
+            OpalSegmentedControl(
+                selection: $activeStorageSubTab,
+                options: RemoteStorageSubTab.allCases.map { tab in
+                    OpalSegmentOption(value: tab, label: storageSubTabTitle(tab, report: report))
+                },
+                compact: true
+            )
 
             Spacer()
 
@@ -210,19 +209,19 @@ extension RemoteFileBrowserWindowView {
     private func storageSubTabTitle(_ tab: RemoteStorageSubTab, report: RemoteStorageReport) -> String {
         switch tab {
         case .categories:
-            return tab.rawValue
+            return tab.title
         case .folders:
-            return report.folders.isEmpty ? tab.rawValue : "\(tab.rawValue) (\(report.folders.count))"
+            return report.folders.isEmpty ? tab.title : "\(tab.title) (\(report.folders.count))"
         case .apps:
-            return report.apps.isEmpty ? tab.rawValue : "\(tab.rawValue) (\(report.apps.count))"
+            return report.apps.isEmpty ? tab.title : "\(tab.title) (\(report.apps.count))"
         }
     }
 
     private var storageSubTabHint: String {
         switch activeStorageSubTab {
-        case .categories: return "按媒体与文档类型统计手机内部存储分布"
-        case .folders: return "点击任意文件夹可直接跳转至文件浏览定位"
-        case .apps: return "按应用安装包、数据与缓存排序 · 点击小窗按钮可直接打开清理"
+        case .categories: return OpalL10n.text("files.storage.hint.categories")
+        case .folders: return OpalL10n.text("files.storage.hint.folders")
+        case .apps: return OpalL10n.text("files.storage.hint.apps")
         }
     }
 
@@ -252,19 +251,19 @@ extension RemoteFileBrowserWindowView {
 
         return VStack(alignment: .leading, spacing: OpalSpacing.md) {
             OpalSectionHeader(
-                title: "文件夹空间占用",
+                title: OpalL10n.text("files.storage.folders_title"),
                 systemImage: "folder.fill",
-                badgeText: "\(folders.count) 个目录",
+                badgeText: OpalL10n.format("files.storage.folder_count_fmt", folders.count),
                 badgeColor: .blue
             )
 
             if folders.isEmpty {
                 OpalEmptyStateRow(
                     icon: "folder.badge.questionmark",
-                    title: searchQuery.isEmpty ? "暂无文件夹占用统计" : "没有匹配的文件夹",
+                    title: searchQuery.isEmpty ? OpalL10n.text("files.storage.folders_empty_title") : OpalL10n.text("files.storage.folders_search_empty"),
                     subtitle: searchQuery.isEmpty
-                        ? "请点击右上角刷新按钮重新扫描手机目录空间占用。"
-                        : "请尝试调整顶部筛选关键字。"
+                        ? OpalL10n.text("files.storage.folders_empty_sub")
+                        : OpalL10n.text("files.storage.search_hint")
                 )
             } else {
                 VStack(spacing: OpalSpacing.xs) {
@@ -312,7 +311,7 @@ extension RemoteFileBrowserWindowView {
                         Text(FileBrowserPresentation.formatByteCount(folder.bytes))
                             .font(.callout.weight(.semibold).monospacedDigit())
                             .foregroundStyle(.primary)
-                        Text("\(folder.fileCount) 个文件 · \(shareText)")
+                        Text("\(OpalL10n.format("files.storage.file_count_fmt", folder.fileCount)) · \(shareText)")
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -344,7 +343,7 @@ extension RemoteFileBrowserWindowView {
             .opalInteractiveHover(cornerRadius: OpalRadius.tile)
         }
         .buttonStyle(.plain)
-        .help("点击打开目录 \(folder.path)")
+        .help(OpalL10n.format("files.storage.folder_open_help_fmt", folder.path))
     }
 
     private func appStorageLeaderboardCard(_ report: RemoteStorageReport) -> some View {
@@ -353,9 +352,9 @@ extension RemoteFileBrowserWindowView {
 
         return VStack(alignment: .leading, spacing: OpalSpacing.md) {
             OpalSectionHeader(
-                title: "应用空间排行",
+                title: OpalL10n.text("files.storage.apps_title"),
                 systemImage: "square.stack.3d.up.fill",
-                badgeText: "\(apps.count) 个应用",
+                badgeText: OpalL10n.format("files.storage.app_count_fmt", apps.count),
                 badgeColor: .purple
             )
 
@@ -363,10 +362,10 @@ extension RemoteFileBrowserWindowView {
                 OpalEmptyStateRow(
                     icon: "app.dashed",
                     tint: .orange,
-                    title: searchQuery.isEmpty ? "当前设备未返回应用空间统计" : "没有匹配的应用",
+                    title: searchQuery.isEmpty ? OpalL10n.text("files.storage.apps_empty_title") : OpalL10n.text("files.storage.apps_search_empty"),
                     subtitle: searchQuery.isEmpty
-                        ? "部分 Android ROM 限制或裁剪了 dumpsys diskstats 输出，因此仅展示目录与文件分类统计。"
-                        : "请尝试搜索其他应用名称或包名。"
+                        ? OpalL10n.text("files.storage.apps_empty_sub")
+                        : OpalL10n.text("files.storage.apps_search_sub")
                 )
             } else {
                 VStack(spacing: OpalSpacing.xs) {
@@ -417,7 +416,7 @@ extension RemoteFileBrowserWindowView {
                         tint: .accentColor,
                         size: 26,
                         iconSize: 12,
-                        helpText: "在独立小窗中打开「\(app.displayLabel)」"
+                        helpText: OpalL10n.format("files.storage.app_popout_help_fmt", app.displayLabel)
                     ) {
                         onOpenAppPopout(app)
                     }
@@ -435,19 +434,19 @@ extension RemoteFileBrowserWindowView {
     private func appStorageBreakdownBadges(_ app: AppStorageEntry) -> some View {
         HStack(spacing: 5) {
             StatusBadgeView(
-                text: "应用 \(FileBrowserPresentation.formatByteCount(app.apkBytes))",
+                text: OpalL10n.format("files.storage.badge_app_fmt", FileBrowserPresentation.formatByteCount(app.apkBytes)),
                 color: .blue,
                 horizontalPadding: 6,
                 verticalPadding: 2
             )
             StatusBadgeView(
-                text: "数据 \(FileBrowserPresentation.formatByteCount(app.dataBytes))",
+                text: OpalL10n.format("files.storage.badge_data_fmt", FileBrowserPresentation.formatByteCount(app.dataBytes)),
                 color: .purple,
                 horizontalPadding: 6,
                 verticalPadding: 2
             )
             StatusBadgeView(
-                text: "缓存 \(FileBrowserPresentation.formatByteCount(app.cacheBytes))",
+                text: OpalL10n.format("files.storage.badge_cache_fmt", FileBrowserPresentation.formatByteCount(app.cacheBytes)),
                 color: .orange,
                 horizontalPadding: 6,
                 verticalPadding: 2
@@ -489,14 +488,14 @@ extension RemoteFileBrowserWindowView {
         return VStack(alignment: .leading, spacing: OpalSpacing.md) {
             HStack(spacing: OpalSpacing.sm) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("大文件排行榜 (\(visibleLargeFiles.count))")
+                    Text(OpalL10n.format("files.storage.large_title_fmt", visibleLargeFiles.count))
                         .font(.headline)
                     if !selectedLargeFiles.isEmpty {
-                        Text("已勾选 \(selectedLargeFiles.count) 项 · 可释放 \(FileBrowserPresentation.formatByteCount(selectedBytes))")
+                        Text(OpalL10n.format("files.storage.large_selected_fmt", selectedLargeFiles.count, FileBrowserPresentation.formatByteCount(selectedBytes)))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.orange)
                     } else {
-                        Text("勾选不需要的大文件后可批量备份到 Mac 或删除释放空间")
+                        Text(OpalL10n.text("files.storage.large_hint"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -505,39 +504,35 @@ extension RemoteFileBrowserWindowView {
 
                 if !visibleLargeFiles.isEmpty {
                     let allSelected = selectedLargeFiles.count == visibleLargeFiles.count
-                    Button(allSelected ? "取消全选" : "全选") {
+                    Button(allSelected ? OpalL10n.text("files.storage.deselect_all") : OpalL10n.text("common.select_all")) {
                         if allSelected {
                             selectedLargeFilePaths.removeAll()
                         } else {
                             selectedLargeFilePaths = Set(visibleLargeFiles.map(\.path))
                         }
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
                 }
 
                 if !selectedLargeFiles.isEmpty {
                     Button {
                         actions.onDownloadItems(selectedLargeFiles)
                     } label: {
-                        Label("下载备份", systemImage: "arrow.down.circle")
+                        Label(OpalL10n.text("files.storage.download_backup"), systemImage: "arrow.down.circle")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
 
                     Button(role: .destructive) {
                         pendingDeleteItems = selectedLargeFiles
                     } label: {
-                        Label("批量删除 (\(selectedLargeFiles.count))", systemImage: "trash")
+                        Label(OpalL10n.format("files.storage.batch_delete_fmt", selectedLargeFiles.count), systemImage: "trash")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
-                    .controlSize(.small)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .destructive, size: .small, isPill: true))
                 }
             }
 
             if visibleLargeFiles.isEmpty {
-                Text("未发现匹配的大文件记录。")
+                Text(OpalL10n.text("files.storage.large_empty"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, OpalSpacing.md)
@@ -566,7 +561,7 @@ extension RemoteFileBrowserWindowView {
             )) { EmptyView() }
                 .toggleStyle(.checkbox)
                 .labelsHidden()
-                .accessibilityLabel("选择 \(file.name)")
+                .accessibilityLabel(OpalL10n.format("files.storage.select_a11y_fmt", file.name))
 
             Text("#\(rank)")
                 .font(.caption.weight(.semibold).monospacedDigit())
@@ -601,7 +596,7 @@ extension RemoteFileBrowserWindowView {
                 tint: .secondary,
                 size: 26,
                 iconSize: 13,
-                helpText: "下载备份到 Mac"
+                helpText: OpalL10n.text("files.storage.download_backup_help")
             ) { actions.onDownloadItems([file]) }
 
             OpalGlassIconButton(
@@ -609,7 +604,7 @@ extension RemoteFileBrowserWindowView {
                 tint: .red,
                 size: 26,
                 iconSize: 12.5,
-                helpText: "删除此文件"
+                helpText: OpalL10n.text("files.storage.delete_file_help")
             ) { pendingDeleteItems = [file] }
         }
         .padding(.horizontal, OpalSpacing.md)

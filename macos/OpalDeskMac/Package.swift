@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "OpalDeskMac",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v14)
     ],
@@ -20,6 +21,9 @@ let package = Package(
         .target(
             name: "OpalDeskCore",
             path: "Sources/OpalDeskCore",
+            resources: [
+                .process("Resources")
+            ],
             linkerSettings: [
                 .linkedFramework("Network"),
                 .linkedFramework("Security"),

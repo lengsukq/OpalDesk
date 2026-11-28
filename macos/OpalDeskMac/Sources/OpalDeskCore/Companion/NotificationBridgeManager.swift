@@ -420,15 +420,15 @@ final class SystemUserNotificationCenterAdapter: NSObject, LocalNotificationCent
 
         let copyOtpAction = UNNotificationAction(
             identifier: NotificationBridgeIdentifiers.actionCopyOtp,
-            title: "复制验证码",
+            title: OpalL10n.text("notify.action.copy_otp"),
             options: []
         )
         let inlineReplyAction = UNTextInputNotificationAction(
             identifier: NotificationBridgeIdentifiers.actionInlineReply,
-            title: "回复",
+            title: OpalL10n.text("notify.action.reply"),
             options: [],
-            textInputButtonTitle: "发送",
-            textInputPlaceholder: "输入回复内容..."
+            textInputButtonTitle: OpalL10n.text("notify.action.send"),
+            textInputPlaceholder: OpalL10n.text("notify.action.reply_placeholder")
         )
 
         let plainCategory = UNNotificationCategory(
@@ -820,7 +820,7 @@ public final class NotificationBridgeManager: Sendable {
         let displaySubtitle = item.title.isEmpty ? "" : appTitle
         var displayBody = item.text
         if hasOtp {
-            let otpTag = "验证码：\(item.otpCode)"
+            let otpTag = OpalL10n.format("notify.otp_tag_fmt", item.otpCode)
             if displayBody.isEmpty {
                 displayBody = otpTag
             } else if !displayBody.contains(item.otpCode) {

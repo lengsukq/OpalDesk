@@ -28,35 +28,31 @@ public struct FeedbackTrackingView: View {
         VStack(alignment: .leading, spacing: OpalSpacing.md) {
             HStack(alignment: .center, spacing: OpalSpacing.sm) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(model.feedbackRecords.isEmpty ? "我的反馈追踪" : "我的反馈追踪 (\(model.feedbackRecords.count))")
+                    Text(model.feedbackRecords.isEmpty ? OpalL10n.text("feedback.title") : OpalL10n.format("feedback.title_count_fmt", model.feedbackRecords.count))
                         .font(.headline)
                     Text(statusSubtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(lookupOpen ? "收起查询" : "查反馈码") {
+                Button(lookupOpen ? OpalL10n.text("feedback.hide_lookup") : OpalL10n.text("feedback.lookup_btn")) {
                     lookupOpen.toggle()
                     syncNotice = nil
                 }
-                .buttonStyle(.bordered)
-                .tint(lookupOpen ? .accentColor : nil)
-                .controlSize(.small)
+                .buttonStyle(OpalLiquidButtonStyle(variant: lookupOpen ? .prominent : .secondary, size: .small, isPill: true))
 
-                Button(syncing ? "同步中…" : "刷新状态") { triggerRefresh() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                Button(syncing ? OpalL10n.text("feedback.syncing") : OpalL10n.text("feedback.refresh_status")) { triggerRefresh() }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
                     .disabled(!model.isFeedbackStatusSyncConfigured || syncing || !hasSyncableRecords)
             }
 
             if lookupOpen {
                 HStack(spacing: OpalSpacing.sm) {
-                    TextField("输入 8 位反馈码（如 A1B2C3D4）", text: $lookupCodeInput)
-                        .textFieldStyle(.roundedBorder)
+                    TextField(OpalL10n.text("feedback.code_placeholder"), text: $lookupCodeInput)
+                        .opalLiquidInput()
                         .onSubmit { triggerLookup() }
-                    Button(lookingUp ? "查询中…" : "查询") { triggerLookup() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
+                    Button(lookingUp ? OpalL10n.text("feedback.looking_up") : OpalL10n.text("feedback.lookup_go")) { triggerLookup() }
+                        .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .small, isPill: true))
                         .disabled(!model.isFeedbackStatusSyncConfigured || lookingUp || lookupCodeInput.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
@@ -70,7 +66,7 @@ public struct FeedbackTrackingView: View {
             }
 
             if model.feedbackRecords.isEmpty {
-                Text("暂无本地反馈记录。提交问题或功能建议后会自动在这里追踪处理进度、开发者回复与发布版本；重装或换机可用「查反馈码」找回。")
+                Text(OpalL10n.text("feedback.empty"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(OpalSpacing.md)
@@ -86,11 +82,10 @@ public struct FeedbackTrackingView: View {
                     }
                 }
                 if model.feedbackRecords.count > Self.defaultCollapsedCount {
-                    Button(showAllRecords ? "收起历史记录" : "展开全部 \(model.feedbackRecords.count) 条反馈") {
+                    Button(showAllRecords ? OpalL10n.text("feedback.collapse") : OpalL10n.format("feedback.expand_fmt", model.feedbackRecords.count)) {
                         showAllRecords.toggle()
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
                     .frame(maxWidth: .infinity)
                 }
             }
@@ -106,12 +101,12 @@ public struct FeedbackTrackingView: View {
 
     private var statusSubtitle: String {
         if !model.isFeedbackStatusSyncConfigured {
-            return "当前构建未配置状态查询服务，仅保存本地提交记录"
+            return OpalL10n.text("feedback.sub.unconfigured")
         }
         if model.lastFeedbackSyncAtMs > 0 {
-            return "最近同步：\(Self.formatTime(model.lastFeedbackSyncAtMs))"
+            return OpalL10n.format("feedback.sub.synced_fmt", Self.formatTime(model.lastFeedbackSyncAtMs))
         }
-        return "可查看问题是否修复、功能建议进度与开发者回复"
+        return OpalL10n.text("feedback.sub.default")
     }
 
     private func recordCard(_ record: FeedbackRecord) -> some View {
@@ -131,13 +126,12 @@ public struct FeedbackTrackingView: View {
                         ? record.shortCode
                         : "\(record.shortCode) (\(record.eventId))"
                     pb.setString(val, forType: .string)
-                    model.showToast("已复制反馈码 #\(record.shortCode)")
+                    model.showToast(OpalL10n.format("feedback.copied_code_fmt", record.shortCode))
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .mini, isPill: true))
                 .font(.caption.monospaced().weight(.bold))
 
-                StatusBadgeView(text: isFeature ? "需求" : "问题", color: isFeature ? .cyan : .accentColor)
+                StatusBadgeView(text: isFeature ? OpalL10n.text("feedback.kind.feature") : OpalL10n.text("feedback.kind.bug"), color: isFeature ? .cyan : .accentColor)
 
                 let meta = (record.reportedVersion.isEmpty ? "" : "v\(record.reportedVersion) · ")
                     + Self.formatTime(record.createdAtMs)
@@ -156,7 +150,7 @@ public struct FeedbackTrackingView: View {
                 .lineLimit(2)
 
             if !record.replyNote.isEmpty {
-                Text("开发者回复：\(record.replyNote)")
+                Text(OpalL10n.format("feedback.reply_fmt", record.replyNote))
                     .font(.caption)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
@@ -170,7 +164,7 @@ public struct FeedbackTrackingView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
-                Button("移除") { model.removeFeedbackRecord(eventId: record.eventId) }
+                Button(OpalL10n.text("common.remove")) { model.removeFeedbackRecord(eventId: record.eventId) }
                     .buttonStyle(.borderless)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -188,9 +182,9 @@ public struct FeedbackTrackingView: View {
             let outcome = await model.refreshFeedbackStatuses(force: true)
             syncing = false
             if outcome.success {
-                syncNotice = (outcome.updatedCount > 0 ? "已同步 \(outcome.updatedCount) 条反馈最新进度" : "暂未查询到状态变更", false)
+                syncNotice = (outcome.updatedCount > 0 ? OpalL10n.format("feedback.refresh.updated_fmt", outcome.updatedCount) : OpalL10n.text("feedback.refresh.no_change"), false)
             } else {
-                syncNotice = (outcome.message.isEmpty ? "刷新失败，请稍后再试" : outcome.message, true)
+                syncNotice = (outcome.message.isEmpty ? OpalL10n.text("feedback.refresh.failed") : outcome.message, true)
             }
         }
     }
@@ -199,7 +193,7 @@ public struct FeedbackTrackingView: View {
         guard model.isFeedbackStatusSyncConfigured, !lookingUp else { return }
         let normalized = FeedbackHistoryLogic.normalizeShortCode(lookupCodeInput)
         guard !normalized.isEmpty else {
-            syncNotice = ("请输入有效的 8 位反馈码（如 A1B2C3D4）", true)
+            syncNotice = (OpalL10n.text("feedback.lookup.invalid"), true)
             return
         }
         lookingUp = true
@@ -215,14 +209,14 @@ public struct FeedbackTrackingView: View {
                 let desc: String
                 if item.status == .fixedInVersion && !item.fixedVersion.isEmpty {
                     desc = item.kind == .feature
-                        ? "已查到 #\(normalized)：已在 v\(item.fixedVersion) 实现"
-                        : "已查到 #\(normalized)：已在 v\(item.fixedVersion) 修复"
+                        ? OpalL10n.format("feedback.lookup.found_feature_ver_fmt", normalized, item.fixedVersion)
+                        : OpalL10n.format("feedback.lookup.found_bug_ver_fmt", normalized, item.fixedVersion)
                 } else {
-                    desc = "已查到 #\(normalized)：\(item.status.displayLabel(for: item.kind))"
+                    desc = OpalL10n.format("feedback.lookup.found_status_fmt", normalized, item.status.displayLabel(for: item.kind))
                 }
                 syncNotice = (desc, false)
             } else {
-                syncNotice = (outcome.message.isEmpty ? "未查到 #\(normalized) 对应的记录" : outcome.message, true)
+                syncNotice = (outcome.message.isEmpty ? OpalL10n.format("feedback.lookup.not_found_fmt", normalized) : outcome.message, true)
             }
         }
     }
@@ -231,24 +225,24 @@ public struct FeedbackTrackingView: View {
         let isFeature = record.kind == .feature
         switch record.status {
         case .open:
-            return (isFeature ? "评估中" : "排查中", .orange)
+            return (isFeature ? OpalL10n.text("feedback.status.evaluating") : OpalL10n.text("feedback.status.investigating"), .orange)
         case .fixedPendingRelease:
-            return (isFeature ? "已规划 · 待下版" : "已修复 · 待下版", .cyan)
+            return (isFeature ? OpalL10n.text("feedback.status.planned") : OpalL10n.text("feedback.status.fixed_pending"), .cyan)
         case .ignored:
-            return (isFeature ? "暂不考虑" : "已归档", .secondary)
+            return (isFeature ? OpalL10n.text("feedback.status.wont_do") : OpalL10n.text("feedback.status.archived"), .secondary)
         case .resolvedOther:
-            return (isFeature ? "已采纳" : "已处理", .green)
+            return (isFeature ? OpalL10n.text("feedback.status.adopted") : OpalL10n.text("feedback.status.resolved"), .green)
         case .fixedInVersion:
             switch relation {
             case .fixedInCurrentOrOlder:
-                return (isFeature ? "当前版已上线 (v\(record.fixedVersion))" : "当前版已修复 (v\(record.fixedVersion))", .green)
+                return (isFeature ? OpalL10n.format("feedback.status.shipped_cur_fmt", record.fixedVersion) : OpalL10n.format("feedback.status.fixed_cur_fmt", record.fixedVersion), .green)
             case .fixedInNewerVersion:
-                return (isFeature ? "v\(record.fixedVersion) 已实现 · 可更新" : "v\(record.fixedVersion) 已修复 · 可更新", .accentColor)
+                return (isFeature ? OpalL10n.format("feedback.status.shipped_new_fmt", record.fixedVersion) : OpalL10n.format("feedback.status.fixed_new_fmt", record.fixedVersion), .accentColor)
             default:
                 if !record.fixedVersion.isEmpty {
-                    return (isFeature ? "已在 v\(record.fixedVersion) 实现" : "已在 v\(record.fixedVersion) 修复", .green)
+                    return (isFeature ? OpalL10n.format("feedback.status.shipped_ver_fmt", record.fixedVersion) : OpalL10n.format("feedback.status.fixed_ver_fmt", record.fixedVersion), .green)
                 }
-                return (isFeature ? "已实现" : "已修复", .green)
+                return (isFeature ? OpalL10n.text("feedback.status.shipped") : OpalL10n.text("feedback.status.fixed"), .green)
             }
         }
     }
@@ -256,20 +250,20 @@ public struct FeedbackTrackingView: View {
     private func footerHint(record: FeedbackRecord, relation: FeedbackVersionRelation) -> String {
         if relation == .fixedInCurrentOrOlder && !record.fixedVersion.isEmpty {
             return record.kind == .feature
-                ? "当前运行版本已包含 v\(record.fixedVersion) 的功能更新"
-                : "当前运行版本已包含 v\(record.fixedVersion) 的修复"
+                ? OpalL10n.format("feedback.hint.cur_feature_fmt", record.fixedVersion)
+                : OpalL10n.format("feedback.hint.cur_bug_fmt", record.fixedVersion)
         }
         if relation == .fixedInNewerVersion && !record.fixedVersion.isEmpty {
-            return "请前往 GitHub Releases 更新至 v\(record.fixedVersion)"
+            return OpalL10n.format("feedback.hint.update_fmt", record.fixedVersion)
         }
         if record.lastCheckedAtMs > 0 {
-            return "核验于 \(Self.formatTime(record.lastCheckedAtMs))"
+            return OpalL10n.format("feedback.hint.checked_fmt", Self.formatTime(record.lastCheckedAtMs))
         }
-        return "点击右上角「刷新状态」获取最新进度"
+        return OpalL10n.text("feedback.hint.refresh")
     }
 
     private static func formatTime(_ timestampMs: Int64) -> String {
-        guard timestampMs > 0 else { return "未知时间" }
+        guard timestampMs > 0 else { return OpalL10n.text("feedback.unknown_time") }
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
         df.dateFormat = "MM-dd HH:mm"

@@ -70,11 +70,11 @@ public final class RemoteAppCatalogFetcher {
                 finish(.failure(NSError(
                     domain: "OpalDeskCatalog",
                     code: -2,
-                    userInfo: [NSLocalizedDescriptionKey: "获取应用列表超时，请确认手机端已开启共享并允许连接"]
+                    userInfo: [NSLocalizedDescriptionKey: OpalL10n.text("app.catalog.timeout")]
                 )))
             }
 
-            onStatus("正在连接手机获取应用列表…")
+            onStatus(OpalL10n.text("app.catalog.connecting"))
 
             session.connect(to: endpoint) { event in
                 Task { @MainActor in
@@ -86,9 +86,9 @@ public final class RemoteAppCatalogFetcher {
                         switch state {
                         case .connected:
                             if transportHint == .wifiTls && authToken.isEmpty {
-                                onStatus("请在手机弹窗中点击「允许」以获取应用列表…")
+                                onStatus(OpalL10n.text("app.catalog.waiting_approval"))
                             } else {
-                                onStatus("已连接，正在请求应用目录…")
+                                onStatus(OpalL10n.text("app.catalog.requesting"))
                             }
                             do {
                                 let hello = HelloPayload(
@@ -119,7 +119,7 @@ public final class RemoteAppCatalogFetcher {
                             finish(.failure(NSError(
                                 domain: "OpalDeskCatalog",
                                 code: -3,
-                                userInfo: [NSLocalizedDescriptionKey: "获取应用列表前连接已断开"]
+                                userInfo: [NSLocalizedDescriptionKey: OpalL10n.text("app.catalog.disconnected")]
                             )))
                         default:
                             break
@@ -130,7 +130,7 @@ public final class RemoteAppCatalogFetcher {
                             do {
                                 let auth = try AuthResultPayload.decode(from: frame.payload)
                                 guard auth.ok else {
-                                    let msg = auth.message.isEmpty ? "手机端拒绝了应用目录请求" : auth.message
+                                    let msg = auth.message.isEmpty ? OpalL10n.text("app.catalog.denied") : auth.message
                                     finish(.failure(NSError(
                                         domain: "OpalDeskCatalog",
                                         code: -4,
@@ -144,7 +144,7 @@ public final class RemoteAppCatalogFetcher {
                                 if req.resolvedFingerprint.isEmpty && !auth.certFingerprint.isEmpty {
                                     req.resolvedFingerprint = auth.certFingerprint
                                 }
-                                onStatus("已授权，正在读取已安装应用…")
+                                onStatus(OpalL10n.text("app.catalog.reading"))
                                 session.send(.listApps())
                             } catch {
                                 finish(.failure(error))

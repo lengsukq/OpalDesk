@@ -231,4 +231,33 @@ struct FileBrowserPresentationTests {
         #expect(materialized[0].pathExtension == "png")
         #expect(try Data(contentsOf: materialized[0]) == fakePng)
     }
+
+    @Test("Small-file direct-open policy respects configurable MB threshold and blocks executables")
+    func smallFileDirectOpenPolicy() {
+        let tenMB: Int64 = 10 * 1024 * 1024
+        let pdfUnder = RemoteFileItem(name: "report.pdf", path: "/sdcard/Download/report.pdf", isDirectory: false, sizeBytes: tenMB, modifiedAtMs: 1)
+        let videoOver = RemoteFileItem(name: "clip.mp4", path: "/sdcard/DCIM/clip.mp4", isDirectory: false, sizeBytes: tenMB + 1, modifiedAtMs: 1)
+        let folder = RemoteFileItem(name: "Docs", path: "/sdcard/Docs", isDirectory: true, sizeBytes: 0, modifiedAtMs: 1)
+        let apk = RemoteFileItem(name: "app.apk", path: "/sdcard/app.apk", isDirectory: false, sizeBytes: 1024, modifiedAtMs: 1)
+        let script = RemoteFileItem(name: "run.command", path: "/sdcard/run.command", isDirectory: false, sizeBytes: 512, modifiedAtMs: 1)
+        let winExe = RemoteFileItem(name: "setup.exe", path: "/sdcard/setup.exe", isDirectory: false, sizeBytes: 2048, modifiedAtMs: 1)
+
+        #expect(FileBrowserPresentation.defaultDirectOpenMaxMB == 10)
+        #expect(FileBrowserPresentation.clampDirectOpenMaxMB(-5) == 0)
+        #expect(FileBrowserPresentation.clampDirectOpenMaxMB(999) == FileBrowserPresentation.maxDirectOpenMaxMB)
+
+        // Default 10 MB threshold: <= 10 MB safe files open directly; > 10 MB downloads
+        #expect(FileBrowserPresentation.shouldDirectOpen(pdfUnder, maxSizeMB: 10))
+        #expect(!FileBrowserPresentation.shouldDirectOpen(videoOver, maxSizeMB: 10))
+        #expect(FileBrowserPresentation.shouldDirectOpen(videoOver, maxSizeMB: 25))
+
+        // Disabled (0 MB) always downloads
+        #expect(!FileBrowserPresentation.shouldDirectOpen(pdfUnder, maxSizeMB: 0))
+
+        // Directories, APKs, and executable scripts/binaries never auto direct-open
+        #expect(!FileBrowserPresentation.shouldDirectOpen(folder, maxSizeMB: 100))
+        #expect(!FileBrowserPresentation.shouldDirectOpen(apk, maxSizeMB: 100))
+        #expect(!FileBrowserPresentation.shouldDirectOpen(script, maxSizeMB: 100))
+        #expect(!FileBrowserPresentation.shouldDirectOpen(winExe, maxSizeMB: 100))
+    }
 }

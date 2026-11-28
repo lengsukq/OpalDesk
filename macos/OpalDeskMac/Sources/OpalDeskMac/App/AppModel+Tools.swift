@@ -33,7 +33,7 @@ extension AppModel {
     /// Captures the current projected frame to Desktop as PNG and simultaneously copies it to the macOS clipboard.
     public func captureMainWindowScreenshot() {
         guard isAuthenticated else {
-            showToast("请先连接手机投屏后再截图")
+            showToast(OpalL10n.text("app.tools.screenshot_connect_first"))
             return
         }
         let renderer = videoRenderer
@@ -42,21 +42,21 @@ extension AppModel {
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard let image = await renderer.captureCurrentFrameCGImageAsync(timeoutSeconds: 2.0) else {
-                self.showToast("当前暂无可用视频帧，请稍后重试截图")
+                self.showToast(OpalL10n.text("app.tools.screenshot_no_frame"))
                 return
             }
             do {
                 let savedURL = try WindowMediaCapture.saveImageToFile(image, prefix: prefix)
                 _ = try? WindowMediaCapture.writeImageToClipboard(image)
                 self.showToast(
-                    "截图已保存到桌面并复制剪贴板",
+                    OpalL10n.text("app.tools.screenshot_saved"),
                     durationSeconds: 5.0,
-                    actionTitle: "在 Finder 显示",
+                    actionTitle: OpalL10n.text("common.reveal_in_finder"),
                     revealURL: savedURL
                 )
             } catch {
                 OpalDeskLog.video.error("Main screenshot failed: \(error.localizedDescription, privacy: .public)")
-                self.showToast("截图失败：\(error.localizedDescription)")
+                self.showToast(OpalL10n.format("app.popout.screenshot_failed_fmt", error.localizedDescription))
             }
         }
     }
@@ -72,7 +72,7 @@ extension AppModel {
 
     public func startMainWindowRecording() {
         guard isAuthenticated else {
-            showToast("请先连接手机投屏后再录屏")
+            showToast(OpalL10n.text("app.tools.rec_connect_first"))
             return
         }
         guard !screenRecorder.isRecording else { return }
@@ -92,11 +92,11 @@ extension AppModel {
             )
             isMainWindowRecording = true
             mainRecordingDurationSeconds = 0
-            showToast("开始录制 MP4 视频（零编码直写）", durationSeconds: 2.2)
+            showToast(OpalL10n.text("app.tools.rec_started"), durationSeconds: 2.2)
         } catch {
             isMainWindowRecording = false
             OpalDeskLog.video.error("Failed to start main screen recording: \(error.localizedDescription, privacy: .public)")
-            showToast("启动录屏失败：\(error.localizedDescription)")
+            showToast(OpalL10n.format("app.popout.rec_start_failed_fmt", error.localizedDescription))
         }
     }
 
@@ -114,16 +114,16 @@ extension AppModel {
                 self.mainRecordingDurationSeconds = 0
                 let durText = Self.formatRecordingDuration(result.durationSeconds)
                 self.showToast(
-                    "录屏已保存至桌面（\(durText)）",
+                    OpalL10n.format("app.tools.rec_saved_fmt", durText),
                     durationSeconds: 6.0,
-                    actionTitle: "在 Finder 显示",
+                    actionTitle: OpalL10n.text("common.reveal_in_finder"),
                     revealURL: result.url
                 )
             } catch {
                 self.isMainWindowRecording = false
                 self.mainRecordingDurationSeconds = 0
                 OpalDeskLog.video.warning("Main screen recording stop error: \(error.localizedDescription, privacy: .public)")
-                self.showToast("录屏结束失败：\(error.localizedDescription)")
+                self.showToast(OpalL10n.format("app.popout.rec_stop_failed_fmt", error.localizedDescription))
             }
         }
     }
@@ -167,13 +167,13 @@ extension AppModel {
                 guard self.isAnyChannelConnected else {
                     self.onRequestOpenMainWindow?()
                     NSApp.activate(ignoringOtherApps: true)
-                    let msg = "未连接到 Android 设备，无法通过 Finder 发送文件"
+                    let msg = OpalL10n.text("app.tools.finder_disconnected")
                     self.bannerError = msg
                     self.showToast(msg)
                     return
                 }
                 self.sendFiles(urls)
-                self.showToast("正在发送 \(urls.count) 个文件到「\(self.activeChannelDeviceName)」…")
+                self.showToast(OpalL10n.format("app.tools.sending_files_fmt", urls.count, self.activeChannelDeviceName))
             },
             onApkPackageReceived: { [weak self] apkURL in
                 self?.presentApkInstaller(forLocalURL: apkURL, targetWindow: .main)
@@ -231,6 +231,7 @@ extension AppModel {
                         packageName: request.packageName,
                         activityClass: request.activityClass ?? "",
                         appLabel: request.label ?? request.packageName,
+                        userId: request.userId,
                         preferredDeviceKey: request.deviceKey,
                         preferredDeviceName: request.deviceName,
                         waitForDiscoveryIfNeeded: true
@@ -259,7 +260,9 @@ extension AppModel {
             appLabel: app.displayLabel,
             deviceKey: deviceKey,
             deviceName: deviceName,
-            iconPNGData: nil
+            iconPNGData: nil,
+            userId: app.userId,
+            profileType: app.profileType
         )
         do {
             let created = try AppShortcutBuilder.createShortcut(
@@ -269,15 +272,15 @@ extension AppModel {
                 refreshSpotlight: true
             )
             showToast(
-                "已创建「\(created.displayName)」Spotlight 快捷方式",
+                OpalL10n.format("app.tools.shortcut_created_fmt", created.displayName),
                 durationSeconds: 5.0,
-                actionTitle: "在 Finder 显示",
+                actionTitle: OpalL10n.text("common.reveal_in_finder"),
                 revealURL: created.bundleURL
             )
         } catch {
             OpalDeskLog.warn("app", "Failed to create Spotlight shortcut for \(app.pkg): \(error.localizedDescription)")
             bannerError = error.localizedDescription
-            showToast("创建快捷方式失败：\(error.localizedDescription)")
+            showToast(OpalL10n.format("app.tools.shortcut_failed_fmt", error.localizedDescription))
         }
     }
 
@@ -304,7 +307,9 @@ extension AppModel {
                     activityClass: app.cls.isEmpty ? nil : app.cls,
                     appLabel: app.displayLabel,
                     deviceKey: devKey,
-                    deviceName: conn.deviceName
+                    deviceName: conn.deviceName,
+                    userId: app.userId,
+                    profileType: app.profileType
                 ))
             }
         }
@@ -317,7 +322,9 @@ extension AppModel {
                     activityClass: app.cls.isEmpty ? nil : app.cls,
                     appLabel: app.displayLabel,
                     deviceKey: devKey,
-                    deviceName: target.deviceName
+                    deviceName: target.deviceName,
+                    userId: app.userId,
+                    profileType: app.profileType
                 ))
             }
         }
@@ -328,7 +335,9 @@ extension AppModel {
                 activityClass: entry.appActivity.isEmpty ? nil : entry.appActivity,
                 appLabel: entry.displayLabel,
                 deviceKey: entry.deviceKey.isEmpty ? nil : entry.deviceKey,
-                deviceName: entry.deviceName
+                deviceName: entry.deviceName,
+                userId: entry.appUserId,
+                profileType: entry.appProfileType
             ))
         }
 
@@ -345,8 +354,8 @@ extension AppModel {
 
     public func presentApkFileChooser(targetWindow: ApkInstallerContext.PresentationTarget = .main) {
         let panel = NSOpenPanel()
-        panel.title = "选择要安装的 Android 安装包 (.apk / .apks / .apkm / .xapk)"
-        panel.prompt = "预览并安装"
+        panel.title = OpalL10n.text("app.tools.apk_panel_title")
+        panel.prompt = OpalL10n.text("app.tools.apk_panel_prompt")
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -379,7 +388,7 @@ extension AppModel {
 
     public func presentApkInstaller(forRemoteItem item: RemoteFileItem) {
         guard let detectedFormat = AndroidPackageFormat.detect(fileExtension: item.fileExtension) else {
-            showToast("不支持的安装包格式：\(item.name)")
+            showToast(OpalL10n.format("app.tools.apk_unsupported_fmt", item.name))
             return
         }
         let preloaded = AndroidPackageInfo(
@@ -389,7 +398,7 @@ extension AppModel {
             format: detectedFormat,
             packageName: item.path,
             appName: (item.name as NSString).deletingPathExtension,
-            warnings: ["此安装包已位于手机存储（\(item.path)），点击安装将直接调用手机端安装器，无需重复上传。"]
+            warnings: [OpalL10n.format("app.tools.apk_remote_warning_fmt", item.path)]
         )
         activeApkInstallTask?.cancel()
         activeApkInstallTask = nil
@@ -423,11 +432,11 @@ extension AppModel {
     ) {
         guard let context = apkInstallerContext else { return }
         guard isAnyChannelConnected else {
-            apkInstallState = .failed(message: "未连接到 Android 设备，请先连接投屏或等待后台伴侣上线")
+            apkInstallState = .failed(message: OpalL10n.text("app.tools.apk_disconnected"))
             return
         }
         guard let wireFormat = OpalCastApkFormat(rawValue: info.format.rawValue) else {
-            apkInstallState = .failed(message: "不支持的安装包格式：\(info.format.rawValue)")
+            apkInstallState = .failed(message: OpalL10n.format("app.tools.apk_unsupported_fmt", info.format.rawValue))
             return
         }
 
@@ -445,7 +454,7 @@ extension AppModel {
                         .replacingOccurrences(of: "/", with: "_")
                         .replacingOccurrences(of: "\\", with: "_")
                     let stagedRemoteName = "@apk_stage/\(cleanName)"
-                    self.apkInstallState = .uploading(progress: 0.0, message: "正在上传 \(info.fileName)…")
+                    self.apkInstallState = .uploading(progress: 0.0, message: OpalL10n.format("app.tools.apk_uploading_fmt", info.fileName))
                     remotePath = try await self.uploadFileAwaitingAck(
                         url: context.packageURL,
                         remoteFileNameOverride: stagedRemoteName,
@@ -456,12 +465,12 @@ extension AppModel {
                                 let pct = Int((progress.fractionCompleted * 100).rounded())
                                 self.apkInstallState = .uploading(
                                     progress: progress.fractionCompleted,
-                                    message: "正在上传 \(info.fileName)（\(pct)%）"
+                                    message: OpalL10n.format("app.tools.apk_uploading_pct_fmt", info.fileName, pct)
                                 )
                             case .awaitingAck:
                                 self.apkInstallState = .uploading(
                                     progress: 0.99,
-                                    message: "上传完毕，等待手机端校验落盘…"
+                                    message: OpalL10n.text("app.tools.apk_verifying")
                                 )
                             default:
                                 break
@@ -471,7 +480,7 @@ extension AppModel {
                 }
 
                 try Task.checkCancellation()
-                self.apkInstallState = .installing(progress: 0.05, message: "已提交安装请求，等待手机端响应…")
+                self.apkInstallState = .installing(progress: 0.05, message: OpalL10n.text("app.tools.apk_request_sent"))
 
                 let statusStream = self.fileBrowserClient.requestApkInstall(
                     filePath: remotePath,
@@ -494,17 +503,17 @@ extension AppModel {
                         self.apkInstallState = .installing(progress: fraction, message: detail)
                     case .succeeded:
                         reachedTerminal = true
-                        let msg = detail ?? "已成功安装 \(status.packageName.isEmpty ? installLabel : status.packageName)"
+                        let msg = detail ?? OpalL10n.format("app.tools.apk_installed_fmt", status.packageName.isEmpty ? installLabel : status.packageName)
                         self.apkInstallState = .succeeded(message: msg)
-                        self.showToast("「\(installLabel)」已安装至「\(self.activeChannelDeviceName)」")
+                        self.showToast(OpalL10n.format("app.tools.apk_installed_toast_fmt", installLabel, self.activeChannelDeviceName))
                     case .failed:
                         reachedTerminal = true
-                        self.apkInstallState = .failed(message: detail ?? "手机端安装包安装失败")
+                        self.apkInstallState = .failed(message: detail ?? OpalL10n.text("app.tools.apk_failed_default"))
                     }
                 }
 
                 if !reachedTerminal && !Task.isCancelled {
-                    self.apkInstallState = .succeeded(message: "安装流程已完成")
+                    self.apkInstallState = .succeeded(message: OpalL10n.text("app.tools.apk_done_default"))
                 }
             } catch is CancellationError {
                 self.apkInstallState = .idle
@@ -590,7 +599,7 @@ extension AppModel {
                     cont.resume(throwing: NSError(
                         domain: "OpalDeskApkUpload",
                         code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: reason.isEmpty ? "安装包上传失败" : reason]
+                        userInfo: [NSLocalizedDescriptionKey: reason.isEmpty ? OpalL10n.text("app.tools.apk_upload_failed") : reason]
                     ))
                 }
             case .cancelled:

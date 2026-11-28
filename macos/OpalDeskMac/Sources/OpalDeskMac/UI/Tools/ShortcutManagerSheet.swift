@@ -6,7 +6,7 @@ import SwiftUI
 public struct ShortcutAppCandidate: Sendable, Equatable, Hashable, Identifiable {
     public var id: String {
         let dev = deviceKey ?? ""
-        return "\(dev)::\(packageName)::\(activityClass ?? "")"
+        return "\(dev)::\(appKey)::\(activityClass ?? "")"
     }
 
     public let packageName: String
@@ -15,6 +15,16 @@ public struct ShortcutAppCandidate: Sendable, Equatable, Hashable, Identifiable 
     public let deviceKey: String?
     public let deviceName: String?
     public let iconPNGData: Data?
+    public let userId: Int
+    public let profileType: String
+
+    public var appKey: String {
+        RemoteAppInfo.formatAppKey(pkg: packageName, userId: userId)
+    }
+
+    public var profileBadgeText: String? {
+        RemoteAppInfo.profileBadgeText(userId: userId, profileType: profileType)
+    }
 
     public init(
         packageName: String,
@@ -22,14 +32,19 @@ public struct ShortcutAppCandidate: Sendable, Equatable, Hashable, Identifiable 
         appLabel: String,
         deviceKey: String? = nil,
         deviceName: String? = nil,
-        iconPNGData: Data? = nil
+        iconPNGData: Data? = nil,
+        userId: Int = 0,
+        profileType: String = ""
     ) {
+        let normalizedUid = max(0, userId)
         self.packageName = packageName
         self.activityClass = activityClass
         self.appLabel = appLabel
         self.deviceKey = deviceKey
         self.deviceName = deviceName
         self.iconPNGData = iconPNGData
+        self.userId = normalizedUid
+        self.profileType = RemoteAppInfo.normalizeProfileType(profileType, userId: normalizedUid)
     }
 
     public func toShortcutSpec() -> AppShortcutSpec {
@@ -39,7 +54,9 @@ public struct ShortcutAppCandidate: Sendable, Equatable, Hashable, Identifiable 
             appLabel: appLabel,
             deviceKey: deviceKey,
             deviceName: deviceName,
-            iconPNGData: iconPNGData
+            iconPNGData: iconPNGData,
+            userId: userId,
+            profileType: profileType
         )
     }
 }
@@ -54,9 +71,9 @@ public enum ShortcutDirectoryPreset: String, CaseIterable, Identifiable, Sendabl
 
     public var title: String {
         switch self {
-        case .spotlightApps: return "Spotlight 应用目录"
-        case .desktop: return "桌面 (Desktop)"
-        case .custom: return "自定义目录"
+        case .spotlightApps: return OpalL10n.text("shortcut.dir.spotlight")
+        case .desktop: return OpalL10n.text("shortcut.dir.desktop")
+        case .custom: return OpalL10n.text("shortcut.dir.custom")
         }
     }
 }
@@ -121,9 +138,9 @@ public struct ShortcutManagerSheet: View {
             OpalSheetHeader(
                 icon: "app.badge.checkmark.fill",
                 iconTint: .purple,
-                title: "Spotlight 与桌面快捷方式",
-                subtitle: "为手机应用生成原生 macOS .app 入口，支持 Spotlight 聚焦搜索与双击打开独立小窗。",
-                badgeText: "\(shortcuts.count) 个已创建",
+                title: OpalL10n.text("shortcut.title"),
+                subtitle: OpalL10n.text("shortcut.subtitle"),
+                badgeText: OpalL10n.format("shortcut.badge_count_fmt", shortcuts.count),
                 badgeColor: .accentColor
             )
 
@@ -149,11 +166,11 @@ public struct ShortcutManagerSheet: View {
         .padding(OpalSpacing.xl)
         .opalModalSheetChrome(width: 600)
         .onAppear { reloadShortcuts() }
-        .alert("移除当前目录全部快捷方式？", isPresented: $confirmClearAll) {
-            Button("取消", role: .cancel) {}
-            Button("全部移除", role: .destructive) { removeAllInActiveDirectory() }
+        .alert(OpalL10n.text("shortcut.clear_alert.title"), isPresented: $confirmClearAll) {
+            Button(OpalL10n.text("common.cancel"), role: .cancel) {}
+            Button(OpalL10n.text("shortcut.clear_alert.confirm"), role: .destructive) { removeAllInActiveDirectory() }
         } message: {
-            Text("仅移除由 OpalDesk 生成的 .app 快捷方式（共 \(shortcuts.count) 项），不会影响目录内的其他文件。")
+            Text(OpalL10n.format("shortcut.clear_alert.msg_fmt", shortcuts.count))
         }
     }
 
@@ -162,13 +179,15 @@ public struct ShortcutManagerSheet: View {
     private var directoryBar: some View {
         VStack(alignment: .leading, spacing: OpalSpacing.sm) {
             HStack(spacing: OpalSpacing.sm) {
-                Picker("目标目录", selection: $directoryPreset) {
-                    Text("Spotlight 目录").tag(ShortcutDirectoryPreset.spotlightApps)
-                    Text("桌面").tag(ShortcutDirectoryPreset.desktop)
-                    Text("自定义").tag(ShortcutDirectoryPreset.custom)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                OpalSegmentedControl(
+                    selection: $directoryPreset,
+                    options: [
+                        OpalSegmentOption(value: ShortcutDirectoryPreset.spotlightApps, label: OpalL10n.text("shortcut.dir.spotlight_short")),
+                        OpalSegmentOption(value: ShortcutDirectoryPreset.desktop, label: OpalL10n.text("shortcut.dir.desktop_short")),
+                        OpalSegmentOption(value: ShortcutDirectoryPreset.custom, label: OpalL10n.text("shortcut.dir.custom_short")),
+                    ],
+                    compact: true
+                )
                 .onChange(of: directoryPreset) { _, newValue in
                     switch newValue {
                     case .spotlightApps:
@@ -182,14 +201,16 @@ public struct ShortcutManagerSheet: View {
                     }
                 }
 
-                Button("选择目录…") { pickCustomDirectory() }
-                    .controlSize(.small)
+                Spacer(minLength: 4)
+
+                Button(OpalL10n.text("shortcut.choose_dir")) { pickCustomDirectory() }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
 
                 OpalGlassIconButton(
                     systemName: "folder",
-                    size: 26,
+                    size: 28,
                     iconSize: 12,
-                    helpText: "在 Finder 中打开目录"
+                    helpText: OpalL10n.text("shortcut.open_dir_help")
                 ) {
                     NSWorkspace.shared.open(activeDirectory)
                 }
@@ -207,17 +228,18 @@ public struct ShortcutManagerSheet: View {
 
     private var tabAndSearchBar: some View {
         HStack(spacing: OpalSpacing.sm) {
-            Picker("视图", selection: $selectedTab) {
-                Text("已创建 (\(shortcuts.count))").tag(SheetTab.installed)
-                Text("批量创建 (\(availableApps.count))").tag(SheetTab.createBatch)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 240)
+            OpalSegmentedControl(
+                selection: $selectedTab,
+                options: [
+                    OpalSegmentOption(value: SheetTab.installed, label: OpalL10n.format("shortcut.tab.installed_fmt", shortcuts.count)),
+                    OpalSegmentOption(value: SheetTab.createBatch, label: OpalL10n.format("shortcut.tab.batch_fmt", availableApps.count)),
+                ],
+                compact: true
+            )
 
             Spacer()
 
-            OpalSearchField(placeholder: "搜索应用名或包名…", text: $searchQuery)
+            OpalSearchField(placeholder: OpalL10n.text("shortcut.search_placeholder"), text: $searchQuery)
                 .frame(width: 230)
         }
     }
@@ -239,13 +261,12 @@ public struct ShortcutManagerSheet: View {
         if filteredShortcuts.isEmpty {
             VStack(spacing: OpalSpacing.sm) {
                 OpalIconBadge(systemName: "sparkles.rectangle.stack", tint: .secondary, size: 46, iconSize: 20, cornerRadius: 14)
-                Text(shortcuts.isEmpty ? "当前目录尚未创建快捷方式" : "没有匹配的快捷方式")
+                Text(shortcuts.isEmpty ? OpalL10n.text("shortcut.empty.none") : OpalL10n.text("shortcut.empty.no_match"))
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
                 if !availableApps.isEmpty && shortcuts.isEmpty {
-                    Button("前往批量创建") { selectedTab = .createBatch }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
+                    Button(OpalL10n.text("shortcut.go_batch")) { selectedTab = .createBatch }
+                        .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .small, isPill: true))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -295,17 +316,16 @@ public struct ShortcutManagerSheet: View {
                 Button {
                     launchShortcut(shortcut)
                 } label: {
-                    Label("测试启动", systemImage: "play.fill")
+                    Label(OpalL10n.text("shortcut.test_launch"), systemImage: "play.fill")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
 
                 OpalGlassIconButton(
                     systemName: "folder",
                     tint: .secondary,
                     size: 26,
                     iconSize: 12,
-                    helpText: "在 Finder 中显示"
+                    helpText: OpalL10n.text("common.reveal_in_finder")
                 ) { revealShortcut(shortcut) }
 
                 OpalGlassIconButton(
@@ -313,7 +333,7 @@ public struct ShortcutManagerSheet: View {
                     tint: .red,
                     size: 26,
                     iconSize: 12,
-                    helpText: "删除快捷方式"
+                    helpText: OpalL10n.text("shortcut.delete_help")
                 ) { deleteShortcut(shortcut) }
             }
         }
@@ -331,11 +351,14 @@ public struct ShortcutManagerSheet: View {
         return availableApps.filter {
             $0.appLabel.lowercased().contains(q)
                 || $0.packageName.lowercased().contains(q)
+                || ($0.profileBadgeText?.lowercased().contains(q) ?? false)
+                || RemoteAppInfo.profileSearchKeywords(userId: $0.userId, profileType: $0.profileType)
+                    .contains(where: { $0.lowercased().contains(q) })
         }
     }
 
-    private var existingPackageNames: Set<String> {
-        Set(shortcuts.map(\.packageName))
+    private var existingAppKeys: Set<String> {
+        Set(shortcuts.map(\.appKey))
     }
 
     @ViewBuilder
@@ -343,10 +366,10 @@ public struct ShortcutManagerSheet: View {
         if availableApps.isEmpty {
             VStack(spacing: OpalSpacing.sm) {
                 OpalIconBadge(systemName: "apps.iphone", tint: .secondary, size: 46, iconSize: 20, cornerRadius: 14)
-                Text("暂无可创建的手机应用列表")
+                Text(OpalL10n.text("shortcut.batch.empty_title"))
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
-                Text("连接手机并加载应用列表后，可在此一键批量生成 Spotlight 或桌面快捷方式。")
+                Text(OpalL10n.text("shortcut.batch.empty_sub"))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
@@ -357,20 +380,20 @@ public struct ShortcutManagerSheet: View {
         } else {
             VStack(alignment: .leading, spacing: OpalSpacing.sm) {
                 HStack {
-                    Button("全选当前列表") {
+                    Button(OpalL10n.text("shortcut.batch.select_all")) {
                         selectedCandidateIds.formUnion(filteredCandidates.map(\.id))
                     }
-                    .controlSize(.small)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
 
-                    Button("取消选择") {
+                    Button(OpalL10n.text("common.deselect")) {
                         selectedCandidateIds.removeAll()
                     }
-                    .controlSize(.small)
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
                     .disabled(selectedCandidateIds.isEmpty)
 
                     Spacer()
 
-                    Text("已选 \(selectedCandidateIds.count) 项")
+                    Text(OpalL10n.format("shortcut.batch.selected_fmt", selectedCandidateIds.count))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -390,7 +413,7 @@ public struct ShortcutManagerSheet: View {
 
     private func candidateRow(_ candidate: ShortcutAppCandidate) -> some View {
         let isSelected = selectedCandidateIds.contains(candidate.id)
-        let alreadyExists = existingPackageNames.contains(candidate.packageName)
+        let alreadyExists = existingAppKeys.contains(candidate.appKey)
 
         return HStack(spacing: OpalSpacing.md) {
             Toggle(isOn: Binding(
@@ -404,7 +427,7 @@ public struct ShortcutManagerSheet: View {
 
             OpalAppMonogram(
                 label: candidate.appLabel,
-                packageKey: candidate.packageName,
+                packageKey: candidate.appKey,
                 iconData: candidate.iconPNGData,
                 fallbackSymbol: "app.fill",
                 size: 34,
@@ -416,11 +439,20 @@ public struct ShortcutManagerSheet: View {
                     Text(candidate.appLabel)
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
+                    if let badge = candidate.profileBadgeText {
+                        StatusBadgeView(
+                            text: badge,
+                            color: .opalProfileTint(candidate.profileType),
+                            horizontalPadding: 6,
+                            verticalPadding: 1,
+                            backgroundOpacity: 0.16
+                        )
+                    }
                     if alreadyExists {
-                        StatusBadgeView(text: "已存在", color: .green, horizontalPadding: 6, verticalPadding: 1)
+                        StatusBadgeView(text: OpalL10n.text("shortcut.batch.exists"), color: .green, horizontalPadding: 6, verticalPadding: 1)
                     }
                 }
-                Text(candidate.packageName)
+                Text(candidate.userId > 0 ? "\(candidate.packageName) · u\(candidate.userId)" : candidate.packageName)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -444,19 +476,22 @@ public struct ShortcutManagerSheet: View {
     private var footerSection: some View {
         HStack {
             if selectedTab == .installed {
-                Button("清空当前目录", role: .destructive) { confirmClearAll = true }
+                Button(OpalL10n.text("shortcut.footer.clear_dir"), role: .destructive) { confirmClearAll = true }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .destructive, size: .regular, isPill: true))
                     .disabled(shortcuts.isEmpty)
 
-                Button("刷新") { reloadShortcuts() }
+                Button(OpalL10n.text("common.refresh")) { reloadShortcuts() }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .regular, isPill: true))
             } else {
-                Button("批量创建 (\(selectedCandidateIds.count))") { createSelectedShortcuts() }
-                    .buttonStyle(.borderedProminent)
+                Button(OpalL10n.format("shortcut.footer.create_fmt", selectedCandidateIds.count)) { createSelectedShortcuts() }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .regular, isPill: true))
                     .disabled(selectedCandidateIds.isEmpty)
             }
 
             Spacer()
 
-            Button("关闭", action: onClose)
+            Button(OpalL10n.text("common.close"), action: onClose)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .regular, isPill: true))
                 .keyboardShortcut(.cancelAction)
         }
     }
@@ -491,7 +526,7 @@ public struct ShortcutManagerSheet: View {
     private func deleteShortcut(_ shortcut: CreatedAppShortcut) {
         do {
             try AppShortcutBuilder.removeShortcut(at: shortcut.bundleURL)
-            statusBanner = "已删除快捷方式「\(shortcut.displayName)」"
+            statusBanner = OpalL10n.format("shortcut.status.deleted_fmt", shortcut.displayName)
             errorBanner = nil
             reloadShortcuts()
         } catch {
@@ -502,7 +537,7 @@ public struct ShortcutManagerSheet: View {
     private func removeAllInActiveDirectory() {
         do {
             let removed = try AppShortcutBuilder.removeAllShortcuts(in: activeDirectory)
-            statusBanner = "已移除 \(removed) 个 OpalDesk 快捷方式"
+            statusBanner = OpalL10n.format("shortcut.status.removed_all_fmt", removed)
             errorBanner = nil
             reloadShortcuts()
         } catch {
@@ -524,7 +559,7 @@ public struct ShortcutManagerSheet: View {
                 refreshSpotlight: refreshSpotlightOnWrite
             )
             selectedCandidateIds.removeAll()
-            statusBanner = "已在 \(activeDirectory.lastPathComponent) 创建 \(created.count) 个快捷方式"
+            statusBanner = OpalL10n.format("shortcut.status.created_fmt", created.count, activeDirectory.lastPathComponent)
             errorBanner = nil
             selectedTab = .installed
             reloadShortcuts()
@@ -540,7 +575,7 @@ public struct ShortcutManagerSheet: View {
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.directoryURL = activeDirectory
-        panel.prompt = "选择目录"
+        panel.prompt = OpalL10n.text("shortcut.panel.prompt")
         if panel.runModal() == .OK, let url = panel.url {
             activeDirectory = url
             directoryPreset = .custom

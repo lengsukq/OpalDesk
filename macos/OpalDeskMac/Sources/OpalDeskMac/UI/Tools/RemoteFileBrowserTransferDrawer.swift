@@ -18,7 +18,7 @@ extension RemoteFileBrowserWindowView {
                     HStack(spacing: OpalSpacing.xs) {
                         Image(systemName: isTransferDrawerExpanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 10.5, weight: .semibold))
-                        Text(activeCount > 0 ? "传输队列（进行中 \(activeCount) / 共 \(transfers.count) 项）" : "传输记录（共 \(transfers.count) 项）")
+                        Text(activeCount > 0 ? OpalL10n.format("files.transfer.active_fmt", activeCount, transfers.count) : OpalL10n.format("files.transfer.history_fmt", transfers.count))
                             .font(.caption.weight(.semibold))
                     }
                 }
@@ -27,7 +27,7 @@ extension RemoteFileBrowserWindowView {
                 Spacer()
 
                 if transfers.contains(where: { $0.state.isTerminal }) {
-                    Button("清除已完成") { actions.onClearCompletedTransfers() }
+                    Button(OpalL10n.text("files.transfer.clear_completed")) { actions.onClearCompletedTransfers() }
                         .buttonStyle(.borderless)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -84,7 +84,7 @@ extension RemoteFileBrowserWindowView {
                     tint: .secondary,
                     size: 22,
                     iconSize: 10,
-                    helpText: "移除此记录"
+                    helpText: OpalL10n.text("files.transfer.remove_help")
                 ) { actions.onDismissTransfer(transfer.id) }
             } else {
                 OpalGlassIconButton(
@@ -92,7 +92,7 @@ extension RemoteFileBrowserWindowView {
                     tint: .secondary,
                     size: 22,
                     iconSize: 12,
-                    helpText: "取消传输"
+                    helpText: OpalL10n.text("display.transfer.cancel_help")
                 ) { actions.onCancelTransfer(transfer.id) }
             }
         }
@@ -111,12 +111,12 @@ extension RemoteFileBrowserWindowView {
             OpalSheetHeader(
                 icon: "folder.badge.plus",
                 iconTint: .accentColor,
-                title: "新建文件夹",
-                subtitle: "将在「\(currentPath)」下创建子目录"
+                title: OpalL10n.text("files.new_folder"),
+                subtitle: OpalL10n.format("files.new_folder.subtitle_fmt", currentPath)
             )
 
-            TextField("输入文件夹名称", text: $newFolderName)
-                .textFieldStyle(.roundedBorder)
+            TextField(OpalL10n.text("files.new_folder.placeholder"), text: $newFolderName)
+                .opalLiquidInput()
                 .onSubmit {
                     if FileBrowserPresentation.joining(base: currentPath, name: newFolderName) != nil {
                         let clean = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -126,19 +126,20 @@ extension RemoteFileBrowserWindowView {
                 }
 
             if showValidationError {
-                OpalNoticeBanner(tone: .error, message: "名称不能为空、不能为 . 或 ..，且不能包含 / 或 \\。")
+                OpalNoticeBanner(tone: .error, message: OpalL10n.text("files.new_folder.invalid"))
             }
 
             HStack {
-                Button("取消", role: .cancel) { isNewFolderPresented = false }
+                Button(OpalL10n.text("common.cancel"), role: .cancel) { isNewFolderPresented = false }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .regular, isPill: true))
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("创建") {
+                Button(OpalL10n.text("common.create")) {
                     let clean = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
                     isNewFolderPresented = false
                     actions.onCreateFolder(currentPath, clean)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .regular, isPill: true))
                 .disabled(joinedPath == nil)
                 .keyboardShortcut(.defaultAction)
             }
@@ -158,12 +159,12 @@ extension RemoteFileBrowserWindowView {
             OpalSheetHeader(
                 icon: "pencil",
                 iconTint: .accentColor,
-                title: "重命名项目",
+                title: OpalL10n.text("files.rename.title"),
                 subtitle: item.name
             )
 
-            TextField("输入新名称", text: $renameInput)
-                .textFieldStyle(.roundedBorder)
+            TextField(OpalL10n.text("files.rename.placeholder"), text: $renameInput)
+                .opalLiquidInput()
                 .onSubmit {
                     if joinedPath != nil && isChanged {
                         renamingItem = nil
@@ -172,18 +173,19 @@ extension RemoteFileBrowserWindowView {
                 }
 
             if showValidationError {
-                OpalNoticeBanner(tone: .error, message: "名称不能为 . 或 ..，且不能包含 / 或 \\。")
+                OpalNoticeBanner(tone: .error, message: OpalL10n.text("files.rename.invalid"))
             }
 
             HStack {
-                Button("取消", role: .cancel) { renamingItem = nil }
+                Button(OpalL10n.text("common.cancel"), role: .cancel) { renamingItem = nil }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .regular, isPill: true))
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("确定") {
+                Button(OpalL10n.text("common.ok")) {
                     renamingItem = nil
                     actions.onRenameItem(item, trimmed)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .regular, isPill: true))
                 .disabled(joinedPath == nil || !isChanged)
                 .keyboardShortcut(.defaultAction)
             }

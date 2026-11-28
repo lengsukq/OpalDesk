@@ -32,6 +32,8 @@ public final class PreferencesStore {
         static let enableEdgeNavigationGestures = "opaldesk.pref.enableEdgeNavigationGestures"
         static let callControlEnabled = "opaldesk.pref.callControlEnabled"
         static let bleNearbyDiscoveryEnabled = "opaldesk.pref.bleNearbyDiscoveryEnabled"
+        static let fileDirectOpenMaxMB = "opaldesk.pref.fileDirectOpenMaxMB"
+        static let appLanguage = "opaldesk.pref.appLanguage"
     }
 
     private let defaults: UserDefaults
@@ -145,6 +147,30 @@ public final class PreferencesStore {
         didSet { defaults.set(bleNearbyDiscoveryEnabled, forKey: Key.bleNearbyDiscoveryEnabled) }
     }
 
+    /// Max file size in MB (default 10; 0 disables) eligible for direct-open from the bounded temp cache.
+    public var fileDirectOpenMaxMB: Int {
+        didSet {
+            let clamped = FileBrowserPresentation.clampDirectOpenMaxMB(fileDirectOpenMaxMB)
+            if clamped != fileDirectOpenMaxMB {
+                fileDirectOpenMaxMB = clamped
+                return
+            }
+            defaults.set(clamped, forKey: Key.fileDirectOpenMaxMB)
+        }
+    }
+
+    /// Display language preference (`system`, `zh-Hans`, or `en`).
+    public var appLanguage: AppLanguage {
+        didSet {
+            defaults.set(appLanguage.rawValue, forKey: Key.appLanguage)
+            OpalL10n.currentPreference = appLanguage
+        }
+    }
+
+    public var resolvedLocale: Locale {
+        OpalL10n.resolveLanguage(preference: appLanguage).locale
+    }
+
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -200,5 +226,15 @@ public final class PreferencesStore {
         self.enableEdgeNavigationGestures = defaults.object(forKey: Key.enableEdgeNavigationGestures) as? Bool ?? true
         self.callControlEnabled = defaults.object(forKey: Key.callControlEnabled) as? Bool ?? true
         self.bleNearbyDiscoveryEnabled = defaults.object(forKey: Key.bleNearbyDiscoveryEnabled) as? Bool ?? true
+        if let storedDirectOpen = defaults.object(forKey: Key.fileDirectOpenMaxMB) as? Int {
+            self.fileDirectOpenMaxMB = FileBrowserPresentation.clampDirectOpenMaxMB(storedDirectOpen)
+        } else {
+            self.fileDirectOpenMaxMB = FileBrowserPresentation.defaultDirectOpenMaxMB
+        }
+
+        let langRaw = defaults.string(forKey: Key.appLanguage) ?? AppLanguage.system.rawValue
+        let resolvedPref = AppLanguage(rawValue: langRaw) ?? .system
+        self.appLanguage = resolvedPref
+        OpalL10n.currentPreference = resolvedPref
     }
 }

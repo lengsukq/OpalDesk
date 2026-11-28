@@ -439,6 +439,33 @@ public struct RemoteQuickLocation: Identifiable, Sendable, Equatable, Hashable {
 public enum FileBrowserPresentation {
     public static let androidPackageExtensions: Set<String> = ["apk", "apks", "apkm", "xapk"]
 
+    /// Default small-file direct-open threshold (10 MB). Set to `0` to always download.
+    public static let defaultDirectOpenMaxMB: Int = 10
+    public static let maxDirectOpenMaxMB: Int = 200
+    public static let directOpenMaxMBOptions: [Int] = [0, 5, 10, 25, 50, 100]
+
+    /// Executable / installer extensions that should never be auto-executed on double-click.
+    private static let unsafeDirectOpenExtensions: Set<String> = [
+        "app", "command", "tool", "pkg", "dmg", "sh", "zsh", "bash", "csh", "ksh",
+        "exe", "msi", "bat", "cmd", "com", "scr", "pif", "vbs", "vbe", "js", "jse",
+        "wsf", "wsh", "ps1", "hta", "cpl", "reg"
+    ]
+
+    public static func clampDirectOpenMaxMB(_ mb: Int) -> Int {
+        min(max(mb, 0), maxDirectOpenMaxMB)
+    }
+
+    /// Returns `true` when double-clicking `item` should open it directly via the bounded temp cache
+    /// instead of saving a permanent copy into the user's Downloads folder.
+    public static func shouldDirectOpen(_ item: RemoteFileItem, maxSizeMB: Int) -> Bool {
+        guard !item.isDirectory, !item.isAndroidPackage else { return false }
+        let clampedMB = clampDirectOpenMaxMB(maxSizeMB)
+        guard clampedMB > 0 else { return false }
+        guard !unsafeDirectOpenExtensions.contains(item.fileExtension) else { return false }
+        let thresholdBytes = Int64(clampedMB) * 1024 * 1024
+        return item.sizeBytes >= 0 && item.sizeBytes <= thresholdBytes
+    }
+
     private static let imageExtensions: Set<String> = [
         "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "tif", "tiff", "svg", "dng", "raw", "avif"
     ]

@@ -39,16 +39,19 @@ public final class PopoutWindowManager {
 
     public init() {}
 
-    public func existingController(for appPackage: String) -> PopoutAppController? {
+    public func existingController(for appPackage: String, userId: Int = 0) -> PopoutAppController? {
         let normalized = appPackage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return nil }
-        return controllers.first { $0.appPackage == normalized }
+        let normalizedUid = max(0, userId)
+        return controllers.first { $0.appPackage == normalized && $0.appUserId == normalizedUid }
     }
 
     public func openPopout(
         appPackage: String,
         appActivity: String = "",
         appLabel: String = "",
+        appUserId: Int = 0,
+        appProfileType: String = "",
         deviceKey: String,
         deviceName: String,
         taskId: Int = -1,
@@ -67,8 +70,9 @@ public final class PopoutWindowManager {
         guard !normalizedPkg.isEmpty else {
             return .invalidPackage
         }
+        let normalizedUid = max(0, appUserId)
 
-        if let existing = controllers.first(where: { $0.appPackage == normalizedPkg }) {
+        if let existing = controllers.first(where: { $0.appPackage == normalizedPkg && $0.appUserId == normalizedUid }) {
             if !forceReloadExisting {
                 return .alreadyOpen(existingId: existing.id, appLabel: existing.appLabel)
             }
@@ -84,6 +88,8 @@ public final class PopoutWindowManager {
             appPackage: normalizedPkg,
             appActivity: appActivity,
             appLabel: appLabel.isEmpty ? normalizedPkg : appLabel,
+            appUserId: normalizedUid,
+            appProfileType: appProfileType,
             deviceKey: deviceKey,
             deviceName: deviceName,
             taskId: taskId,
@@ -233,7 +239,11 @@ public final class PopoutWindowManager {
             backing: .buffered,
             defer: false
         )
-        window.title = controller.appLabel
+        if let badge = controller.profileBadgeText {
+            window.title = "\(controller.appLabel) (\(badge))"
+        } else {
+            window.title = controller.appLabel
+        }
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = false

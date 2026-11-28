@@ -28,35 +28,49 @@ public struct RemoteAppPickerSheet: View {
     private var filteredApps: [RemoteAppInfo] {
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let base = context.apps.filter { app in
-            q.isEmpty || app.displayLabel.lowercased().contains(q) || app.pkg.lowercased().contains(q)
+            if q.isEmpty { return true }
+            if app.displayLabel.lowercased().contains(q) || app.pkg.lowercased().contains(q) {
+                return true
+            }
+            if app.isSecondaryProfile {
+                if let badge = app.profileBadgeText?.lowercased(), badge.contains(q) { return true }
+                if RemoteAppInfo.profileSearchKeywords(userId: app.userId, profileType: app.profileType)
+                    .contains(where: { $0.lowercased().contains(q) })
+                {
+                    return true
+                }
+            }
+            return false
         }
         let favRanks = favoritePackageRank
-        let localCounts = Dictionary(uniqueKeysWithValues: model.popoutHistory.map { ($0.appPackage, $0.openCount) })
+        let localCounts = Dictionary(model.popoutHistory.map { ($0.appKey, $0.openCount) }, uniquingKeysWith: max)
 
         return base.sorted { lhs, rhs in
-            let lFav = favRanks[lhs.pkg]
-            let rFav = favRanks[rhs.pkg]
+            let lFav = favRanks[lhs.appKey]
+            let rFav = favRanks[rhs.appKey]
             if lFav != nil || rFav != nil {
                 if let lf = lFav, let rf = rFav { return lf < rf }
                 return lFav != nil
             }
             if sortByUsage {
-                let lc = max(lhs.openCount, localCounts[lhs.pkg] ?? 0)
-                let rc = max(rhs.openCount, localCounts[rhs.pkg] ?? 0)
+                let lc = max(lhs.openCount, localCounts[lhs.appKey] ?? 0)
+                let rc = max(rhs.openCount, localCounts[rhs.appKey] ?? 0)
                 if lc != rc { return lc > rc }
             }
-            return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
+            let nameOrder = lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel)
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return lhs.userId < rhs.userId
         }
     }
 
     private var favoriteFilteredApps: [RemoteAppInfo] {
         let favRanks = favoritePackageRank
-        return filteredApps.filter { favRanks[$0.pkg] != nil }
+        return filteredApps.filter { favRanks[$0.appKey] != nil }
     }
 
     private var regularFilteredApps: [RemoteAppInfo] {
         let favRanks = favoritePackageRank
-        return filteredApps.filter { favRanks[$0.pkg] == nil }
+        return filteredApps.filter { favRanks[$0.appKey] == nil }
     }
 
     private var relevantHistory: [PopoutHistoryEntry] {
@@ -69,9 +83,9 @@ public struct RemoteAppPickerSheet: View {
             OpalSheetHeader(
                 icon: "macwindow.on.rectangle",
                 iconTint: .accentColor,
-                title: "远程应用与悬浮小窗",
-                subtitle: "来自「\(context.deviceName)」· 最多同时开启 \(maxCount) 个独立悬浮窗",
-                badgeText: "已开 \(activeCount)/\(maxCount)",
+                title: OpalL10n.text("picker.title"),
+                subtitle: OpalL10n.format("picker.subtitle_fmt", context.deviceName, maxCount),
+                badgeText: OpalL10n.format("hub.history.open_count_fmt", activeCount, maxCount),
                 badgeColor: activeCount >= maxCount ? .orange : .accentColor
             ) {
                 HStack(spacing: OpalSpacing.sm) {
@@ -79,14 +93,13 @@ public struct RemoteAppPickerSheet: View {
                         onDismiss()
                         model.openShortcutManager()
                     } label: {
-                        Label("快捷方式", systemImage: "sparkles.rectangle.stack")
-                            .font(.caption.weight(.medium))
+                        Label(OpalL10n.text("picker.shortcuts_btn"), systemImage: "sparkles.rectangle.stack")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("管理已创建的 Spotlight / 桌面快捷方式")
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
+                    .help(OpalL10n.text("picker.shortcuts_help"))
 
-                    Button("关闭", action: onDismiss)
+                    Button(OpalL10n.text("common.close"), action: onDismiss)
+                        .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
                         .keyboardShortcut(.cancelAction)
                 }
             }
@@ -96,23 +109,20 @@ public struct RemoteAppPickerSheet: View {
             }
 
             HStack(spacing: OpalSpacing.sm) {
-                OpalSearchField(placeholder: "搜索「\(context.deviceName)」上的应用…", text: $searchQuery)
+                OpalSearchField(placeholder: OpalL10n.format("picker.search_placeholder_fmt", context.deviceName), text: $searchQuery)
 
                 Button {
                     sortByUsage.toggle()
                 } label: {
-                    Label(sortByUsage ? "常用排序" : "名称排序", systemImage: sortByUsage ? "flame.fill" : "textformat.abc")
-                        .font(.caption.weight(.semibold))
+                    Label(sortByUsage ? OpalL10n.text("picker.sort.usage") : OpalL10n.text("picker.sort.name"), systemImage: sortByUsage ? "flame.fill" : "textformat.abc")
                 }
-                .buttonStyle(.bordered)
-                .tint(sortByUsage ? .accentColor : nil)
-                .controlSize(.small)
+                .buttonStyle(OpalLiquidButtonStyle(variant: sortByUsage ? .prominent : .secondary, size: .small, isPill: true))
 
                 OpalGlassIconButton(
                     systemName: "arrow.clockwise",
                     size: 28,
                     iconSize: 12.5,
-                    helpText: "刷新应用列表"
+                    helpText: OpalL10n.text("picker.refresh_help")
                 ) {
                     model.refreshRemoteAppPicker()
                 }
@@ -128,12 +138,12 @@ public struct RemoteAppPickerSheet: View {
     private var quickHistoryStrip: some View {
         VStack(alignment: .leading, spacing: OpalSpacing.sm) {
             HStack {
-                Label("运行中与历史小窗", systemImage: "clock.arrow.circlepath")
+                Label(OpalL10n.text("picker.strip.title"), systemImage: "clock.arrow.circlepath")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
                 if !model.popoutManager.controllers.isEmpty {
-                    Button("全部关闭") {
+                    Button(OpalL10n.text("picker.strip.close_all")) {
                         model.popoutManager.closeAll(sendDisconnect: true)
                     }
                     .buttonStyle(.borderless)
@@ -147,7 +157,7 @@ public struct RemoteAppPickerSheet: View {
                     ForEach(model.popoutManager.controllers) { ctrl in
                         activeControllerPill(ctrl)
                     }
-                    ForEach(relevantHistory.filter { !model.isPopoutActive(pkg: $0.appPackage) }) { entry in
+                    ForEach(relevantHistory.filter { !model.isPopoutActive(pkg: $0.appPackage, userId: $0.appUserId) }) { entry in
                         historyEntryPill(entry)
                     }
                 }
@@ -163,13 +173,22 @@ public struct RemoteAppPickerSheet: View {
             Text(ctrl.appLabel)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
+            if let badge = ctrl.profileBadgeText {
+                StatusBadgeView(
+                    text: badge,
+                    color: .opalProfileTint(ctrl.appProfileType),
+                    horizontalPadding: 5,
+                    verticalPadding: 1,
+                    backgroundOpacity: 0.16
+                )
+            }
 
             OpalGlassIconButton(
                 systemName: ctrl.isPinnedOnTop ? "pin.fill" : "pin",
                 tint: ctrl.isPinnedOnTop ? .orange : .secondary,
                 size: 18,
                 iconSize: 9.5,
-                helpText: ctrl.isPinnedOnTop ? "取消置顶" : "窗口置顶"
+                helpText: ctrl.isPinnedOnTop ? OpalL10n.text("hub.history.unpin_help") : OpalL10n.text("hub.history.pin_help")
             ) { ctrl.togglePinnedOnTop() }
 
             OpalGlassIconButton(
@@ -177,12 +196,14 @@ public struct RemoteAppPickerSheet: View {
                 tint: .secondary,
                 size: 18,
                 iconSize: 9.5,
-                helpText: "聚焦或重载小窗+应用"
+                helpText: OpalL10n.text("picker.strip.reload_help")
             ) {
                 model.requestPopoutLaunch(
                     pkg: ctrl.appPackage,
                     cls: ctrl.appActivity,
                     label: ctrl.appLabel,
+                    userId: ctrl.appUserId,
+                    profileType: ctrl.appProfileType,
                     pickerContext: context
                 )
             }
@@ -192,7 +213,7 @@ public struct RemoteAppPickerSheet: View {
                 tint: .secondary,
                 size: 18,
                 iconSize: 9,
-                helpText: "关闭此小窗"
+                helpText: OpalL10n.text("hub.history.close_help")
             ) { model.popoutManager.closeWindow(id: ctrl.id, sendDisconnect: true) }
         }
         .padding(.horizontal, 10)
@@ -210,6 +231,8 @@ public struct RemoteAppPickerSheet: View {
                 pkg: entry.appPackage,
                 cls: entry.appActivity,
                 label: entry.displayLabel,
+                userId: entry.appUserId,
+                profileType: entry.appProfileType,
                 pickerContext: context
             )
         } label: {
@@ -222,6 +245,15 @@ public struct RemoteAppPickerSheet: View {
                 Text(entry.displayLabel)
                     .font(.caption.weight(.medium))
                     .lineLimit(1)
+                if let badge = entry.profileBadgeText {
+                    StatusBadgeView(
+                        text: badge,
+                        color: .opalProfileTint(entry.appProfileType),
+                        horizontalPadding: 5,
+                        verticalPadding: 1,
+                        backgroundOpacity: 0.14
+                    )
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -236,7 +268,7 @@ public struct RemoteAppPickerSheet: View {
         if context.isLoading && context.apps.isEmpty {
             VStack(spacing: OpalSpacing.md) {
                 ProgressView()
-                Text(context.statusMessage.isEmpty ? "正在加载手机应用列表…" : context.statusMessage)
+                Text(context.statusMessage.isEmpty ? OpalL10n.text("picker.loading_default") : context.statusMessage)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -250,13 +282,13 @@ public struct RemoteAppPickerSheet: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 360)
-                Button("重试获取") { model.refreshRemoteAppPicker() }
-                    .buttonStyle(.borderedProminent)
+                Button(OpalL10n.text("picker.retry_fetch")) { model.refreshRemoteAppPicker() }
+                    .buttonStyle(OpalLiquidButtonStyle(variant: .prominent, size: .regular, isPill: true))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
         } else if filteredApps.isEmpty {
-            ContentUnavailableView("未找到匹配应用", systemImage: "magnifyingglass")
+            ContentUnavailableView(OpalL10n.text("picker.empty_search"), systemImage: "magnifyingglass")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opalGlassSurface(.card, cornerRadius: OpalRadius.card)
         } else {
@@ -265,7 +297,7 @@ public struct RemoteAppPickerSheet: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: OpalSpacing.xs) {
                     if !favorites.isEmpty {
-                        Label("常用置顶 (\(favorites.count))", systemImage: "star.fill")
+                        Label(OpalL10n.format("picker.section.favorites_fmt", favorites.count), systemImage: "star.fill")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.orange)
                             .padding(.horizontal, 6)
@@ -277,7 +309,7 @@ public struct RemoteAppPickerSheet: View {
                         }
 
                         if !others.isEmpty {
-                            Text("全部应用")
+                            Text(OpalL10n.text("picker.section.all_apps"))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 6)
@@ -297,15 +329,15 @@ public struct RemoteAppPickerSheet: View {
     }
 
     private func appRow(_ app: RemoteAppInfo) -> some View {
-        let isOpen = model.isPopoutActive(pkg: app.pkg)
-        let isFavorite = model.isFavoriteApp(pkg: app.pkg, deviceKey: context.deviceKey)
-        let prefSummary = model.popoutPreferenceSummary(pkg: app.pkg, deviceKey: context.deviceKey)
+        let isOpen = model.isPopoutActive(pkg: app.pkg, userId: app.userId)
+        let isFavorite = model.isFavoriteApp(pkg: app.pkg, userId: app.userId, deviceKey: context.deviceKey)
+        let prefSummary = model.popoutPreferenceSummary(pkg: app.pkg, userId: app.userId, deviceKey: context.deviceKey)
         let isLimitHit = !isOpen && activeCount >= maxCount
 
         return HStack(spacing: OpalSpacing.md) {
             OpalAppMonogram(
                 label: app.displayLabel,
-                packageKey: app.pkg,
+                packageKey: app.appKey,
                 size: 36,
                 cornerRadius: 10,
                 showActiveIndicator: isOpen
@@ -316,8 +348,17 @@ public struct RemoteAppPickerSheet: View {
                     Text(app.displayLabel)
                         .font(.body.weight(.medium))
                         .lineLimit(1)
+                    if let badge = app.profileBadgeText {
+                        StatusBadgeView(
+                            text: badge,
+                            color: .opalProfileTint(app.profileType),
+                            horizontalPadding: 6,
+                            verticalPadding: 1.5,
+                            backgroundOpacity: 0.16
+                        )
+                    }
                     if isOpen {
-                        StatusBadgeView(text: "小窗运行中", color: .green)
+                        StatusBadgeView(text: OpalL10n.text("picker.badge.running"), color: .green)
                     }
                     if let prefSummary {
                         StatusBadgeView(
@@ -329,7 +370,7 @@ public struct RemoteAppPickerSheet: View {
                         )
                     }
                 }
-                Text(app.pkg)
+                Text(app.isSecondaryProfile ? "\(app.pkg) · u\(app.userId)" : app.pkg)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -343,9 +384,9 @@ public struct RemoteAppPickerSheet: View {
                 isActive: isFavorite,
                 size: 26,
                 iconSize: 12.5,
-                helpText: isFavorite ? "取消常用置顶" : "设为常用置顶应用"
+                helpText: isFavorite ? OpalL10n.text("hub.history.unfav_help") : OpalL10n.text("hub.history.fav_help")
             ) {
-                model.toggleFavoriteApp(pkg: app.pkg, deviceKey: context.deviceKey)
+                model.toggleFavoriteApp(pkg: app.pkg, userId: app.userId, deviceKey: context.deviceKey)
             }
 
             OpalGlassIconButton(
@@ -353,7 +394,7 @@ public struct RemoteAppPickerSheet: View {
                 tint: .secondary,
                 size: 26,
                 iconSize: 12.5,
-                helpText: "创建 Spotlight 快捷方式（~/Applications/OpalDesk Apps/）"
+                helpText: OpalL10n.text("picker.shortcut_create_help")
             ) {
                 model.createSpotlightShortcut(
                     for: app,
@@ -363,25 +404,24 @@ public struct RemoteAppPickerSheet: View {
             }
 
             if context.allowLaunchInDesktop && model.isAuthenticated {
-                Button("大屏打开") {
+                Button(OpalL10n.text("picker.open_desktop")) {
                     model.launchApp(app)
                     onDismiss()
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(OpalLiquidButtonStyle(variant: .secondary, size: .small, isPill: true))
             }
 
-            Button(isOpen ? "小窗已开" : (isLimitHit ? "已满 \(maxCount)/\(maxCount)" : "独立小窗")) {
+            Button(isOpen ? OpalL10n.text("picker.window_open") : (isLimitHit ? OpalL10n.format("picker.limit_fmt", maxCount, maxCount) : OpalL10n.text("hub.row.standalone_window"))) {
                 model.requestPopoutLaunch(
                     pkg: app.pkg,
                     cls: app.cls,
                     label: app.displayLabel,
+                    userId: app.userId,
+                    profileType: app.profileType,
                     pickerContext: context
                 )
             }
-            .buttonStyle(.borderedProminent)
-            .tint(isOpen ? .green : .accentColor)
-            .controlSize(.small)
+            .buttonStyle(OpalLiquidButtonStyle(variant: isOpen ? .emerald : .prominent, size: .small, isPill: true))
             .disabled(isLimitHit)
         }
         .padding(.horizontal, OpalSpacing.md)

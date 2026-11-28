@@ -14,6 +14,8 @@ public struct AppShortcutSpec: Sendable, Equatable, Hashable {
     public let deviceKey: String?
     public let deviceName: String?
     public let iconPNGData: Data?
+    public let userId: Int
+    public let profileType: String
 
     public init(
         packageName: String,
@@ -21,14 +23,19 @@ public struct AppShortcutSpec: Sendable, Equatable, Hashable {
         appLabel: String,
         deviceKey: String? = nil,
         deviceName: String? = nil,
-        iconPNGData: Data? = nil
+        iconPNGData: Data? = nil,
+        userId: Int = 0,
+        profileType: String = ""
     ) {
+        let normalizedUid = max(0, userId)
         self.packageName = packageName
         self.activityClass = activityClass
         self.appLabel = appLabel
         self.deviceKey = deviceKey
         self.deviceName = deviceName
         self.iconPNGData = iconPNGData
+        self.userId = normalizedUid
+        self.profileType = RemoteAppInfo.normalizeProfileType(profileType, userId: normalizedUid)
     }
 }
 
@@ -45,6 +52,15 @@ public struct CreatedAppShortcut: Sendable, Equatable, Hashable, Identifiable {
     public let deepLinkURL: URL
     public let iconData: Data?
     public let createdAt: Date?
+    public let userId: Int
+
+    public var appKey: String {
+        RemoteAppInfo.formatAppKey(pkg: packageName, userId: userId)
+    }
+
+    public var profileBadgeText: String? {
+        RemoteAppInfo.profileBadgeText(userId: userId)
+    }
 
     public init(
         bundleURL: URL,
@@ -56,7 +72,8 @@ public struct CreatedAppShortcut: Sendable, Equatable, Hashable, Identifiable {
         deviceName: String? = nil,
         deepLinkURL: URL,
         iconData: Data? = nil,
-        createdAt: Date? = nil
+        createdAt: Date? = nil,
+        userId: Int = 0
     ) {
         self.bundleURL = bundleURL
         self.bundleIdentifier = bundleIdentifier
@@ -68,6 +85,7 @@ public struct CreatedAppShortcut: Sendable, Equatable, Hashable, Identifiable {
         self.deepLinkURL = deepLinkURL
         self.iconData = iconData
         self.createdAt = createdAt
+        self.userId = max(0, userId)
     }
 }
 
@@ -110,6 +128,7 @@ public enum AppShortcutBuilder {
     private static let infoKeyDeviceKey = "OpalDeskDeviceKey"
     private static let infoKeyDeviceName = "OpalDeskDeviceName"
     private static let infoKeyDeepLink = "OpalDeskDeepLink"
+    private static let infoKeyUserId = "OpalDeskUserId"
 
     /// Default Spotlight-indexed directory (`~/Applications/OpalDesk Apps`).
     public static var defaultShortcutsDirectory: URL {
@@ -139,18 +158,28 @@ public enum AppShortcutBuilder {
                 activityClass: spec.activityClass,
                 label: spec.appLabel,
                 deviceKey: spec.deviceKey,
-                deviceName: spec.deviceName
+                deviceName: spec.deviceName,
+                userId: spec.userId
             )
         } catch {
             throw AppShortcutBuilderError.invalidDeepLink(error.localizedDescription)
         }
 
-        let displayName = sanitizeDisplayName(spec.appLabel, fallback: spec.packageName)
+        let baseDisplayName = sanitizeDisplayName(spec.appLabel, fallback: spec.packageName)
+        let displayName: String = {
+            if let badge = RemoteAppInfo.profileBadgeText(userId: spec.userId, profileType: spec.profileType),
+               !baseDisplayName.contains(badge)
+            {
+                return sanitizeDisplayName("\(baseDisplayName) (\(badge))", fallback: spec.packageName)
+            }
+            return baseDisplayName
+        }()
         let bundleFileName = sanitizeFileName(displayName, fallback: spec.packageName) + ".app"
         let bundleId = makeBundleIdentifier(
             packageName: spec.packageName,
             activityClass: spec.activityClass,
-            deviceKey: spec.deviceKey
+            deviceKey: spec.deviceKey,
+            userId: spec.userId
         )
 
         let fm = FileManager.default
@@ -206,6 +235,7 @@ public enum AppShortcutBuilder {
             infoKeyDeviceKey: spec.deviceKey ?? "",
             infoKeyDeviceName: spec.deviceName ?? "",
             infoKeyDeepLink: deepLinkURL.absoluteString,
+            infoKeyUserId: spec.userId,
         ]
         do {
             let plistData = try PropertyListSerialization.data(
@@ -261,7 +291,8 @@ public enum AppShortcutBuilder {
             deviceName: spec.deviceName?.isEmpty == false ? spec.deviceName : nil,
             deepLinkURL: deepLinkURL,
             iconData: icnsData,
-            createdAt: createdAt
+            createdAt: createdAt,
+            userId: spec.userId
         )
     }
 
@@ -403,9 +434,11 @@ public enum AppShortcutBuilder {
     public static func makeBundleIdentifier(
         packageName: String,
         activityClass: String? = nil,
-        deviceKey: String? = nil
+        deviceKey: String? = nil,
+        userId: Int = 0
     ) -> String {
-        let seed = "\(packageName)|\(deviceKey ?? "")|\(activityClass ?? "")"
+        let baseSeed = "\(packageName)|\(deviceKey ?? "")|\(activityClass ?? "")"
+        let seed = userId > 0 ? "\(baseSeed)|u\(userId)" : baseSeed
         let digest = SHA256.hash(data: Data(seed.utf8))
         let shortHex = digest.prefix(6).map { String(format: "%02x", $0) }.joined()
         return "\(bundleIdentifierPrefix)\(shortHex)"
@@ -481,6 +514,7 @@ public enum AppShortcutBuilder {
         let clsRaw = (dict[infoKeyActivityClass] as? String) ?? parsed.activityClass
         let devKeyRaw = (dict[infoKeyDeviceKey] as? String) ?? parsed.deviceKey
         let devNameRaw = (dict[infoKeyDeviceName] as? String) ?? parsed.deviceName
+        let parsedUserId = max(0, (dict[infoKeyUserId] as? Int) ?? parsed.userId)
 
         let iconURL = bundleURL
             .appendingPathComponent("Contents", isDirectory: true)
@@ -499,7 +533,8 @@ public enum AppShortcutBuilder {
             deviceName: devNameRaw?.isEmpty == false ? devNameRaw : nil,
             deepLinkURL: deepLinkURL,
             iconData: iconData,
-            createdAt: createdAt
+            createdAt: createdAt,
+            userId: parsedUserId
         )
     }
 

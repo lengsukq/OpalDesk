@@ -79,6 +79,9 @@ extension AppModel {
             onQuickLookItem: { [weak self] item in
                 self?.previewRemoteItemWithQuickLook(item)
             },
+            onOpenItem: { [weak self] item in
+                self?.openRemoteItemDirectly(item)
+            },
             onOpenAppPopout: { [weak self] app in
                 self?.openAppPopoutForRemotePackage(
                     packageName: app.pkg,
@@ -100,7 +103,7 @@ extension AppModel {
         }
         guard finderMountState != .mounting else { return }
         guard isAnyChannelConnected else {
-            let msg = "尚未连接到 Android 设备，无法挂载到访达"
+            let msg = OpalL10n.text("app.files.mount_disconnected")
             fileBrowserError = msg
             showToast(msg)
             return
@@ -109,7 +112,7 @@ extension AppModel {
         let targetDeviceName = activeChannelDeviceName
         let browserClient = fileBrowserClient
         let backend = CompanionRemoteFileSystemBackend(browserClient: browserClient) { [weak self] localURL, toRemoteDirectory, remoteFileName in
-            guard let self else { throw RemoteFileSystemError.ioError("应用会话已关闭") }
+            guard let self else { throw RemoteFileSystemError.ioError(OpalL10n.text("app.files.session_closed")) }
             guard let remotePath = FileBrowserPresentation.joining(base: toRemoteDirectory, name: remoteFileName) else {
                 throw RemoteFileSystemError.invalidPath("\(toRemoteDirectory)/\(remoteFileName)")
             }
@@ -134,9 +137,9 @@ extension AppModel {
                 self.finderMountState = self.finderMountManager.currentState
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: mountPoint.path)
                 self.showToast(
-                    "已在访达中挂载「\(targetDeviceName)」",
+                    OpalL10n.format("app.files.mounted_fmt", targetDeviceName),
                     durationSeconds: 5.0,
-                    actionTitle: "打开访达",
+                    actionTitle: OpalL10n.text("common.open_finder"),
                     revealURL: mountPoint
                 )
             } catch is CancellationError {
@@ -168,7 +171,7 @@ extension AppModel {
         await finderMountManager.unmount()
         finderMountState = .unmounted
         if showToastOnSuccess {
-            showToast("已卸载访达挂载卷")
+            showToast(OpalL10n.text("app.files.unmounted"))
         }
     }
 
@@ -197,7 +200,7 @@ extension AppModel {
     /// `path + sizeBytes + modifiedAtMs` so repeated Spacebar Quick Look previews open instantaneously.
     public func downloadForQuickLook(_ item: RemoteFileItem) async throws -> URL {
         guard !item.isDirectory else {
-            throw RemoteFileBrowserError.localFileError("文件夹暂不支持快速查看")
+            throw RemoteFileBrowserError.localFileError(OpalL10n.text("app.files.quicklook_folder"))
         }
         guard isAnyChannelConnected else {
             throw RemoteFileBrowserError.notConnected
@@ -248,7 +251,38 @@ extension AppModel {
                 return
             } catch {
                 OpalDeskLog.file.warning("Quick Look download failed for \(item.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                self.showToast("快速查看失败：\(error.localizedDescription)")
+                self.showToast(OpalL10n.format("app.files.quicklook_failed_fmt", error.localizedDescription))
+            }
+        }
+    }
+
+    /// Streams a remote file into the bounded LRU temp cache (instant hit on repeat opens) and launches
+    /// it directly with macOS's default application without cluttering the user's Downloads folder.
+    public func openRemoteItemDirectly(_ item: RemoteFileItem) {
+        guard !item.isDirectory else { return }
+        quickLookDownloadTask?.cancel()
+        quickLookLoadingPath = item.path
+
+        quickLookDownloadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.quickLookLoadingPath == item.path {
+                    self.quickLookLoadingPath = nil
+                }
+            }
+            do {
+                let localURL = try await self.downloadForQuickLook(item)
+                guard !Task.isCancelled else { return }
+                let opened = NSWorkspace.shared.open(localURL)
+                if !opened {
+                    self.quickLookCoordinator.togglePreview(url: localURL)
+                }
+                self.showToast(OpalL10n.format("app.files.direct_opened_fmt", item.name), revealURL: localURL)
+            } catch is CancellationError {
+                return
+            } catch {
+                OpalDeskLog.file.warning("Direct open failed for \(item.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                self.showToast(OpalL10n.format("app.files.direct_open_failed_fmt", error.localizedDescription))
             }
         }
     }
@@ -325,7 +359,7 @@ extension AppModel {
     public func refreshFileBrowser(path: String) {
         let normalized = FileBrowserPresentation.normalizePath(path)
         guard isAnyChannelConnected else {
-            fileBrowserError = "尚未连接到 Android 设备"
+            fileBrowserError = OpalL10n.text("app.files.disconnected")
             isLoadingFileBrowser = false
             return
         }
@@ -365,7 +399,7 @@ extension AppModel {
 
     public func createRemoteFolder(parentPath: String, name: String) {
         guard let targetPath = FileBrowserPresentation.joining(base: parentPath, name: name) else {
-            fileBrowserError = "文件夹名称无效：\(name)"
+            fileBrowserError = OpalL10n.format("app.files.invalid_folder_fmt", name)
             return
         }
         Task { @MainActor [weak self] in
@@ -373,7 +407,7 @@ extension AppModel {
             do {
                 try await self.fileBrowserClient.makeDirectory(path: targetPath)
                 self.refreshFileBrowser(path: parentPath)
-                self.showToast("已新建文件夹「\(name)」")
+                self.showToast(OpalL10n.format("app.files.created_folder_fmt", name))
             } catch {
                 self.fileBrowserError = error.localizedDescription
             }
@@ -384,7 +418,7 @@ extension AppModel {
         guard let parent = FileBrowserPresentation.parentPath(of: item.path),
               let newPath = FileBrowserPresentation.joining(base: parent, name: newName)
         else {
-            fileBrowserError = "无效的新文件名：\(newName)"
+            fileBrowserError = OpalL10n.format("app.files.invalid_rename_fmt", newName)
             return
         }
         Task { @MainActor [weak self] in
@@ -392,7 +426,7 @@ extension AppModel {
             do {
                 try await self.fileBrowserClient.rename(from: item.path, to: newPath)
                 self.refreshFileBrowser(path: self.fileBrowserCurrentPath)
-                self.showToast("已重命名为「\(newName)」")
+                self.showToast(OpalL10n.format("app.files.renamed_fmt", newName))
             } catch {
                 self.fileBrowserError = error.localizedDescription
             }
@@ -421,14 +455,14 @@ extension AppModel {
             if let lastError {
                 self.fileBrowserError = lastError
             } else if deletedCount > 0 {
-                self.showToast("已删除 \(deletedCount) 个手机文件")
+                self.showToast(OpalL10n.format("app.files.deleted_count_fmt", deletedCount))
             }
         }
     }
 
     public func uploadFilesToRemoteDirectory(_ localURLs: [URL], remoteDirectory: String) {
         guard isAnyChannelConnected else {
-            fileBrowserError = "尚未连接到 Android 设备"
+            fileBrowserError = OpalL10n.text("app.files.disconnected")
             return
         }
         let validFiles = FileBrowserPresentation.filterUploadableLocalFiles(localURLs)
@@ -482,7 +516,7 @@ extension AppModel {
         var targets: [(item: RemoteFileItem, localURL: URL)] = []
         if files.count == 1, let single = files.first {
             let panel = NSSavePanel()
-            panel.title = "保存手机文件到 Mac"
+            panel.title = OpalL10n.text("app.files.save_single_title")
             panel.nameFieldStringValue = single.name
             panel.directoryURL = downloadsDir
             panel.canCreateDirectories = true
@@ -490,8 +524,8 @@ extension AppModel {
             targets.append((single, destination))
         } else {
             let panel = NSOpenPanel()
-            panel.title = "选择保存 \(files.count) 个文件的目标文件夹"
-            panel.prompt = "下载到此文件夹"
+            panel.title = OpalL10n.format("app.files.save_multi_title_fmt", files.count)
+            panel.prompt = OpalL10n.text("app.files.save_prompt")
             panel.canChooseFiles = false
             panel.canChooseDirectories = true
             panel.canCreateDirectories = true
@@ -546,9 +580,9 @@ extension AppModel {
                     entry.state = .completed
                 }
                 self.showToast(
-                    "已下载「\(remoteItem.name)」",
+                    OpalL10n.format("app.files.downloaded_fmt", remoteItem.name),
                     durationSeconds: 5.0,
-                    actionTitle: "在 Finder 显示",
+                    actionTitle: OpalL10n.text("common.reveal_in_finder"),
                     revealURL: savedURL
                 )
             } catch is CancellationError {
@@ -588,7 +622,7 @@ extension AppModel {
 
     public func scanRemoteStorage() {
         guard isAnyChannelConnected else {
-            fileBrowserStorageError = "尚未连接到 Android 设备"
+            fileBrowserStorageError = OpalL10n.text("app.files.disconnected")
             isScanningRemoteStorage = false
             return
         }
@@ -708,13 +742,13 @@ extension AppModel {
 
     private static func localizedStorageCategoryName(_ raw: String) -> String {
         switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "images", "image", "photos": return "图片"
-        case "videos", "video": return "视频"
-        case "audio", "music": return "音频"
-        case "documents", "docs", "document": return "文档"
-        case "apks", "apk", "packages", "apps": return "安装包"
-        case "archives", "archive", "zip": return "压缩包"
-        case "others", "other": return "其他文件"
+        case "images", "image", "photos": return OpalL10n.text("files.cat.images")
+        case "videos", "video": return OpalL10n.text("files.cat.videos")
+        case "audio", "music": return OpalL10n.text("files.cat.audio")
+        case "documents", "docs", "document": return OpalL10n.text("files.cat.documents")
+        case "apks", "apk", "packages", "apps": return OpalL10n.text("files.cat.apks")
+        case "archives", "archive", "zip": return OpalL10n.text("files.cat.archives")
+        case "others", "other": return OpalL10n.text("files.cat.others")
         default: return raw
         }
     }
