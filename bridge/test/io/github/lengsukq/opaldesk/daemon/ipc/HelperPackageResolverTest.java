@@ -68,6 +68,43 @@ public class HelperPackageResolverTest {
     }
 
     @Test
+    public void parseDumpsysPackageExtractsTrustedApkPathsAndUserScopedUidOnlyFromTargetSection() {
+        String output = ""
+                + "Packages:\n"
+                + "  Package [com.evil.other] (deadbeef):\n"
+                + "    appId=10999\n"
+                + "    codePath=/data/app/~~evil==/com.evil.other-1==\n"
+                + "  Package [io.github.lengsukq.opaldesk] (1a2b3c4d):\n"
+                + "    appId=10432\n"
+                + "    codePath=/data/app/~~DMSN9Lwq1CrQ72RlKQ7HXw==/io.github.lengsukq.opaldesk-Vxa1==\n"
+                + "    resourcePath=/data/app/~~DMSN9Lwq1CrQ72RlKQ7HXw==/io.github.lengsukq.opaldesk-Vxa1==\n"
+                + "    path: /data/local/tmp/untrusted.apk\n"
+                + "    path: /data/app/~~DMSN9Lwq1CrQ72RlKQ7HXw==/io.github.lengsukq.opaldesk-Vxa1==/split_config.arm64_v8a.apk\n"
+                + "  Queries:\n"
+                + "    codePath=/data/app/~~wrong==/after.queries==\n";
+
+        assertEquals(
+                Arrays.asList(
+                        "/data/app/~~DMSN9Lwq1CrQ72RlKQ7HXw==/io.github.lengsukq.opaldesk-Vxa1==/base.apk",
+                        "/data/app/~~DMSN9Lwq1CrQ72RlKQ7HXw==/io.github.lengsukq.opaldesk-Vxa1==/split_config.arm64_v8a.apk"),
+                HelperPackageResolver.parseApkPathsFromDumpsysPackage(output, "io.github.lengsukq.opaldesk"));
+        assertEquals(10432, HelperPackageResolver.parseUidFromDumpsysPackage(output, "io.github.lengsukq.opaldesk", 0));
+        assertEquals(99910432, HelperPackageResolver.parseUidFromDumpsysPackage(output, "io.github.lengsukq.opaldesk", 999));
+        assertEquals(-1, HelperPackageResolver.parseUidFromDumpsysPackage(output, "io.github.lengsukq.opaldesk.missing", 0));
+        assertEquals(-1, HelperPackageResolver.parseUidFromDumpsysPackage(output, "io.github.lengsukq.opaldesk", -1));
+        assertEquals(Collections.emptyList(), HelperPackageResolver.parseApkPathsFromDumpsysPackage(null, "io.github.lengsukq.opaldesk"));
+
+        String legacyUserIdOutput = ""
+                + "  Package [io.github.lengsukq.opaldesk] (abcd):\n"
+                + "    userId=10256\n"
+                + "    codePath=/data/app/io.github.lengsukq.opaldesk-1/base.apk\n";
+        assertEquals(10256, HelperPackageResolver.parseUidFromDumpsysPackage(legacyUserIdOutput, "io.github.lengsukq.opaldesk", 0));
+        assertEquals(
+                Collections.singletonList("/data/app/io.github.lengsukq.opaldesk-1/base.apk"),
+                HelperPackageResolver.parseApkPathsFromDumpsysPackage(legacyUserIdOutput, "io.github.lengsukq.opaldesk"));
+    }
+
+    @Test
     public void verifySignerDigestsEnforcesSingleMatchingCertificateFailClosed() {
         byte[] trustedBytes = "trusted-helper-cert".getBytes(StandardCharsets.UTF_8);
         byte[] evilBytes = "evil-cert".getBytes(StandardCharsets.UTF_8);

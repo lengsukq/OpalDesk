@@ -2,6 +2,7 @@ package io.github.lengsukq.opaldesk.daemon.compositor;
 
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil.IntRect;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
+import io.github.lengsukq.opaldesk.daemon.platform.UserProfileAppPolicy;
 import io.github.lengsukq.opaldesk.daemon.stream.SimpleJson;
 
 /**
@@ -11,6 +12,8 @@ import io.github.lengsukq.opaldesk.daemon.stream.SimpleJson;
 public final class WindowSession {
     public final int windowId;
     public final String pkg;
+    public final int userId;
+    public final String profileType;
     public String activityClass;
     public boolean pendingActivitySwitch = false;
 
@@ -50,8 +53,27 @@ public final class WindowSession {
             int contentHeight,
             int contentDpi,
             long nowMs) {
+        this(windowId, pkg, UserProfileAppPolicy.PRIMARY_USER_ID, UserProfileAppPolicy.PROFILE_PRIMARY,
+                activityClass, title, profile, initialFrame, contentWidth, contentHeight, contentDpi, nowMs);
+    }
+
+    public WindowSession(
+            int windowId,
+            String pkg,
+            int userId,
+            String profileType,
+            String activityClass,
+            String title,
+            WindowProfile profile,
+            IntRect initialFrame,
+            int contentWidth,
+            int contentHeight,
+            int contentDpi,
+            long nowMs) {
         this.windowId = windowId;
         this.pkg = pkg != null ? pkg : "";
+        this.userId = Math.max(0, userId);
+        this.profileType = UserProfileAppPolicy.normalizeProfileType(profileType, this.userId);
         this.activityClass = activityClass != null ? activityClass : "";
         this.title = (title != null && !title.isEmpty()) ? title : this.pkg;
         this.profile = (profile != null) ? profile : WindowProfile.DESKTOP;
@@ -68,6 +90,14 @@ public final class WindowSession {
         this.lastLaunchAtMs = nowMs;
     }
 
+    public boolean matchesApp(String targetPkg, int targetUserId) {
+        return targetPkg != null && targetPkg.equals(this.pkg) && this.userId == Math.max(0, targetUserId);
+    }
+
+    public String appKey() {
+        return UserProfileAppPolicy.formatAppKey(pkg, userId);
+    }
+
     public boolean isLive() {
         return BridgeProtocol.STATE_LIVE.equals(state) && displayId > 0;
     }
@@ -81,9 +111,10 @@ public final class WindowSession {
     }
 
     public String toJson() {
-        return new SimpleJson.ObjectBuilder()
+        SimpleJson.ObjectBuilder b = new SimpleJson.ObjectBuilder()
                 .put("windowId", windowId)
                 .put("pkg", pkg)
+                .put("userId", userId)
                 .put("cls", activityClass)
                 .put("title", title)
                 .put("profile", profile.name())
@@ -102,7 +133,10 @@ public final class WindowSession {
                 .put("zOrder", zOrder)
                 .put("focused", focused)
                 .put("snapshotVer", snapshotVersion)
-                .put("hasSnapshot", hibernatedSnapshotBytes != null && hibernatedSnapshotBytes.length > 0)
-                .build();
+                .put("hasSnapshot", hibernatedSnapshotBytes != null && hibernatedSnapshotBytes.length > 0);
+        if (!profileType.isEmpty()) {
+            b.put("profileType", profileType);
+        }
+        return b.build();
     }
 }

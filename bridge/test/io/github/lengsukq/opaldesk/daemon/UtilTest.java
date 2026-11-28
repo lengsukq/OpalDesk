@@ -258,6 +258,81 @@ public class UtilTest {
         assertEquals(1, DisplayGeometryUtil.selectBestEdidModeIndex(rotWs, rotHs, rotRs, 1920, 1080, 60f));
         assertEquals(1, DisplayGeometryUtil.selectBestEdidModeIndex(
                 new int[]{1080, 1080}, new int[]{1920, 1920}, new float[]{60f, 120f}, 1920, 1080, 120f));
+
+        // Synthetic-aware overload prefers non-synthetic hardware mode over synthetic mode at same size
+        assertEquals(1, DisplayGeometryUtil.selectBestEdidModeIndex(
+                new int[]{2048, 2048},
+                new int[]{1536, 1536},
+                new float[]{60f, 59f},
+                new boolean[]{true, false},
+                2048, 1536, 60f));
+    }
+
+    @Test
+    public void testExternalPixelAnisotropyDetectionAndNative1To1ScalingPolicy() {
+        // Exact OPALDESK-1A portable 4:3 2048x1536 panel with 61x35cm fake widescreen EDID
+        assertTrue(DisplayGeometryUtil.isAnisotropicPixelDensity(85.27f, 111.47f));
+        // Normal 27" 1440p monitor (60x34cm -> ~108.4x107.6dpi) must never trigger anisotropy
+        assertFalse(DisplayGeometryUtil.isAnisotropicPixelDensity(108.4f, 107.6f));
+        assertFalse(DisplayGeometryUtil.isAnisotropicPixelDensity(0f, 0f));
+
+        int[] portableWs = new int[]{2677, 2091, 1920, 1600, 1506, 1339, 1280, 1280, 1024, 1046};
+        int[] portableHs = new int[]{1536, 1200, 1080, 1200, 864, 768, 1024, 720, 768, 600};
+        boolean[] noneFlagged = new boolean[portableWs.length];
+        assertTrue(DisplayGeometryUtil.hasExternalPixelAnisotropy(
+                2048, 1536, 85.27f, 111.47f, portableWs, portableHs, noneFlagged));
+        // Even if ROM hides xDpi/yDpi and synthetic flags, missing 2048x1536 + odd 2677x1536 still detects it
+        assertTrue(DisplayGeometryUtil.hasExternalPixelAnisotropy(
+                2048, 1536, 0f, 0f, portableWs, portableHs, noneFlagged));
+
+        // Normal 3440x1440 ultrawide currently running 2560x1440 must NOT false-trigger
+        int[] ultrawideWs = new int[]{3440, 2560, 1920};
+        int[] ultrawideHs = new int[]{1440, 1440, 1080};
+        assertFalse(DisplayGeometryUtil.hasExternalPixelAnisotropy(
+                2560, 1440, 109f, 109f, ultrawideWs, ultrawideHs, new boolean[]{false, false, false}));
+
+        // Smart auto disables scaling strictly at 1:1 native 2048x1536 when anisotropy is present
+        assertTrue(DisplayGeometryUtil.shouldDisableScalingForNativeAnisotropy(
+                2048, 1536, 2048, 1536, true,
+                io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol.EXTERNAL_SCALING_SMART_AUTO));
+        // Leaving native 2048x1536 for 1920x1080 must re-enable OS scaling
+        assertFalse(DisplayGeometryUtil.shouldDisableScalingForNativeAnisotropy(
+                1920, 1080, 2048, 1536, true,
+                io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol.EXTERNAL_SCALING_SMART_AUTO));
+        // Normal display without anisotropy keeps OS auto scaling under SMART_AUTO
+        assertFalse(DisplayGeometryUtil.shouldDisableScalingForNativeAnisotropy(
+                2560, 1440, 2560, 1440, false,
+                io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol.EXTERNAL_SCALING_SMART_AUTO));
+        // Explicit user 1:1 opt-in works at native size, but refuses non-native sizes (prevents centered tiny box)
+        assertTrue(DisplayGeometryUtil.shouldDisableScalingForNativeAnisotropy(
+                2048, 1536, 2048, 1536, false,
+                io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol.EXTERNAL_SCALING_NATIVE_1TO1));
+        assertFalse(DisplayGeometryUtil.shouldDisableScalingForNativeAnisotropy(
+                1280, 720, 2048, 1536, true,
+                io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol.EXTERNAL_SCALING_NATIVE_1TO1));
+        // Safety revert (FORCE_SYSTEM_AUTO) always forces scaling back to AUTO even with anisotropy
+        assertFalse(DisplayGeometryUtil.shouldDisableScalingForNativeAnisotropy(
+                2048, 1536, 2048, 1536, true,
+                io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol.EXTERNAL_SCALING_FORCE_SYSTEM_AUTO));
+    }
+
+    @Test
+    public void testMirroredPrimaryDisplayCollapseDetection() {
+        // HyperOS wired DP reset collapses 2048x1536 external display to phone's 1200x2608 portrait size
+        assertTrue(DisplayGeometryUtil.isMirroredPrimaryDisplayCollapse(
+                2048, 1536, 1200, 2608, 1200, 2608));
+        // Landscape 1920x1080 monitor collapsed to 1080x1920 portrait phone mirror
+        assertTrue(DisplayGeometryUtil.isMirroredPrimaryDisplayCollapse(
+                1920, 1080, 1080, 1920, 1080, 1920));
+        // Intentional custom portrait 1080x1920 on 1200x2608 phone is NOT a primary mirror collapse
+        assertFalse(DisplayGeometryUtil.isMirroredPrimaryDisplayCollapse(
+                2048, 1536, 1080, 1920, 1200, 2608));
+        // Physical portrait monitor matching Display 0's own orientation & size is NOT a collapse
+        assertFalse(DisplayGeometryUtil.isMirroredPrimaryDisplayCollapse(
+                1200, 2608, 1200, 2608, 1200, 2608));
+        // Normal native size is NOT a collapse
+        assertFalse(DisplayGeometryUtil.isMirroredPrimaryDisplayCollapse(
+                2048, 1536, 2048, 1536, 1200, 2608));
     }
 
     @Test

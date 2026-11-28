@@ -120,9 +120,28 @@ public final class TaskLaunchPolicy {
             int windowingMode,
             int flags,
             Map<String, Object> extras) {
+        return buildAmStartArgs(flattenedComponent, displayId, windowingMode, flags, extras, 0);
+    }
+
+    /**
+     * Multi-user overload of {@link #buildAmStartArgs(String, int, int, int, Map)}: appends
+     * {@code --user <userId>} whenever {@code userId > 0} so cloned / work-profile apps launch
+     * cleanly inside their isolated user space on {@code displayId}.
+     */
+    public static String[] buildAmStartArgs(
+            String flattenedComponent,
+            int displayId,
+            int windowingMode,
+            int flags,
+            Map<String, Object> extras,
+            int userId) {
         List<String> args = new ArrayList<>();
         args.add("am");
         args.add("start");
+        if (userId > 0) {
+            args.add("--user");
+            args.add(String.valueOf(userId));
+        }
         args.add("--display");
         args.add(String.valueOf(displayId));
         args.add("--windowingMode");

@@ -5,6 +5,7 @@ import io.github.lengsukq.opaldesk.daemon.DaemonConfig.PackagePolicy;
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil;
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil.IntRect;
 import io.github.lengsukq.opaldesk.daemon.ipc.BridgeProtocol;
+import io.github.lengsukq.opaldesk.daemon.platform.UserProfileAppPolicy;
 import io.github.lengsukq.opaldesk.daemon.stream.SimpleJson;
 
 import java.util.ArrayList;
@@ -28,15 +29,42 @@ import java.util.function.IntConsumer;
  */
 public final class CompositorEngine {
 
+    /** Immutable {@code (pkg, userId)} pair identifying a managed window's app instance. */
+    public static final class WindowAppTarget {
+        public final String pkg;
+        public final int userId;
+
+        public WindowAppTarget(String pkg, int userId) {
+            this.pkg = (pkg != null) ? pkg : "";
+            this.userId = Math.max(0, userId);
+        }
+
+        public String appKey() {
+            return UserProfileAppPolicy.formatAppKey(pkg, userId);
+        }
+    }
+
     /** Platform bridge for launching/moving/removing fullscreen Android tasks on a displayId. */
     public interface AppRuntimeBridge {
         String resolveAppLabel(String pkg);
+
+        default String resolveAppLabel(String pkg, int userId) {
+            return resolveAppLabel(pkg);
+        }
+
+        default String resolveProfileType(int userId) {
+            return UserProfileAppPolicy.classifyProfileType(userId, "", 0, "");
+        }
 
         /**
          * Launches or moves {@code pkg}/{@code cls} onto {@code displayId} in standard
          * {@code WINDOWING_MODE_FULLSCREEN (1)} and returns the resolved {@code taskId} (or {@code -1}).
          */
         int launchOrMoveFullscreenApp(String pkg, String cls, int displayId, int existingTaskId);
+
+        default int launchOrMoveFullscreenApp(String pkg, String cls, int userId, int displayId, int existingTaskId) {
+            return launchOrMoveFullscreenApp(pkg, cls, displayId, existingTaskId);
+        }
 
         /**
          * Cold-launches {@code pkg}/{@code cls} directly onto {@code displayId} without reusing
@@ -46,8 +74,16 @@ public final class CompositorEngine {
             return launchOrMoveFullscreenApp(pkg, cls, displayId, -1);
         }
 
+        default int relaunchFreshFullscreenApp(String pkg, String cls, int userId, int displayId) {
+            return relaunchFreshFullscreenApp(pkg, cls, displayId);
+        }
+
         /** Queries the active user taskId currently running on {@code displayId} (or {@code -1}). */
         int findTopTaskIdOnDisplay(int displayId, String expectedPkg);
+
+        default int findTopTaskIdOnDisplay(int displayId, String expectedPkg, int userId) {
+            return findTopTaskIdOnDisplay(displayId, expectedPkg);
+        }
 
         /** Queries every running Android taskId currently hosted on {@code displayId}. */
         default List<Integer> findAllTaskIdsOnDisplay(int displayId) {
@@ -60,6 +96,10 @@ public final class CompositorEngine {
          */
         default int findTopVisibleTaskIdOnDisplay(int displayId, String expectedPkg) {
             return findTopTaskIdOnDisplay(displayId, expectedPkg);
+        }
+
+        default int findTopVisibleTaskIdOnDisplay(int displayId, String expectedPkg, int userId) {
+            return findTopVisibleTaskIdOnDisplay(displayId, expectedPkg);
         }
 
         /**
@@ -80,12 +120,20 @@ public final class CompositorEngine {
         /** Force-stops and relaunches an app cleanly inside its VirtualDisplay. */
         void forceStopPackage(String pkg);
 
+        default void forceStopPackage(String pkg, int userId) {
+            forceStopPackage(pkg);
+        }
+
         /** Moves Android display focus onto {@code displayId} when resuming an existing lease. */
         default void focusDisplay(int displayId) {}
 
         /** Launches a specific sub-activity (e.g. Wi-Fi / Bluetooth settings) inside an already-live VirtualDisplay. */
         default int launchExplicitActivityOnDisplay(String pkg, String cls, int displayId) {
             return launchOrMoveFullscreenApp(pkg, cls, displayId, -1);
+        }
+
+        default int launchExplicitActivityOnDisplay(String pkg, String cls, int userId, int displayId) {
+            return launchExplicitActivityOnDisplay(pkg, cls, displayId);
         }
 
         /** Invoked when all client TextureView surfaces have detached so Display 0 top focus can be restored. */
@@ -254,6 +302,22 @@ public final class CompositorEngine {
         }
     }
 
+    /** Returns {@code (pkg, userId)} targets of all open windows for multi-user audio split routing. */
+    public List<WindowAppTarget> getOpenWindowAppTargets() {
+        synchronized (lock) {
+            Map<String, WindowAppTarget> dedup = new LinkedHashMap<>();
+            for (WindowSession ws : sessionsById.values()) {
+                if (ws != null && ws.pkg != null && !ws.pkg.isEmpty()) {
+                    String key = ws.appKey();
+                    if (!dedup.containsKey(key)) {
+                        dedup.put(key, new WindowAppTarget(ws.pkg, ws.userId));
+                    }
+                }
+            }
+            return new ArrayList<>(dedup.values());
+        }
+    }
+
     public WindowSession getWindowSnapshot(int windowId) {
         synchronized (lock) {
             return sessionsById.get(windowId);
@@ -276,7 +340,7 @@ public final class CompositorEngine {
     }
 
     /**
-     * Opens a new window for {@code pkg} or focuses/restores an existing window for {@code pkg}.
+     * Opens a new window for {@code pkg} (primary user 0) or focuses/restores an existing window.
      * Returns positive {@code windowId}, or {@code -1} if {@code pkg} is invalid/blocked.
      */
     public int openOrFocusWindow(
@@ -287,14 +351,34 @@ public final class CompositorEngine {
             int reqTop,
             int reqRight,
             int reqBottom) {
+        return openOrFocusWindow(
+                pkg, activityClass, UserProfileAppPolicy.PRIMARY_USER_ID,
+                requestedProfileCode, reqLeft, reqTop, reqRight, reqBottom);
+    }
+
+    /**
+     * Opens a new window for {@code (pkg, userId)} or focuses/restores its existing window.
+     * Primary ({@code userId == 0}) and cloned/work-profile ({@code userId > 0}) instances of the
+     * same package are isolated as independent windows with dedicated VirtualDisplays.
+     */
+    public int openOrFocusWindow(
+            String pkg,
+            String activityClass,
+            int userId,
+            int requestedProfileCode,
+            int reqLeft,
+            int reqTop,
+            int reqRight,
+            int reqBottom) {
         if (PackagePolicy.isBlockedWindowPkg(pkg)) return -1;
+        int safeUserId = Math.max(0, userId);
         String safeCls = PackagePolicy.isValidClassName(activityClass) ? activityClass : "";
         long now = System.currentTimeMillis();
 
         int existingWinId = -1;
         int liveSwitchDisplayId = -1;
         synchronized (lock) {
-            WindowSession existing = findByPackageLocked(pkg);
+            WindowSession existing = findByPackageAndUserLocked(pkg, safeUserId);
             if (existing != null) {
                 boolean wasHidden = existing.isMinimized() || existing.isHibernated();
                 boolean clsChanged = !safeCls.isEmpty() && !safeCls.equals(existing.activityClass);
@@ -322,7 +406,7 @@ public final class CompositorEngine {
         }
         if (existingWinId > 0) {
             if (liveSwitchDisplayId > 0) {
-                int tid = runtimeBridge.launchExplicitActivityOnDisplay(pkg, safeCls, liveSwitchDisplayId);
+                int tid = runtimeBridge.launchExplicitActivityOnDisplay(pkg, safeCls, safeUserId, liveSwitchDisplayId);
                 synchronized (lock) {
                     WindowSession cur = sessionsById.get(existingWinId);
                     if (cur != null && tid > 0) {
@@ -334,7 +418,6 @@ public final class CompositorEngine {
         }
 
         synchronized (lock) {
-
             int canvasW = config.getCanvasWidth();
             int canvasH = config.getCanvasHeight();
             int canvasDpi = config.getCanvasDpi();
@@ -343,13 +426,14 @@ public final class CompositorEngine {
                     ? (saved != null ? saved : WindowProfile.DESKTOP)
                     : WindowProfile.fromCode(requestedProfileCode, WindowProfile.DESKTOP);
 
+            boolean hasSiblingSamePkg = hasAnyWindowForPackageLocked(pkg);
             IntRect initialFrame;
             String initialPres = BridgeProtocol.PRES_FLOATING;
             if (reqRight - reqLeft >= DisplayGeometryUtil.MIN_WINDOW_EDGE_PX
                     && reqBottom - reqTop >= DisplayGeometryUtil.MIN_WINDOW_EDGE_PX) {
                 initialFrame = DisplayGeometryUtil.clampWindowFrame(
                         new IntRect(reqLeft, reqTop, reqRight, reqBottom), canvasW, canvasH, canvasDpi);
-            } else {
+            } else if (!hasSiblingSamePkg) {
                 DaemonConfig.SavedWindowBounds remembered = config.getSavedWindowBounds(pkg);
                 if (remembered != null) {
                     initialPres = remembered.presentation;
@@ -364,14 +448,21 @@ public final class CompositorEngine {
                     initialFrame = DisplayGeometryUtil.computeInitialWindowFrame(
                             profile, sessionsById.size(), canvasW, canvasH, canvasDpi);
                 }
+            } else {
+                // Cascade when primary and cloned/work instances of the same package are open together.
+                initialFrame = DisplayGeometryUtil.computeInitialWindowFrame(
+                        profile, sessionsById.size(), canvasW, canvasH, canvasDpi);
             }
 
             int[] spec = computeWindowSpecLocked(initialFrame, false, profile, pkg);
             int winId = nextWindowId.getAndIncrement();
-            String label = runtimeBridge.resolveAppLabel(pkg);
+            String label = runtimeBridge.resolveAppLabel(pkg, safeUserId);
+            String profileType = (safeUserId > 0)
+                    ? runtimeBridge.resolveProfileType(safeUserId)
+                    : UserProfileAppPolicy.PROFILE_PRIMARY;
 
             WindowSession created = new WindowSession(
-                    winId, pkg, safeCls, label, profile, initialFrame,
+                    winId, pkg, safeUserId, profileType, safeCls, label, profile, initialFrame,
                     spec[0], spec[1], spec[2], now);
             created.presentation = initialPres;
             if (!BridgeProtocol.PRES_FLOATING.equals(initialPres)) {
@@ -407,6 +498,7 @@ public final class CompositorEngine {
         if (surface == null) return -1;
         String pkgToLaunch;
         String clsToLaunch;
+        int userIdToLaunch;
         int prevTaskId;
         int assignedDisplayId;
         boolean reusedExistingLease;
@@ -444,7 +536,7 @@ public final class CompositorEngine {
                     this::handleWindowEvictedLocked);
             if (lease == null) {
                 System.err.println("OPALDESK_ATTACH_VD_FAIL wid=" + windowId + " pkg=" + ws.pkg
-                        + " size=" + cw + "x" + ch + "@" + dpi + "dpi");
+                        + " user=" + ws.userId + " size=" + cw + "x" + ch + "@" + dpi + "dpi");
                 runtimeBridge.releaseSurfaceHandle(surface);
                 return -1;
             }
@@ -468,6 +560,7 @@ public final class CompositorEngine {
 
             pkgToLaunch = ws.pkg;
             clsToLaunch = ws.activityClass;
+            userIdToLaunch = ws.userId;
             prevTaskId = ws.taskId;
             assignedDisplayId = lease.displayId;
             forceExplicitLaunch = ws.pendingActivitySwitch;
@@ -478,18 +571,18 @@ public final class CompositorEngine {
         // If re-attaching a TextureView to an already-active VirtualDisplay whose app is still visible on top,
         // skip relaunching to prevent activity flicker unless an explicit sub-activity switch was requested.
         int existingTopTid = (reusedExistingLease && !forceExplicitLaunch)
-                ? runtimeBridge.findTopVisibleTaskIdOnDisplay(assignedDisplayId, pkgToLaunch)
+                ? runtimeBridge.findTopVisibleTaskIdOnDisplay(assignedDisplayId, pkgToLaunch, userIdToLaunch)
                 : -1;
         int launchedTid;
         if (forceExplicitLaunch && !clsToLaunch.isEmpty()) {
             launchedTid = runtimeBridge.launchExplicitActivityOnDisplay(
-                    pkgToLaunch, clsToLaunch, assignedDisplayId);
+                    pkgToLaunch, clsToLaunch, userIdToLaunch, assignedDisplayId);
         } else if (existingTopTid > 0) {
             runtimeBridge.focusDisplay(assignedDisplayId);
             launchedTid = existingTopTid;
         } else {
             launchedTid = runtimeBridge.launchOrMoveFullscreenApp(
-                    pkgToLaunch, clsToLaunch, assignedDisplayId, prevTaskId);
+                    pkgToLaunch, clsToLaunch, userIdToLaunch, assignedDisplayId, prevTaskId);
         }
         if (launchedTid > 0) {
             synchronized (lock) {
@@ -527,6 +620,7 @@ public final class CompositorEngine {
             VirtualDisplayPool.RebindResult rebind;
             String pkg;
             String cls;
+            int userId;
             int prevTaskId;
             int newDisplayId;
             synchronized (lock) {
@@ -542,13 +636,14 @@ public final class CompositorEngine {
                 ws.emptySinceMs = 0L;
                 pkg = ws.pkg;
                 cls = ws.activityClass;
+                userId = ws.userId;
                 prevTaskId = ws.taskId;
                 newDisplayId = rebind.newLease.displayId;
                 markDirtyAndNotifyLocked();
             }
 
             try {
-                int movedTid = runtimeBridge.launchOrMoveFullscreenApp(pkg, cls, newDisplayId, prevTaskId);
+                int movedTid = runtimeBridge.launchOrMoveFullscreenApp(pkg, cls, userId, newDisplayId, prevTaskId);
                 if (movedTid > 0) {
                     synchronized (lock) {
                         WindowSession ws = sessionsById.get(winId);
@@ -562,7 +657,7 @@ public final class CompositorEngine {
                 vdPool.finishReleaseOldLease(rebind.oldLease);
             }
             migrated++;
-            System.out.println("OPALDESK_VD_MIGRATED wid=" + winId + " pkg=" + pkg
+            System.out.println("OPALDESK_VD_MIGRATED wid=" + winId + " pkg=" + pkg + " user=" + userId
                     + " oldDisplay=" + rebind.oldLease.displayId + " newDisplay=" + newDisplayId);
         }
         return migrated;
@@ -722,7 +817,9 @@ public final class CompositorEngine {
         int taskToRemove = -1;
         int displayToRelease = -1;
         String pkgToClose = null;
+        int closeUserId = 0;
         String pkgToReload = null;
+        int reloadUserId = 0;
         int reloadOldTaskId = -1;
         int reloadDisplayId = -1;
         String reloadCls = "";
@@ -841,20 +938,22 @@ public final class CompositorEngine {
                         vdPool.detachSurfaceOnly(windowId);
                         displayToRelease = ws.displayId;
                         pkgToClose = ws.pkg;
+                        closeUserId = ws.userId;
                     }
                     if (forceStopOnClose
                             && ws.pkg != null
                             && !ws.pkg.isEmpty()
                             && !PackagePolicy.shouldSkipForceStopOnClose(ws.pkg)) {
-                        boolean hasOtherWindowSamePkg = false;
+                        boolean hasOtherWindowSameApp = false;
                         for (WindowSession other : sessionsById.values()) {
-                            if (ws.pkg.equals(other.pkg)) {
-                                hasOtherWindowSamePkg = true;
+                            if (ws.pkg.equals(other.pkg) && ws.userId == other.userId) {
+                                hasOtherWindowSameApp = true;
                                 break;
                             }
                         }
-                        if (!hasOtherWindowSamePkg) {
+                        if (!hasOtherWindowSameApp) {
                             pkgToClose = ws.pkg;
+                            closeUserId = ws.userId;
                             shouldForceStopPkg = true;
                         }
                     }
@@ -903,6 +1002,7 @@ public final class CompositorEngine {
                 }
                 case BridgeProtocol.WIN_ACTION_RELOAD_APP:
                     pkgToReload = ws.pkg;
+                    reloadUserId = ws.userId;
                     reloadCls = ws.activityClass;
                     reloadDisplayId = ws.displayId;
                     reloadOldTaskId = ws.taskId;
@@ -933,7 +1033,7 @@ public final class CompositorEngine {
                 }
             }
             if (tasksToRemoveOnClose.isEmpty() && pkgToClose != null) {
-                int fallbackTid = runtimeBridge.findTopTaskIdOnDisplay(displayToRelease, pkgToClose);
+                int fallbackTid = runtimeBridge.findTopTaskIdOnDisplay(displayToRelease, pkgToClose, closeUserId);
                 if (fallbackTid > 0) tasksToRemoveOnClose.add(fallbackTid);
             }
         }
@@ -944,10 +1044,10 @@ public final class CompositorEngine {
             vdPool.releaseLease(windowId);
             runtimeBridge.onDisplayReleased(displayToRelease);
         }
-        // When the last window of a package is explicitly closed (not minimized), stop its
-        // background playback/media service so video apps never keep playing audio in background.
+        // When the last window of a (pkg, userId) instance is explicitly closed (not minimized),
+        // stop only that user's background playback/media service so sibling primary/clone instances stay alive.
         if (shouldForceStopPkg && pkgToClose != null && !pkgToClose.isEmpty()) {
-            runtimeBridge.forceStopPackage(pkgToClose);
+            runtimeBridge.forceStopPackage(pkgToClose, closeUserId);
         }
         if (allSurfacesNowDetached) {
             runtimeBridge.onAllClientSurfacesDetached();
@@ -956,9 +1056,10 @@ public final class CompositorEngine {
             if (reloadOldTaskId > 0) {
                 runtimeBridge.removeTask(reloadOldTaskId);
             }
-            runtimeBridge.forceStopPackage(pkgToReload);
+            runtimeBridge.forceStopPackage(pkgToReload, reloadUserId);
             if (reloadDisplayId > 0) {
-                int newTid = runtimeBridge.relaunchFreshFullscreenApp(pkgToReload, reloadCls, reloadDisplayId);
+                int newTid = runtimeBridge.relaunchFreshFullscreenApp(
+                        pkgToReload, reloadCls, reloadUserId, reloadDisplayId);
                 long relaunchedAt = System.currentTimeMillis();
                 synchronized (lock) {
                     WindowSession ws = sessionsById.get(windowId);
@@ -1005,14 +1106,16 @@ public final class CompositorEngine {
         int displayId;
         int taskId;
         String pkg;
+        int userId;
         synchronized (lock) {
             WindowSession ws = sessionsById.get(windowId);
             if (ws == null || !ws.isLive() || ws.displayId <= 0) return;
             displayId = ws.displayId;
             taskId = ws.taskId;
             pkg = ws.pkg;
+            userId = ws.userId;
         }
-        int visibleTid = runtimeBridge.findTopVisibleTaskIdOnDisplay(displayId, pkg);
+        int visibleTid = runtimeBridge.findTopVisibleTaskIdOnDisplay(displayId, pkg, userId);
         if (visibleTid > 0) {
             synchronized (lock) {
                 WindowSession ws = sessionsById.get(windowId);
@@ -1055,6 +1158,7 @@ public final class CompositorEngine {
         List<Integer> checkDisplayIds = new ArrayList<>();
         List<Integer> checkTaskIds = new ArrayList<>();
         List<String> checkPkgs = new ArrayList<>();
+        List<Integer> checkUserIds = new ArrayList<>();
 
         synchronized (lock) {
             if (sessionsById.isEmpty()) return;
@@ -1064,6 +1168,7 @@ public final class CompositorEngine {
                     checkDisplayIds.add(ws.displayId);
                     checkTaskIds.add(ws.taskId);
                     checkPkgs.add(ws.pkg);
+                    checkUserIds.add(ws.userId);
                 }
             }
         }
@@ -1074,7 +1179,8 @@ public final class CompositorEngine {
         for (int i = 0; i < checkWindowIds.size(); i++) {
             int wid = checkWindowIds.get(i);
             int dId = checkDisplayIds.get(i);
-            int topVisibleTid = runtimeBridge.findTopVisibleTaskIdOnDisplay(dId, checkPkgs.get(i));
+            int topVisibleTid = runtimeBridge.findTopVisibleTaskIdOnDisplay(
+                    dId, checkPkgs.get(i), checkUserIds.get(i));
             if (topVisibleTid > 0) {
                 discoveredVisibleTasks.put(wid, topVisibleTid);
             } else {
@@ -1414,18 +1520,43 @@ public final class CompositorEngine {
         }
     }
 
-    private WindowSession findByPackageLocked(String pkg) {
+    private WindowSession findByPackageAndUserLocked(String pkg, int userId) {
+        int safeUserId = Math.max(0, userId);
         for (WindowSession ws : sessionsById.values()) {
-            if (pkg.equals(ws.pkg)) return ws;
+            if (ws.matchesApp(pkg, safeUserId)) return ws;
         }
         return null;
     }
 
-    private void focusWindowLocked(WindowSession target, long nowMs) {
+    private boolean hasAnyWindowForPackageLocked(String pkg) {
         for (WindowSession ws : sessionsById.values()) {
+            if (pkg.equals(ws.pkg)) return true;
+        }
+        return false;
+    }
+
+    private void focusWindowLocked(WindowSession target, long nowMs) {
+        int maxZ = Integer.MIN_VALUE;
+        for (WindowSession ws : sessionsById.values()) {
+            if (ws.zOrder > maxZ) {
+                maxZ = ws.zOrder;
+            }
             ws.focused = (ws == target);
         }
-        target.zOrder = nextZOrder++;
+        // Only increment zOrder when promoting a window not already strictly on top;
+        // avoids redundant zIndex / RenderNode invalidations on drag-move or resize release.
+        boolean alreadyStrictlyTop = target.zOrder > 0 && target.zOrder >= maxZ;
+        if (alreadyStrictlyTop) {
+            for (WindowSession ws : sessionsById.values()) {
+                if (ws != target && ws.zOrder >= target.zOrder) {
+                    alreadyStrictlyTop = false;
+                    break;
+                }
+            }
+        }
+        if (!alreadyStrictlyTop) {
+            target.zOrder = nextZOrder++;
+        }
         target.lastActiveAtMs = nowMs;
     }
 

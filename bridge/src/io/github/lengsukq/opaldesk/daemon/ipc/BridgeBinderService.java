@@ -134,7 +134,8 @@ public final class BridgeBinderService extends Binder {
                 int top = data.readInt();
                 int right = data.readInt();
                 int bottom = data.readInt();
-                int winId = compositor.openOrFocusWindow(pkg, cls, profileCode, left, top, right, bottom);
+                int userId = (data.dataAvail() >= 4) ? Math.max(0, data.readInt()) : 0;
+                int winId = compositor.openOrFocusWindow(pkg, cls, userId, profileCode, left, top, right, bottom);
                 if (reply != null) reply.writeInt(winId);
                 return true;
             }
@@ -373,6 +374,9 @@ public final class BridgeBinderService extends Binder {
                 int reqW = data.readInt();
                 int reqH = data.readInt();
                 int fpsX100 = data.readInt();
+                int scalingMode = (data.dataAvail() >= 4)
+                        ? data.readInt()
+                        : BridgeProtocol.EXTERNAL_SCALING_SMART_AUTO;
                 float reqFps = fpsX100 / 100f;
                 boolean ok;
                 if (remoteBridge != null && remoteBridge.hasActiveDesktopSession()
@@ -380,10 +384,11 @@ public final class BridgeBinderService extends Binder {
                     ok = remoteBridge.reconfigureActiveDesktop(reqW, reqH, reqFps);
                 } else {
                     ok = services != null
-                            && services.setExternalDisplayMode(displayId, reqW, reqH, reqFps);
+                            && services.setExternalDisplayMode(displayId, reqW, reqH, reqFps, scalingMode);
                 }
                 System.out.println("OPALDESK_EXT_DISPLAY_MODE displayId=" + displayId
-                        + " req=" + reqW + "x" + reqH + "@" + reqFps + " ok=" + ok);
+                        + " req=" + reqW + "x" + reqH + "@" + reqFps
+                        + " scaling=" + scalingMode + " ok=" + ok);
                 if (reply != null) reply.writeInt(ok ? 1 : 0);
                 return true;
             }
@@ -717,6 +722,13 @@ public final class BridgeBinderService extends Binder {
                         ? remoteBridge.triggerHotspotForBleClient(clientId, nonceHex, hmacHex)
                         : HotspotController.HotspotResult.unauthorized(RemoteStreamServer.DEFAULT_WIFI_PORT).toJson();
                 if (reply != null) reply.writeString(resultJson);
+                return true;
+            }
+            case BridgeProtocol.TX_GET_SECONDARY_USER_APPS: {
+                String json = (services != null)
+                        ? services.querySecondaryUserLaunchableAppsJson()
+                        : "[]";
+                if (reply != null) reply.writeString(json);
                 return true;
             }
             case BridgeProtocol.TX_SHUTDOWN: {

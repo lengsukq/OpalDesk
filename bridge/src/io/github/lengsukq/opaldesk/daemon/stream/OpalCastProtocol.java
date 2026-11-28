@@ -730,19 +730,27 @@ public final class OpalCastProtocol {
         public final int taskId;
         public final String iconPngBase64;
         public final int openCount;
+        public final int userId;
+        public final String profileType;
 
         public AppEntry(String pkg, String cls, String label, boolean runningOnExt, int taskId) {
-            this(pkg, cls, label, runningOnExt, taskId, "", 0);
+            this(pkg, cls, label, runningOnExt, taskId, "", 0, 0, "");
         }
 
         public AppEntry(
                 String pkg, String cls, String label, boolean runningOnExt, int taskId, String iconPngBase64) {
-            this(pkg, cls, label, runningOnExt, taskId, iconPngBase64, 0);
+            this(pkg, cls, label, runningOnExt, taskId, iconPngBase64, 0, 0, "");
         }
 
         public AppEntry(
                 String pkg, String cls, String label, boolean runningOnExt, int taskId,
                 String iconPngBase64, int openCount) {
+            this(pkg, cls, label, runningOnExt, taskId, iconPngBase64, openCount, 0, "");
+        }
+
+        public AppEntry(
+                String pkg, String cls, String label, boolean runningOnExt, int taskId,
+                String iconPngBase64, int openCount, int userId, String profileType) {
             this.pkg = (pkg != null) ? pkg : "";
             this.cls = (cls != null) ? cls : "";
             this.label = (label != null) ? label : "";
@@ -750,6 +758,8 @@ public final class OpalCastProtocol {
             this.taskId = taskId;
             this.iconPngBase64 = (iconPngBase64 != null) ? iconPngBase64 : "";
             this.openCount = Math.max(0, openCount);
+            this.userId = Math.max(0, userId);
+            this.profileType = (this.userId > 0 && profileType != null) ? profileType.trim() : "";
         }
     }
 
@@ -775,6 +785,12 @@ public final class OpalCastProtocol {
                         .put("runningOnExt", e.runningOnExt)
                         .put("taskId", e.taskId)
                         .put("openCount", e.openCount);
+                if (e.userId > 0) {
+                    item.put("userId", e.userId);
+                    if (e.profileType != null && !e.profileType.isEmpty()) {
+                        item.put("profileType", e.profileType);
+                    }
+                }
                 if (e.iconPngBase64 != null && !e.iconPngBase64.isEmpty()) {
                     item.put("icon", e.iconPngBase64);
                 }
@@ -1041,6 +1057,7 @@ public final class OpalCastProtocol {
         public final String sessionRole;   // "desktop" | "standalone_app"
         public final String appPackage;
         public final String appActivity;
+        public final int appUserId;
         public final String clientPlatform; // "android" | "macos" | "windows" | "web" | ""
         // OpalCast v1.2 opt-in capability flag for desktop sessions (companion always subscribes)
         public final boolean companionEvents;
@@ -1051,7 +1068,7 @@ public final class OpalCastProtocol {
                 int displayMode, boolean audioEnabled, String authToken, String pinCode) {
             this(protocolVersion, clientName, clientId, preferredCodec,
                     width, height, dpi, fps, bitrateKbps, displayMode, audioEnabled,
-                    authToken, pinCode, "", SESSION_ROLE_DESKTOP, "", "", "", false);
+                    authToken, pinCode, "", SESSION_ROLE_DESKTOP, "", "", "", false, 0);
         }
 
         public HelloMsg(
@@ -1061,7 +1078,7 @@ public final class OpalCastProtocol {
                 String transportHint, String sessionRole, String appPackage, String appActivity) {
             this(protocolVersion, clientName, clientId, preferredCodec,
                     width, height, dpi, fps, bitrateKbps, displayMode, audioEnabled,
-                    authToken, pinCode, transportHint, sessionRole, appPackage, appActivity, "", false);
+                    authToken, pinCode, transportHint, sessionRole, appPackage, appActivity, "", false, 0);
         }
 
         public HelloMsg(
@@ -1073,7 +1090,7 @@ public final class OpalCastProtocol {
             this(protocolVersion, clientName, clientId, preferredCodec,
                     width, height, dpi, fps, bitrateKbps, displayMode, audioEnabled,
                     authToken, pinCode, transportHint, sessionRole, appPackage, appActivity,
-                    clientPlatform, false);
+                    clientPlatform, false, 0);
         }
 
         public HelloMsg(
@@ -1082,6 +1099,18 @@ public final class OpalCastProtocol {
                 int displayMode, boolean audioEnabled, String authToken, String pinCode,
                 String transportHint, String sessionRole, String appPackage, String appActivity,
                 String clientPlatform, boolean companionEvents) {
+            this(protocolVersion, clientName, clientId, preferredCodec,
+                    width, height, dpi, fps, bitrateKbps, displayMode, audioEnabled,
+                    authToken, pinCode, transportHint, sessionRole, appPackage, appActivity,
+                    clientPlatform, companionEvents, 0);
+        }
+
+        public HelloMsg(
+                int protocolVersion, String clientName, String clientId, String preferredCodec,
+                int width, int height, int dpi, int fps, int bitrateKbps,
+                int displayMode, boolean audioEnabled, String authToken, String pinCode,
+                String transportHint, String sessionRole, String appPackage, String appActivity,
+                String clientPlatform, boolean companionEvents, int appUserId) {
             this.protocolVersion = protocolVersion;
             this.clientName = (clientName != null) ? clientName : "Mac";
             this.clientId = (clientId != null) ? clientId : "";
@@ -1100,6 +1129,7 @@ public final class OpalCastProtocol {
             this.sessionRole = role.isEmpty() ? SESSION_ROLE_DESKTOP : role;
             this.appPackage = (appPackage != null) ? appPackage.trim() : "";
             this.appActivity = (appActivity != null) ? appActivity.trim() : "";
+            this.appUserId = Math.max(0, appUserId);
             this.clientPlatform = (clientPlatform != null) ? clientPlatform.trim().toLowerCase(java.util.Locale.ROOT) : "";
             this.companionEvents = companionEvents;
         }
@@ -1142,7 +1172,8 @@ public final class OpalCastProtocol {
                     obj.getString("appPackage", ""),
                     obj.getString("appActivity", ""),
                     obj.getString("clientPlatform", ""),
-                    obj.getBoolean("companionEvents", false));
+                    obj.getBoolean("companionEvents", false),
+                    obj.getInt("appUserId", 0));
         } catch (RuntimeException t) {
             throw new ProtocolException("Invalid HELLO JSON: " + t.getMessage(), t);
         }
@@ -1373,6 +1404,7 @@ public final class OpalCastProtocol {
         public final List<String> pkgs;
         public final List<Integer> ratios;
         public final String backend;
+        public final int userId;
 
         public WindowActionMsg(
                 String action,
@@ -1395,6 +1427,32 @@ public final class OpalCastProtocol {
                 List<String> pkgs,
                 List<Integer> ratios,
                 String backend) {
+            this(action, hasEnabled, enabled, defaultWidthDp, pkg, cls, mode, widthPct, remember,
+                    slot, taskId, left, top, right, bottom, hasBounds, topology, pkgs, ratios, backend, 0);
+        }
+
+        public WindowActionMsg(
+                String action,
+                boolean hasEnabled,
+                boolean enabled,
+                int defaultWidthDp,
+                String pkg,
+                String cls,
+                String mode,
+                int widthPct,
+                boolean remember,
+                int slot,
+                int taskId,
+                int left,
+                int top,
+                int right,
+                int bottom,
+                boolean hasBounds,
+                String topology,
+                List<String> pkgs,
+                List<Integer> ratios,
+                String backend,
+                int userId) {
             this.action = (action != null) ? action.trim() : "";
             this.hasEnabled = hasEnabled;
             this.enabled = enabled;
@@ -1419,6 +1477,7 @@ public final class OpalCastProtocol {
                     ? Collections.unmodifiableList(new ArrayList<>(ratios))
                     : Collections.emptyList();
             this.backend = (backend != null) ? backend.trim() : "";
+            this.userId = Math.max(0, userId);
         }
     }
 
@@ -1453,7 +1512,8 @@ public final class OpalCastProtocol {
                     obj.getString("topology", ""),
                     obj.getStringList("pkgs"),
                     obj.getIntList("ratios"),
-                    obj.getString("backend", ""));
+                    obj.getString("backend", ""),
+                    obj.getInt("userId", 0));
         } catch (ProtocolException pe) {
             throw pe;
         } catch (RuntimeException t) {

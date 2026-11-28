@@ -34,6 +34,7 @@ import io.github.lengsukq.opaldesk.daemon.platform.AndroidDisplayDriver;
 import io.github.lengsukq.opaldesk.daemon.platform.AndroidServices;
 import io.github.lengsukq.opaldesk.daemon.platform.HotspotController;
 import io.github.lengsukq.opaldesk.daemon.platform.TaskApiAdapter;
+import io.github.lengsukq.opaldesk.daemon.platform.UserProfileAppPolicy;
 import io.github.lengsukq.opaldesk.daemon.platform.VirtualDisplayFactory;
 import io.github.lengsukq.opaldesk.daemon.security.PairingApprovalCoordinator;
 import io.github.lengsukq.opaldesk.daemon.security.TrustStoreManager;
@@ -133,13 +134,14 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         }
     }
 
-    private static final class ActiveRemoteSession {
+    static final class ActiveRemoteSession {
         final int sessionId;
         final int sinkType;
         final boolean standalone;
         final boolean companion;
         final String appPackage;
         final String appActivity;
+        final int appUserId;
         final String clientPlatform;
         final Object lock = new Object();
 
@@ -186,6 +188,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 boolean companion,
                 String pkg,
                 String cls,
+                int appUserId,
                 String clientPlatform) {
             this.sessionId = sessionId;
             this.sinkType = sinkType;
@@ -193,6 +196,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             this.companion = companion;
             this.appPackage = pkg != null ? pkg : "";
             this.appActivity = cls != null ? cls : "";
+            this.appUserId = Math.max(0, appUserId);
             this.clientPlatform = clientPlatform != null ? clientPlatform : "";
         }
 
@@ -254,16 +258,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     private volatile String hostTopAppLabel = "";
     private volatile int desktopSessionId = -1;
     private volatile boolean localHostTextFieldFocused = false;
-    private final Object audioLock = new Object();
-    private volatile AudioStreamCapturer audioCapturer;
-    private volatile int audioOwnerSessionId = -1;
-    private volatile OpalCastProtocol.AudioConfig lastAudioConfig;
-    private final Object micLock = new Object();
-    private RemoteMicInjector micInjector;
-    private volatile int micOwnerSessionId = -1;
-    private final Object cameraLock = new Object();
-    private RootCameraBridge cameraBridge;
-    private volatile int cameraOwnerSessionId = -1;
+    private final RemoteMediaDevicesCoordinator mediaDevices;
     /** Optional zero-clipboard direct commit hook backed by OpalDesk's built-in channel IME. */
     public interface DirectImeTextCommitter {
         boolean tryCommitText(String text);
@@ -307,6 +302,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         String devName = (Build.MODEL != null && !Build.MODEL.trim().isEmpty())
                 ? Build.MODEL.trim() : "Android Device";
         this.server = new RemoteStreamServer(this, trustStore, CERT_FILE, devName);
+        this.mediaDevices = new RemoteMediaDevicesCoordinator(
+                services, config, compositor, displayDriver, server, sessions, () -> desktopSessionId, worker);
         this.fileManager.setAppStorageStatsProvider(
                 RemoteFileManager.createDefaultAppStorageProvider(this::resolveCachedHostAppLabel));
         this.notificationRelay = new CompanionNotificationRelay(new CompanionNotificationRelay.OutboundSender() {
@@ -545,9 +542,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
 
     public void shutdown() {
         unregisterMirrorDisplayListener();
-        stopAudio();
-        stopRemoteMic(false);
-        stopRemoteCamera(false, true);
+        mediaDevices.shutdown();
         if (mouseRouter != null) {
             mouseRouter.releaseToLocal();
         }
@@ -851,12 +846,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         ActiveRemoteSession s = sessions.remove(sessionId);
         boolean wasCompanion = (s != null && s.companion)
                 || OpalCastProtocol.SESSION_ROLE_COMPANION.equalsIgnoreCase(sessionRole);
-        if (sessionId == micOwnerSessionId) {
-            stopRemoteMic(false);
-        }
-        if (sessionId == cameraOwnerSessionId) {
-            stopRemoteCamera(false);
-        }
+        mediaDevices.onSessionDisconnected(sessionId);
         if (sessionId == desktopSessionId) {
             desktopSessionId = -1;
             localHostTextFieldFocused = false;
@@ -873,7 +863,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             if (!wasCompanion) {
                 final boolean wasStandalone = s.standalone;
                 worker.execute(() -> {
-                    reconcileAudioOwner();
+                    mediaDevices.reconcileAudioOwner();
                     if (wasStandalone) {
                         onCompositorWindowsChanged();
                     }
@@ -1117,13 +1107,15 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                             KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK, 0);
                     final int checkDisplayId = s.displayId;
                     final String checkPkg = s.appPackage;
+                    final int checkUserId = s.appUserId;
                     worker.execute(() -> {
                         for (long waitMs : new long[]{260L, 320L}) {
                             SystemClock.sleep(waitMs);
                             if (s.closed || s.displayId != checkDisplayId) return;
-                            int visibleTid = displayDriver.findTopVisibleTaskIdOnDisplay(checkDisplayId, checkPkg);
+                            int visibleTid = displayDriver.findTopVisibleTaskIdOnDisplay(checkDisplayId, checkPkg, checkUserId);
                             if (visibleTid <= 0) {
-                                System.out.println("OPALDESK_STANDALONE_BACK_EXITED sid=" + sessionId + " pkg=" + checkPkg);
+                                System.out.println("OPALDESK_STANDALONE_BACK_EXITED sid=" + sessionId
+                                        + " pkg=" + checkPkg + " user=" + checkUserId);
                                 server.disconnectSession(sessionId, "app_exited");
                                 return;
                             }
@@ -1175,7 +1167,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             case OpalCastProtocol.SYS_SET_AUDIO_ENABLED:
                 s.audioRequested = (msg.arg != 0);
                 worker.execute(() -> {
-                    reconcileAudioOwner();
+                    mediaDevices.reconcileAudioOwner();
                     pushDeviceState(s);
                 });
                 break;
@@ -1209,7 +1201,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         String act = msg.action.toLowerCase(Locale.ROOT);
         if ("launch".equals(act) || "focus".equals(act) || "open".equals(act)) {
             if (!msg.pkg.isEmpty()) {
-                compositor.openOrFocusWindow(msg.pkg, msg.cls, BridgeProtocol.PROFILE_AUTO, 0, 0, 0, 0);
+                compositor.openOrFocusWindow(
+                        msg.pkg, msg.cls, msg.userId, BridgeProtocol.PROFILE_AUTO, 0, 0, 0, 0);
             }
         } else if ("close_all".equals(act)) {
             compositor.closeAllWindows(true);
@@ -1219,31 +1212,23 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     @Override
     public void onMicConfig(int sessionId, OpalCastProtocol.MicConfigMsg msg) {
         if (msg == null) return;
-        worker.execute(() -> handleMicConfig(sessionId, msg));
+        worker.execute(() -> mediaDevices.handleMicConfig(sessionId, msg));
     }
 
     @Override
     public void onMicFrame(int sessionId, byte[] pcmData, long timestampUs) {
-        if (sessionId != micOwnerSessionId || pcmData == null || pcmData.length == 0) return;
-        RemoteMicInjector inj = micInjector;
-        if (inj != null) {
-            inj.feedPcm(pcmData);
-        }
+        mediaDevices.feedMicFrame(sessionId, pcmData);
     }
 
     @Override
     public void onCameraConfig(int sessionId, OpalCastProtocol.CameraConfigMsg msg) {
         if (msg == null) return;
-        worker.execute(() -> handleCameraConfig(sessionId, msg));
+        worker.execute(() -> mediaDevices.handleCameraConfig(sessionId, msg));
     }
 
     @Override
     public void onCameraFrame(int sessionId, byte[] jpegData, long timestampUs) {
-        if (sessionId != cameraOwnerSessionId || jpegData == null || jpegData.length == 0) return;
-        RootCameraBridge bridge = cameraBridge;
-        if (bridge != null) {
-            bridge.feedJpeg(jpegData);
-        }
+        mediaDevices.feedCameraFrame(sessionId, jpegData);
     }
 
     @Override
@@ -1411,7 +1396,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         if (hello != null && hello.isCompanion()) {
             // Background lightweight companion session: zero VirtualDisplay, zero video/audio encoder!
             ActiveRemoteSession comp = new ActiveRemoteSession(
-                    sessionId, sinkType, false, true, "", "", hello.clientPlatform);
+                    sessionId, sinkType, false, true, "", "", 0, hello.clientPlatform);
             synchronized (comp.lock) {
                 comp.width = 0;
                 comp.height = 0;
@@ -1444,7 +1429,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         }
         boolean standalone = hello.isStandaloneApp();
         ActiveRemoteSession s = new ActiveRemoteSession(
-                sessionId, sinkType, standalone, false, hello.appPackage, hello.appActivity, hello.clientPlatform);
+                sessionId, sinkType, standalone, false,
+                hello.appPackage, hello.appActivity, hello.appUserId, hello.clientPlatform);
         synchronized (s.lock) {
             if (standalone) {
                 int[] spec = resolveStandaloneStreamSpec(s.appPackage, hello.width, hello.height, hello.dpi);
@@ -1572,7 +1558,9 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 }
             }
             if (!s.isMirror()) {
-                String vdName = standalone ? ("OpalDesk-App-" + s.appPackage) : "OpalDesk-Remote";
+                String vdName = standalone
+                        ? ("OpalDesk-App-" + UserProfileAppPolicy.formatAppKey(s.appPackage, s.appUserId))
+                        : "OpalDesk-Remote";
                 int[] candidates = standalone ? standaloneVdCandidates() : desktopVdCandidates();
                 int[] chosenFlags = new int[1];
                 // Always omit requestedRefreshRate (0f) on the remote VirtualDisplay: on Android 14-16
@@ -1580,18 +1568,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 // Touch Boost, while pinning 120Hz causes jitter when Display 0 idles at 60Hz. Leaving
                 // it 0f lets SurfaceFlinger pace smoothly across every pacesetter refresh transition.
                 if (standalone) {
-                    RootCameraBridge cam = this.cameraBridge;
-                    if (cam != null && cam.hasAospVirtualCamera()) {
-                        for (int candFlags : candidates) {
-                            VirtualDisplay customVd = cam.createVirtualDisplay(
-                                    vdName, s.width, s.height, s.dpi, candFlags, 0f, codecSurf);
-                            if (customVd != null && customVd.getDisplay() != null) {
-                                vd = customVd;
-                                chosenFlags[0] = candFlags;
-                                break;
-                            }
-                        }
-                    }
+                    vd = mediaDevices.tryCreateStandaloneCameraVirtualDisplay(
+                            vdName, s.width, s.height, s.dpi, candidates, codecSurf, chosenFlags);
                 }
                 if (vd == null) {
                     vd = VirtualDisplayFactory.createWithFlagFallback(
@@ -1658,10 +1636,11 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
                 }
             } else if (!s.appPackage.isEmpty()) {
                 config.recordAppLaunch(s.appPackage);
-                displayDriver.launchOrMoveFullscreenApp(s.appPackage, s.appActivity, s.displayId, -1);
+                displayDriver.launchOrMoveFullscreenApp(
+                        s.appPackage, s.appActivity, s.appUserId, s.displayId, -1);
                 onCompositorWindowsChanged();
             }
-            reconcileAudioOwner();
+            mediaDevices.reconcileAudioOwner();
 
             s.clipboard.onSessionStarted();
             if (!standalone) {
@@ -1740,7 +1719,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             mouseRouter.releaseToLocal();
         }
         services.focusDisplay(Display.DEFAULT_DISPLAY);
-        syncAudioRoutingForMode(true);
+        mediaDevices.syncAudioRoutingForMode(true);
         registerMirrorDisplayListener();
         pushDeviceState(s);
         notifyRemoteStateChanged();
@@ -1801,7 +1780,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         if (mouseRouter != null) {
             mouseRouter.setMouseTarget(config.getMouseTargetMode(), s.displayId);
         }
-        syncAudioRoutingForMode(false);
+        mediaDevices.syncAudioRoutingForMode(false);
         System.out.println("OPALDESK_REMOTE_MODE_SWITCH sid=" + s.sessionId
                 + " mode=DEX size=" + s.width + "x" + s.height + "@" + s.dpi
                 + " displayId=" + s.displayId);
@@ -2067,129 +2046,8 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         System.out.println("OPALDESK_REMOTE_HOST_LAUNCH displayId=" + displayId + " ok=" + ok);
     }
 
-    private void reconcileAudioOwner() {
-        synchronized (audioLock) {
-            List<AudioRoutingPolicy.AudioSessionCandidate> candidates = new ArrayList<>();
-            for (ActiveRemoteSession session : sessions.values()) {
-                if (session != null && !session.closed && !session.companion) {
-                    candidates.add(new AudioRoutingPolicy.AudioSessionCandidate(
-                            session.sessionId, session.standalone, session.audioRequested));
-                }
-            }
-            int prevOwner = this.audioOwnerSessionId;
-            int nextOwner = AudioRoutingPolicy.selectAudioOwnerSessionId(
-                    prevOwner, desktopSessionId, candidates);
-            if (nextOwner <= 0) {
-                stopAudioLocked();
-                return;
-            }
-
-            boolean splitByApp = !isSessionInMirrorMode(nextOwner)
-                    && (config.getAudioRouteMode() == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP);
-            List<Integer> targetUids = splitByApp ? collectDexAppUids() : Collections.emptyList();
-
-            AudioStreamCapturer cap = this.audioCapturer;
-            if (cap == null || !cap.isActive()) {
-                startAudioForOwnerLocked(nextOwner, splitByApp, targetUids);
-                return;
-            }
-
-            boolean ownerChanged = (prevOwner != nextOwner);
-            this.audioOwnerSessionId = nextOwner;
-            cap.setSplitMode(splitByApp, targetUids);
-            if (ownerChanged) {
-                OpalCastProtocol.AudioConfig cached = this.lastAudioConfig;
-                if (cached != null) {
-                    server.sendAudioConfig(nextOwner, cached, SystemClock.elapsedRealtimeNanos() / 1000L);
-                }
-                System.out.println("OPALDESK_REMOTE_AUDIO_OWNER sid=" + nextOwner + " split=" + splitByApp);
-            }
-        }
-    }
-
-    private void startAudioForOwnerLocked(int ownerSessionId, boolean splitByApp, List<Integer> initialUids) {
-        stopAudioLocked();
-        this.audioOwnerSessionId = ownerSessionId;
-        final AudioStreamCapturer[] holder = new AudioStreamCapturer[1];
-        AudioStreamCapturer cap = new AudioStreamCapturer(services.context, new AudioStreamCapturer.AudioListener() {
-            @Override
-            public void onAudioConfig(OpalCastProtocol.AudioConfig cfg, long tsUs) {
-                int targetSid;
-                synchronized (audioLock) {
-                    if (audioCapturer != holder[0]) return;
-                    lastAudioConfig = cfg;
-                    targetSid = audioOwnerSessionId;
-                }
-                if (targetSid > 0) {
-                    server.sendAudioConfig(targetSid, cfg, tsUs);
-                }
-            }
-
-            @Override
-            public void onAudioFrame(byte[] aacAu, long tsUs) {
-                int targetSid = audioOwnerSessionId;
-                if (targetSid > 0 && audioCapturer == holder[0]) {
-                    server.sendAudioFrame(targetSid, aacAu, tsUs);
-                }
-            }
-
-            @Override
-            public void onAudioStateChanged(boolean active) {
-                if (!active) {
-                    synchronized (audioLock) {
-                        if (audioCapturer == holder[0]) {
-                            audioCapturer = null;
-                            audioOwnerSessionId = -1;
-                            lastAudioConfig = null;
-                        }
-                    }
-                }
-                System.out.println("OPALDESK_REMOTE_AUDIO_STATE active=" + active + " owner=" + audioOwnerSessionId);
-            }
-        });
-        holder[0] = cap;
-        this.audioCapturer = cap;
-        if (!cap.start(splitByApp, initialUids)) {
-            if (this.audioCapturer == cap) {
-                this.audioCapturer = null;
-                this.audioOwnerSessionId = -1;
-                this.lastAudioConfig = null;
-            }
-        } else {
-            System.out.println("OPALDESK_REMOTE_AUDIO_OWNER sid=" + ownerSessionId + " split=" + splitByApp);
-        }
-    }
-
-    private boolean isSessionInMirrorMode(int sessionId) {
-        if (sessionId <= 0) return false;
-        ActiveRemoteSession s = sessions.get(sessionId);
-        return s != null && !s.closed && s.isMirror();
-    }
-
-    private boolean isAudioOwnerInMirrorMode() {
-        return isSessionInMirrorMode(audioOwnerSessionId);
-    }
-
-    private void syncAudioRoutingForMode(boolean mirrorMode) {
-        synchronized (audioLock) {
-            AudioStreamCapturer cap = audioCapturer;
-            if (cap == null || !cap.isActive()) return;
-            boolean effectiveMirror = mirrorMode && (audioOwnerSessionId == desktopSessionId);
-            boolean splitByApp = !effectiveMirror && (config.getAudioRouteMode() == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP);
-            List<Integer> uids = splitByApp ? collectDexAppUids() : Collections.emptyList();
-            cap.setSplitMode(splitByApp, uids);
-        }
-    }
-
     public void onCompositorWindowsChanged() {
-        synchronized (audioLock) {
-            AudioStreamCapturer cap = audioCapturer;
-            if (cap != null && cap.isActive()
-                    && !isAudioOwnerInMirrorMode()
-                    && config.getAudioRouteMode() == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP) {
-                cap.updateTargetUids(collectDexAppUids());
-            }
-        }
+        mediaDevices.syncSplitAudioUidsIfActive();
         int deskSid = desktopSessionId;
         if (deskSid > 0) {
             ActiveRemoteSession s = sessions.get(deskSid);
@@ -2203,65 +2061,7 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
     }
 
     public void applyAudioRouteMode(int mode) {
-        worker.execute(() -> {
-            synchronized (audioLock) {
-                AudioStreamCapturer cap = audioCapturer;
-                if (cap == null || !cap.isActive()) return;
-                boolean splitByApp = !isAudioOwnerInMirrorMode()
-                        && (mode == BridgeProtocol.AUDIO_ROUTE_SPLIT_BY_APP);
-                List<Integer> uids = splitByApp ? collectDexAppUids() : Collections.emptyList();
-                cap.setSplitMode(splitByApp, uids);
-            }
-        });
-    }
-
-    private List<Integer> collectDexAppUids() {
-        Set<String> pkgs = compositor.getOpenWindowPackages();
-        for (ActiveRemoteSession s : sessions.values()) {
-            if (s != null && !s.closed && s.standalone && !s.appPackage.isEmpty()) {
-                pkgs.add(s.appPackage);
-            }
-        }
-        List<Integer> uids = new ArrayList<>();
-        if (pkgs.isEmpty() || services.context == null) {
-            return uids;
-        }
-        PackageManager pm;
-        try {
-            pm = services.context.getPackageManager();
-        } catch (RuntimeException ignored) {
-            return uids;
-        }
-        if (pm == null) {
-            return uids;
-        }
-        for (String pkg : pkgs) {
-            if (pkg == null || pkg.isEmpty()) continue;
-            try {
-                int uid = pm.getPackageUid(pkg, 0);
-                if (uid >= io.github.lengsukq.opaldesk.daemon.audio.AudioRoutingPolicy.MIN_APP_UID) {
-                    uids.add(uid);
-                }
-            } catch (PackageManager.NameNotFoundException | RuntimeException ignored) {
-            }
-        }
-        return uids;
-    }
-
-    private void stopAudio() {
-        synchronized (audioLock) {
-            stopAudioLocked();
-        }
-    }
-
-    private void stopAudioLocked() {
-        AudioStreamCapturer cap = audioCapturer;
-        audioCapturer = null;
-        audioOwnerSessionId = -1;
-        lastAudioConfig = null;
-        if (cap != null) {
-            try { cap.stop(); } catch (RuntimeException ignored) {}
-        }
+        mediaDevices.applyAudioRouteMode(mode);
     }
 
     public void applyRemoteMediaPolicy(boolean micEnabled, boolean cameraEnabled) {
@@ -2273,221 +2073,14 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             boolean cameraEnabled,
             boolean triggerMicStart,
             boolean triggerCameraStart) {
-        if (!micEnabled) {
-            stopRemoteMic(true);
-        } else if (triggerMicStart) {
-            int deskSid = desktopSessionId;
-            ActiveRemoteSession s = (deskSid > 0) ? sessions.get(deskSid) : null;
-            if (s != null && !s.closed && micOwnerSessionId != deskSid) {
-                server.sendMicState(deskSid, new OpalCastProtocol.MicStateMsg(
-                        true,
-                        true,
-                        OpalCastProtocol.DEFAULT_MIC_SAMPLE_RATE,
-                        OpalCastProtocol.DEFAULT_MIC_CHANNELS,
-                        ""));
-            }
-        }
-        if (!cameraEnabled) {
-            stopRemoteCamera(true);
-        } else if (triggerCameraStart && config.isRootEnhanced()) {
-            int deskSid = desktopSessionId;
-            ActiveRemoteSession s = (deskSid > 0) ? sessions.get(deskSid) : null;
-            if (s != null && !s.closed && cameraOwnerSessionId != deskSid) {
-                server.sendCameraState(deskSid, new OpalCastProtocol.CameraStateMsg(
-                        true,
-                        true,
-                        false,
-                        OpalCastProtocol.DEFAULT_CAMERA_WIDTH,
-                        OpalCastProtocol.DEFAULT_CAMERA_HEIGHT,
-                        OpalCastProtocol.DEFAULT_CAMERA_FPS,
-                        "",
-                        "",
-                        "front"));
-            }
-        }
-    }
-
-    private void handleMicConfig(int sessionId, OpalCastProtocol.MicConfigMsg msg) {
-        synchronized (micLock) {
-            if (!msg.enabled) {
-                if (micOwnerSessionId == sessionId) {
-                    stopRemoteMicLocked(false);
-                }
-                server.sendMicState(sessionId, new OpalCastProtocol.MicStateMsg(
-                        false, config.isRemoteMicEnabled(), msg.sampleRate, msg.channels, "远端麦克风已关闭"));
-                return;
-            }
-            if (!config.isRemoteMicEnabled()) {
-                server.sendMicState(sessionId, new OpalCastProtocol.MicStateMsg(
-                        false, false, msg.sampleRate, msg.channels,
-                        "主机端未开启远端麦克风（可在主应用设置或控制中心开启）"));
-                return;
-            }
-            if (!OpalCastProtocol.MIC_CODEC_PCM16.equalsIgnoreCase(msg.codec)) {
-                server.sendMicState(sessionId, new OpalCastProtocol.MicStateMsg(
-                        false, false, msg.sampleRate, msg.channels, "不支持的麦克风音频格式：" + msg.codec));
-                return;
-            }
-            if (micOwnerSessionId > 0 && micOwnerSessionId != sessionId) {
-                int prevSid = micOwnerSessionId;
-                stopRemoteMicLocked(false);
-                server.sendMicState(prevSid, new OpalCastProtocol.MicStateMsg(
-                        false, true, OpalCastProtocol.DEFAULT_MIC_SAMPLE_RATE,
-                        OpalCastProtocol.DEFAULT_MIC_CHANNELS, "远端麦克风已被其他会话接管"));
-            }
-            if (micInjector == null) {
-                micInjector = new RemoteMicInjector(services.context);
-            }
-            RemoteMicInjector.StartResult res = micInjector.start(msg.sampleRate, msg.channels);
-            if (res.active) {
-                micOwnerSessionId = sessionId;
-            } else {
-                micOwnerSessionId = -1;
-            }
-            server.sendMicState(sessionId, new OpalCastProtocol.MicStateMsg(
-                    res.active, res.supported, res.sampleRate, res.channels, res.message));
-        }
-    }
-
-    private void stopRemoteMic(boolean notifyOwner) {
-        synchronized (micLock) {
-            stopRemoteMicLocked(notifyOwner);
-        }
-    }
-
-    private void stopRemoteMicLocked(boolean notifyOwner) {
-        int prevSid = micOwnerSessionId;
-        micOwnerSessionId = -1;
-        if (micInjector != null) {
-            try { micInjector.stop(); } catch (RuntimeException ignored) {}
-        }
-        if (notifyOwner && prevSid > 0) {
-            server.sendMicState(prevSid, new OpalCastProtocol.MicStateMsg(
-                    false, config.isRemoteMicEnabled(), OpalCastProtocol.DEFAULT_MIC_SAMPLE_RATE,
-                    OpalCastProtocol.DEFAULT_MIC_CHANNELS,
-                    config.isRemoteMicEnabled() ? "远端麦克风已关闭" : "主机端已关闭远端麦克风开关"));
-        }
-    }
-
-    private void handleCameraConfig(int sessionId, OpalCastProtocol.CameraConfigMsg msg) {
-        synchronized (cameraLock) {
-            if (!msg.enabled) {
-                if (cameraOwnerSessionId == sessionId) {
-                    stopRemoteCameraLocked(false);
-                }
-                server.sendCameraState(sessionId, new OpalCastProtocol.CameraStateMsg(
-                        false, config.isRemoteCameraEnabled() && config.isRootEnhanced(), !config.isRootEnhanced(),
-                        msg.width, msg.height, msg.fps, "", "远端摄像头映射已关闭"));
-                return;
-            }
-            if (!config.isRootEnhanced()) {
-                server.sendCameraState(sessionId, new OpalCastProtocol.CameraStateMsg(
-                        false, false, true,
-                        msg.width, msg.height, msg.fps, "",
-                        "摄像头映射需要 Root 权限（请使用 Root 增强模式启动 OpalDesk 引擎）"));
-                return;
-            }
-            if (!config.isRemoteCameraEnabled()) {
-                server.sendCameraState(sessionId, new OpalCastProtocol.CameraStateMsg(
-                        false, false, false,
-                        msg.width, msg.height, msg.fps, "",
-                        "主机端未开启 Root 摄像头映射（可在主应用设置或控制中心开启）"));
-                return;
-            }
-            if (!OpalCastProtocol.CAMERA_CODEC_MJPEG.equalsIgnoreCase(msg.codec)) {
-                server.sendCameraState(sessionId, new OpalCastProtocol.CameraStateMsg(
-                        false, false, false, msg.width, msg.height, msg.fps, "",
-                        "不支持的摄像头编码格式：" + msg.codec));
-                return;
-            }
-            if (cameraOwnerSessionId > 0 && cameraOwnerSessionId != sessionId) {
-                int prevSid = cameraOwnerSessionId;
-                stopRemoteCameraLocked(false);
-                server.sendCameraState(prevSid, new OpalCastProtocol.CameraStateMsg(
-                        false, true, false,
-                        OpalCastProtocol.DEFAULT_CAMERA_WIDTH, OpalCastProtocol.DEFAULT_CAMERA_HEIGHT,
-                        OpalCastProtocol.DEFAULT_CAMERA_FPS, "", "远端摄像头映射已被其他会话接管"));
-            }
-            if (cameraBridge == null) {
-                cameraBridge = new RootCameraBridge(services.context);
-                cameraBridge.setFacingChangeListener(this::onVirtualCameraActiveFacingChanged);
-            }
-            boolean wasAospActive = cameraBridge.hasAospVirtualCamera();
-            RootCameraBridge.StartResult res = cameraBridge.start(
-                    config.isRootEnhanced(), msg.width, msg.height, msg.fps, msg.facing);
-            cameraOwnerSessionId = res.active ? sessionId : -1;
-            if (res.active && cameraBridge.hasAospVirtualCamera()) {
-                final RootCameraBridge activeBridge = cameraBridge;
-                displayDriver.setCustomVirtualDisplayProvider(activeBridge::createVirtualDisplay);
-                if (!wasAospActive) {
-                    int migrated = compositor.migrateLiveWindowsToCurrentDisplayDriver();
-                    System.out.println("OPALDESK_AOSP_VCAM_MIGRATED_ON count=" + migrated);
-                }
-            }
-            server.sendCameraState(sessionId, new OpalCastProtocol.CameraStateMsg(
-                    res.active, res.supported, res.rootRequired,
-                    res.width, res.height, res.fps, res.backend, res.message,
-                    msg.facing));
-        }
-    }
-
-    private void onVirtualCameraActiveFacingChanged(String facing) {
-        if (facing == null || facing.isEmpty()) return;
-        int ownerSid = cameraOwnerSessionId;
-        RootCameraBridge bridge = cameraBridge;
-        if (ownerSid <= 0 || bridge == null || !bridge.isActive()) return;
-        System.out.println("OPALDESK_AOSP_VCAM_FACING_SYNC sid=" + ownerSid + " facing=" + facing);
-        server.sendCameraState(ownerSid, new OpalCastProtocol.CameraStateMsg(
-                true, true, false,
-                bridge.getActiveWidth(), bridge.getActiveHeight(), bridge.getActiveFps(),
-                bridge.getActiveBackend(), "", facing));
-    }
-
-    private void stopRemoteCamera(boolean notifyOwner) {
-        stopRemoteCamera(notifyOwner, false);
-    }
-
-    private void stopRemoteCamera(boolean notifyOwner, boolean disassociateCdm) {
-        synchronized (cameraLock) {
-            stopRemoteCameraLocked(notifyOwner, disassociateCdm);
-        }
-    }
-
-    private void stopRemoteCameraLocked(boolean notifyOwner) {
-        stopRemoteCameraLocked(notifyOwner, false);
-    }
-
-    private void stopRemoteCameraLocked(boolean notifyOwner, boolean disassociateCdm) {
-        int prevSid = cameraOwnerSessionId;
-        cameraOwnerSessionId = -1;
-        boolean hadAosp = cameraBridge != null && cameraBridge.hasAospVirtualCamera();
-        if (displayDriver != null) {
-            displayDriver.setCustomVirtualDisplayProvider(null);
-        }
-        if (hadAosp && !disassociateCdm) {
-            // Migrate live windows back to default DisplayManager BEFORE closing VirtualDevice so
-            // apps regain the phone's physical cameras and are never killed by VD teardown.
-            int migrated = compositor.migrateLiveWindowsToCurrentDisplayDriver();
-            System.out.println("OPALDESK_AOSP_VCAM_MIGRATED_OFF count=" + migrated);
-        }
-        if (cameraBridge != null) {
-            try { cameraBridge.stop(disassociateCdm); } catch (RuntimeException ignored) {}
-        }
-        if (notifyOwner && prevSid > 0) {
-            server.sendCameraState(prevSid, new OpalCastProtocol.CameraStateMsg(
-                    false, config.isRemoteCameraEnabled() && config.isRootEnhanced(), !config.isRootEnhanced(),
-                    OpalCastProtocol.DEFAULT_CAMERA_WIDTH, OpalCastProtocol.DEFAULT_CAMERA_HEIGHT,
-                    OpalCastProtocol.DEFAULT_CAMERA_FPS, "",
-                    config.isRemoteCameraEnabled() ? "远端摄像头映射已关闭" : "主机端已关闭 Root 摄像头映射开关"));
-        }
+        mediaDevices.applyRemoteMediaPolicy(micEnabled, cameraEnabled, triggerMicStart, triggerCameraStart);
     }
 
     private void pushDeviceState(ActiveRemoteSession s) {
         boolean mirror = s.isMirror();
         String fsTitle = (s.standalone || s.companion || mirror) ? "" : compositor.getFullscreenWindowTitle();
         s.lastPushedFullscreenTitle = fsTitle;
-        AudioStreamCapturer cap = audioCapturer;
-        boolean sessionAudioActive = !s.companion && cap != null && cap.isActive() && s.audioRequested;
+        boolean sessionAudioActive = !s.companion && mediaDevices.isAudioActive() && s.audioRequested;
         OpalCastProtocol.DeviceState state = new OpalCastProtocol.DeviceState(
                 server.getDeviceName(),
                 s.sinkType,
@@ -2545,18 +2138,29 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
             PackageManager pm = services.context.getPackageManager();
             Intent q = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
             List<ResolveInfo> resolved = pm.queryIntentActivities(q, 0);
-            Set<String> seenPkgs = new HashSet<>();
+            Set<String> seenKeys = new HashSet<>();
             for (ResolveInfo ri : resolved) {
                 if (ri == null || ri.activityInfo == null) continue;
                 String pkg = ri.activityInfo.packageName;
                 if (DaemonConfig.PackagePolicy.isBlockedWindowPkg(pkg)) continue;
-                if (!seenPkgs.add(pkg)) continue;
+                String key = UserProfileAppPolicy.formatAppKey(pkg, 0);
+                if (!seenKeys.add(key)) continue;
                 CharSequence lbl = ri.loadLabel(pm);
                 String label = (lbl != null && lbl.length() > 0) ? lbl.toString().trim() : pkg;
                 int openCount = config.getAppLaunchCount(pkg);
-                out.add(new OpalCastProtocol.AppEntry(pkg, ri.activityInfo.name, label, false, -1, "", openCount));
+                out.add(new OpalCastProtocol.AppEntry(pkg, ri.activityInfo.name, label, false, -1, "", openCount, 0, ""));
             }
-            out.sort(Comparator.comparing(a -> a.label.toLowerCase(Locale.ROOT)));
+            for (UserProfileAppPolicy.SecondaryAppEntry sec : services.querySecondaryUserLaunchableApps()) {
+                if (sec == null || sec.pkg.isEmpty() || sec.userId <= 0) continue;
+                String key = sec.appKey();
+                if (!seenKeys.add(key)) continue;
+                int openCount = config.getAppLaunchCount(sec.pkg);
+                out.add(new OpalCastProtocol.AppEntry(
+                        sec.pkg, sec.cls, sec.label, false, -1, "", openCount, sec.userId, sec.profileType));
+            }
+            out.sort(Comparator
+                    .comparing((OpalCastProtocol.AppEntry a) -> a.label.toLowerCase(Locale.ROOT))
+                    .thenComparingInt(a -> a.userId));
         } catch (RuntimeException ignored) {
         }
         return out;

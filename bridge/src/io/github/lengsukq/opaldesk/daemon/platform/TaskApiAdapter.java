@@ -66,11 +66,15 @@ public final class TaskApiAdapter {
     }
 
     public List<?> getTasks() {
-        return invokeTaskQuery("getTasks", DEFAULT_MAX_TASKS);
+        return invokeTaskQuery("getTasks", DEFAULT_MAX_TASKS, 0);
     }
 
     public List<?> getRecentTasks() {
-        return invokeTaskQuery("getRecentTasks", DEFAULT_MAX_TASKS);
+        return getRecentTasks(0);
+    }
+
+    public List<?> getRecentTasks(int userId) {
+        return invokeTaskQuery("getRecentTasks", DEFAULT_MAX_TASKS, Math.max(0, userId));
     }
 
     public Set<Integer> collectAliveTaskIds() {
@@ -82,7 +86,7 @@ public final class TaskApiAdapter {
                 if (tid > 0) alive.add(tid);
             }
         }
-        List<?> recents = getRecentTasks();
+        List<?> recents = getRecentTasks(0);
         if (recents != null) {
             for (Object t : recents) {
                 int tid = extractTaskId(t);
@@ -109,16 +113,25 @@ public final class TaskApiAdapter {
     }
 
     public int findRunningOrRecentTaskForPackage(String pkg) {
-        TaskCandidate candidate = findTaskCandidateForPackage(pkg);
+        return findRunningOrRecentTaskForPackage(pkg, 0);
+    }
+
+    public int findRunningOrRecentTaskForPackage(String pkg, int userId) {
+        TaskCandidate candidate = findTaskCandidateForPackage(pkg, userId);
         return candidate != null ? candidate.taskId : -1;
     }
 
     public TaskCandidate findTaskCandidateForPackage(String pkg) {
+        return findTaskCandidateForPackage(pkg, 0);
+    }
+
+    public TaskCandidate findTaskCandidateForPackage(String pkg, int userId) {
         if (pkg == null || pkg.isEmpty()) return null;
+        int safeUserId = Math.max(0, userId);
         List<?> running = getTasks();
         if (running != null) {
             for (Object t : running) {
-                if (pkg.equals(extractTaskPkg(t))) {
+                if (pkg.equals(extractTaskPkg(t)) && extractTaskUserId(t) == safeUserId) {
                     int tid = extractTaskId(t);
                     if (tid > 0) {
                         return new TaskCandidate(
@@ -129,10 +142,10 @@ public final class TaskApiAdapter {
                 }
             }
         }
-        List<?> recents = getRecentTasks();
+        List<?> recents = getRecentTasks(safeUserId);
         if (recents != null) {
             for (Object t : recents) {
-                if (pkg.equals(extractTaskPkg(t))) {
+                if (pkg.equals(extractTaskPkg(t)) && extractTaskUserId(t) == safeUserId) {
                     int tid = extractTaskId(t);
                     if (tid > 0) {
                         return new TaskCandidate(
@@ -163,6 +176,10 @@ public final class TaskApiAdapter {
     }
 
     public int findTopTaskIdOnDisplay(int displayId, String expectedPkg) {
+        return findTopTaskIdOnDisplay(displayId, expectedPkg, -1);
+    }
+
+    public int findTopTaskIdOnDisplay(int displayId, String expectedPkg, int expectedUserId) {
         if (displayId <= 0) return -1;
         List<?> running = getTasks();
         if (running == null) return -1;
@@ -172,8 +189,9 @@ public final class TaskApiAdapter {
             int tid = extractTaskId(t);
             if (tid <= 0) continue;
             String p = extractTaskPkg(t);
-            if (expectedPkg != null && expectedPkg.equals(p)) return tid;
-            if (fallbackTid <= 0) fallbackTid = tid;
+            boolean userOk = (expectedUserId < 0) || (extractTaskUserId(t) == expectedUserId);
+            if (expectedPkg != null && expectedPkg.equals(p) && userOk) return tid;
+            if (fallbackTid <= 0 && userOk) fallbackTid = tid;
         }
         return fallbackTid;
     }
@@ -198,6 +216,10 @@ public final class TaskApiAdapter {
      * or called {@code moveTaskToBack(true)} (which otherwise leaves a blank VirtualDisplay).
      */
     public int findTopVisibleTaskIdOnDisplay(int displayId, String expectedPkg) {
+        return findTopVisibleTaskIdOnDisplay(displayId, expectedPkg, -1);
+    }
+
+    public int findTopVisibleTaskIdOnDisplay(int displayId, String expectedPkg, int expectedUserId) {
         if (displayId <= 0) return -1;
         List<?> running = getTasks();
         if (running == null) return -1;
@@ -208,8 +230,9 @@ public final class TaskApiAdapter {
             int tid = extractTaskId(t);
             if (tid <= 0) continue;
             String p = extractTaskPkg(t);
-            if (expectedPkg != null && expectedPkg.equals(p)) return tid;
-            if (fallbackTid <= 0) fallbackTid = tid;
+            boolean userOk = (expectedUserId < 0) || (extractTaskUserId(t) == expectedUserId);
+            if (expectedPkg != null && expectedPkg.equals(p) && userOk) return tid;
+            if (fallbackTid <= 0 && userOk) fallbackTid = tid;
         }
         return fallbackTid;
     }
@@ -486,7 +509,7 @@ public final class TaskApiAdapter {
         return null;
     }
 
-    private List<?> invokeTaskQuery(String name, int maxNum) {
+    private List<?> invokeTaskQuery(String name, int maxNum, int userId) {
         if (atm == null) return null;
         try {
             for (Method m : atm.getClass().getMethods()) {
@@ -499,7 +522,7 @@ public final class TaskApiAdapter {
                     else if (pt.length == 3) res = m.invoke(atm, maxNum, false, true);
                     else if (pt.length == 4) res = m.invoke(atm, maxNum, false, true, -1);
                 } else if ("getRecentTasks".equals(name) && pt.length == 3) {
-                    res = m.invoke(atm, maxNum, 0, 0);
+                    res = m.invoke(atm, maxNum, 0, Math.max(0, userId));
                 }
                 if (res instanceof List<?>) return (List<?>) res;
                 if (res != null) {
@@ -514,6 +537,10 @@ public final class TaskApiAdapter {
             System.err.println("OPALDESK_TASK_QUERY_WARN method=" + name + ": " + e.getMessage());
         }
         return null;
+    }
+
+    public static int extractTaskUserId(Object taskInfo) {
+        return Math.max(0, readIntField(taskInfo, "userId", 0));
     }
 
     public static int extractTaskId(Object taskInfo) {

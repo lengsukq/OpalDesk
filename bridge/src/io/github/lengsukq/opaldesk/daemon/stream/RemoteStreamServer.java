@@ -17,7 +17,6 @@ import java.io.BufferedOutputStream;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -25,12 +24,8 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-import java.util.function.Predicate;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocket;
@@ -42,9 +37,9 @@ import javax.net.ssl.SSLSocket;
  *    supporting both wired USB (SINK_REMOTE_USB) and wireless ADB (SINK_REMOTE_WIFI_ADB) via
  *    HELLO.transportHint, plus authenticated Wi-Fi TLS zero-PIN upgrade (REQUEST_WIFI_UPGRADE).
  * 2) On-demand wireless SSLServerSocket (OFF by default; TLS 1.2/1.3, TCP_NODELAY, ECDSA P-256,
- *    one-time 6-digit PIN + 32-byte hex authToken trust store).
- * 3) Concurrent multi-session isolation: 1 main "desktop" session + up to 3 independent
- *    "standalone_app" pop-out sessions without kicking each other off.
+ *    interactive consent + 32-byte hex authToken trust store).
+ * 3) Concurrent multi-session isolation delegated to {@link RemoteSessionRegistry} and frame
+ *    routing delegated to {@link RemoteUplinkFrameDispatcher}.
  */
 public final class RemoteStreamServer {
     public static final String USB_SOCKET_NAME = "opaldesk_stream";
@@ -55,10 +50,7 @@ public final class RemoteStreamServer {
     private static final int HANDSHAKE_TIMEOUT_MS = 10_000;
     private static final int SOCKET_IO_BUFFER_BYTES = 131_072;
     private static final int USB_SOCKET_SEND_BUF_BYTES = 512 * 1024;
-    // 512 KiB Wi-Fi TCP send buffer absorbs single 2.5K/4K IDR bursts (~180-200ms @ 22 Mbps)
-    // without triggering premature sender-queue congestion drops while staying bounded against bufferbloat.
     private static final int WIFI_SOCKET_SEND_BUF_BYTES = 512 * 1024;
-    // DSCP EF (46 << 2 = 0xB8) signals low-latency real-time media priority to 802.11e WMM Wi-Fi 6 APs.
     private static final int REALTIME_MEDIA_TRAFFIC_CLASS = 0xB8;
 
     public interface SessionListener {
@@ -126,17 +118,16 @@ public final class RemoteStreamServer {
     private final SessionListener listener;
     private final TrustStoreManager trustStore;
     private final PairingApprovalCoordinator pairingCoordinator = new PairingApprovalCoordinator();
+    private final RemoteSessionRegistry sessions = new RemoteSessionRegistry();
     private final File certStoreFile;
     private final String deviceName;
 
     private final Object lifecycleLock = new Object();
     private volatile boolean stopped = false;
 
-    // ADB LocalServerSocket (handles both wired USB and wireless ADB)
     private LocalServerSocket usbServerSocket;
     private Thread usbAcceptThread;
 
-    // Wireless / USB-tether TLS server (OFF by default!)
     private volatile boolean wifiEnabled = false;
     private volatile int wifiPort = DEFAULT_WIFI_PORT;
     private volatile int wifiBindScope = BridgeProtocol.TLS_BIND_SCOPE_ALL;
@@ -144,14 +135,6 @@ public final class RemoteStreamServer {
     private volatile SelfSignedCertGenerator.ServerIdentity tlsIdentity;
     private SSLServerSocket wifiServerSocket;
     private Thread wifiAcceptThread;
-
-    // Multi-session registry: 1 desktop + up to 3 standalone_app + up to 2 companion sessions
-    private final AtomicInteger nextSessionId = new AtomicInteger(0);
-    private final Object sessionLock = new Object();
-    private volatile ClientSession desktopSession;
-    private final LinkedHashMap<Integer, ClientSession> standaloneSessions = new LinkedHashMap<>();
-    private final LinkedHashMap<Integer, ClientSession> companionSessions = new LinkedHashMap<>();
-    private final ConcurrentHashMap<Integer, ClientSession> allSessions = new ConcurrentHashMap<>();
 
     public RemoteStreamServer(SessionListener listener, TrustStoreManager trustStore) {
         this(listener, trustStore, new File(SelfSignedCertGenerator.DEFAULT_KEYSTORE_PATH), resolveDeviceName());
@@ -218,138 +201,51 @@ public final class RemoteStreamServer {
     }
 
     public boolean isActiveSessionPermanent() {
-        ClientSession d = desktopSession;
-        if (d != null && !d.isClosed()) {
-            return d.permanentTrust;
-        }
-        synchronized (sessionLock) {
-            for (ClientSession s : standaloneSessions.values()) {
-                if (s != null && !s.isClosed()) return s.permanentTrust;
-            }
-        }
-        return false;
+        return sessions.isActiveSessionPermanent();
     }
 
     public boolean hasDesktopSession() {
-        ClientSession s = desktopSession;
-        return s != null && !s.isClosed();
+        return sessions.hasDesktopSession();
     }
 
     public boolean hasActiveSession() {
-        if (hasDesktopSession()) return true;
-        synchronized (sessionLock) {
-            for (ClientSession s : standaloneSessions.values()) {
-                if (s != null && !s.isClosed()) return true;
-            }
-        }
-        return false;
+        return sessions.hasActiveSession();
     }
 
     public boolean hasCompanionSession() {
-        synchronized (sessionLock) {
-            for (ClientSession s : companionSessions.values()) {
-                if (s != null && !s.isClosed()) return true;
-            }
-        }
-        return false;
+        return sessions.hasCompanionSession();
     }
 
     public int getCompanionSessionCount() {
-        synchronized (sessionLock) {
-            int count = 0;
-            for (ClientSession s : companionSessions.values()) {
-                if (s != null && !s.isClosed()) count++;
-            }
-            return count;
-        }
+        return sessions.getCompanionSessionCount();
     }
 
     public int getStandaloneSessionCount() {
-        synchronized (sessionLock) {
-            int count = 0;
-            for (ClientSession s : standaloneSessions.values()) {
-                if (s != null && !s.isClosed()) count++;
-            }
-            return count;
-        }
+        return sessions.getStandaloneSessionCount();
     }
 
     public List<Integer> getDesktopAndCompanionSessionIds() {
-        List<Integer> ids = new ArrayList<>(3);
-        ClientSession d = desktopSession;
-        if (d != null && !d.isClosed()) {
-            ids.add(d.sessionId);
-        }
-        synchronized (sessionLock) {
-            for (ClientSession s : companionSessions.values()) {
-                if (s != null && !s.isClosed()) {
-                    ids.add(s.sessionId);
-                }
-            }
-        }
-        return ids;
+        return sessions.getDesktopAndCompanionSessionIds();
     }
 
-    /**
-     * Returns all live sessions eligible to receive OPD1 v1.2 {@code 0x19}/{@code 0x1A} pushes:
-     * all companion sessions plus any desktop session that declared {@code companionEvents=true}
-     * in {@code HELLO} or dynamically subscribed via {@code 0x31}/{@code 0x32}.
-     * Protects pre-P1 legacy desktop clients from disconnecting on unknown frame types.
-     */
     public List<Integer> getCompanionEventSubscriberSessionIds() {
-        List<Integer> ids = new ArrayList<>(3);
-        ClientSession d = desktopSession;
-        if (d != null && !d.isClosed() && d.isCompanionEventsSubscribed()) {
-            ids.add(d.sessionId);
-        }
-        synchronized (sessionLock) {
-            for (ClientSession s : companionSessions.values()) {
-                if (s != null && !s.isClosed() && s.isCompanionEventsSubscribed()) {
-                    ids.add(s.sessionId);
-                }
-            }
-        }
-        return ids;
+        return sessions.getCompanionEventSubscriberSessionIds();
     }
 
     public boolean markSessionCompanionEventsSubscribed(int sessionId) {
-        ClientSession s = allSessions.get(sessionId);
-        if (s == null || s.isClosed()) return false;
-        boolean wasSubscribed = s.isCompanionEventsSubscribed();
-        s.setCompanionEventsSubscribed(true);
-        return !wasSubscribed;
+        return sessions.markSessionCompanionEventsSubscribed(sessionId);
     }
 
     public int getActiveSinkType() {
-        ClientSession d = desktopSession;
-        if (d != null && !d.isClosed()) {
-            return d.sinkType;
-        }
-        synchronized (sessionLock) {
-            for (ClientSession s : standaloneSessions.values()) {
-                if (s != null && !s.isClosed()) return s.sinkType;
-            }
-        }
-        return DisplaySink.SINK_NONE;
+        return sessions.getActiveSinkType();
     }
 
     public String getActivePeerName() {
-        ClientSession d = desktopSession;
-        if (d != null && !d.isClosed() && d.clientName != null) {
-            return d.clientName;
-        }
-        synchronized (sessionLock) {
-            for (ClientSession s : standaloneSessions.values()) {
-                if (s != null && !s.isClosed() && s.clientName != null) return s.clientName;
-            }
-        }
-        return "";
+        return sessions.getActivePeerName();
     }
 
     /**
      * Starts the always-on ADB abstract socket listener ("opaldesk_stream").
-     * Does NOT start Wi-Fi TLS server (wireless remains off by default until explicitly enabled
-     * via Binder code 45 or authenticated ADB REQUEST_WIFI_UPGRADE).
      */
     public void startUsbListener() {
         synchronized (lifecycleLock) {
@@ -366,18 +262,10 @@ public final class RemoteStreamServer {
         }
     }
 
-    /**
-     * Configures the on-demand TLS 1.2/1.3 server on wildcard {@code 0.0.0.0} (Binder TX 24 or ADB Wi-Fi upgrade).
-     */
     public WifiConfigStatus configureWifi(boolean enable, int requestedPort) {
         return configureWifi(enable, requestedPort, BridgeProtocol.TLS_BIND_SCOPE_ALL);
     }
 
-    /**
-     * Configures the on-demand TLS 1.2/1.3 server with an explicit bind scope:
-     * {@link BridgeProtocol#TLS_BIND_SCOPE_ALL} (default wildcard) or
-     * {@link BridgeProtocol#TLS_BIND_SCOPE_USB_TETHER_ONLY} (Beta isolated USB tethering IP bind).
-     */
     public WifiConfigStatus configureWifi(boolean enable, int requestedPort, int requestedBindScope) {
         int effectiveScope = (requestedBindScope == BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY)
                 ? BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY
@@ -388,7 +276,7 @@ public final class RemoteStreamServer {
             }
             if (!enable) {
                 stopWifiListenerLocked();
-                disconnectMatchingSessions(s -> DisplaySink.isTlsNetworkSink(s.sinkType), "TLS stream server disabled");
+                sessions.disconnectMatching(s -> DisplaySink.isTlsNetworkSink(s.sinkType), "TLS stream server disabled");
                 return new WifiConfigStatus(false, wifiPort, getCertFingerprint(), BridgeProtocol.TLS_BIND_SCOPE_ALL);
             }
 
@@ -400,10 +288,9 @@ public final class RemoteStreamServer {
             if (effectiveScope == BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY) {
                 NetworkInterfaceClassifier.Endpoint usbEp = detectUsbTetherEndpoint();
                 if (!usbEp.isPresent()) {
-                    // Fail closed: never fall back to 0.0.0.0 when user explicitly requested USB-only isolation.
                     System.err.println("OPALDESK_USB_TETHER_BIND_ABORTED reason=no_active_usb_tether_interface");
                     stopWifiListenerLocked();
-                    disconnectMatchingSessions(
+                    sessions.disconnectMatching(
                             s -> DisplaySink.isTlsNetworkSink(s.sinkType),
                             "No active USB tethering interface");
                     return new WifiConfigStatus(false, wifiPort, getCertFingerprint(), BridgeProtocol.TLS_BIND_SCOPE_ALL);
@@ -420,7 +307,7 @@ public final class RemoteStreamServer {
 
             stopWifiListenerLocked();
             if (effectiveScope == BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY) {
-                disconnectMatchingSessions(
+                sessions.disconnectMatching(
                         s -> s.sinkType == DisplaySink.SINK_REMOTE_WIFI,
                         "Switched to USB tethering only mode");
             }
@@ -460,10 +347,6 @@ public final class RemoteStreamServer {
         }
     }
 
-    /**
-     * Reconciles a USB-tethering-only listener whenever Android re-randomizes the USB tethering IP
-     * on cable replug or tears down the interface on unplug. Strictly no-op in regular LAN mode.
-     */
     public void reconcileUsbTetherBindIfNeeded() {
         if (!wifiEnabled || wifiBindScope != BridgeProtocol.TLS_BIND_SCOPE_USB_TETHER_ONLY) {
             return;
@@ -476,7 +359,7 @@ public final class RemoteStreamServer {
             if (!cur.isPresent()) {
                 System.out.println("OPALDESK_USB_TETHER_LOST closing USB-only listener");
                 stopWifiListenerLocked();
-                disconnectMatchingSessions(
+                sessions.disconnectMatching(
                         s -> DisplaySink.isTlsNetworkSink(s.sinkType),
                         "USB tethering disconnected");
                 return;
@@ -490,7 +373,7 @@ public final class RemoteStreamServer {
 
     public boolean revokeTrustedClient(String clientId) {
         boolean ok = trustStore.revokeClient(clientId);
-        disconnectMatchingSessions(
+        sessions.disconnectMatching(
                 s -> DisplaySink.isTlsNetworkSink(s.sinkType)
                         && ("*".equals(clientId) || (s.clientId != null && s.clientId.equals(clientId))),
                 "Trusted client revoked");
@@ -498,29 +381,11 @@ public final class RemoteStreamServer {
     }
 
     public void disconnectSession(int sessionId, String reason) {
-        ClientSession target = allSessions.get(sessionId);
-        if (target != null) {
-            target.close(reason);
-        }
+        sessions.disconnectSession(sessionId, reason);
     }
 
     public void disconnectActiveClient(String reason) {
-        List<ClientSession> toClose = new ArrayList<>(allSessions.values());
-        for (ClientSession s : toClose) {
-            if (s != null) s.close(reason);
-        }
-    }
-
-    private void disconnectMatchingSessions(Predicate<ClientSession> pred, String reason) {
-        List<ClientSession> toClose = new ArrayList<>();
-        for (ClientSession s : allSessions.values()) {
-            if (s != null && pred.test(s)) {
-                toClose.add(s);
-            }
-        }
-        for (ClientSession s : toClose) {
-            s.close(reason);
-        }
+        sessions.disconnectAll(reason);
     }
 
     public void shutdown() {
@@ -539,14 +404,14 @@ public final class RemoteStreamServer {
     // ---- Session-addressed outbound frame senders ----
 
     public void updateSessionTargetFps(int sessionId, float targetFps) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed()) {
             s.setTargetFps(targetFps);
         }
     }
 
     public void sendVideoConfig(int sessionId, OpalCastProtocol.VideoConfig config, long timestampUs) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && config != null) {
             s.enqueue(OpalCastProtocol.TYPE_VIDEO_CONFIG, 0, timestampUs, OpalCastProtocol.encodeVideoConfig(config));
         }
@@ -564,7 +429,7 @@ public final class RemoteStreamServer {
             int flags,
             long timestampUs,
             Consumer<byte[]> onRelease) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed()) {
             s.enqueue(OpalCastProtocol.TYPE_VIDEO_FRAME, flags, timestampUs, annexB, length, onRelease);
         } else if (onRelease != null && annexB != null) {
@@ -573,42 +438,39 @@ public final class RemoteStreamServer {
     }
 
     public void sendAudioConfig(int sessionId, OpalCastProtocol.AudioConfig config, long timestampUs) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && config != null) {
             s.enqueue(OpalCastProtocol.TYPE_AUDIO_CONFIG, 0, timestampUs, OpalCastProtocol.encodeAudioConfig(config));
         }
     }
 
     public void sendAudioFrame(int sessionId, byte[] aacAu, long timestampUs) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed()) {
             s.enqueue(OpalCastProtocol.TYPE_AUDIO_FRAME, 0, timestampUs, aacAu);
         }
     }
 
     public void sendDeviceState(int sessionId, OpalCastProtocol.DeviceState state) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && state != null) {
-            long ts = nowTimestampUs();
-            s.enqueue(OpalCastProtocol.TYPE_DEVICE_STATE, 0, ts, OpalCastProtocol.encodeDeviceState(state));
+            s.enqueue(OpalCastProtocol.TYPE_DEVICE_STATE, 0, nowTimestampUs(), OpalCastProtocol.encodeDeviceState(state));
         }
     }
 
     public void sendClipboardPush(int sessionId, long seq, String text) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed()) {
-            long ts = nowTimestampUs();
-            s.enqueue(OpalCastProtocol.TYPE_CLIPBOARD_PUSH, 0, ts, OpalCastProtocol.encodeClipboardPush(seq, text));
+            s.enqueue(OpalCastProtocol.TYPE_CLIPBOARD_PUSH, 0, nowTimestampUs(), OpalCastProtocol.encodeClipboardPush(seq, text));
         }
     }
 
     public void sendClipboardImagePush(int sessionId, long seq, byte[] pngData) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed()) {
             try {
                 byte[] payload = OpalCastProtocol.encodeClipboardImagePush(seq, pngData);
-                long ts = nowTimestampUs();
-                s.enqueue(OpalCastProtocol.TYPE_CLIPBOARD_PUSH, OpalCastProtocol.FLAG_CLIPBOARD_IMAGE_PNG, ts, payload);
+                s.enqueue(OpalCastProtocol.TYPE_CLIPBOARD_PUSH, OpalCastProtocol.FLAG_CLIPBOARD_IMAGE_PNG, nowTimestampUs(), payload);
             } catch (Throwable t) {
                 System.err.println("OPALDESK_CLIP_IMG_SEND_ERR: " + t.getMessage());
             }
@@ -616,48 +478,43 @@ public final class RemoteStreamServer {
     }
 
     public void sendFileTransferAck(int sessionId, int transferId, int status, String pathOrError) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed()) {
-            long ts = nowTimestampUs();
-            s.enqueue(OpalCastProtocol.TYPE_FILE_TRANSFER_ACK, 0, ts,
+            s.enqueue(OpalCastProtocol.TYPE_FILE_TRANSFER_ACK, 0, nowTimestampUs(),
                     OpalCastProtocol.encodeFileTransferAck(transferId, status, pathOrError));
         }
     }
 
     public void sendAppList(int sessionId, OpalCastProtocol.AppListMsg appList) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && appList != null) {
-            long ts = nowTimestampUs();
-            s.enqueue(OpalCastProtocol.TYPE_APP_LIST, 0, ts, OpalCastProtocol.encodeAppList(appList));
+            s.enqueue(OpalCastProtocol.TYPE_APP_LIST, 0, nowTimestampUs(), OpalCastProtocol.encodeAppList(appList));
         }
     }
 
     public void sendImeRequest(int sessionId, boolean show, int inputType) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed()) {
-            long ts = nowTimestampUs();
-            s.enqueue(OpalCastProtocol.TYPE_IME_REQUEST, 0, ts, OpalCastProtocol.encodeImeRequest(show, inputType));
+            s.enqueue(OpalCastProtocol.TYPE_IME_REQUEST, 0, nowTimestampUs(), OpalCastProtocol.encodeImeRequest(show, inputType));
         }
     }
 
     public void sendMicState(int sessionId, OpalCastProtocol.MicStateMsg state) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && state != null) {
-            long ts = nowTimestampUs();
-            s.enqueue(OpalCastProtocol.TYPE_MIC_STATE, 0, ts, OpalCastProtocol.encodeMicState(state));
+            s.enqueue(OpalCastProtocol.TYPE_MIC_STATE, 0, nowTimestampUs(), OpalCastProtocol.encodeMicState(state));
         }
     }
 
     public void sendCameraState(int sessionId, OpalCastProtocol.CameraStateMsg state) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && state != null) {
-            long ts = nowTimestampUs();
-            s.enqueue(OpalCastProtocol.TYPE_CAMERA_STATE, 0, ts, OpalCastProtocol.encodeCameraState(state));
+            s.enqueue(OpalCastProtocol.TYPE_CAMERA_STATE, 0, nowTimestampUs(), OpalCastProtocol.encodeCameraState(state));
         }
     }
 
     public void sendNotificationEvent(int sessionId, byte[] jsonUtf8) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && jsonUtf8 != null && jsonUtf8.length > 0) {
             s.enqueue(OpalCastProtocol.TYPE_NOTIFICATION_EVENT, 0, nowTimestampUs(), jsonUtf8);
         }
@@ -671,7 +528,7 @@ public final class RemoteStreamServer {
     }
 
     public void sendMediaState(int sessionId, byte[] jsonUtf8) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && jsonUtf8 != null && jsonUtf8.length > 0) {
             s.enqueue(OpalCastProtocol.TYPE_MEDIA_STATE, 0, nowTimestampUs(), jsonUtf8);
         }
@@ -685,7 +542,7 @@ public final class RemoteStreamServer {
     }
 
     public void sendCallState(int sessionId, byte[] jsonUtf8) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && jsonUtf8 != null && jsonUtf8.length > 0) {
             s.enqueue(OpalCastProtocol.TYPE_CALL_STATE, 0, nowTimestampUs(), jsonUtf8);
         }
@@ -699,7 +556,7 @@ public final class RemoteStreamServer {
     }
 
     public void sendFileOpResponse(int sessionId, OpalCastProtocol.FileOpResponseMsg response) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && response != null) {
             s.enqueue(OpalCastProtocol.TYPE_FILE_OP_RESPONSE, 0, nowTimestampUs(),
                     OpalCastProtocol.encodeFileOpResponse(response));
@@ -707,13 +564,13 @@ public final class RemoteStreamServer {
     }
 
     public boolean sendFilePullChunk(int sessionId, byte[] payload) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s == null || s.isClosed() || payload == null) return false;
         return s.enqueueBackpressured(OpalCastProtocol.TYPE_FILE_PULL_CHUNK, 0, nowTimestampUs(), payload, 30_000L);
     }
 
     public void sendApkInstallStatus(int sessionId, OpalCastProtocol.ApkInstallStatusMsg status) {
-        ClientSession s = allSessions.get(sessionId);
+        ClientSession s = sessions.getSession(sessionId);
         if (s != null && !s.isClosed() && status != null) {
             s.enqueue(OpalCastProtocol.TYPE_APK_INSTALL_STATUS, 0, nowTimestampUs(),
                     OpalCastProtocol.encodeApkInstallStatus(status));
@@ -723,32 +580,32 @@ public final class RemoteStreamServer {
     // ---- Desktop-session convenience senders ----
 
     public void sendAudioConfig(OpalCastProtocol.AudioConfig config, long timestampUs) {
-        ClientSession s = desktopSession;
+        ClientSession s = sessions.getDesktopSession();
         if (s != null) sendAudioConfig(s.sessionId, config, timestampUs);
     }
 
     public void sendAudioFrame(byte[] aacAu, long timestampUs) {
-        ClientSession s = desktopSession;
+        ClientSession s = sessions.getDesktopSession();
         if (s != null) sendAudioFrame(s.sessionId, aacAu, timestampUs);
     }
 
     public void sendDeviceState(OpalCastProtocol.DeviceState state) {
-        ClientSession s = desktopSession;
+        ClientSession s = sessions.getDesktopSession();
         if (s != null) sendDeviceState(s.sessionId, state);
     }
 
     public void sendClipboardPush(long seq, String text) {
-        ClientSession s = desktopSession;
+        ClientSession s = sessions.getDesktopSession();
         if (s != null) sendClipboardPush(s.sessionId, seq, text);
     }
 
     public void sendClipboardImagePush(long seq, byte[] pngData) {
-        ClientSession s = desktopSession;
+        ClientSession s = sessions.getDesktopSession();
         if (s != null) sendClipboardImagePush(s.sessionId, seq, pngData);
     }
 
     public void sendFileTransferAck(int transferId, int status, String pathOrError) {
-        ClientSession s = desktopSession;
+        ClientSession s = sessions.getDesktopSession();
         if (s != null) sendFileTransferAck(s.sessionId, transferId, status, pathOrError);
     }
 
@@ -941,7 +798,6 @@ public final class RemoteStreamServer {
                 return;
             }
 
-            // Interactive host-side consent (replaces legacy 6-digit PIN)
             sock.setSoTimeout((int) PairingApprovalCoordinator.DEFAULT_TIMEOUT_MS + 10_000);
             int decision = pairingCoordinator.requestAndAwait(
                     clientId, clientName, peerIp, PairingApprovalCoordinator.DEFAULT_TIMEOUT_MS);
@@ -1006,7 +862,7 @@ public final class RemoteStreamServer {
             Closeable sock,
             TimeoutClearer clearTimeout,
             OpalCastFrameTransport frameTransport) throws IOException {
-        if (!hasCapacityForSession(hello, clientId)) {
+        if (!sessions.hasCapacityForSession(hello, clientId)) {
             String errMsg = hello.isCompanion()
                     ? ("Maximum " + MAX_COMPANION_SESSIONS + " companion sessions active")
                     : ("Maximum " + MAX_STANDALONE_SESSIONS + " standalone app sessions active");
@@ -1020,30 +876,6 @@ public final class RemoteStreamServer {
         clearTimeout.clear();
         runAuthenticatedSession(
                 sinkType, isAdbLocalSocket, permanentTrust, clientId, clientName, hello, sock, frameTransport);
-    }
-
-    private boolean hasCapacityForSession(OpalCastProtocol.HelloMsg hello, String clientId) {
-        if (hello.isCompanion()) {
-            synchronized (sessionLock) {
-                if (clientId != null && !clientId.isEmpty()) {
-                    for (ClientSession existing : companionSessions.values()) {
-                        if (existing != null && !existing.isClosed() && clientId.equals(existing.clientId)) {
-                            return true; // Replacing existing companion session for the same clientId
-                        }
-                    }
-                }
-                return companionSessions.size() < MAX_COMPANION_SESSIONS;
-            }
-        }
-        if (!hello.isStandaloneApp()) return true;
-        synchronized (sessionLock) {
-            for (ClientSession existing : standaloneSessions.values()) {
-                if (existing != null && !existing.isClosed() && hello.appPackage.equals(existing.appPackage)) {
-                    return true; // Replacing existing standalone window for the same app
-                }
-            }
-            return standaloneSessions.size() < MAX_STANDALONE_SESSIONS;
-        }
     }
 
     void runAuthenticatedSessionForTest(
@@ -1068,7 +900,7 @@ public final class RemoteStreamServer {
             OpalCastProtocol.HelloMsg hello,
             Closeable transport,
             OpalCastFrameTransport frameTransport) {
-        int sessionId = nextSessionId.incrementAndGet();
+        int sessionId = sessions.nextSessionId();
         boolean isStandalone = hello.isStandaloneApp();
         boolean isCatalog = hello.isAppCatalog();
         boolean isCompanion = hello.isCompanion();
@@ -1079,59 +911,15 @@ public final class RemoteStreamServer {
         current.setCompanionEventsSubscribed(
                 isCompanion || (!isStandalone && !isCatalog && hello.companionEvents));
 
-        ClientSession replaced = null;
-        boolean capacityExceeded = false;
-        synchronized (sessionLock) {
-            if (isCatalog) {
-                allSessions.put(sessionId, current);
-            } else if (isCompanion) {
-                if (clientId != null && !clientId.isEmpty()) {
-                    for (ClientSession existing : companionSessions.values()) {
-                        if (existing != null && clientId.equals(existing.clientId)) {
-                            replaced = existing;
-                            break;
-                        }
-                    }
-                }
-                if (replaced != null) {
-                    companionSessions.remove(replaced.sessionId);
-                } else if (companionSessions.size() >= MAX_COMPANION_SESSIONS) {
-                    capacityExceeded = true;
-                }
-                if (!capacityExceeded) {
-                    companionSessions.put(sessionId, current);
-                    allSessions.put(sessionId, current);
-                }
-            } else if (isStandalone) {
-                for (ClientSession existing : standaloneSessions.values()) {
-                    if (existing != null && hello.appPackage.equals(existing.appPackage)) {
-                        replaced = existing;
-                        break;
-                    }
-                }
-                if (replaced != null) {
-                    standaloneSessions.remove(replaced.sessionId);
-                } else if (standaloneSessions.size() >= MAX_STANDALONE_SESSIONS) {
-                    capacityExceeded = true;
-                }
-                if (!capacityExceeded) {
-                    standaloneSessions.put(sessionId, current);
-                    allSessions.put(sessionId, current);
-                }
-            } else {
-                replaced = desktopSession;
-                desktopSession = current;
-                allSessions.put(sessionId, current);
-            }
-        }
-        if (capacityExceeded) {
+        RemoteSessionRegistry.RegistrationOutcome outcome = sessions.registerSession(current, hello, clientId);
+        if (outcome.capacityExceeded) {
             current.close(isCompanion
                     ? "Maximum companion sessions reached"
                     : "Maximum standalone app sessions reached");
             return;
         }
-        if (replaced != null) {
-            replaced.close("Replaced by new session");
+        if (outcome.replacedSession != null) {
+            outcome.replacedSession.close("Replaced by new session");
         }
 
         current.startSenderThread();
@@ -1146,7 +934,8 @@ public final class RemoteStreamServer {
                 if (frame == null) {
                     break;
                 }
-                dispatchUplinkFrame(current, frame);
+                RemoteUplinkFrameDispatcher.dispatch(
+                        current, frame, listener, this::handleWifiUpgradeRequest, RemoteStreamServer::nowTimestampUs);
             }
         } catch (Throwable t) {
             if (!current.isClosed()) {
@@ -1155,147 +944,10 @@ public final class RemoteStreamServer {
             }
         } finally {
             current.close("Session closed");
-            allSessions.remove(sessionId, current);
-            synchronized (sessionLock) {
-                if (isCompanion) {
-                    if (companionSessions.get(sessionId) == current) {
-                        companionSessions.remove(sessionId);
-                    }
-                } else if (isStandalone) {
-                    if (standaloneSessions.get(sessionId) == current) {
-                        standaloneSessions.remove(sessionId);
-                    }
-                } else if (!isCatalog && desktopSession == current) {
-                    desktopSession = null;
-                }
-            }
+            sessions.unregisterSession(current, isCompanion, isStandalone, isCatalog);
             if (notifiedConnect && listener != null) {
                 listener.onSessionDisconnected(sessionId, sinkType, current.sessionRole, current.closeReason);
             }
-        }
-    }
-
-    private void dispatchUplinkFrame(ClientSession session, OpalCastProtocol.Frame f) throws IOException {
-        int sid = session.sessionId;
-        switch (f.type) {
-            case OpalCastProtocol.TYPE_PING: {
-                long pingId = OpalCastProtocol.decodePingPong(f.payload);
-                session.enqueue(OpalCastProtocol.TYPE_PONG, 0,
-                        nowTimestampUs(),
-                        OpalCastProtocol.encodePingPong(pingId));
-                break;
-            }
-            case OpalCastProtocol.TYPE_REQUEST_IDR: {
-                if (listener != null) listener.onRequestIdr(sid);
-                break;
-            }
-            case OpalCastProtocol.TYPE_RESIZE_CONFIG: {
-                OpalCastProtocol.ResizeConfig cfg = OpalCastProtocol.decodeResizeConfig(f.payload);
-                if (listener != null) listener.onResizeConfig(sid, cfg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_INPUT_MOUSE: {
-                OpalCastProtocol.MouseEventMsg msg = OpalCastProtocol.decodeMouseEvent(f.payload);
-                if (listener != null) listener.onMouseEvent(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_INPUT_TOUCH: {
-                OpalCastProtocol.TouchEventMsg msg = OpalCastProtocol.decodeTouchEvent(f.payload);
-                if (listener != null) listener.onTouchEvent(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_INPUT_KEY: {
-                OpalCastProtocol.KeyEventMsg msg = OpalCastProtocol.decodeKeyEvent(f.payload);
-                if (listener != null) listener.onKeyEvent(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_INPUT_TEXT: {
-                if ((f.flags & OpalCastProtocol.FLAG_CLIPBOARD_IMAGE_PNG) != 0) {
-                    OpalCastProtocol.ImageClipboardEventMsg imgMsg = OpalCastProtocol.decodeImageClipboardEvent(f.payload);
-                    if (listener != null) listener.onImageClipboardEvent(sid, imgMsg);
-                } else {
-                    OpalCastProtocol.TextEventMsg msg = OpalCastProtocol.decodeTextEvent(f.payload);
-                    if (listener != null) listener.onTextEvent(sid, msg);
-                }
-                break;
-            }
-            case OpalCastProtocol.TYPE_SYSTEM_ACTION: {
-                OpalCastProtocol.SystemActionMsg msg = OpalCastProtocol.decodeSystemAction(f.payload);
-                if (listener != null) listener.onSystemAction(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_FILE_TRANSFER_CHUNK: {
-                OpalCastProtocol.FileTransferChunkMsg msg = OpalCastProtocol.decodeFileTransferChunk(f.payload);
-                if (listener != null) listener.onFileTransferChunk(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_REQUEST_WIFI_UPGRADE: {
-                handleWifiUpgradeRequest(session);
-                break;
-            }
-            case OpalCastProtocol.TYPE_LIST_APPS: {
-                if (listener != null) listener.onListApps(sid);
-                break;
-            }
-            case OpalCastProtocol.TYPE_WINDOW_ACTION: {
-                OpalCastProtocol.WindowActionMsg msg = OpalCastProtocol.decodeWindowAction(f.payload);
-                if (listener != null) listener.onWindowAction(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_MIC_CONFIG: {
-                OpalCastProtocol.MicConfigMsg msg = OpalCastProtocol.decodeMicConfig(f.payload);
-                if (listener != null) listener.onMicConfig(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_MIC_FRAME: {
-                if (listener != null && f.payload != null && f.payload.length > 0
-                        && f.payload.length <= OpalCastProtocol.MAX_MIC_FRAME_BYTES) {
-                    listener.onMicFrame(sid, f.payload, f.timestampUs);
-                }
-                break;
-            }
-            case OpalCastProtocol.TYPE_CAMERA_CONFIG: {
-                OpalCastProtocol.CameraConfigMsg msg = OpalCastProtocol.decodeCameraConfig(f.payload);
-                if (listener != null) listener.onCameraConfig(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_CAMERA_FRAME: {
-                if (listener != null && f.payload != null && f.payload.length > 0
-                        && f.payload.length <= OpalCastProtocol.MAX_CAMERA_FRAME_BYTES) {
-                    listener.onCameraFrame(sid, f.payload, f.timestampUs);
-                }
-                break;
-            }
-            case OpalCastProtocol.TYPE_NOTIFICATION_ACTION: {
-                session.setCompanionEventsSubscribed(true);
-                OpalCastProtocol.NotificationActionMsg msg = OpalCastProtocol.decodeNotificationAction(f.payload);
-                if (listener != null) listener.onNotificationAction(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_MEDIA_ACTION: {
-                session.setCompanionEventsSubscribed(true);
-                OpalCastProtocol.MediaActionMsg msg = OpalCastProtocol.decodeMediaAction(f.payload);
-                if (listener != null) listener.onMediaAction(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_FILE_OP_REQUEST: {
-                OpalCastProtocol.FileOpRequestMsg msg = OpalCastProtocol.decodeFileOpRequest(f.payload);
-                if (listener != null) listener.onFileOpRequest(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_APK_INSTALL_REQUEST: {
-                OpalCastProtocol.ApkInstallRequestMsg msg = OpalCastProtocol.decodeApkInstallRequest(f.payload);
-                if (listener != null) listener.onApkInstallRequest(sid, msg);
-                break;
-            }
-            case OpalCastProtocol.TYPE_CALL_ACTION: {
-                session.setCompanionEventsSubscribed(true);
-                OpalCastProtocol.CallActionMsg msg = OpalCastProtocol.decodeCallAction(f.payload);
-                if (listener != null) listener.onCallAction(sid, msg);
-                break;
-            }
-            default:
-                break;
         }
     }
 
@@ -1352,18 +1004,11 @@ public final class RemoteStreamServer {
         }
     }
 
-    /**
-     * Detects the phone's best non-loopback LAN IPv4 address (strongly preferring wlan/ap/eth
-     * RFC1918 addresses over cellular rmnet or VPN tun interfaces).
-     */
     public static String detectLanIpv4Address() {
         return NetworkInterfaceClassifier.selectBestLanIp(
                 NetworkInterfaceClassifier.snapshotSystemInterfaces());
     }
 
-    /**
-     * Detects the phone's active USB Tethering IPv4 interface ({@code ncm*}/{@code rndis*}/{@code usb*}).
-     */
     public static NetworkInterfaceClassifier.Endpoint detectUsbTetherEndpoint() {
         return NetworkInterfaceClassifier.selectUsbTetherEndpoint(
                 NetworkInterfaceClassifier.snapshotSystemInterfaces());

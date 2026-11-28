@@ -114,6 +114,7 @@ public final class BridgeProtocol {
     public static final int TX_SYNC_MEDIA_STATE = 51;
     public static final int TX_SYNC_CALL_STATE = 52;
     public static final int TX_TRIGGER_HOTSPOT = 53;
+    public static final int TX_GET_SECONDARY_USER_APPS = 54;
     public static final int TX_SHUTDOWN = 99;
 
     // ---- Built-in / Companion Plugin IME Event Codes (TX_NOTIFY_BRIDGE_IME_EVENT) ----
@@ -139,6 +140,14 @@ public final class BridgeProtocol {
     public static final int PAIRING_DECISION_REJECT = 0;
     public static final int PAIRING_DECISION_APPROVE_ONCE = 1;
     public static final int PAIRING_DECISION_APPROVE_PERMANENT = 2;
+
+    // ---- Physical External Display Scaling Modes (TX_SET_EXTERNAL_DISPLAY_MODE) ----
+    /** Smart auto: disables OS scaling strictly at 1:1 native size when pixel anisotropy is detected. */
+    public static final int EXTERNAL_SCALING_SMART_AUTO = 0;
+    /** Explicit user opt-in: 1:1 native pixel output with OS scaling disabled (fixes 4:3 / portable black bars). */
+    public static final int EXTERNAL_SCALING_NATIVE_1TO1 = 1;
+    /** Explicit restore/revert: always re-enable standard OS AUTO scaling (used by 15s black-screen auto-revert). */
+    public static final int EXTERNAL_SCALING_FORCE_SYSTEM_AUTO = 2;
 
     // ---- Physical External Mouse Output Routing Targets ----
     public static final int MOUSE_TARGET_LOCAL = 0;

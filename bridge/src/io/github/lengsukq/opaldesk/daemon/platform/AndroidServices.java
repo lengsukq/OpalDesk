@@ -5,6 +5,9 @@ import android.content.ClipData;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.hardware.display.DisplayManager;
 import android.hardware.input.InputManager;
 import android.os.Binder;
@@ -53,18 +56,6 @@ public final class AndroidServices {
     private static volatile boolean sGetServiceChecked;
     private static volatile Method sSetActionButtonMethod;
     private static volatile boolean sSetActionButtonChecked;
-    private static final Object CLIPBOARD_LOCK = new Object();
-    private static final ExecutorService IMMS_DUMP_WRITER = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "OpalImmsDumpWriter");
-        t.setDaemon(true);
-        return t;
-    });
-    private static volatile boolean sClipboardInitAttempted;
-    private static volatile Object sIClipboard;
-    private static volatile Method sSetPrimaryClipMethod;
-    private static volatile int sSetPrimaryClipArgCount;
-    private static volatile Method sGetPrimaryClipMethod;
-    private static volatile int sGetPrimaryClipArgCount;
 
     public final Context context;
     public final Context systemContext;
@@ -80,6 +71,7 @@ public final class AndroidServices {
     public final SystemInputInjectorResolver.ResolvedInjector systemInputInjector;
     public final Method setDisplayIdMethod;
     public final Method startActivityMethod;
+    public final Method startActivityAsUserMethod;
     public final Method focusTopTaskMethod;
     public final Method moveDisplayToTopMethod;
     public final Method setDisplayImePolicyMethod;
@@ -91,9 +83,11 @@ public final class AndroidServices {
     public final Method setRemoveContentModeMethod;
     public final Method setForcedDisplaySizeMethod;
     public final Method clearForcedDisplaySizeMethod;
+    public final Method setForcedDisplayScalingModeMethod;
 
     private final Object displayPowerLock = new Object();
     private final Set<Integer> forcedExternalSizeDisplays = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final Set<Integer> forcedExternalScalingDisplays = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final HostScreenWakeMonitor wakeMonitor = new HostScreenWakeMonitor();
     private volatile boolean hostScreenOff = false;
     private volatile boolean displayControlResolved = false;
@@ -133,6 +127,7 @@ public final class AndroidServices {
         }
         this.setDisplayIdMethod = findMethodOrNull(InputEvent.class, "setDisplayId", int.class);
         this.startActivityMethod = findMethodByName(iActivityTaskManager, "startActivity", 11);
+        this.startActivityAsUserMethod = resolveStartActivityAsUserMethod(iActivityTaskManager);
         this.focusTopTaskMethod = findMethodByName(iActivityTaskManager, "focusTopTask", 1);
         this.moveDisplayToTopMethod = findMethodByName(iWindowManager, "moveDisplayToTop", 2);
         this.setDisplayImePolicyMethod = (iWindowManager != null)
@@ -161,6 +156,9 @@ public final class AndroidServices {
                 : null;
         this.clearForcedDisplaySizeMethod = (iWindowManager != null)
                 ? findMethodOrNull(iWindowManager.getClass(), "clearForcedDisplaySize", int.class)
+                : null;
+        this.setForcedDisplayScalingModeMethod = (iWindowManager != null)
+                ? findMethodOrNull(iWindowManager.getClass(), "setForcedDisplayScalingMode", int.class, int.class)
                 : null;
     }
 
@@ -584,7 +582,45 @@ public final class AndroidServices {
     }
 
     public boolean startActivityAsShell(Intent intent, Bundle options) {
-        if (intent == null || iActivityTaskManager == null || startActivityMethod == null) return false;
+        return startActivityAsShellForUser(intent, options, UserProfileAppPolicy.PRIMARY_USER_ID);
+    }
+
+    /**
+     * Launches an Activity as {@code com.android.shell} targeting {@code userId} (using
+     * {@code IActivityTaskManager.startActivityAsUser} when {@code userId > 0}).
+     */
+    public boolean startActivityAsShellForUser(Intent intent, Bundle options, int userId) {
+        int safeUserId = Math.max(0, userId);
+        if (intent == null || iActivityTaskManager == null) return false;
+        if (safeUserId > 0) {
+            if (startActivityAsUserMethod == null) return false;
+            try {
+                Object rc;
+                int paramCount = startActivityAsUserMethod.getParameterCount();
+                if (paramCount == 12) {
+                    rc = startActivityAsUserMethod.invoke(
+                            iActivityTaskManager, null, SHELL_PACKAGE, null, intent,
+                            null, null, null, 0, 0, null, options, safeUserId);
+                } else if (paramCount == 11) {
+                    rc = startActivityAsUserMethod.invoke(
+                            iActivityTaskManager, null, SHELL_PACKAGE, intent,
+                            null, null, null, 0, 0, null, options, safeUserId);
+                } else {
+                    return false;
+                }
+                if (rc instanceof Integer && (Integer) rc < 0) {
+                    System.err.println("OPALDESK_START_ACTIVITY_USER_RC user=" + safeUserId
+                            + " intent=" + intent + " rc=" + rc);
+                    return false;
+                }
+                return true;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.err.println("OPALDESK_START_ACTIVITY_USER_ERR user=" + safeUserId
+                        + " intent=" + intent + ": " + unwrapMessage(e));
+                return false;
+            }
+        }
+        if (startActivityMethod == null) return false;
         try {
             Object rc = startActivityMethod.invoke(
                     iActivityTaskManager, null, SHELL_PACKAGE, null, intent,
@@ -607,7 +643,19 @@ public final class AndroidServices {
      */
     public boolean startActivityAsShellWithAmFallback(
             Intent intent, Bundle options, int displayId, boolean clearTask) {
-        if (startActivityAsShell(intent, options)) {
+        return startActivityAsShellWithAmFallback(
+                intent, options, displayId, clearTask, UserProfileAppPolicy.PRIMARY_USER_ID);
+    }
+
+    /**
+     * Multi-user overload of {@link #startActivityAsShellWithAmFallback(Intent, Bundle, int, boolean)}:
+     * targets {@code userId} via {@code startActivityAsUser} with {@code am start --user <userId>}
+     * shell fallback.
+     */
+    public boolean startActivityAsShellWithAmFallback(
+            Intent intent, Bundle options, int displayId, boolean clearTask, int userId) {
+        int safeUserId = Math.max(0, userId);
+        if (startActivityAsShellForUser(intent, options, safeUserId)) {
             return true;
         }
         if (intent == null || displayId <= 0) {
@@ -637,16 +685,19 @@ public final class AndroidServices {
                 displayId,
                 BridgeProtocol.WINDOWING_MODE_FULLSCREEN,
                 flags,
-                extraMap);
+                extraMap,
+                safeUserId);
         ShellCommand.Result res = ShellCommand.runWithTimeout(cmd, ShellCommand.DEFAULT_TIMEOUT_MS);
         if (!TaskLaunchPolicy.isAmStartResultSuccessful(res.exitCode, res.timedOut, res.output)) {
-            System.err.println("OPALDESK_AM_START_FALLBACK_ERR displayId=" + displayId
+            System.err.println("OPALDESK_AM_START_FALLBACK_ERR user=" + safeUserId
+                    + " displayId=" + displayId
                     + " exit=" + res.exitCode
                     + " timedOut=" + res.timedOut
                     + ": " + TaskLaunchPolicy.summarizeAmStartOutput(res.output));
             return false;
         }
-        System.out.println("OPALDESK_AM_START_FALLBACK_OK displayId=" + displayId + " comp=" + cn.flattenToShortString());
+        System.out.println("OPALDESK_AM_START_FALLBACK_OK user=" + safeUserId
+                + " displayId=" + displayId + " comp=" + cn.flattenToShortString());
         return true;
     }
 
@@ -825,45 +876,164 @@ public final class AndroidServices {
     }
 
     /**
-     * Switches a physical external display's active resolution & refresh rate:
-     * <ol>
-     *   <li>When {@code width <= 0 || height <= 0}: clears both forced logical size and EDID preference.</li>
-     *   <li>When {@code (width, height)} matches an EDID {@link Display.Mode}: clears any prior forced size
-     *       and switches the hardware EDID mode via {@code DisplayManager.setUserPreferredDisplayMode}.</li>
-     *   <li>Otherwise (custom resolution or incomplete EDID): applies even-aligned AOSP
-     *       {@code IWindowManager.setForcedDisplaySize(displayId, w, h)} (equivalent to
-     *       {@code cmd window size WxH -d <displayId>}) strictly for {@code displayId > 0}.</li>
-     * </ol>
+     * Switches a physical external display's active resolution & refresh rate using default
+     * {@link BridgeProtocol#EXTERNAL_SCALING_SMART_AUTO} scaling policy.
      */
     public boolean setExternalDisplayMode(int displayId, int width, int height, float fps) {
+        return setExternalDisplayMode(displayId, width, height, fps, BridgeProtocol.EXTERNAL_SCALING_SMART_AUTO);
+    }
+
+    /**
+     * Switches a physical external display's active resolution, refresh rate, and scaling mode:
+     * <ol>
+     *   <li>When {@code width <= 0 || height <= 0}: clears forced size, EDID preference, and forced
+     *       scaling mode; then verifies the post-reset state so anisotropic panels (e.g. 4:3
+     *       2048x1536 portable monitors with widescreen EDID dimensions) stay full-bleed 1:1 when
+     *       allowed, and HyperOS mirroring-backed displays never stay collapsed to phone Display 0
+     *       portrait dimensions.</li>
+     *   <li>When targeting native physical dimensions with 1:1 unscaled output (explicit opt-in or
+     *       auto-detected pixel anisotropy): pins native logical size and sets AOSP
+     *       {@code IWindowManager.setForcedDisplayScalingMode(displayId, 1)} (strictly for
+     *       {@code displayId > 0}).</li>
+     *   <li>Otherwise: ensures OS AUTO scaling is restored, attempts hardware EDID mode switching
+     *       across Android 13–17 signatures, and falls back to even-aligned
+     *       {@code IWindowManager.setForcedDisplaySize(displayId, w, h)}.</li>
+     * </ol>
+     */
+    @SuppressWarnings("deprecation")
+    public boolean setExternalDisplayMode(
+            int displayId, int width, int height, float fps, int scalingModePref) {
         if (displayId <= 0 || displayManager == null) return false;
         try {
             Display disp = displayManager.getDisplay(displayId);
             if (disp == null) return false;
-            if (width <= 0 || height <= 0) {
-                boolean clearedForced = clearForcedExternalDisplaySize(displayId);
-                boolean clearedEdid = clearUserPreferredDisplayMode(displayId);
-                System.out.println("OPALDESK_RESET_DISP_MODE id=" + displayId
-                        + " forcedCleared=" + clearedForced + " edidCleared=" + clearedEdid);
-                return clearedForced || clearedEdid;
+            Display.Mode curMode = disp.getMode();
+            int nativeW = (curMode != null) ? curMode.getPhysicalWidth() : 0;
+            int nativeH = (curMode != null) ? curMode.getPhysicalHeight() : 0;
+            android.util.DisplayMetrics extMetrics = new android.util.DisplayMetrics();
+            try {
+                disp.getRealMetrics(extMetrics);
+            } catch (RuntimeException ignored) {
             }
+
             Display.Mode[] modes = disp.getSupportedModes();
             int modeCount = (modes != null) ? modes.length : 0;
             int[] widths = new int[modeCount];
             int[] heights = new int[modeCount];
             float[] rates = new float[modeCount];
+            boolean[] syntheticFlags = new boolean[modeCount];
             for (int i = 0; i < modeCount; i++) {
                 widths[i] = modes[i].getPhysicalWidth();
                 heights[i] = modes[i].getPhysicalHeight();
                 rates[i] = modes[i].getRefreshRate();
+                syntheticFlags[i] = isSyntheticOrAnisotropyMode(modes[i]);
             }
 
-            int exactIdx = DisplayGeometryUtil.selectBestEdidModeIndex(widths, heights, rates, width, height, fps);
+            boolean hasAnisotropy = DisplayGeometryUtil.hasExternalPixelAnisotropy(
+                    nativeW, nativeH, extMetrics.xdpi, extMetrics.ydpi, widths, heights, syntheticFlags);
+
+            if (width <= 0 || height <= 0) {
+                boolean clearedForced = clearForcedExternalDisplaySize(displayId);
+                boolean clearedEdid = clearUserPreferredDisplayMode(disp, displayId);
+                boolean scalingReset = setForcedExternalDisplayScalingMode(displayId, 0);
+                boolean appliedNative1To1 = false;
+                boolean recoveredMirror = false;
+                int afterW = 0;
+                int afterH = 0;
+
+                if (scalingModePref == BridgeProtocol.EXTERNAL_SCALING_NATIVE_1TO1
+                        && nativeW >= 320 && nativeH >= 320) {
+                    int[] alignedNative = DisplayGeometryUtil.alignExternalForcedSize(nativeW, nativeH);
+                    if (alignedNative != null) {
+                        boolean pinned = setForcedExternalDisplaySize(displayId, alignedNative[0], alignedNative[1]);
+                        boolean offOk = setForcedExternalDisplayScalingMode(displayId, 1);
+                        appliedNative1To1 = pinned && offOk;
+                    }
+                } else {
+                    android.os.SystemClock.sleep(60L);
+                    Display freshDisp = displayManager.getDisplay(displayId);
+                    android.graphics.Point afterPt = new android.graphics.Point();
+                    if (freshDisp != null) {
+                        try {
+                            freshDisp.getRealSize(afterPt);
+                        } catch (RuntimeException ignored) {
+                        }
+                    }
+                    afterW = afterPt.x;
+                    afterH = afterPt.y;
+                    int[] primaryState = getPrimaryDisplayState();
+                    boolean mirrorCollapsed = DisplayGeometryUtil.isMirroredPrimaryDisplayCollapse(
+                            nativeW, nativeH, afterW, afterH, primaryState[0], primaryState[1]);
+                    boolean autoDisableScaling = DisplayGeometryUtil.shouldDisableScalingForNativeAnisotropy(
+                            nativeW, nativeH, nativeW, nativeH, hasAnisotropy, scalingModePref);
+                    if (autoDisableScaling && nativeW >= 320 && nativeH >= 320) {
+                        int[] alignedNative = DisplayGeometryUtil.alignExternalForcedSize(nativeW, nativeH);
+                        if (alignedNative != null) {
+                            boolean pinned = setForcedExternalDisplaySize(displayId, alignedNative[0], alignedNative[1]);
+                            boolean offOk = setForcedExternalDisplayScalingMode(displayId, 1);
+                            appliedNative1To1 = pinned && offOk;
+                        }
+                    } else if (mirrorCollapsed && nativeW >= 320 && nativeH >= 320) {
+                        int[] alignedNative = DisplayGeometryUtil.alignExternalForcedSize(nativeW, nativeH);
+                        if (alignedNative != null) {
+                            recoveredMirror = setForcedExternalDisplaySize(displayId, alignedNative[0], alignedNative[1]);
+                        }
+                    }
+                }
+
+                System.out.println("OPALDESK_RESET_DISP_MODE id=" + displayId
+                        + " native=" + nativeW + "x" + nativeH
+                        + " dpi=" + Math.round(extMetrics.xdpi) + "x" + Math.round(extMetrics.ydpi)
+                        + " anisotropy=" + hasAnisotropy
+                        + " forcedCleared=" + clearedForced
+                        + " edidCleared=" + clearedEdid
+                        + " scalingReset=" + scalingReset
+                        + " after=" + afterW + "x" + afterH
+                        + " mirrorRecovered=" + recoveredMirror
+                        + " native1to1=" + appliedNative1To1);
+                return clearedForced || clearedEdid || scalingReset || appliedNative1To1 || recoveredMirror;
+            }
+
+            boolean disableScaling = DisplayGeometryUtil.shouldDisableScalingForNativeAnisotropy(
+                    width, height, nativeW, nativeH, hasAnisotropy, scalingModePref);
+            if (disableScaling) {
+                int[] aligned = DisplayGeometryUtil.alignExternalForcedSize(width, height);
+                if (aligned == null) return false;
+                if (fps > 1f && modeCount > 0) {
+                    int fpsIdx = DisplayGeometryUtil.selectBestEdidModeIndex(
+                            widths, heights, rates, syntheticFlags, nativeW, nativeH, fps);
+                    if (fpsIdx >= 0 && !syntheticFlags[fpsIdx]) {
+                        applyUserPreferredDisplayMode(disp, displayId, modes[fpsIdx]);
+                    }
+                }
+                boolean forcedOk = setForcedExternalDisplaySize(displayId, aligned[0], aligned[1]);
+                boolean scalingOffOk = setForcedExternalDisplayScalingMode(displayId, 1);
+                System.out.println("OPALDESK_SET_DISP_MODE_NATIVE_1TO1 id=" + displayId
+                        + " req=" + width + "x" + height + "@" + fps
+                        + " native=" + nativeW + "x" + nativeH
+                        + " dpi=" + Math.round(extMetrics.xdpi) + "x" + Math.round(extMetrics.ydpi)
+                        + " anisotropy=" + hasAnisotropy
+                        + " applied=" + aligned[0] + "x" + aligned[1]
+                        + " scalingOff=" + scalingOffOk
+                        + " ok=" + forcedOk);
+                return forcedOk;
+            }
+
+            // Ensure standard OS scaling is active whenever leaving 1:1 native mode so non-native
+            // resolutions scale cleanly across the display rather than shrinking into a centered box.
+            if (forcedExternalScalingDisplays.contains(displayId)
+                    || scalingModePref == BridgeProtocol.EXTERNAL_SCALING_FORCE_SYSTEM_AUTO) {
+                setForcedExternalDisplayScalingMode(displayId, 0);
+            }
+
+            int exactIdx = DisplayGeometryUtil.selectBestEdidModeIndex(
+                    widths, heights, rates, syntheticFlags, width, height, fps);
             if (exactIdx >= 0) {
                 clearForcedExternalDisplaySize(displayId);
-                if (applyUserPreferredDisplayMode(displayId, modes[exactIdx])) {
+                if (applyUserPreferredDisplayMode(disp, displayId, modes[exactIdx])) {
                     System.out.println("OPALDESK_SET_DISP_MODE_EDID id=" + displayId
-                            + " mode=" + widths[exactIdx] + "x" + heights[exactIdx] + "@" + rates[exactIdx]);
+                            + " mode=" + widths[exactIdx] + "x" + heights[exactIdx] + "@" + rates[exactIdx]
+                            + " synthetic=" + syntheticFlags[exactIdx]);
                     return true;
                 }
             }
@@ -872,13 +1042,10 @@ public final class AndroidServices {
             if (aligned == null) return false;
 
             if (fps > 1f && modeCount > 0) {
-                Display.Mode cur = disp.getMode();
-                int curW = (cur != null) ? cur.getPhysicalWidth() : 0;
-                int curH = (cur != null) ? cur.getPhysicalHeight() : 0;
                 int fpsIdx = DisplayGeometryUtil.selectBestEdidModeForRefreshRate(
-                        widths, heights, rates, curW, curH, fps);
+                        widths, heights, rates, nativeW, nativeH, fps);
                 if (fpsIdx >= 0) {
-                    applyUserPreferredDisplayMode(displayId, modes[fpsIdx]);
+                    applyUserPreferredDisplayMode(disp, displayId, modes[fpsIdx]);
                 }
             }
 
@@ -889,6 +1056,32 @@ public final class AndroidServices {
             return forcedOk;
         } catch (RuntimeException e) {
             System.err.println("OPALDESK_SET_DISP_MODE_WARN id=" + displayId + ": " + unwrapMessage(e));
+        }
+        return false;
+    }
+
+    private static final int DISPLAY_MODE_FLAG_ANISOTROPY_CORRECTION = 1 << 2;
+
+    static boolean isSyntheticOrAnisotropyMode(Display.Mode mode) {
+        if (mode == null) return false;
+        try {
+            Method mSynth = findMethodOrNull(Display.Mode.class, "isSynthetic");
+            if (mSynth != null) {
+                Object val = mSynth.invoke(mode);
+                if (Boolean.TRUE.equals(val)) return true;
+            }
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+        }
+        try {
+            Method mFlags = findMethodOrNull(Display.Mode.class, "getFlags");
+            if (mFlags != null) {
+                Object val = mFlags.invoke(mode);
+                if (val instanceof Number
+                        && ((((Number) val).intValue()) & DISPLAY_MODE_FLAG_ANISOTROPY_CORRECTION) != 0) {
+                    return true;
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
         }
         return false;
     }
@@ -928,7 +1121,7 @@ public final class AndroidServices {
             int curH = (cur != null) ? cur.getPhysicalHeight() : 0;
             int idx = DisplayGeometryUtil.selectBestEdidModeForRefreshRate(widths, heights, rates, curW, curH, fps);
             if (idx < 0) return false;
-            boolean ok = applyUserPreferredDisplayMode(displayId, modes[idx]);
+            boolean ok = applyUserPreferredDisplayMode(disp, displayId, modes[idx]);
             if (ok) {
                 System.out.println("OPALDESK_SET_EXT_FPS_EDID id=" + displayId
                         + " mode=" + widths[idx] + "x" + heights[idx] + "@" + rates[idx]);
@@ -940,8 +1133,30 @@ public final class AndroidServices {
         }
     }
 
-    private boolean applyUserPreferredDisplayMode(int displayId, Display.Mode chosen) {
+    private boolean applyUserPreferredDisplayMode(Display disp, int displayId, Display.Mode chosen) {
         if (displayId <= 0 || chosen == null) return false;
+        if (disp != null) {
+            try {
+                Method dispSet = findMethodOrNull(Display.class, "setUserPreferredDisplayMode", Display.Mode.class);
+                if (dispSet != null) {
+                    dispSet.invoke(disp, chosen);
+                    return true;
+                }
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.err.println("OPALDESK_SET_EDID_DISP_WARN id=" + displayId + ": " + unwrapMessage(e));
+            }
+        }
+        try {
+            Class<?> dmgCls = Class.forName("android.hardware.display.DisplayManagerGlobal");
+            Object dmg = dmgCls.getMethod("getInstance").invoke(null);
+            Method dmgSet = findMethodOrNull(dmgCls, "setUserPreferredDisplayMode", int.class, Display.Mode.class);
+            if (dmg != null && dmgSet != null) {
+                dmgSet.invoke(dmg, displayId, chosen);
+                return true;
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.err.println("OPALDESK_SET_EDID_DMG_WARN id=" + displayId + ": " + unwrapMessage(e));
+        }
         try {
             Method setM = findMethodOrNull(DisplayManager.class, "setUserPreferredDisplayMode", int.class, Display.Mode.class);
             if (setM != null && displayManager != null) {
@@ -950,8 +1165,13 @@ public final class AndroidServices {
             }
             if (iDisplayManager != null) {
                 for (Method m : iDisplayManager.getClass().getMethods()) {
-                    if ("setUserPreferredDisplayMode".equals(m.getName()) && m.getParameterCount() == 2) {
+                    if (!"setUserPreferredDisplayMode".equals(m.getName())) continue;
+                    int pc = m.getParameterCount();
+                    if (pc == 2) {
                         m.invoke(iDisplayManager, displayId, chosen);
+                        return true;
+                    } else if (pc == 3 && m.getParameterTypes()[2] == boolean.class) {
+                        m.invoke(iDisplayManager, displayId, chosen, true);
                         return true;
                     }
                 }
@@ -959,11 +1179,42 @@ public final class AndroidServices {
         } catch (ReflectiveOperationException | RuntimeException e) {
             System.err.println("OPALDESK_SET_EDID_MODE_WARN id=" + displayId + ": " + unwrapMessage(e));
         }
-        return false;
+        ShellCommand.Result res = ShellCommand.runWithTimeout(
+                new String[]{
+                        "/system/bin/cmd", "display", "set-user-preferred-display-mode",
+                        Integer.toString(chosen.getPhysicalWidth()),
+                        Integer.toString(chosen.getPhysicalHeight()),
+                        String.format(java.util.Locale.US, "%.2f", chosen.getRefreshRate()),
+                        Integer.toString(displayId)
+                },
+                2500L);
+        return isCmdDisplaySuccess(res);
     }
 
-    private boolean clearUserPreferredDisplayMode(int displayId) {
+    private boolean clearUserPreferredDisplayMode(Display disp, int displayId) {
         if (displayId <= 0) return false;
+        if (disp != null) {
+            try {
+                Method dispClear = findMethodOrNull(Display.class, "clearUserPreferredDisplayMode");
+                if (dispClear != null) {
+                    dispClear.invoke(disp);
+                    return true;
+                }
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.err.println("OPALDESK_CLEAR_EDID_DISP_WARN id=" + displayId + ": " + unwrapMessage(e));
+            }
+        }
+        try {
+            Class<?> dmgCls = Class.forName("android.hardware.display.DisplayManagerGlobal");
+            Object dmg = dmgCls.getMethod("getInstance").invoke(null);
+            Method dmgSet = findMethodOrNull(dmgCls, "setUserPreferredDisplayMode", int.class, Display.Mode.class);
+            if (dmg != null && dmgSet != null) {
+                dmgSet.invoke(dmg, displayId, null);
+                return true;
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.err.println("OPALDESK_CLEAR_EDID_DMG_WARN id=" + displayId + ": " + unwrapMessage(e));
+        }
         try {
             Method clearM = findMethodOrNull(DisplayManager.class, "clearUserPreferredDisplayMode", int.class);
             if (clearM != null && displayManager != null) {
@@ -977,11 +1228,60 @@ public final class AndroidServices {
                         return true;
                     }
                 }
+                for (Method m : iDisplayManager.getClass().getMethods()) {
+                    if (!"setUserPreferredDisplayMode".equals(m.getName())) continue;
+                    int pc = m.getParameterCount();
+                    if (pc == 2) {
+                        m.invoke(iDisplayManager, displayId, null);
+                        return true;
+                    } else if (pc == 3 && m.getParameterTypes()[2] == boolean.class) {
+                        m.invoke(iDisplayManager, displayId, null, true);
+                        return true;
+                    }
+                }
             }
         } catch (ReflectiveOperationException | RuntimeException e) {
             System.err.println("OPALDESK_CLEAR_EDID_MODE_WARN id=" + displayId + ": " + unwrapMessage(e));
         }
-        return false;
+        ShellCommand.Result res = ShellCommand.runWithTimeout(
+                new String[]{"/system/bin/cmd", "display", "clear-user-preferred-display-mode", Integer.toString(displayId)},
+                2500L);
+        return isCmdDisplaySuccess(res);
+    }
+
+    private static boolean isCmdDisplaySuccess(ShellCommand.Result res) {
+        if (res == null || !res.isSuccess()) return false;
+        String out = (res.output != null) ? res.output.toLowerCase(java.util.Locale.US) : "";
+        return !out.contains("error") && !out.contains("exception") && !out.contains("unknown command");
+    }
+
+    /**
+     * Applies AOSP {@code IWindowManager.setForcedDisplayScalingMode(displayId, mode)}
+     * ({@code 0 = FORCE_SCALING_MODE_AUTO}, {@code 1 = FORCE_SCALING_MODE_DISABLED}) strictly on
+     * secondary displays ({@code displayId > 0}). Never touches Display 0.
+     */
+    public boolean setForcedExternalDisplayScalingMode(int displayId, int mode) {
+        if (displayId <= 0) return false;
+        int safeMode = (mode == 1) ? 1 : 0;
+        if (safeMode == 1) {
+            forcedExternalScalingDisplays.add(displayId);
+        } else {
+            forcedExternalScalingDisplays.remove(displayId);
+        }
+        if (iWindowManager != null && setForcedDisplayScalingModeMethod != null) {
+            try {
+                setForcedDisplayScalingModeMethod.invoke(iWindowManager, displayId, safeMode);
+                return true;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.err.println("OPALDESK_FORCED_SCALING_BINDER_WARN id=" + displayId
+                        + " mode=" + safeMode + ": " + unwrapMessage(e));
+            }
+        }
+        String arg = (safeMode == 1) ? "off" : "auto";
+        ShellCommand.Result res = ShellCommand.runWithTimeout(
+                new String[]{"/system/bin/cmd", "window", "scaling", arg, "-d", Integer.toString(displayId)},
+                2500L);
+        return isCmdDisplaySuccess(res);
     }
 
     /**
@@ -1027,8 +1327,14 @@ public final class AndroidServices {
         return res.isSuccess();
     }
 
-    /** Restores native sizing for all external displays overridden during this daemon lifecycle. */
+    /** Restores native sizing & AUTO scaling for all external displays overridden during this daemon lifecycle. */
     public void clearAllForcedExternalDisplaySizes() {
+        List<Integer> scalingSnapshot = new ArrayList<>(forcedExternalScalingDisplays);
+        for (Integer id : scalingSnapshot) {
+            if (id != null && id > 0) {
+                setForcedExternalDisplayScalingMode(id, 0);
+            }
+        }
         List<Integer> snapshot = new ArrayList<>(forcedExternalSizeDisplays);
         for (Integer id : snapshot) {
             if (id != null && id > 0) {
@@ -1185,85 +1491,11 @@ public final class AndroidServices {
     }
 
     public static boolean setPrimaryClip(ClipData clip) {
-        if (clip == null) return false;
-        ensureClipboardInit();
-        Object cb = sIClipboard;
-        Method m = sSetPrimaryClipMethod;
-        if (cb == null || m == null) return false;
-        try {
-            switch (sSetPrimaryClipArgCount) {
-                case 5: m.invoke(cb, clip, SHELL_PACKAGE, null, 0, 0); return true;
-                case 4: m.invoke(cb, clip, SHELL_PACKAGE, null, 0); return true;
-                case 3: m.invoke(cb, clip, SHELL_PACKAGE, 0); return true;
-                case 2: m.invoke(cb, clip, SHELL_PACKAGE); return true;
-                default: return false;
-            }
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            System.err.println("OPALDESK_CLIPBOARD_SET_ERR: " + unwrapMessage(e));
-            return false;
-        }
+        return AndroidClipboardAndImeHelper.setPrimaryClip(clip);
     }
 
     public static ClipData getPrimaryClip() {
-        ensureClipboardInit();
-        Object cb = sIClipboard;
-        Method m = sGetPrimaryClipMethod;
-        if (cb == null || m == null) return null;
-        try {
-            Object res;
-            switch (sGetPrimaryClipArgCount) {
-                case 4: res = m.invoke(cb, SHELL_PACKAGE, null, 0, 0); break;
-                case 3: res = m.invoke(cb, SHELL_PACKAGE, null, 0); break;
-                case 2: res = m.invoke(cb, SHELL_PACKAGE, 0); break;
-                case 1: res = m.invoke(cb, SHELL_PACKAGE); break;
-                default: return null;
-            }
-            return (res instanceof ClipData) ? (ClipData) res : null;
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            System.err.println("OPALDESK_CLIPBOARD_GET_ERR: " + unwrapMessage(e));
-            return null;
-        }
-    }
-
-    private static void ensureClipboardInit() {
-        if (sClipboardInitAttempted) return;
-        synchronized (CLIPBOARD_LOCK) {
-            if (sClipboardInitAttempted) return;
-            sClipboardInitAttempted = true;
-            Object cb = getServiceInterface("clipboard", "android.content.IClipboard$Stub");
-            if (cb == null) return;
-            sIClipboard = cb;
-            for (Method m : cb.getClass().getMethods()) {
-                String name = m.getName();
-                Class<?>[] pt = m.getParameterTypes();
-                if ("setPrimaryClip".equals(name) && sSetPrimaryClipMethod == null) {
-                    if (pt.length == 5 && pt[0] == ClipData.class && pt[1] == String.class
-                            && pt[2] == String.class && pt[3] == int.class && pt[4] == int.class) {
-                        sSetPrimaryClipMethod = m; sSetPrimaryClipArgCount = 5;
-                    } else if (pt.length == 4 && pt[0] == ClipData.class && pt[1] == String.class
-                            && pt[2] == String.class && pt[3] == int.class) {
-                        sSetPrimaryClipMethod = m; sSetPrimaryClipArgCount = 4;
-                    } else if (pt.length == 3 && pt[0] == ClipData.class && pt[1] == String.class
-                            && pt[2] == int.class) {
-                        sSetPrimaryClipMethod = m; sSetPrimaryClipArgCount = 3;
-                    } else if (pt.length == 2 && pt[0] == ClipData.class && pt[1] == String.class) {
-                        sSetPrimaryClipMethod = m; sSetPrimaryClipArgCount = 2;
-                    }
-                } else if ("getPrimaryClip".equals(name) && sGetPrimaryClipMethod == null) {
-                    if (pt.length == 4 && pt[0] == String.class && pt[1] == String.class
-                            && pt[2] == int.class && pt[3] == int.class) {
-                        sGetPrimaryClipMethod = m; sGetPrimaryClipArgCount = 4;
-                    } else if (pt.length == 3 && pt[0] == String.class && pt[1] == String.class
-                            && pt[2] == int.class) {
-                        sGetPrimaryClipMethod = m; sGetPrimaryClipArgCount = 3;
-                    } else if (pt.length == 2 && pt[0] == String.class && pt[1] == int.class) {
-                        sGetPrimaryClipMethod = m; sGetPrimaryClipArgCount = 2;
-                    } else if (pt.length == 1 && pt[0] == String.class) {
-                        sGetPrimaryClipMethod = m; sGetPrimaryClipArgCount = 1;
-                    }
-                }
-            }
-        }
+        return AndroidClipboardAndImeHelper.getPrimaryClip();
     }
 
     /**
@@ -1271,25 +1503,7 @@ public final class AndroidServices {
      * preferring direct {@code ContentResolver} access with a timeout-bounded shell fallback.
      */
     public String getDefaultInputMethodId() {
-        if (context != null) {
-            try {
-                String val = Settings.Secure.getString(
-                        context.getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
-                if (val != null && !val.trim().isEmpty() && !"null".equalsIgnoreCase(val.trim())) {
-                    return val.trim();
-                }
-            } catch (RuntimeException ignored) {
-            }
-        }
-        ShellCommand.Result res = ShellCommand.runWithTimeout(
-                1500L, "settings", "get", "secure", "default_input_method");
-        if (res.isSuccess()) {
-            String trimmed = res.output.trim();
-            if (!trimmed.isEmpty() && !"null".equalsIgnoreCase(trimmed)) {
-                return trimmed;
-            }
-        }
-        return "";
+        return AndroidClipboardAndImeHelper.getDefaultInputMethodId(context);
     }
 
     /**
@@ -1297,28 +1511,7 @@ public final class AndroidServices {
      * {@code Settings.Secure.ENABLED_INPUT_METHODS}.
      */
     public List<String> listEnabledInputMethodIds() {
-        ShellCommand.Result res = ShellCommand.runWithTimeout(2000L, "ime", "list", "-s");
-        if (res.isSuccess() && !res.output.trim().isEmpty()) {
-            List<String> parsed = parseLineImeIds(res.output);
-            if (!parsed.isEmpty()) {
-                return parsed;
-            }
-        }
-        String raw = "";
-        if (context != null) {
-            try {
-                String v = Settings.Secure.getString(
-                        context.getContentResolver(), Settings.Secure.ENABLED_INPUT_METHODS);
-                if (v != null) raw = v;
-            } catch (RuntimeException ignored) {
-            }
-        }
-        if (raw.isEmpty()) {
-            ShellCommand.Result secRes = ShellCommand.runWithTimeout(
-                    1500L, "settings", "get", "secure", "enabled_input_methods");
-            if (secRes.isSuccess()) raw = secRes.output.trim();
-        }
-        return parseEnabledImeSetting(raw);
+        return AndroidClipboardAndImeHelper.listEnabledInputMethodIds(context);
     }
 
     /**
@@ -1327,106 +1520,17 @@ public final class AndroidServices {
      * and {@code Settings.Secure} fallbacks.
      */
     public boolean setDefaultInputMethodId(String imeId) {
-        if (!io.github.lengsukq.opaldesk.daemon.DaemonConfig.PackagePolicy.isValidImeId(imeId)) {
-            return false;
-        }
-        ShellCommand.Result res = ShellCommand.runWithTimeout(2500L, "ime", "set", imeId);
-        if (isImeSetSuccessful(res, imeId)) {
-            return true;
-        }
-        // Enable first in case the user picked an installed-but-disabled IME, then retry.
-        ShellCommand.runWithTimeout(2000L, "ime", "enable", imeId);
-        ShellCommand.Result retry = ShellCommand.runWithTimeout(2500L, "ime", "set", imeId);
-        if (isImeSetSuccessful(retry, imeId)) {
-            return true;
-        }
-        ShellCommand.Result cmdRes = ShellCommand.runWithTimeout(2500L, "cmd", "input_method", "set", imeId);
-        if (isImeSetSuccessful(cmdRes, imeId)) {
-            return true;
-        }
-        if (context != null) {
-            try {
-                boolean ok = Settings.Secure.putString(
-                        context.getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD, imeId);
-                if (ok) return true;
-            } catch (RuntimeException e) {
-                System.err.println("OPALDESK_IME_SET_SECURE_WARN id=" + imeId + ": " + unwrapMessage(e));
-            }
-        }
-        System.err.println("OPALDESK_IME_SET_FAIL id=" + imeId
-                + " out=" + (retry.output != null ? retry.output.trim() : ""));
-        return false;
+        return AndroidClipboardAndImeHelper.setDefaultInputMethodId(context, imeId);
     }
 
     /** Reads {@code Settings.Secure.show_ime_with_hard_keyboard} ({@code 0}, {@code 1}, or {@code -1} if unset). */
     public int getShowImeWithHardKeyboard() {
-        if (context != null) {
-            try {
-                int v = Settings.Secure.getInt(context.getContentResolver(), "show_ime_with_hard_keyboard", -1);
-                if (v == 0 || v == 1) return v;
-            } catch (RuntimeException ignored) {
-            }
-        }
-        ShellCommand.Result res = ShellCommand.runWithTimeout(
-                1500L, "settings", "get", "secure", "show_ime_with_hard_keyboard");
-        if (res.isSuccess()) {
-            String trimmed = res.output.trim();
-            if ("0".equals(trimmed)) return 0;
-            if ("1".equals(trimmed)) return 1;
-        }
-        return -1;
+        return AndroidClipboardAndImeHelper.getShowImeWithHardKeyboard(context);
     }
 
     /** Writes {@code Settings.Secure.show_ime_with_hard_keyboard} ({@code 0} or {@code 1}). */
     public boolean setShowImeWithHardKeyboard(int value) {
-        if (value != 0 && value != 1) return false;
-        if (context != null) {
-            try {
-                if (Settings.Secure.putInt(context.getContentResolver(), "show_ime_with_hard_keyboard", value)) {
-                    return true;
-                }
-            } catch (RuntimeException ignored) {
-            }
-        }
-        ShellCommand.Result res = ShellCommand.runWithTimeout(
-                1500L, "settings", "put", "secure", "show_ime_with_hard_keyboard", String.valueOf(value));
-        return res.isSuccess();
-    }
-
-    private boolean isImeSetSuccessful(ShellCommand.Result res, String expectedImeId) {
-        if (res == null || res.timedOut) return false;
-        String out = (res.output != null) ? res.output.trim() : "";
-        if (res.exitCode == 0 && !out.startsWith("Unknown") && !out.contains("cannot be selected")) {
-            return true;
-        }
-        return expectedImeId.equals(getDefaultInputMethodId());
-    }
-
-    private static List<String> parseLineImeIds(String raw) {
-        List<String> out = new ArrayList<>();
-        if (raw == null || raw.isEmpty()) return out;
-        for (String line : raw.split("\r?\n")) {
-            String trimmed = line.trim();
-            if (io.github.lengsukq.opaldesk.daemon.DaemonConfig.PackagePolicy.isValidImeId(trimmed)
-                    && !out.contains(trimmed)) {
-                out.add(trimmed);
-            }
-        }
-        return out;
-    }
-
-    private static List<String> parseEnabledImeSetting(String raw) {
-        List<String> out = new ArrayList<>();
-        if (raw == null || raw.isEmpty() || "null".equalsIgnoreCase(raw.trim())) return out;
-        for (String entry : raw.split(":")) {
-            int semi = entry.indexOf(';');
-            String id = (semi >= 0 ? entry.substring(0, semi) : entry).trim();
-            if (io.github.lengsukq.opaldesk.daemon.DaemonConfig.PackagePolicy.isValidImeId(id)
-                    && !out.contains(id)) {
-                out.add(id);
-            }
-        }
-        return out;
+        return AndroidClipboardAndImeHelper.setShowImeWithHardKeyboard(context, value);
     }
 
     /**
@@ -1434,37 +1538,7 @@ public final class AndroidServices {
      * using an OS pipe drained concurrently so large view-hierarchy dumps never deadlock.
      */
     public static ImmsDumpInspector.Snapshot inspectInputMethodService(int targetDisplayId) {
-        if (targetDisplayId <= 0) return null;
-        IBinder immsBinder = getServiceBinder("input_method");
-        if (immsBinder == null) return null;
-        ParcelFileDescriptor[] pipe = null;
-        try {
-            pipe = ParcelFileDescriptor.createPipe();
-            final ParcelFileDescriptor readEnd = pipe[0];
-            final ParcelFileDescriptor writeEnd = pipe[1];
-            IMMS_DUMP_WRITER.execute(() -> {
-                try {
-                    immsBinder.dump(writeEnd.getFileDescriptor(), new String[0]);
-                } catch (RemoteException | RuntimeException ignored) {
-                } finally {
-                    try {
-                        writeEnd.close();
-                    } catch (IOException ignored) {
-                    }
-                }
-            });
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(new ParcelFileDescriptor.AutoCloseInputStream(readEnd), StandardCharsets.UTF_8),
-                    8192)) {
-                return ImmsDumpInspector.parseReader(br, targetDisplayId);
-            }
-        } catch (IOException | RuntimeException e) {
-            if (pipe != null) {
-                try { pipe[0].close(); } catch (IOException ignored) {}
-                try { pipe[1].close(); } catch (IOException ignored) {}
-            }
-            return null;
-        }
+        return AndroidClipboardAndImeHelper.inspectInputMethodService(targetDisplayId);
     }
 
     private static Object buildShellAttributionSource() throws ReflectiveOperationException {
@@ -1527,13 +1601,84 @@ public final class AndroidServices {
         return !(res instanceof Boolean) || (Boolean) res;
     }
 
+    // ---- Multi-User / Cloned & Work Profile Introspection (uid=2000 AOSP) ----
+
+    /**
+     * Enumerates active Android secondary user profiles (Dual Apps / App Cloner / Work Profile /
+     * Clone Profile / Private Space) via {@code IUserManager}, falling back to {@code pm list users}.
+     */
+    public List<UserProfileAppPolicy.UserProfileInfo> querySecondaryUserProfiles() {
+        return AndroidMultiUserHelper.querySecondaryUserProfiles();
+    }
+
+    /** Resolves the normalized profile type tag for {@code userId} (e.g. {@code "clone"}, {@code "work"}). */
+    public String resolveProfileTypeForUser(int userId) {
+        return AndroidMultiUserHelper.resolveProfileTypeForUser(userId);
+    }
+
+    /**
+     * Scans all active secondary user profiles for user-facing launchable apps (filtering out
+     * system-stub noise in clone profiles via {@link UserProfileAppPolicy}).
+     */
+    public List<UserProfileAppPolicy.SecondaryAppEntry> querySecondaryUserLaunchableApps() {
+        return AndroidMultiUserHelper.querySecondaryUserLaunchableApps(context);
+    }
+
+    public String querySecondaryUserLaunchableAppsJson() {
+        return UserProfileAppPolicy.encodeSecondaryAppsJson(querySecondaryUserLaunchableApps());
+    }
+
+    /** Queries {@code IPackageManager.queryIntentActivities} for a specific Android {@code userId}. */
+    public List<ResolveInfo> queryIntentActivitiesForUser(Intent intent, int userId) {
+        return AndroidMultiUserHelper.queryIntentActivitiesForUser(intent, userId);
+    }
+
+    /** Resolves a launchable main Activity {@link ComponentName} for {@code pkg} inside {@code userId}. */
+    public ComponentName resolveLaunchComponentForUser(String pkg, int userId) {
+        return AndroidMultiUserHelper.resolveLaunchComponentForUser(context, pkg, userId);
+    }
+
+    /** Resolves whether an explicit activity intent exists in {@code userId}. */
+    public boolean canResolveActivityForUser(Intent intent, int userId) {
+        return AndroidMultiUserHelper.canResolveActivityForUser(context, intent, userId);
+    }
+
+    /** Resolves the human-readable application label for {@code pkg} in {@code userId}. */
+    public String resolveAppLabelForUser(String pkg, int userId) {
+        return AndroidMultiUserHelper.resolveAppLabelForUser(context, pkg, userId);
+    }
+
+    /**
+     * Resolves the Linux UID for {@code (pkg, userId)} (e.g. {@code 99910256} for user 999),
+     * preferring {@code IPackageManager.getPackageUid(..., userId)} with deterministic UID-range fallback.
+     */
+    public int getPackageUidForUser(String pkg, int userId) {
+        return AndroidMultiUserHelper.getPackageUidForUser(context, pkg, userId);
+    }
+
+    private static Method resolveStartActivityAsUserMethod(Object atm) {
+        if (atm == null) return null;
+        Method fallback11 = null;
+        for (Method m : atm.getClass().getMethods()) {
+            if (!"startActivityAsUser".equals(m.getName())) continue;
+            Class<?>[] pt = m.getParameterTypes();
+            if (pt.length == 12 && pt[3] == Intent.class && pt[11] == int.class) {
+                return m;
+            }
+            if (pt.length == 11 && pt[2] == Intent.class && pt[10] == int.class) {
+                fallback11 = m;
+            }
+        }
+        return fallback11;
+    }
+
     private static Method resolveInjectInputEventMethod(Object iim) {
         if (iim == null) return null;
         Method exact = findMethodOrNull(iim.getClass(), "injectInputEvent", InputEvent.class, int.class);
         return (exact != null) ? exact : findMethodByName(iim, "injectInputEvent", -1);
     }
 
-    private static Method findMethodOrNull(Class<?> cls, String name, Class<?>... params) {
+    static Method findMethodOrNull(Class<?> cls, String name, Class<?>... params) {
         if (cls == null) return null;
         try { return cls.getMethod(name, params); } catch (NoSuchMethodException ignored) { return null; }
     }
@@ -1548,7 +1693,7 @@ public final class AndroidServices {
         return null;
     }
 
-    private static String unwrapMessage(Throwable t) {
+    static String unwrapMessage(Throwable t) {
         if (t instanceof InvocationTargetException && t.getCause() != null) {
             return String.valueOf(t.getCause());
         }

@@ -203,10 +203,87 @@ public final class AndroidDisplayDriver
     @Override
     public void resizeVirtualDisplay(Object handle, int width, int height, int dpi) {
         if (!(handle instanceof VirtualDisplay)) return;
+        VirtualDisplay vd = (VirtualDisplay) handle;
+        Display disp = vd.getDisplay();
+        Surface savedSurface = vd.getSurface();
+        int displayId = (disp != null) ? disp.getDisplayId() : -1;
         try {
-            ((VirtualDisplay) handle).resize(width, height, dpi);
+            VirtualDisplayResizeCoordinator.ResizeOutcome outcome =
+                    VirtualDisplayResizeCoordinator.performResize(
+                            Build.VERSION.SDK_INT,
+                            width,
+                            height,
+                            dpi,
+                            new VirtualDisplayResizeCoordinator.ResizeAdapter() {
+                                @Override
+                                public boolean hasValidAttachedSurface() {
+                                    return savedSurface != null && savedSurface.isValid();
+                                }
+
+                                @Override
+                                public boolean matchesTargetSpec(int targetW, int targetH, int targetDpi) {
+                                    return displayMatchesSpec(disp, targetW, targetH, targetDpi);
+                                }
+
+                                @Override
+                                public void detachSurface() {
+                                    vd.setSurface(null);
+                                }
+
+                                @Override
+                                public boolean isDisplayStateOff() {
+                                    return disp != null && disp.getState() == Display.STATE_OFF;
+                                }
+
+                                @Override
+                                public void applyResize(int targetW, int targetH, int targetDpi) {
+                                    vd.resize(targetW, targetH, targetDpi);
+                                }
+
+                                @Override
+                                public void reattachSurface() {
+                                    if (savedSurface != null && savedSurface.isValid()) {
+                                        vd.setSurface(savedSurface);
+                                    }
+                                }
+
+                                @Override
+                                public void sleepMs(long ms) {
+                                    if (ms > 0L) {
+                                        SystemClock.sleep(ms);
+                                    }
+                                }
+
+                                @Override
+                                public long uptimeMs() {
+                                    return SystemClock.uptimeMillis();
+                                }
+                            });
+            if (outcome.usedOffSurfacePath) {
+                System.out.println("OPALDESK_VD_RESIZE_OFF_SURFACE displayId=" + displayId
+                        + " size=" + width + "x" + height + "@" + dpi + "dpi"
+                        + " off=" + outcome.observedStateOff + "(" + outcome.stateOffElapsedMs + "ms)"
+                        + " spec=" + outcome.observedTargetSpec + "(" + outcome.resizeAppliedElapsedMs + "ms)");
+            }
         } catch (RuntimeException e) {
             System.err.println("OPALDESK_VD_RESIZE_WARN: " + e.getMessage());
+        }
+    }
+
+    private static boolean displayMatchesSpec(Display disp, int width, int height, int dpi) {
+        if (disp == null) return false;
+        try {
+            Display.Mode mode = disp.getMode();
+            if (mode == null
+                    || mode.getPhysicalWidth() != width
+                    || mode.getPhysicalHeight() != height) {
+                return false;
+            }
+            android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+            disp.getRealMetrics(dm);
+            return dm.densityDpi == dpi;
+        } catch (RuntimeException ignored) {
+            return false;
         }
     }
 
@@ -261,38 +338,47 @@ public final class AndroidDisplayDriver
 
     @Override
     public String resolveAppLabel(String pkg) {
-        if (services.context == null || pkg == null || pkg.isEmpty()) return pkg != null ? pkg : "";
-        try {
-            PackageManager pm = services.context.getPackageManager();
-            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            CharSequence label = pm.getApplicationLabel(ai);
-            if (label != null && label.length() > 0) return label.toString();
-        } catch (PackageManager.NameNotFoundException | RuntimeException ignored) {
-        }
-        return pkg;
+        return resolveAppLabel(pkg, UserProfileAppPolicy.PRIMARY_USER_ID);
+    }
+
+    @Override
+    public String resolveAppLabel(String pkg, int userId) {
+        return services.resolveAppLabelForUser(pkg, userId);
+    }
+
+    @Override
+    public String resolveProfileType(int userId) {
+        return services.resolveProfileTypeForUser(userId);
     }
 
     @Override
     public int launchOrMoveFullscreenApp(String pkg, String cls, int displayId, int existingTaskId) {
+        return launchOrMoveFullscreenApp(pkg, cls, UserProfileAppPolicy.PRIMARY_USER_ID, displayId, existingTaskId);
+    }
+
+    @Override
+    public int launchOrMoveFullscreenApp(String pkg, String cls, int userId, int displayId, int existingTaskId) {
         if (displayId <= 0 || PackagePolicy.isBlockedWindowPkg(pkg)) return -1;
+        int safeUserId = Math.max(0, userId);
         Bundle launchOpts = TaskApiAdapter.makeFullscreenLaunchOptions(displayId).toBundle();
 
         // Fast path: task is already alive on this VirtualDisplay (e.g. waking from minimize).
         // NEVER call startActivityFromRecents() here: on ColorOS / OEM ROMs it invokes
         // moveTaskToFront on Display 0 and hijacks the host phone screen over DesktopActivity!
-        int existingOnTarget = taskApi.findTopTaskIdOnDisplay(displayId, pkg);
+        int existingOnTarget = taskApi.findTopTaskIdOnDisplay(displayId, pkg, safeUserId);
         if (existingOnTarget > 0) {
-            if (taskApi.findTopVisibleTaskIdOnDisplay(displayId, pkg) == existingOnTarget) {
+            if (taskApi.findTopVisibleTaskIdOnDisplay(displayId, pkg, safeUserId) == existingOnTarget) {
                 services.focusDisplay(displayId);
-                System.out.println("OPALDESK_LAUNCH_FOCUS_OK pkg=" + pkg
+                System.out.println("OPALDESK_LAUNCH_FOCUS_OK pkg=" + pkg + " user=" + safeUserId
                         + " displayId=" + displayId + " tid=" + existingOnTarget);
                 return existingOnTarget;
             }
         }
 
-        ResolvedLaunchIntent resolvedLaunch = resolveLaunchIntentInfo(pkg, cls);
+        ResolvedLaunchIntent resolvedLaunch = resolveLaunchIntentInfo(pkg, cls, safeUserId);
         if (resolvedLaunch == null) {
-            System.err.println("OPALDESK_LAUNCH_NO_INTENT pkg=" + pkg + " cls=" + cls + " displayId=" + displayId);
+            System.err.println("OPALDESK_LAUNCH_NO_INTENT pkg=" + pkg + " user=" + safeUserId
+                    + " cls=" + cls + " displayId=" + displayId);
             return existingOnTarget;
         }
         Intent launchIntent = resolvedLaunch.intent;
@@ -302,7 +388,7 @@ public final class AndroidDisplayDriver
         // different taskAffinity, e.g. com.android.settings.root) onto this VirtualDisplay.
         TaskApiAdapter.TaskCandidate candidate = (existingTaskId > 0 || resolvedLaunch.isExplicitSubActivity)
                 ? null
-                : taskApi.findTaskCandidateForPackage(pkg);
+                : taskApi.findTaskCandidateForPackage(pkg, safeUserId);
         int candidateTid = (existingTaskId > 0)
                 ? existingTaskId
                 : (candidate != null ? candidate.taskId : -1);
@@ -320,7 +406,7 @@ public final class AndroidDisplayDriver
             // retain Display-0 input-region / letterbox detector state if reparented directly onto
             // a VirtualDisplay, causing single taps outside the stale Display-0 strip to be
             // rewritten to ACTION_CANCEL. Remove the stale Display-0 task and cold-launch cleanly.
-            System.out.println("OPALDESK_LAUNCH_CLEAN_EMBEDDED_TASK pkg=" + pkg
+            System.out.println("OPALDESK_LAUNCH_CLEAN_EMBEDDED_TASK pkg=" + pkg + " user=" + safeUserId
                     + " oldTid=" + candidateTid + " srcDisplay=" + candidateDisplayId
                     + " dstDisplay=" + displayId + " reason=" + preCleanReason);
             taskApi.removeTask(candidateTid);
@@ -332,111 +418,133 @@ public final class AndroidDisplayDriver
         }
 
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        if (!startActivityWithAmFallback(launchIntent, launchOpts, displayId, cleanedBeforeLaunch)) {
-            System.err.println("OPALDESK_LAUNCH_START_FAIL pkg=" + pkg + " displayId=" + displayId);
+        if (!startActivityWithAmFallback(launchIntent, launchOpts, displayId, cleanedBeforeLaunch, safeUserId)) {
+            System.err.println("OPALDESK_LAUNCH_START_FAIL pkg=" + pkg + " user=" + safeUserId
+                    + " displayId=" + displayId);
             return existingOnTarget;
         }
         services.focusDisplay(displayId);
         SystemClock.sleep(60L);
-        int topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg);
+        int topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg, safeUserId);
         // On ColorOS / OEM ROMs where a background Display-0 task refuses to reparent via moveRootTaskToDisplay,
         // remove the stale Display-0 task and cold-launch directly into the target VirtualDisplay.
         if (topTid <= 0 && candidateTid > 0 && candidateTid != existingOnTarget && !cleanedBeforeLaunch) {
             taskApi.removeTask(candidateTid);
             SystemClock.sleep(80L);
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
-            startActivityWithAmFallback(launchIntent, launchOpts, displayId, true);
+            startActivityWithAmFallback(launchIntent, launchOpts, displayId, true, safeUserId);
             services.focusDisplay(displayId);
             SystemClock.sleep(80L);
-            topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg);
+            topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg, safeUserId);
         } else if (topTid > 0 && !cleanedBeforeLaunch && existingTaskId <= 0 && candidateTid > 0 && candidateDisplayId <= 0) {
             TaskApiAdapter.TaskCandidate landed = taskApi.inspectTaskById(topTid);
             String landedReason = (landed != null) ? landed.cleanLaunchReason : null;
             if (TaskLaunchPolicy.shouldCleanLaunchAfterRecycle(
                     cleanedBeforeLaunch, existingTaskId, candidateTid, candidateDisplayId, topTid, landedReason)) {
-                System.out.println("OPALDESK_LAUNCH_CLEAN_RECYCLED_TASK pkg=" + pkg
+                System.out.println("OPALDESK_LAUNCH_CLEAN_RECYCLED_TASK pkg=" + pkg + " user=" + safeUserId
                         + " oldTid=" + topTid + " dstDisplay=" + displayId + " reason=" + landedReason);
                 taskApi.removeTask(topTid);
                 SystemClock.sleep(80L);
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                startActivityWithAmFallback(launchIntent, launchOpts, displayId, true);
+                startActivityWithAmFallback(launchIntent, launchOpts, displayId, true, safeUserId);
                 services.focusDisplay(displayId);
                 SystemClock.sleep(80L);
-                topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg);
+                topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg, safeUserId);
             }
         }
         int resolvedTid = (topTid > 0) ? topTid
-                : (existingOnTarget > 0 ? existingOnTarget : taskApi.findRunningOrRecentTaskForPackage(pkg));
-        System.out.println("OPALDESK_LAUNCH_START_OK pkg=" + pkg
+                : (existingOnTarget > 0 ? existingOnTarget : taskApi.findRunningOrRecentTaskForPackage(pkg, safeUserId));
+        System.out.println("OPALDESK_LAUNCH_START_OK pkg=" + pkg + " user=" + safeUserId
                 + " displayId=" + displayId + " tid=" + resolvedTid);
         return resolvedTid;
     }
 
     @Override
     public int relaunchFreshFullscreenApp(String pkg, String cls, int displayId) {
+        return relaunchFreshFullscreenApp(pkg, cls, UserProfileAppPolicy.PRIMARY_USER_ID, displayId);
+    }
+
+    @Override
+    public int relaunchFreshFullscreenApp(String pkg, String cls, int userId, int displayId) {
         if (displayId <= 0 || PackagePolicy.isBlockedWindowPkg(pkg)) return -1;
+        int safeUserId = Math.max(0, userId);
         Bundle launchOpts = TaskApiAdapter.makeFullscreenLaunchOptions(displayId).toBundle();
-        Intent launchIntent = resolveSafeLaunchIntent(pkg, cls);
+        Intent launchIntent = resolveSafeLaunchIntent(pkg, cls, safeUserId);
         if (launchIntent == null) {
-            System.err.println("OPALDESK_RELOAD_NO_INTENT pkg=" + pkg + " cls=" + cls + " displayId=" + displayId);
+            System.err.println("OPALDESK_RELOAD_NO_INTENT pkg=" + pkg + " user=" + safeUserId
+                    + " cls=" + cls + " displayId=" + displayId);
             return -1;
         }
         launchIntent.addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_CLEAR_TASK
                         | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        if (!startActivityWithAmFallback(launchIntent, launchOpts, displayId, true)) {
-            System.err.println("OPALDESK_RELOAD_START_FAIL pkg=" + pkg + " displayId=" + displayId);
+        if (!startActivityWithAmFallback(launchIntent, launchOpts, displayId, true, safeUserId)) {
+            System.err.println("OPALDESK_RELOAD_START_FAIL pkg=" + pkg + " user=" + safeUserId
+                    + " displayId=" + displayId);
             return -1;
         }
         services.focusDisplay(displayId);
         SystemClock.sleep(100L);
-        int topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg);
-        int resolvedTid = (topTid > 0) ? topTid : taskApi.findRunningOrRecentTaskForPackage(pkg);
-        System.out.println("OPALDESK_RELOAD_FRESH_OK pkg=" + pkg
+        int topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg, safeUserId);
+        int resolvedTid = (topTid > 0) ? topTid : taskApi.findRunningOrRecentTaskForPackage(pkg, safeUserId);
+        System.out.println("OPALDESK_RELOAD_FRESH_OK pkg=" + pkg + " user=" + safeUserId
                 + " displayId=" + displayId + " tid=" + resolvedTid);
         return resolvedTid;
     }
 
     @Override
     public int launchExplicitActivityOnDisplay(String pkg, String cls, int displayId) {
+        return launchExplicitActivityOnDisplay(pkg, cls, UserProfileAppPolicy.PRIMARY_USER_ID, displayId);
+    }
+
+    @Override
+    public int launchExplicitActivityOnDisplay(String pkg, String cls, int userId, int displayId) {
         if (displayId <= 0 || PackagePolicy.isBlockedWindowPkg(pkg)) return -1;
+        int safeUserId = Math.max(0, userId);
         Bundle launchOpts = TaskApiAdapter.makeFullscreenLaunchOptions(displayId).toBundle();
-        Intent launchIntent = resolveSafeLaunchIntent(pkg, cls);
+        Intent launchIntent = resolveSafeLaunchIntent(pkg, cls, safeUserId);
         if (launchIntent == null) {
-            System.err.println("OPALDESK_LAUNCH_EXPLICIT_NO_INTENT pkg=" + pkg + " cls=" + cls + " displayId=" + displayId);
-            return taskApi.findTopTaskIdOnDisplay(displayId, pkg);
+            System.err.println("OPALDESK_LAUNCH_EXPLICIT_NO_INTENT pkg=" + pkg + " user=" + safeUserId
+                    + " cls=" + cls + " displayId=" + displayId);
+            return taskApi.findTopTaskIdOnDisplay(displayId, pkg, safeUserId);
         }
         launchIntent.addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_CLEAR_TOP
                         | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        if (!startActivityWithAmFallback(launchIntent, launchOpts, displayId, false)) {
-            System.err.println("OPALDESK_LAUNCH_EXPLICIT_FAIL pkg=" + pkg + " cls=" + cls + " displayId=" + displayId);
-            return taskApi.findTopTaskIdOnDisplay(displayId, pkg);
+        if (!startActivityWithAmFallback(launchIntent, launchOpts, displayId, false, safeUserId)) {
+            System.err.println("OPALDESK_LAUNCH_EXPLICIT_FAIL pkg=" + pkg + " user=" + safeUserId
+                    + " cls=" + cls + " displayId=" + displayId);
+            return taskApi.findTopTaskIdOnDisplay(displayId, pkg, safeUserId);
         }
         services.focusDisplay(displayId);
         SystemClock.sleep(60L);
-        int topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg);
-        int resolvedTid = (topTid > 0) ? topTid : taskApi.findRunningOrRecentTaskForPackage(pkg);
-        System.out.println("OPALDESK_LAUNCH_EXPLICIT_OK pkg=" + pkg
+        int topTid = taskApi.findTopTaskIdOnDisplay(displayId, pkg, safeUserId);
+        int resolvedTid = (topTid > 0) ? topTid : taskApi.findRunningOrRecentTaskForPackage(pkg, safeUserId);
+        System.out.println("OPALDESK_LAUNCH_EXPLICIT_OK pkg=" + pkg + " user=" + safeUserId
                 + " cls=" + cls + " displayId=" + displayId + " tid=" + resolvedTid);
         return resolvedTid;
     }
 
     /**
-     * Launches an Activity via {@code IActivityTaskManager.startActivity} and falls back to
-     * {@code am start --display <id> --windowingMode 1} if a future Android/OEM AIDL signature
-     * change breaks hidden-API reflection.
+     * Launches an Activity via {@code IActivityTaskManager.startActivity[AsUser]} and falls back to
+     * {@code am start [--user <userId>] --display <id> --windowingMode 1} if an OEM ROM rejects
+     * direct hidden-API Binder calls.
      */
     private boolean startActivityWithAmFallback(
-            Intent launchIntent, Bundle launchOpts, int displayId, boolean clearTask) {
-        return services.startActivityAsShellWithAmFallback(launchIntent, launchOpts, displayId, clearTask);
+            Intent launchIntent, Bundle launchOpts, int displayId, boolean clearTask, int userId) {
+        return services.startActivityAsShellWithAmFallback(launchIntent, launchOpts, displayId, clearTask, userId);
     }
 
     @Override
     public int findTopTaskIdOnDisplay(int displayId, String expectedPkg) {
         return taskApi.findTopTaskIdOnDisplay(displayId, expectedPkg);
+    }
+
+    @Override
+    public int findTopTaskIdOnDisplay(int displayId, String expectedPkg, int userId) {
+        return taskApi.findTopTaskIdOnDisplay(displayId, expectedPkg, Math.max(0, userId));
     }
 
     @Override
@@ -447,6 +555,11 @@ public final class AndroidDisplayDriver
     @Override
     public int findTopVisibleTaskIdOnDisplay(int displayId, String expectedPkg) {
         return taskApi.findTopVisibleTaskIdOnDisplay(displayId, expectedPkg);
+    }
+
+    @Override
+    public int findTopVisibleTaskIdOnDisplay(int displayId, String expectedPkg, int userId) {
+        return taskApi.findTopVisibleTaskIdOnDisplay(displayId, expectedPkg, Math.max(0, userId));
     }
 
     /**
@@ -496,8 +609,18 @@ public final class AndroidDisplayDriver
 
     @Override
     public void forceStopPackage(String pkg) {
+        forceStopPackage(pkg, UserProfileAppPolicy.PRIMARY_USER_ID);
+    }
+
+    @Override
+    public void forceStopPackage(String pkg, int userId) {
         if (PackagePolicy.isBlockedWindowPkg(pkg)) return;
-        ShellCommand.runOutput("am", "force-stop", pkg);
+        int safeUserId = Math.max(0, userId);
+        if (safeUserId > 0) {
+            ShellCommand.runOutput("am", "force-stop", "--user", String.valueOf(safeUserId), pkg);
+        } else {
+            ShellCommand.runOutput("am", "force-stop", pkg);
+        }
         SystemClock.sleep(150L);
     }
 
@@ -550,17 +673,21 @@ public final class AndroidDisplayDriver
         }
     }
 
-    private Intent resolveSafeLaunchIntent(String pkg, String cls) {
-        ResolvedLaunchIntent info = resolveLaunchIntentInfo(pkg, cls);
+    private Intent resolveSafeLaunchIntent(String pkg, String cls, int userId) {
+        ResolvedLaunchIntent info = resolveLaunchIntentInfo(pkg, cls, userId);
         return (info != null) ? info.intent : null;
     }
 
-    private ResolvedLaunchIntent resolveLaunchIntentInfo(String pkg, String cls) {
+    private ResolvedLaunchIntent resolveLaunchIntentInfo(String pkg, String cls, int userId) {
         if (services.context == null || !PackagePolicy.isValidPackageName(pkg)) return null;
-        PackageManager pm = services.context.getPackageManager();
-        Intent launcher = pm.getLaunchIntentForPackage(pkg);
+        int safeUserId = Math.max(0, userId);
+        ComponentName launcherComp = services.resolveLaunchComponentForUser(pkg, safeUserId);
+        Intent launcher = (launcherComp != null)
+                ? new Intent(Intent.ACTION_MAIN)
+                        .addCategory(Intent.CATEGORY_LAUNCHER)
+                        .setComponent(launcherComp)
+                : services.context.getPackageManager().getLaunchIntentForPackage(pkg);
         if (cls != null && PackagePolicy.isValidClassName(cls)) {
-            ComponentName launcherComp = (launcher != null) ? launcher.getComponent() : null;
             boolean isMainLauncher = launcherComp != null && cls.equals(launcherComp.getClassName());
             Intent explicit = isMainLauncher
                     ? new Intent(Intent.ACTION_MAIN)
@@ -568,8 +695,16 @@ public final class AndroidDisplayDriver
                             .setComponent(new ComponentName(pkg, cls))
                     : new Intent(Intent.ACTION_MAIN)
                             .setComponent(new ComponentName(pkg, cls));
-            if (pm.resolveActivity(explicit, 0) != null) {
+            if (services.canResolveActivityForUser(explicit, safeUserId)) {
                 return new ResolvedLaunchIntent(explicit, !isMainLauncher);
+            }
+            if (safeUserId > 0) {
+                // Allow explicit component launch in secondary profile even if ROM hides queryIntentActivities.
+                return new ResolvedLaunchIntent(
+                        new Intent(Intent.ACTION_MAIN)
+                                .addCategory(Intent.CATEGORY_LAUNCHER)
+                                .setComponent(new ComponentName(pkg, cls)),
+                        false);
             }
         }
         return (launcher != null) ? new ResolvedLaunchIntent(launcher, false) : null;

@@ -16,6 +16,9 @@ import java.util.regex.Pattern;
  */
 public final class HelperPackageResolver {
     private static final Pattern PM_USER_ID_PATTERN = Pattern.compile("UserInfo\\{(\\d+):");
+    private static final Pattern DUMPSYS_SECTION_PACKAGE_PATTERN = Pattern.compile("^Package \\[([^\\]]+)\\].*");
+    private static final Pattern DUMPSYS_APP_ID_PATTERN = Pattern.compile("\\b(?:appId|userId)=(\\d+)\\b");
+    private static final int PER_USER_UID_RANGE = 100000;
     private static final String[] TRUSTED_APK_PREFIXES = {
             "/data/app/",
             "/mnt/expand/",
@@ -154,6 +157,108 @@ public final class HelperPackageResolver {
         }
         primary.addAll(secondary);
         return primary;
+    }
+
+    /**
+     * Extracts trusted APK paths for {@code targetPackage} from {@code dumpsys package <pkg>}
+     * output when {@code PackageManager} / {@code pm path} are filtered for {@code uid=2000}
+     * (e.g. privacy/hide-app hooks or OEM package-visibility rules).
+     *
+     * <p>Only lines inside the exact {@code Package [<targetPackage>]} block are inspected, and
+     * every candidate is validated via {@link #isTrustedInstalledApkPath(String)} before return.
+     */
+    public static List<String> parseApkPathsFromDumpsysPackage(String output, String targetPackage) {
+        List<String> primary = new ArrayList<>();
+        List<String> secondary = new ArrayList<>();
+        if (output == null || output.isEmpty() || targetPackage == null || targetPackage.isEmpty()) {
+            return primary;
+        }
+        boolean inTargetBlock = false;
+        for (String rawLine : output.split("\\r?\\n")) {
+            String line = rawLine.trim();
+            if (line.isEmpty()) continue;
+            Matcher section = DUMPSYS_SECTION_PACKAGE_PATTERN.matcher(line);
+            if (section.matches()) {
+                inTargetBlock = targetPackage.equals(section.group(1).trim());
+                continue;
+            }
+            if (!inTargetBlock) continue;
+            if (line.startsWith("Queries:") || line.startsWith("Packages:") || line.startsWith("Shared users:")) {
+                inTargetBlock = false;
+                continue;
+            }
+            String candidate = extractDumpsysApkCandidate(line);
+            if (candidate == null || !isTrustedInstalledApkPath(candidate)) continue;
+            if (candidate.endsWith("/base.apk")) {
+                if (!primary.contains(candidate)) primary.add(candidate);
+            } else {
+                if (!secondary.contains(candidate)) secondary.add(candidate);
+            }
+        }
+        primary.addAll(secondary);
+        return primary;
+    }
+
+    private static String extractDumpsysApkCandidate(String trimmedLine) {
+        String rawPath = null;
+        if (trimmedLine.startsWith("codePath=")) {
+            rawPath = trimmedLine.substring("codePath=".length()).trim();
+        } else if (trimmedLine.startsWith("resourcePath=")) {
+            rawPath = trimmedLine.substring("resourcePath=".length()).trim();
+        } else if (trimmedLine.startsWith("path:")) {
+            rawPath = trimmedLine.substring("path:".length()).trim();
+        }
+        if (rawPath == null || rawPath.isEmpty()) return null;
+        int ws = rawPath.indexOf(' ');
+        if (ws > 0) {
+            rawPath = rawPath.substring(0, ws).trim();
+        }
+        if (!rawPath.startsWith("/") || rawPath.contains("..")) return null;
+        if (rawPath.toLowerCase(Locale.US).endsWith(".apk")) {
+            return rawPath;
+        }
+        // Android 11+ dumpsys prints directory codePath=/data/app/~~xxx==/pkg-yyy==
+        while (rawPath.endsWith("/") && rawPath.length() > 1) {
+            rawPath = rawPath.substring(0, rawPath.length() - 1);
+        }
+        return rawPath + "/base.apk";
+    }
+
+    /**
+     * Extracts the Linux UID for {@code targetPackage} under {@code userId} from
+     * {@code dumpsys package <pkg>} ({@code appId=} or {@code userId=} inside the exact package
+     * block), returning {@code -1} if absent or out of range.
+     */
+    public static int parseUidFromDumpsysPackage(String output, String targetPackage, int userId) {
+        if (output == null || output.isEmpty() || targetPackage == null || targetPackage.isEmpty() || userId < 0) {
+            return -1;
+        }
+        boolean inTargetBlock = false;
+        for (String rawLine : output.split("\\r?\\n")) {
+            String line = rawLine.trim();
+            if (line.isEmpty()) continue;
+            Matcher section = DUMPSYS_SECTION_PACKAGE_PATTERN.matcher(line);
+            if (section.matches()) {
+                inTargetBlock = targetPackage.equals(section.group(1).trim());
+                continue;
+            }
+            if (!inTargetBlock) continue;
+            if (line.startsWith("Queries:") || line.startsWith("Packages:") || line.startsWith("Shared users:")) {
+                inTargetBlock = false;
+                continue;
+            }
+            Matcher m = DUMPSYS_APP_ID_PATTERN.matcher(line);
+            if (m.find()) {
+                try {
+                    int appId = Integer.parseInt(m.group(1));
+                    if (appId > 0 && appId < PER_USER_UID_RANGE) {
+                        return userId * PER_USER_UID_RANGE + appId;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        return -1;
     }
 
     /**

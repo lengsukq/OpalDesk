@@ -665,6 +665,139 @@ public final class DisplayGeometryUtil {
         };
     }
 
+    public static final float ANISOTROPY_DPI_RATIO_THRESHOLD = 1.05f;
+    private static final float MIRROR_COLLAPSE_ASPECT_DIFF_THRESHOLD = 0.20f;
+    private static final int MIRROR_COLLAPSE_SIZE_TOLERANCE_PX = 4;
+
+    public static boolean matchesDimensionsIgnoringRotation(int w1, int h1, int w2, int h2) {
+        if (w1 <= 0 || h1 <= 0 || w2 <= 0 || h2 <= 0) return false;
+        return (w1 == w2 && h1 == h2) || (w1 == h2 && h1 == w2);
+    }
+
+    /**
+     * Detects significant non-square physical pixel density reported by external monitor EDID
+     * (e.g. a 4:3 2048x1536 portable panel whose driver board declares ~16:9 61x35cm physical
+     * dimensions, yielding yDpi/xDpi = 1.307 and triggering AOSP pixel anisotropy correction).
+     */
+    public static boolean isAnisotropicPixelDensity(float xDpi, float yDpi) {
+        if (!Float.isFinite(xDpi) || !Float.isFinite(yDpi) || xDpi < 20f || yDpi < 20f) {
+            return false;
+        }
+        float ratio = (xDpi >= yDpi) ? (xDpi / yDpi) : (yDpi / xDpi);
+        return ratio > ANISOTROPY_DPI_RATIO_THRESHOLD;
+    }
+
+    /**
+     * Detects whether an external display exhibits AOSP Android 15-17 pixel anisotropy distortion
+     * via either (1) anisotropic physical xDpi/yDpi, (2) OS-flagged synthetic modes sharing one
+     * edge with native dimensions while inflating the other edge by >5%, or (3) missing exact
+     * native mode in supportedModes accompanied by an edge-matching inflated synthetic mode
+     * (e.g. active 2048x1536 absent from supportedModes while 2677x1536 is present).
+     */
+    public static boolean hasExternalPixelAnisotropy(
+            int nativeW,
+            int nativeH,
+            float xDpi,
+            float yDpi,
+            int[] modeWidths,
+            int[] modeHeights,
+            boolean[] modeSynthetic) {
+        if (isAnisotropicPixelDensity(xDpi, yDpi)) {
+            return true;
+        }
+        if (nativeW < 320 || nativeH < 320 || modeWidths == null || modeHeights == null) {
+            return false;
+        }
+        int count = Math.min(modeWidths.length, modeHeights.length);
+        if (count <= 0) return false;
+        boolean nativePresent = false;
+        boolean hasInflatedSameEdge = false;
+        for (int i = 0; i < count; i++) {
+            int w = modeWidths[i];
+            int h = modeHeights[i];
+            if (matchesDimensionsIgnoringRotation(w, h, nativeW, nativeH)) {
+                nativePresent = true;
+            }
+            boolean inflatedW = (h == nativeH && w > Math.round(nativeW * ANISOTROPY_DPI_RATIO_THRESHOLD));
+            boolean inflatedH = (w == nativeW && h > Math.round(nativeH * ANISOTROPY_DPI_RATIO_THRESHOLD));
+            if (inflatedW || inflatedH) {
+                if (modeSynthetic != null && i < modeSynthetic.length && modeSynthetic[i]) {
+                    return true;
+                }
+                if ((w & 1) != 0 || (h & 1) != 0) {
+                    return true;
+                }
+                hasInflatedSameEdge = true;
+            }
+        }
+        return !nativePresent && hasInflatedSameEdge;
+    }
+
+    /**
+     * Detects when clearing a forced size on a mirroring-backed external display (such as Xiaomi
+     * HyperOS wired DP Presentation displays) collapses its logical size to Display 0's portrait
+     * dimensions (e.g. 1200x2608 on a 2048x1536 landscape panel), which creates severe pillarboxing.
+     */
+    public static boolean isMirroredPrimaryDisplayCollapse(
+            int nativeW,
+            int nativeH,
+            int logicalW,
+            int logicalH,
+            int primaryW,
+            int primaryH) {
+        if (nativeW < 320 || nativeH < 320
+                || logicalW < 320 || logicalH < 320
+                || primaryW < 320 || primaryH < 320) {
+            return false;
+        }
+        boolean logicalMatchesPrimary =
+                Math.abs(logicalW - primaryW) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX
+                        && Math.abs(logicalH - primaryH) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX;
+        if (!logicalMatchesPrimary) {
+            return false;
+        }
+        boolean nativeMatchesPrimarySameOrientation =
+                Math.abs(nativeW - primaryW) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX
+                        && Math.abs(nativeH - primaryH) <= MIRROR_COLLAPSE_SIZE_TOLERANCE_PX;
+        if (nativeMatchesPrimarySameOrientation) {
+            return false;
+        }
+        boolean nativeLandscape = nativeW >= nativeH;
+        boolean logicalLandscape = logicalW >= logicalH;
+        if (nativeLandscape != logicalLandscape) {
+            return true;
+        }
+        float nativeAspect = (float) nativeW / (float) nativeH;
+        float logicalAspect = (float) logicalW / (float) logicalH;
+        return Math.abs(nativeAspect - logicalAspect) / Math.max(nativeAspect, logicalAspect)
+                >= MIRROR_COLLAPSE_ASPECT_DIFF_THRESHOLD;
+    }
+
+    /**
+     * Decides whether to apply {@code IWindowManager.setForcedDisplayScalingMode(displayId, 1)}
+     * ({@code FORCE_SCALING_MODE_DISABLED}) for 1:1 native pixel output. Strictly gated to targets
+     * matching the display's native physical resolution so lower custom resolutions (e.g. 1080p on
+     * a 4K screen) never shrink into unscaled centered boxes.
+     */
+    public static boolean shouldDisableScalingForNativeAnisotropy(
+            int targetW,
+            int targetH,
+            int nativeW,
+            int nativeH,
+            boolean hasAnisotropy,
+            int scalingModePref) {
+        if (scalingModePref == BridgeProtocol.EXTERNAL_SCALING_FORCE_SYSTEM_AUTO) {
+            return false;
+        }
+        if (!matchesDimensionsIgnoringRotation(targetW, targetH, nativeW, nativeH)) {
+            return false;
+        }
+        if (scalingModePref == BridgeProtocol.EXTERNAL_SCALING_NATIVE_1TO1) {
+            return true;
+        }
+        return hasAnisotropy;
+    }
+
     /**
      * Picks the best matching EDID mode index for an exact {@code reqW x reqH} request.
      * Matches either normal orientation or swapped orientation when physical EDID is reported rotated;
@@ -672,24 +805,48 @@ public final class DisplayGeometryUtil {
      */
     public static int selectBestEdidModeIndex(
             int[] widths, int[] heights, float[] rates, int reqW, int reqH, float reqFps) {
+        return selectBestEdidModeIndex(widths, heights, rates, null, reqW, reqH, reqFps);
+    }
+
+    /**
+     * Synthetic-aware overload of {@link #selectBestEdidModeIndex(int[], int[], float[], int, int, float)}:
+     * prefers native hardware modes over synthetic anisotropy modes when both share the requested size.
+     */
+    public static int selectBestEdidModeIndex(
+            int[] widths,
+            int[] heights,
+            float[] rates,
+            boolean[] syntheticFlags,
+            int reqW,
+            int reqH,
+            float reqFps) {
         if (widths == null || heights == null || rates == null) return -1;
         int count = Math.min(widths.length, Math.min(heights.length, rates.length));
         if (count <= 0 || reqW <= 0 || reqH <= 0) return -1;
         int bestExactIdx = -1;
+        boolean bestExactSynthetic = true;
         float bestExactScore = Float.MAX_VALUE;
         int bestRotatedIdx = -1;
+        boolean bestRotatedSynthetic = true;
         float bestRotatedScore = Float.MAX_VALUE;
         for (int i = 0; i < count; i++) {
             float r = rates[i];
             float score = (reqFps > 1f) ? Math.abs(r - reqFps) : -r;
+            boolean isSynth = (syntheticFlags != null && i < syntheticFlags.length && syntheticFlags[i]);
             if (widths[i] == reqW && heights[i] == reqH) {
-                if (bestExactIdx < 0 || score < bestExactScore) {
+                if (bestExactIdx < 0
+                        || (bestExactSynthetic && !isSynth)
+                        || (bestExactSynthetic == isSynth && score < bestExactScore)) {
                     bestExactIdx = i;
+                    bestExactSynthetic = isSynth;
                     bestExactScore = score;
                 }
             } else if (reqW != reqH && widths[i] == reqH && heights[i] == reqW) {
-                if (bestRotatedIdx < 0 || score < bestRotatedScore) {
+                if (bestRotatedIdx < 0
+                        || (bestRotatedSynthetic && !isSynth)
+                        || (bestRotatedSynthetic == isSynth && score < bestRotatedScore)) {
                     bestRotatedIdx = i;
+                    bestRotatedSynthetic = isSynth;
                     bestRotatedScore = score;
                 }
             }

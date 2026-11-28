@@ -668,4 +668,36 @@ public class CompositorEngineTest {
         assertEquals(WindowProfile.DESKTOP, landscape.profile);
         assertTrue("Second toggle restores landscape orientation", landscape.contentWidth > landscape.contentHeight);
     }
+
+    @Test
+    public void testUpdateWindowFrameDoesNotChurnZOrderWhenAlreadyTopFocused() {
+        File confF = new File(tmpDir.getRoot(), "zorder_main.conf");
+        File profF = new File(tmpDir.getRoot(), "zorder_prof.conf");
+        DaemonConfig cfg = new DaemonConfig(confF, profF);
+        cfg.updateRuntimeConfig(BridgeProtocol.INPUT_BACKEND_AUTO, 4, 1440, 3200, 560);
+
+        RecordingDriver driver = new RecordingDriver();
+        VirtualDisplayPool pool = new VirtualDisplayPool(driver, 4, false);
+        FakeRuntime runtime = new FakeRuntime();
+        CompositorEngine engine = new CompositorEngine(cfg, pool, runtime, null);
+
+        int w1 = engine.openOrFocusWindow("com.example.one", "", BridgeProtocol.PROFILE_PORTRAIT, 0, 0, 0, 0);
+        int w2 = engine.openOrFocusWindow("com.example.two", "", BridgeProtocol.PROFILE_PORTRAIT, 0, 0, 0, 0);
+        WindowSession s1Before = engine.getWindowSnapshot(w1);
+        WindowSession s2Before = engine.getWindowSnapshot(w2);
+        assertTrue("Second opened window must start above first", s2Before.zOrder > s1Before.zOrder);
+
+        // Moving or resizing the already-top focused window keeps its zOrder unchanged
+        assertTrue(engine.updateWindowFrame(w2, 100, 200, 1000, 1400, BridgeProtocol.PRES_FLOATING));
+        WindowSession s2AfterMove = engine.getWindowSnapshot(w2);
+        assertEquals("Top window zOrder must not churn on drag/resize release", s2Before.zOrder, s2AfterMove.zOrder);
+        assertTrue(s2AfterMove.focused);
+
+        // Moving or focusing the lower window promotes it strictly above w2
+        assertTrue(engine.updateWindowFrame(w1, 120, 240, 1020, 1440, BridgeProtocol.PRES_FLOATING));
+        WindowSession s1AfterFocus = engine.getWindowSnapshot(w1);
+        assertTrue("Lower window must rise strictly above previous top window", s1AfterFocus.zOrder > s2AfterMove.zOrder);
+        assertTrue(s1AfterFocus.focused);
+        assertFalse(engine.getWindowSnapshot(w2).focused);
+    }
 }
