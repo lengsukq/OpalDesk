@@ -1,3 +1,5 @@
+**简体中文** | [English](./README.en.md)
+
 # <img src="site/assets/icon.svg" alt="OpalDesk Icon" width="44" height="44" align="top" /> OpalDesk
 
 > **在线体验**：[3D 交互舞台](https://lengsukq.github.io/OpalDesk/) ｜ [2D 实拍与多窗模拟器](https://lengsukq.github.io/OpalDesk/overview.html) ｜ [**Web 被投屏端 & 局域网激活**](https://lengsukq.github.io/OpalDesk/cast/) ｜ [使用指南](docs/USER_GUIDE.md) ｜ [架构设计](docs/ANDROID_WINDOW_ENGINE_DESIGN.md) ｜ [下载最新 Release](https://github.com/lengsukq/OpalDesk/releases/latest)
@@ -126,6 +128,7 @@ flowchart LR
 - **零安装 Web 被投屏端 & 局域网免线激活**：直接访问 **[OpalDesk Web 投屏端（GitHub Pages）](https://lengsukq.github.io/OpalDesk/cast/)**，守护进程 `:19878` 同端口首字节嗅探无缝兼容原生 TLS 与 `wss://`（以及 USB `adb forward` 本地免证书 `ws://127.0.0.1:19878/ws`）；浏览器通过 **WebCodecs (`VideoDecoder` / `AudioDecoder` + `AudioWorklet`)** 硬件直解 H.264/HEVC 与 48kHz AAC 音频，支持键鼠、10 指触控、中文 IME 桥、文本/图片粘贴、拖拽传文件与独立应用小窗；未激活时还可一键开启手机 `:19879` 临时前台激活服务，扫码免数据线在电脑浏览器完成远程激活并自动切入投屏。
 - **精密触控板、物理熄屏与全局物理鼠标路由**：投屏期间本机秒变 120Hz 液态毛玻璃触控板（50/50 按键条 + 拖拽锁定 / 显示桌面 / 一键物理息屏并支持双击亮屏）；蓝牙/USB 鼠标可自由切换归属本机或投屏端，遇 ROM 封锁自动回退 Linux `/dev/uhid` 内核虚拟外设。
 - **95%+ 免 Root 运行 & 内置 GitHub 安全更新**：五通道激活（内置 `libadb.so` 无线调试免电脑激活 / **Web 局域网扫码免线激活** / Shizuku / 电脑 ADB / 可选 Root 降权），内置应用更新直连 GitHub Releases 并执行 **SHA-256 摘要 + APK 包名双重校验**。
+- **全端中英双语国际化（i18n）**：覆盖 **Android 主机端、Android 通用被投屏端 `OpalCast`、macOS、Windows 与 Web 被投屏端**全客户端；默认跟随系统/浏览器语言（`zh*` 自动匹配简体中文，其余区域默认 English），并支持在各端设置中随时手动切换（详见 [docs/I18N_SPEC.md](docs/I18N_SPEC.md)）。
 
 ---
 
