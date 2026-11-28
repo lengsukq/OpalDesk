@@ -233,15 +233,7 @@ private fun HubOverviewPage(
     val dateText = remember(nowMs / 60_000L, isZh) {
         SimpleDateFormat(if (isZh) "M月d日 · EEEE" else "EEE, MMM d", locale).format(Date(nowMs))
     }
-    val pulse by rememberInfiniteTransition(label = "hub_conn_pulse").animateFloat(
-        initialValue = 0.38f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "hub_conn_alpha",
-    )
+    val pulse = if (status.isConnected) 0.96f else 0.68f
     val connAccent = if (status.isConnected) colors.accentEmerald else colors.accentAmber
     val connLabel = status.connectionLabel.ifBlank {
         if (status.isConnected) {

@@ -176,6 +176,7 @@ internal fun DirectExtendedImeAndFocusEffects(
     imeController: NativeImeHostController,
 ) {
     val inputBindings by BridgeClient.inputBindingsFlow.collectAsState()
+    val directImePendingShow by imeController.pendingShowFlow.collectAsState()
     val focusedLiveDisplayId = scene.focusedWindow
         ?.takeIf { !it.isMinimized && it.isLive }
         ?.displayId ?: -1
@@ -187,8 +188,9 @@ internal fun DirectExtendedImeAndFocusEffects(
                 imeState.effectiveWindowImePolicy == BridgeProtocol.DisplayImePolicy.LOCAL,
             localOverlayNeedsFocus = directLocalOverlayNeedsFocus,
             localTextFieldFocused = localTextFieldFocused,
-            hostSoftImeVisible = directImeVisible,
+            hostSoftImeVisible = directImeVisible || directImePendingShow,
             hasEnabledKeyBindings = io.github.lengsukq.opaldesk.input.hasEnabledKeyBinding(inputBindings),
+            isForegroundActivityWindow = true,
         )
     LaunchedEffect(directNotFocusable) {
         setDirectWindowNotFocusable(activity.window, directNotFocusable)

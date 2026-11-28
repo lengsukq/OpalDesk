@@ -21,6 +21,18 @@ class WindowTrafficLightPolicyTest {
             ),
             WindowTrafficLightPolicy.ORDERED_TYPES,
         )
+        assertEquals(
+            WindowTrafficLightPolicy.ORDERED_TYPES,
+            WindowTrafficLightPolicy.orderedTypes(rightAligned = false),
+        )
+        assertEquals(
+            listOf(
+                TrafficLightType.MINIMIZE,
+                TrafficLightType.FULLSCREEN,
+                TrafficLightType.CLOSE,
+            ),
+            WindowTrafficLightPolicy.orderedTypes(rightAligned = true),
+        )
     }
 
     @Test

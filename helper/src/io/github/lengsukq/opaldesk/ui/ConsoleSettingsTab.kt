@@ -61,6 +61,7 @@ fun ConsoleEngineSettingsTab(
     val autoEnterDex by AppPrefs.autoEnterDexFlow.collectAsState()
     val sortByUsage by AppPrefs.sortAppsByUsageFlow.collectAsState()
     val showDesktopGuideIcon by AppPrefs.showDesktopGuideIconFlow.collectAsState()
+    val swapWindowHeaderButtons by AppPrefs.swapWindowHeaderButtonsFlow.collectAsState()
     val autoCheckUpdate by AppPrefs.autoCheckUpdateFlow.collectAsState()
     val updateState by AppUpdateManager.stateFlow.collectAsState()
     val remoteMicEnabled by AppPrefs.remoteMicEnabledFlow.collectAsState()
@@ -259,6 +260,12 @@ fun ConsoleEngineSettingsTab(
                 subtitle = stringResource(R.string.settings_guide_icon_sub),
                 checked = showDesktopGuideIcon,
                 onCheckedChange = { enabled -> AppPrefs.setDesktopGuideIconVisible(ctx, enabled) },
+            )
+            OpalSwitchRow(
+                title = stringResource(R.string.settings_swap_win_btns_title),
+                subtitle = stringResource(R.string.settings_swap_win_btns_sub),
+                checked = swapWindowHeaderButtons,
+                onCheckedChange = { enabled -> AppPrefs.setSwapWindowHeaderButtons(ctx, enabled) },
             )
         }
 

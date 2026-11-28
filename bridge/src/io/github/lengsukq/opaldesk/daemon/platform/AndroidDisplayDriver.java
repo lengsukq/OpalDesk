@@ -304,10 +304,9 @@ public final class AndroidDisplayDriver
         Surface surf = (Surface) surfaceObj;
         if (!surf.isValid()) return;
         try {
-            int compat = (Build.VERSION.SDK_INT >= 31 && fps > 60.5f)
-                    ? Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
-                    : Surface.FRAME_RATE_COMPATIBILITY_DEFAULT;
-            surf.setFrameRate(fps, compat);
+            // Always use FRAME_RATE_COMPATIBILITY_DEFAULT so Android 12–17 LTPO / VRR displays can
+            // scale down to 30–60Hz on static reading/note pages instead of pinning 120Hz hardware lock.
+            surf.setFrameRate(fps, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
         } catch (RuntimeException ignored) {
         }
     }

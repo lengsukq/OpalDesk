@@ -182,6 +182,7 @@ class ExternalMonitorPresentation(
                     val inputBindings by BridgeClient.inputBindingsFlow.collectAsState()
                     val controller = rememberNativeImeHostController()
                     imeController = controller
+                    val imePendingShow by controller.pendingShowFlow.collectAsState()
                     val focusedLiveDisplayId = scene.focusedWindow
                         ?.takeIf { !it.isMinimized && it.isLive }
                         ?.displayId ?: -1
@@ -192,8 +193,9 @@ class ExternalMonitorPresentation(
                             imeState.effectiveWindowImePolicy == io.github.lengsukq.opaldesk.protocol.BridgeProtocol.DisplayImePolicy.LOCAL,
                         localOverlayNeedsFocus = localOverlayNeedsFocus,
                         localTextFieldFocused = localTextFieldFocused,
-                        hostSoftImeVisible = imeVisible,
+                        hostSoftImeVisible = imeVisible || imePendingShow,
                         hasEnabledKeyBindings = io.github.lengsukq.opaldesk.input.hasEnabledKeyBinding(inputBindings),
+                        isForegroundActivityWindow = false,
                     )
                     val showVirtualCursor = pointerDispatcher.showVirtualCursorState.value
                     LaunchedEffect(showVirtualCursor) {

@@ -50,6 +50,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class OpalDeskDaemon implements Runnable {
     private static final long RECONCILE_TICK_MS = 2000L;
+    private static final int TASK_RECONCILE_EVERY_N_TICKS = 5;
     private static final long NEED_BINDER_DEBOUNCE_MS = 500L;
 
     private final AndroidServices services;
@@ -384,6 +385,8 @@ public final class OpalDeskDaemon implements Runnable {
         mainHandler.postDelayed(this, RECONCILE_TICK_MS);
     }
 
+    private int reconcileTickCounter = 0;
+
     @Override
     public void run() {
         if (config.shuttingDown) return;
@@ -391,7 +394,8 @@ public final class OpalDeskDaemon implements Runnable {
             long now = SystemClock.uptimeMillis();
             helperBridge.maybePushBinderOnTick(now);
             vdPool.setConfiguredMaxDisplays(config.getMaxActiveDisplays());
-            if (compositor.getWindowCount() > 0) {
+            int tick = ++reconcileTickCounter;
+            if (compositor.getWindowCount() > 0 && (tick % TASK_RECONCILE_EVERY_N_TICKS == 0)) {
                 bgExec.execute(compositor::reconcileWithSystemTasks);
             }
             if (remoteBridge.hasDesktopOrCompanionSession()) {
@@ -474,7 +478,7 @@ public final class OpalDeskDaemon implements Runnable {
         }
     }
 
-    private void scheduleImeFallbackProbe(int windowId, int displayId, long tapDownUptimeMs) {
+    private void scheduleImeFallbackProbe(int windowId, int displayId, long tapDownUptimeMs, boolean isTouch) {
         boolean hasPhysKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
         boolean hasPhysicalExt = mouseRouter != null && mouseRouter.hasPhysicalExternalDisplay();
         boolean remoteDesktop = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
@@ -486,28 +490,34 @@ public final class OpalDeskDaemon implements Runnable {
                         remoteDesktop,
                         config.getDexImeDisplayMode(),
                         hasPhysicalExt,
-                        bridgeImeActive)) {
+                        bridgeImeActive,
+                        isTouch,
+                        config.getShowImeWithHardKeyboard())) {
             return;
         }
         final long gen = imeProbeGen.incrementAndGet();
         mainHandler.postDelayed(
-                () -> bgExec.execute(() -> runImeFallbackProbe(gen, windowId, displayId, tapDownUptimeMs)),
+                () -> bgExec.execute(() -> runImeFallbackProbe(gen, windowId, displayId, tapDownUptimeMs, isTouch)),
                 110L);
         mainHandler.postDelayed(
-                () -> bgExec.execute(() -> runImeFallbackProbe(gen, windowId, displayId, tapDownUptimeMs)),
+                () -> bgExec.execute(() -> runImeFallbackProbe(gen, windowId, displayId, tapDownUptimeMs, isTouch)),
                 260L);
         mainHandler.postDelayed(
-                () -> bgExec.execute(() -> runImeFallbackProbe(gen, windowId, displayId, tapDownUptimeMs)),
-                460L);
+                () -> bgExec.execute(() -> runImeFallbackProbe(gen, windowId, displayId, tapDownUptimeMs, isTouch)),
+                480L);
+        mainHandler.postDelayed(
+                () -> bgExec.execute(() -> runImeFallbackProbe(gen, windowId, displayId, tapDownUptimeMs, isTouch)),
+                800L);
     }
 
-    private void runImeFallbackProbe(long gen, int windowId, int displayId, long tapDownUptimeMs) {
+    private void runImeFallbackProbe(long gen, int windowId, int displayId, long tapDownUptimeMs, boolean isTouch) {
         boolean hasPhysKbd = mouseRouter != null && mouseRouter.hasPhysicalKeyboard();
         boolean hasExtTouch = mouseRouter != null && mouseRouter.hasExternalTouchscreen();
         boolean hasPhysicalExt = mouseRouter != null && mouseRouter.hasPhysicalExternalDisplay();
         boolean remoteDesktopActive = remoteBridge != null && remoteBridge.hasActiveDesktopSession();
         boolean bridgeImeActive = imeManager != null && imeManager.isBridgeImeConfiguredOrActive();
         int dexMode = config.getDexImeDisplayMode();
+        int hardKbdSoftMode = config.getShowImeWithHardKeyboard();
         if (config.shuttingDown || imeProbeGen.get() != gen
                 || !MouseRoutingPolicy.shouldRunFallbackImeProbe(
                         inputRouter.isLocalImeActive(),
@@ -515,7 +525,9 @@ public final class OpalDeskDaemon implements Runnable {
                         remoteDesktopActive,
                         dexMode,
                         hasPhysicalExt,
-                        bridgeImeActive)) {
+                        bridgeImeActive,
+                        isTouch,
+                        hardKbdSoftMode)) {
             return;
         }
         WindowSession ws = compositor.getWindowSnapshot(windowId);
@@ -545,7 +557,7 @@ public final class OpalDeskDaemon implements Runnable {
         }
 
         boolean bridgeOverShown = MouseRoutingPolicy.shouldBridgeHostImeWhenSystemInputShown(
-                false, hasPhysicalExt, hasPhysKbd, hasExtTouch, dexMode);
+                false, hasPhysicalExt, hasPhysKbd, hasExtTouch, dexMode, isTouch, hardKbdSoftMode);
         if (snap.inputShown && !bridgeOverShown) {
             // Native cross-display fallback IME opened cleanly on Display 0 (e.g. local DeX or
             // non-touch external monitor in AUTO/FALLBACK_HOST mode) — do not interfere.
@@ -572,6 +584,7 @@ public final class OpalDeskDaemon implements Runnable {
                     + " reason=" + snap.latestShowReason
                     + " inputShown=" + snap.inputShown
                     + " extBridge=" + bridgeOverShown
+                    + " isTouch=" + isTouch
                     + " rawType=0x" + Integer.toHexString(rawType)
                     + " hostType=0x" + Integer.toHexString(hostType));
             helperBridge.pushImeRequest(windowId, true, hostType);

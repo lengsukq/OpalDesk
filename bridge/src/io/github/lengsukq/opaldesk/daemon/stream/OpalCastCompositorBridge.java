@@ -490,12 +490,12 @@ public final class OpalCastCompositorBridge implements RemoteStreamServer.Sessio
         if (s != null && !s.closed) server.sendImeRequest(sid, show, inputType);
     }
 
-    public void onBridgeImeShowRequested(int imeDisplayId, String pkg, int rawInputType) {
-        inputAdapter.onBridgeImeShowRequested(imeDisplayId, rawInputType);
+    public boolean onBridgeImeShowRequested(int imeDisplayId, String pkg, int rawInputType) {
+        return inputAdapter.onBridgeImeShowRequested(imeDisplayId, pkg, rawInputType);
     }
 
-    public void onBridgeImeHideRequested(int imeDisplayId) {
-        inputAdapter.onBridgeImeHideRequested(imeDisplayId);
+    public boolean onBridgeImeHideRequested(int imeDisplayId, String pkg) {
+        return inputAdapter.onBridgeImeHideRequested(imeDisplayId, pkg);
     }
 
     public float getActiveNativeFps() {

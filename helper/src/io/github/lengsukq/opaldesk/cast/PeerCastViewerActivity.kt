@@ -83,6 +83,10 @@ class PeerCastViewerActivity : ComponentActivity() {
     private var remoteImeReqSeq by mutableLongStateOf(0L)
     private var remoteImeShow by mutableStateOf(false)
     private var remoteImeInputType by mutableIntStateOf(0)
+    private var activeImeController: io.github.lengsukq.opaldesk.ui.NativeImeHostController? = null
+    private var lastInputModality: io.github.lengsukq.opaldesk.ime.InputModality =
+        io.github.lengsukq.opaldesk.ime.InputModality.UNKNOWN
+    private var lastTouchDownUptimeMs: Long = 0L
     private var errorText by mutableStateOf("")
     private var showAppPicker by mutableStateOf(false)
     private var remoteApps by mutableStateOf<List<OpalCastPeerClient.RemoteAppEntry>>(emptyList())
@@ -190,6 +194,7 @@ class PeerCastViewerActivity : ComponentActivity() {
         setContent {
             OpalTheme {
                 val imeController = rememberNativeImeHostController()
+                activeImeController = imeController
                 LaunchedEffect(connected, toolbarExpanded, toolbarInteractTick, showAppPicker) {
                     if (connected && toolbarExpanded && !showAppPicker) {
                         kotlinx.coroutines.delay(if (toolbarInteractTick == 0) 2_200L else 5_000L)
@@ -199,16 +204,25 @@ class PeerCastViewerActivity : ComponentActivity() {
                 LaunchedEffect(remoteImeReqSeq) {
                     if (remoteImeReqSeq <= 0L || showAppPicker) return@LaunchedEffect
                     if (remoteImeShow) {
-                        // When a Bluetooth / USB physical keyboard is attached to the receiver tablet,
-                        // do NOT summon the tablet's local IME (NativeImeBridgeHost): forward all
-                        // hardware keys directly to the casting phone so the phone's Yuyan IME
-                        // handles input and renders its cursor-following candidate bar cleanly.
-                        if (!hasConnectedPhysicalKeyboard(this@PeerCastViewerActivity)) {
-                            imeController.showKeyboard(remoteImeInputType)
-                        } else if (imeVisible) {
-                            imeController.hideKeyboard()
+                        val physKbd = hasConnectedPhysicalKeyboard(this@PeerCastViewerActivity)
+                        val elapsedTouch = if (lastTouchDownUptimeMs > 0L) {
+                            (android.os.SystemClock.uptimeMillis() - lastTouchDownUptimeMs).coerceAtLeast(0L)
+                        } else {
+                            Long.MAX_VALUE
                         }
-                    } else if (imeVisible) {
+                        val shouldShow = io.github.lengsukq.opaldesk.ime.OpalDeskImeChannelCore
+                            .shouldAutoShowSoftKeyboardForModality(
+                                physicalKeyboardDetected = physKbd,
+                                showImeWithHardKeyboardMode = AppPrefs.hardKbdSoftImeModeFlow.value,
+                                lastModality = lastInputModality,
+                                msSinceLastPointerDown = elapsedTouch,
+                            )
+                        if (shouldShow) {
+                            imeController.showKeyboard(remoteImeInputType)
+                        } else {
+                            imeController.focusForHardwareIme(remoteImeInputType)
+                        }
+                    } else if (imeVisible || imeController.isHardwareImeFocused) {
                         imeController.hideKeyboard()
                     }
                 }
@@ -272,7 +286,16 @@ class PeerCastViewerActivity : ComponentActivity() {
                         },
                         onDispatchTouch = { ev, w, h ->
                             val c = client ?: return@PeerCastViewerContent
-                            if (c.isMouseMotion(ev)) c.sendMouseEvent(ev, w, h) else c.sendTouchEvent(ev, w, h)
+                            val isMouse = c.isMouseMotion(ev)
+                            if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                                if (isMouse) {
+                                    lastInputModality = io.github.lengsukq.opaldesk.ime.InputModality.MOUSE
+                                } else {
+                                    lastInputModality = io.github.lengsukq.opaldesk.ime.InputModality.TOUCH
+                                    lastTouchDownUptimeMs = android.os.SystemClock.uptimeMillis()
+                                }
+                            }
+                            if (isMouse) c.sendMouseEvent(ev, w, h) else c.sendTouchEvent(ev, w, h)
                         },
                         onDispatchGenericMotion = { ev, w, h ->
                             val c = client ?: return@PeerCastViewerContent false
@@ -707,10 +730,21 @@ class PeerCastViewerActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN &&
+            io.github.lengsukq.opaldesk.ui.WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)
+        ) {
+            lastInputModality = io.github.lengsukq.opaldesk.ime.InputModality.KEYBOARD
+            if (imeVisible &&
+                AppPrefs.hardKbdSoftImeModeFlow.value != io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SHOW
+            ) {
+                activeImeController?.hideSoftKeyboardOnly()
+            }
+        }
         return dispatchPeerCastKeyEvent(
             event = event,
             connected = connected,
             imeVisible = imeVisible,
+            hardwareImeFocused = activeImeController?.isHardwareImeFocused == true,
             client = client,
             superDispatch = { super.dispatchKeyEvent(it) },
         )

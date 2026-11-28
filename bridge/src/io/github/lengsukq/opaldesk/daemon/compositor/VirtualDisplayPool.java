@@ -226,6 +226,15 @@ public final class VirtualDisplayPool {
         }
     }
 
+    public synchronized byte[] captureSnapshotIfPossible(int taskId) {
+        if (taskId <= 0 || driver == null) return null;
+        try {
+            return driver.captureTaskSnapshotBytes(taskId);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
     public synchronized void releaseLease(int windowId) {
         Lease removed = activeLeases.remove(windowId);
         if (removed != null) {

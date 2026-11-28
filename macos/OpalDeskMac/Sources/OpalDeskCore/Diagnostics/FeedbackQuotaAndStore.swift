@@ -174,7 +174,7 @@ public struct FeedbackBuildConfig: Sendable, Equatable {
         self.sentryTunnelUrl = sentryTunnelUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         self.feedbackStatusUrl = feedbackStatusUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanVer = appVersion.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.appVersion = cleanVer.isEmpty ? "1.0.23" : cleanVer
+        self.appVersion = cleanVer.isEmpty ? "1.0.24" : cleanVer
     }
 
     public var isSentryConfigured: Bool { !sentryDsn.isEmpty }
@@ -209,12 +209,12 @@ public struct FeedbackBuildConfig: Sendable, Equatable {
         let tunnel = resolve(plistKey: "OpalDeskSentryTunnelURL", envKeys: ["OPALDESK_SENTRY_TUNNEL_URL", "SENTRY_TUNNEL_URL"])
         let status = resolve(plistKey: "OpalDeskFeedbackStatusURL", envKeys: ["OPALDESK_FEEDBACK_STATUS_URL", "FEEDBACK_STATUS_URL"])
         let version = (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "1.0.23"
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "1.0.24"
         return FeedbackBuildConfig(
             sentryDsn: dsn,
             sentryTunnelUrl: tunnel,
             feedbackStatusUrl: status,
-            appVersion: version.isEmpty ? "1.0.23" : version
+            appVersion: version.isEmpty ? "1.0.24" : version
         )
     }
 }

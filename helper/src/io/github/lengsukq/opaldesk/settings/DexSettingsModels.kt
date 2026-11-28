@@ -122,8 +122,8 @@ object DexSettingsCatalog {
             subtitleZh = "布局记忆、虚拟屏配额、输入后端与分屏辅助",
             subtitleEn = "Layout restore, VD quota, input backend & multitasking",
             keywords = listOf(
-                "窗口", "多任务", "分屏", "缩放", "布局", "恢复", "虚拟屏", "配额", "uhid", "应用列表",
-                "window", "multitask", "snap", "layout", "restore", "quota", "vd", "backend", "drawer",
+                "窗口", "多任务", "分屏", "缩放", "布局", "恢复", "虚拟屏", "配额", "uhid", "应用列表", "按钮", "互换", "红绿灯", "标题栏",
+                "window", "multitask", "snap", "layout", "restore", "quota", "vd", "backend", "drawer", "swap", "header", "traffic",
             ),
             badgeColor = Color(0xFF30D158),
             glyph = ChromeGlyph.EXPOSE,

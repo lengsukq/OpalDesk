@@ -116,8 +116,8 @@ android {
         // 100% universal single APK across armeabi-v7a, arm64-v8a, x86, and x86_64.
         minSdk = 21
         targetSdk = 37
-        versionCode = 10023
-        versionName = "1.0.23"
+        versionCode = 10024
+        versionName = "1.0.24"
         buildConfigField("String", "RECEIVER_CERT_SHA256", "\"$receiverCertSha256\"")
     }
 

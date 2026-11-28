@@ -210,6 +210,7 @@ public final class CompositorEngine {
                 }
                 if (wasHidden) {
                     existing.state = BridgeProtocol.STATE_LIVE;
+                    existing.minimizedAtMs = 0L;
                 } else if (clsChanged && existing.isLive() && existing.displayId > 0) {
                     liveSwitchDisplayId = existing.displayId;
                     existing.pendingActivitySwitch = false;
@@ -336,6 +337,7 @@ public final class CompositorEngine {
             long nowMs = System.currentTimeMillis();
             ws.lastActiveAtMs = nowMs;
             ws.lastLaunchAtMs = nowMs;
+            ws.minimizedAtMs = 0L;
             ws.emptyDisplayTicks = 0;
             ws.emptySinceMs = 0L;
 
@@ -463,7 +465,10 @@ public final class CompositorEngine {
             switch (action) {
                 case BridgeProtocol.WIN_ACTION_FOCUS:
                 case BridgeProtocol.WIN_ACTION_WAKE:
-                    if (ws.isMinimized() || ws.isHibernated()) ws.state = BridgeProtocol.STATE_LIVE;
+                    if (ws.isMinimized() || ws.isHibernated()) {
+                        ws.state = BridgeProtocol.STATE_LIVE;
+                        ws.minimizedAtMs = 0L;
+                    }
                     layoutManager.focusWindowLocked(sessionsById.values(), ws, now);
                     markDirtyAndNotifyLocked();
                     return true;
@@ -477,6 +482,7 @@ public final class CompositorEngine {
                     if (minSurf != null) runtimeBridge.releaseSurfaceHandle(minSurf);
                     layoutManager.restoreFullscreenBeforeMinimizeLocked(ws);
                     ws.state = BridgeProtocol.STATE_MINIMIZED;
+                    ws.minimizedAtMs = now;
                     ws.focused = false;
                     layoutManager.promoteTopVisibleFocusLocked(sessionsById.values(), now);
                     allSurfacesNowDetached = attachedSurfaces.isEmpty();
@@ -647,6 +653,7 @@ public final class CompositorEngine {
 
     public void minimizeAllWindows() {
         List<Object> surfacesToRelease = new ArrayList<>();
+        long now = System.currentTimeMillis();
         synchronized (lock) {
             boolean changed = false;
             for (WindowSession ws : sessionsById.values()) {
@@ -656,6 +663,7 @@ public final class CompositorEngine {
                 if (surf != null) surfacesToRelease.add(surf);
                 layoutManager.restoreFullscreenBeforeMinimizeLocked(ws);
                 ws.state = BridgeProtocol.STATE_MINIMIZED;
+                ws.minimizedAtMs = now;
                 ws.focused = false;
                 changed = true;
             }

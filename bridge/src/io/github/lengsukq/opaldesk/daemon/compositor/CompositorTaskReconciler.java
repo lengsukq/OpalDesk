@@ -14,6 +14,8 @@ import java.util.Set;
  * Pure JVM task reconciliation and VirtualDisplay live-migration coordinator for {@link CompositorEngine}.
  */
 final class CompositorTaskReconciler {
+    static final long MINIMIZED_VD_IDLE_RELEASE_MS = 45_000L;
+
     interface ActionDispatcher {
         void markDirtyAndNotifyLocked();
         void performAction(int windowId, int action, boolean forceStopOnClose);
@@ -204,6 +206,39 @@ final class CompositorTaskReconciler {
                             if (runningBg) toMinimize.add(ws.windowId);
                             else toClose.add(ws.windowId);
                         }
+                    }
+                }
+            }
+            List<WindowSession> idleMinimizedToRelease = new ArrayList<>();
+            for (WindowSession ws : sessionsById.values()) {
+                if (ws.isMinimized()
+                        && ws.displayId > 0
+                        && ws.minimizedAtMs > 0L
+                        && (now - ws.minimizedAtMs) >= MINIMIZED_VD_IDLE_RELEASE_MS) {
+                    idleMinimizedToRelease.add(ws);
+                }
+            }
+            if (!idleMinimizedToRelease.isEmpty()) {
+                for (WindowSession ws : idleMinimizedToRelease) {
+                    int oldDisplayId = ws.displayId;
+                    if ((ws.hibernatedSnapshotBytes == null || ws.hibernatedSnapshotBytes.length == 0)
+                            && ws.taskId > 0) {
+                        byte[] snap = vdPool.captureSnapshotIfPossible(ws.taskId);
+                        if (snap != null && snap.length > 0) {
+                            ws.hibernatedSnapshotBytes = snap;
+                            ws.snapshotVersion++;
+                        }
+                    }
+                    vdPool.releaseLease(ws.windowId);
+                    ws.displayId = -1;
+                    ws.vdUniqueId = "";
+                    dirty = true;
+                    System.out.println("OPALDESK_VD_MINIMIZED_IDLE_RELEASE wid=" + ws.windowId
+                            + " pkg=" + ws.pkg
+                            + " displayId=" + oldDisplayId
+                            + " idleMs=" + (now - ws.minimizedAtMs));
+                    if (oldDisplayId > 0) {
+                        runtimeBridge.onDisplayReleased(oldDisplayId);
                     }
                 }
             }

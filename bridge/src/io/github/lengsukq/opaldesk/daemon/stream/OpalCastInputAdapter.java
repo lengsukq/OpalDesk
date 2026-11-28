@@ -80,41 +80,75 @@ final class OpalCastInputAdapter {
         this.helperInputActionDispatcher = helperInputActionDispatcher != null ? helperInputActionDispatcher : action -> false;
     }
 
-    void onBridgeImeShowRequested(int imeDisplayId, int rawInputType) {
-        if (imeDisplayId <= 0) return;
+    boolean onBridgeImeShowRequested(int imeDisplayId, String pkg, int rawInputType) {
         int hostType = ImmsDumpInspector.sanitizeHostInputType(rawInputType);
-        for (OpalCastCompositorBridge.ActiveRemoteSession s : sessions.values()) {
-            if (s != null && !s.closed && s.standalone && s.displayId == imeDisplayId) {
-                server.sendImeRequest(s.sessionId, true, hostType);
-                return;
+        String cleanPkg = (pkg != null) ? pkg.trim() : "";
+        if (imeDisplayId > 0) {
+            for (OpalCastCompositorBridge.ActiveRemoteSession s : sessions.values()) {
+                if (s != null && !s.closed && s.standalone && s.displayId == imeDisplayId) {
+                    server.sendImeRequest(s.sessionId, true, hostType);
+                    return true;
+                }
+            }
+        } else if (!cleanPkg.isEmpty()) {
+            // Android IMMS can transiently report imeDisplayId=0 during onShowInputRequested;
+            // fall back to matching active standalone or focused desktop window package.
+            for (OpalCastCompositorBridge.ActiveRemoteSession s : sessions.values()) {
+                if (s != null && !s.closed && s.standalone && cleanPkg.equals(s.appPackage)) {
+                    server.sendImeRequest(s.sessionId, true, hostType);
+                    return true;
+                }
             }
         }
         int deskSid = desktopSessionIdSupplier.getAsInt();
         OpalCastCompositorBridge.ActiveRemoteSession desk = (deskSid > 0) ? sessions.get(deskSid) : null;
         if (desk != null && !desk.closed && !desk.isMirror()) {
             WindowSession focused = compositor.getFocusedLiveWindow();
-            if ((focused != null && focused.displayId == imeDisplayId) || desk.displayId == imeDisplayId) {
+            boolean matchDisplay = imeDisplayId > 0
+                    && ((focused != null && focused.displayId == imeDisplayId) || desk.displayId == imeDisplayId);
+            boolean matchPkg = imeDisplayId <= 0 && !cleanPkg.isEmpty()
+                    && ((focused != null && cleanPkg.equals(focused.pkg))
+                            || "io.github.lengsukq.opaldesk".equals(cleanPkg));
+            if (matchDisplay || matchPkg) {
                 server.sendImeRequest(deskSid, true, hostType);
+                return true;
             }
         }
+        return false;
     }
 
-    void onBridgeImeHideRequested(int imeDisplayId) {
-        if (imeDisplayId <= 0) return;
-        for (OpalCastCompositorBridge.ActiveRemoteSession s : sessions.values()) {
-            if (s != null && !s.closed && s.standalone && s.displayId == imeDisplayId) {
-                server.sendImeRequest(s.sessionId, false, 0);
-                return;
+    boolean onBridgeImeHideRequested(int imeDisplayId, String pkg) {
+        String cleanPkg = (pkg != null) ? pkg.trim() : "";
+        if (imeDisplayId > 0) {
+            for (OpalCastCompositorBridge.ActiveRemoteSession s : sessions.values()) {
+                if (s != null && !s.closed && s.standalone && s.displayId == imeDisplayId) {
+                    server.sendImeRequest(s.sessionId, false, 0);
+                    return true;
+                }
+            }
+        } else if (!cleanPkg.isEmpty()) {
+            for (OpalCastCompositorBridge.ActiveRemoteSession s : sessions.values()) {
+                if (s != null && !s.closed && s.standalone && cleanPkg.equals(s.appPackage)) {
+                    server.sendImeRequest(s.sessionId, false, 0);
+                    return true;
+                }
             }
         }
         int deskSid = desktopSessionIdSupplier.getAsInt();
         OpalCastCompositorBridge.ActiveRemoteSession desk = (deskSid > 0) ? sessions.get(deskSid) : null;
         if (desk != null && !desk.closed && !desk.isMirror()) {
             WindowSession focused = compositor.getFocusedLiveWindow();
-            if ((focused != null && focused.displayId == imeDisplayId) || desk.displayId == imeDisplayId) {
+            boolean matchDisplay = imeDisplayId > 0
+                    && ((focused != null && focused.displayId == imeDisplayId) || desk.displayId == imeDisplayId);
+            boolean matchPkg = imeDisplayId <= 0 && !cleanPkg.isEmpty()
+                    && ((focused != null && cleanPkg.equals(focused.pkg))
+                            || "io.github.lengsukq.opaldesk".equals(cleanPkg));
+            if (matchDisplay || matchPkg) {
                 server.sendImeRequest(deskSid, false, 0);
+                return true;
             }
         }
+        return false;
     }
 
     private void scheduleStandaloneImeProbe(OpalCastCompositorBridge.ActiveRemoteSession s, long tapDownMs) {

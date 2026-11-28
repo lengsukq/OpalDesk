@@ -69,15 +69,7 @@ internal fun LiquidGradientClockDigits(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalOpalColors.current
-    val pulse by rememberInfiniteTransition(label = "clock_colon_breath").animateFloat(
-        initialValue = 0.28f,
-        targetValue = 0.96f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "clock_colon_alpha",
-    )
+    val pulse = if (((seconds.toIntOrNull() ?: 0) and 1) == 0) 0.92f else 0.56f
     val digitBrush = if (colors.isDark) {
         Brush.verticalGradient(
             listOf(Color(0xFFFFFFFF), Color(0xFFEAF2FF), Color(0xFFB3C6E7)),

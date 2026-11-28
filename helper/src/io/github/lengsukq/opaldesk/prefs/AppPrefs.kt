@@ -71,6 +71,7 @@ object AppPrefs {
     val globalShortcutsEnabledFlow: StateFlow<Boolean> = DisplayAndInputPrefs.globalShortcutsEnabledFlow
     val disabledShortcutIdsFlow: StateFlow<Set<String>> = DisplayAndInputPrefs.disabledShortcutIdsFlow
     val showDesktopGuideIconFlow: StateFlow<Boolean> = DisplayAndInputPrefs.showDesktopGuideIconFlow
+    val swapWindowHeaderButtonsFlow: StateFlow<Boolean> = DisplayAndInputPrefs.swapWindowHeaderButtonsFlow
     val customResolutionPresetsFlow: StateFlow<List<CustomResolutionSpec>> = DisplayAndInputPrefs.customResolutionPresetsFlow
     val autoCustomResolutionEnabledFlow: StateFlow<Boolean> = DisplayAndInputPrefs.autoCustomResolutionEnabledFlow
     val externalNative1To1Flow: StateFlow<Boolean> = DisplayAndInputPrefs.externalNative1To1Flow
@@ -339,6 +340,12 @@ object AppPrefs {
 
     fun setDesktopGuideIconVisible(ctx: Context?, visible: Boolean) =
         DisplayAndInputPrefs.setDesktopGuideIconVisible(ctx, visible)
+
+    fun isSwapWindowHeaderButtonsEnabled(ctx: Context?): Boolean =
+        DisplayAndInputPrefs.isSwapWindowHeaderButtonsEnabled(ctx)
+
+    fun setSwapWindowHeaderButtons(ctx: Context?, enabled: Boolean) =
+        DisplayAndInputPrefs.setSwapWindowHeaderButtons(ctx, enabled)
 
     fun getCustomResolutionPresets(ctx: Context?): List<CustomResolutionSpec> =
         DisplayAndInputPrefs.getCustomResolutionPresets(ctx)

@@ -214,7 +214,7 @@ export class OpalDiagnosticsController {
     if ($('diagDeviceMeta')) {
       if (this.desktop.enabled) {
         $('diagDeviceMeta').textContent = t('diag.clientMetaDesktop', {
-          version: this.feedbackState.appVersion || '1.0.23',
+          version: this.feedbackState.appVersion || '1.0.24',
           summary: this.feedbackState.deviceSummary || 'Desktop',
         });
       } else {

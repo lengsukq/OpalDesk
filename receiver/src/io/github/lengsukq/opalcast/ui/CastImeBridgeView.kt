@@ -37,6 +37,7 @@ internal class CastImeBridgeView(
     }
     private var activeInputType = DEFAULT_INPUT_TYPE
     private var imeShown = false
+    private var keepHardwareImeFocus = false
 
     init {
         isFocusable = true
@@ -53,11 +54,14 @@ internal class CastImeBridgeView(
     val isImeVisible: Boolean
         get() = imeShown
 
+    val isHardwareImeFocused: Boolean
+        get() = keepHardwareImeFocus && hasFocus()
+
     private fun updateImeVisible(visible: Boolean) {
         if (imeShown != visible) {
             imeShown = visible
             onImeVisibilityChanged(visible)
-            if (!visible) {
+            if (!visible && !keepHardwareImeFocus) {
                 onComposingChanged("")
                 clearFocus()
             }
@@ -129,7 +133,33 @@ internal class CastImeBridgeView(
         }
     }
 
+    /**
+     * Binds local Android InputConnection focus for physical/Bluetooth keyboard CJK composition
+     * WITHOUT popping up the soft on-screen keyboard.
+     */
+    fun focusForHardwareIme(inputType: Int = 0) {
+        activeInputType = if (inputType != 0) inputType else DEFAULT_INPUT_TYPE
+        keepHardwareImeFocus = true
+        requestFocus()
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.restartInput(this)
+        if (imeShown) {
+            hideSoftKeyboardOnly()
+        }
+    }
+
+    fun hideSoftKeyboardOnly() {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(windowToken, 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching { windowInsetsController?.hide(WindowInsets.Type.ime()) }
+        } else {
+            updateImeVisible(false)
+        }
+    }
+
     fun hideIme() {
+        keepHardwareImeFocus = false
         onComposingChanged("")
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.hideSoftInputFromWindow(windowToken, 0)

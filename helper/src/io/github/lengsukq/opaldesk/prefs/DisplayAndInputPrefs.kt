@@ -37,6 +37,7 @@ internal object DisplayAndInputPrefs {
     private const val KEY_GLOBAL_SHORTCUTS_ENABLED = "global_shortcuts_enabled_v1"
     private const val KEY_DISABLED_SHORTCUT_IDS = "disabled_shortcut_ids_v1"
     private const val KEY_SHOW_DESKTOP_GUIDE_ICON = "show_desktop_guide_icon_v1"
+    private const val KEY_SWAP_WINDOW_HEADER_BUTTONS = "swap_window_header_buttons_v1"
     private const val KEY_CUSTOM_RES_PRESETS = "custom_resolution_presets_v1"
     private const val KEY_AUTO_CUSTOM_RES_ENABLED = "auto_custom_resolution_enabled_v1"
     private const val KEY_EXTERNAL_NATIVE_1TO1_NO_SCALING = "external_native_1to1_no_scaling_v1"
@@ -113,6 +114,9 @@ internal object DisplayAndInputPrefs {
     private val _showDesktopGuideIconFlow = MutableStateFlow(true)
     val showDesktopGuideIconFlow: StateFlow<Boolean> = _showDesktopGuideIconFlow.asStateFlow()
 
+    private val _swapWindowHeaderButtonsFlow = MutableStateFlow(false)
+    val swapWindowHeaderButtonsFlow: StateFlow<Boolean> = _swapWindowHeaderButtonsFlow.asStateFlow()
+
     private val _customResolutionPresetsFlow = MutableStateFlow<List<CustomResolutionSpec>>(emptyList())
     val customResolutionPresetsFlow: StateFlow<List<CustomResolutionSpec>> = _customResolutionPresetsFlow.asStateFlow()
 
@@ -174,6 +178,7 @@ internal object DisplayAndInputPrefs {
             p.getString(KEY_DISABLED_SHORTCUT_IDS, null),
         )
         _showDesktopGuideIconFlow.value = p.getBoolean(KEY_SHOW_DESKTOP_GUIDE_ICON, true)
+        _swapWindowHeaderButtonsFlow.value = p.getBoolean(KEY_SWAP_WINDOW_HEADER_BUTTONS, false)
         _customResolutionPresetsFlow.value = CustomResolutionPolicy.parsePresets(
             p.getString(KEY_CUSTOM_RES_PRESETS, null),
         )
@@ -465,6 +470,16 @@ internal object DisplayAndInputPrefs {
     fun setDesktopGuideIconVisible(ctx: Context?, visible: Boolean) {
         AppPrefs.sharedPrefs(ctx)?.edit()?.putBoolean(KEY_SHOW_DESKTOP_GUIDE_ICON, visible)?.apply()
         _showDesktopGuideIconFlow.value = visible
+    }
+
+    fun isSwapWindowHeaderButtonsEnabled(ctx: Context?): Boolean {
+        AppPrefs.hydrateFlows(ctx)
+        return _swapWindowHeaderButtonsFlow.value
+    }
+
+    fun setSwapWindowHeaderButtons(ctx: Context?, enabled: Boolean) {
+        AppPrefs.sharedPrefs(ctx)?.edit()?.putBoolean(KEY_SWAP_WINDOW_HEADER_BUTTONS, enabled)?.apply()
+        _swapWindowHeaderButtonsFlow.value = enabled
     }
 
     fun getCustomResolutionPresets(ctx: Context?): List<CustomResolutionSpec> {

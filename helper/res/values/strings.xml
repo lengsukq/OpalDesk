@@ -427,6 +427,8 @@
     <string name="settings_sort_usage_sub">Applies to DeX App Drawer and Standalone App Picker; alphabetical when off</string>
     <string name="settings_guide_icon_title">Show \"Feature Guide\" Icon on DeX Desktop</string>
     <string name="settings_guide_icon_sub">Still accessible from Control Center or below when hidden</string>
+    <string name="settings_swap_win_btns_title">Swap Window Header Left/Right Buttons</string>
+    <string name="settings_swap_win_btns_sub">Swap left close/minimize/fullscreen (3) with right snap/pin/profile/reload (5) globally across all slots</string>
     <string name="settings_update_guide_title">App Update &amp; Feature Guide</string>
     <string name="settings_current_ver_sub">Current v%1$s · Direct GitHub Releases check</string>
     <string name="settings_badge_new_ver">New %1$s</string>

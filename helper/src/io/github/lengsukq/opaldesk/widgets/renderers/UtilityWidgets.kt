@@ -120,7 +120,7 @@ fun SystemMonitorWidgetContent(
                 collectSystemMetrics(ctx, rxRate, txRate)
             }
             sample = next
-            delay(2_000L)
+            delay(5_000L)
         }
     }
 

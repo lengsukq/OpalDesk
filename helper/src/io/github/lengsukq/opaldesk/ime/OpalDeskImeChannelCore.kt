@@ -109,7 +109,7 @@ class OpalDeskImeChannelCore {
     companion object {
         const val MAX_COMMIT_CHARS = 65_536
         const val TYPE_TEXT_FLAG_MULTI_LINE = 0x00020000
-        const val TOUCH_TAP_FRESH_WINDOW_MS = 1_800L
+        const val TOUCH_TAP_FRESH_WINDOW_MS = 5_000L
 
         fun isAcceptingTextInput(inputType: Int, imeOptions: Int): Boolean =
             inputType != 0 || imeOptions != 0
@@ -151,6 +151,27 @@ class OpalDeskImeChannelCore {
         }
 
         /**
+         * Universal soft-keyboard popup policy shared across Local DeX, External Monitor,
+         * Yuyan Compositor Soft Keyboard, and Remote Cast Receivers:
+         * - No physical keyboard -> always show.
+         * - Explicit user SHOW -> always show; explicit HIDE -> never auto-show.
+         * - Physical/Bluetooth keyboard connected in AUTO/SYSTEM mode -> show if and only if the
+         *   user's most recent interaction was a fresh touchscreen tap ([InputModality.TOUCH]).
+         */
+        fun shouldAutoShowSoftKeyboardForModality(
+            physicalKeyboardDetected: Boolean,
+            showImeWithHardKeyboardMode: Int,
+            lastModality: InputModality,
+            msSinceLastPointerDown: Long,
+        ): Boolean {
+            if (!physicalKeyboardDetected) return true
+            if (showImeWithHardKeyboardMode == BridgeProtocol.HardKbdSoftIme.SHOW) return true
+            if (showImeWithHardKeyboardMode == BridgeProtocol.HardKbdSoftIme.HIDE) return false
+            return lastModality == InputModality.TOUCH &&
+                msSinceLastPointerDown in 0L..TOUCH_TAP_FRESH_WINDOW_MS
+        }
+
+        /**
          * Decides whether `OpalCompositorWorkspace` should automatically display the Yuyan plugin's
          * Compositor Desktop Soft Keyboard when an editable field requests soft input.
          */
@@ -163,11 +184,12 @@ class OpalDeskImeChannelCore {
             msSinceLastPointerDown: Long,
         ): Boolean {
             if (!acceptingText || isRemoteCastDisplay) return false
-            if (!physicalKeyboardDetected) return true
-            if (showImeWithHardKeyboardMode == BridgeProtocol.HardKbdSoftIme.SHOW) return true
-            if (showImeWithHardKeyboardMode == BridgeProtocol.HardKbdSoftIme.HIDE) return false
-            return lastModality == InputModality.TOUCH &&
-                msSinceLastPointerDown in 0L..TOUCH_TAP_FRESH_WINDOW_MS
+            return shouldAutoShowSoftKeyboardForModality(
+                physicalKeyboardDetected = physicalKeyboardDetected,
+                showImeWithHardKeyboardMode = showImeWithHardKeyboardMode,
+                lastModality = lastModality,
+                msSinceLastPointerDown = msSinceLastPointerDown,
+            )
         }
 
         /**

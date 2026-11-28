@@ -141,6 +141,7 @@ class DesktopActivity : ComponentActivity() {
                     mutableLongStateOf(BridgeClient.imeBridgeRequestFlow.value?.seq ?: 0L)
                 }
 
+                val imePendingShow by imeController.pendingShowFlow.collectAsState()
                 val focusedLiveDisplayId = scene.focusedWindow
                     ?.takeIf { !it.isMinimized && it.isLive }
                     ?.displayId ?: -1
@@ -151,8 +152,9 @@ class DesktopActivity : ComponentActivity() {
                         imeState.effectiveWindowImePolicy == BridgeProtocol.DisplayImePolicy.LOCAL,
                     localOverlayNeedsFocus = localOverlayNeedsFocus,
                     localTextFieldFocused = localTextFieldFocused,
-                    hostSoftImeVisible = imeVisible,
+                    hostSoftImeVisible = imeVisible || imePendingShow,
                     hasEnabledKeyBindings = io.github.lengsukq.opaldesk.input.hasEnabledKeyBinding(inputBindings),
+                    isForegroundActivityWindow = true,
                 )
                 LaunchedEffect(hostNotFocusable) {
                     setHostWindowNotFocusable(hostNotFocusable)
@@ -450,6 +452,17 @@ class DesktopActivity : ComponentActivity() {
     }
 
     private fun applyPreferredDisplayRefreshRate(targetFps: Int) {
+        val lp = window.attributes
+        if (targetFps <= 0) {
+            // Auto mode: let Android's native LTPO / VRR scheduler ramp up to peak Hz during
+            // touch/scroll/stylus activity and drop down on static reading screens to save battery.
+            if (lp.preferredDisplayModeId != 0 || lp.preferredRefreshRate != 0f) {
+                lp.preferredDisplayModeId = 0
+                lp.preferredRefreshRate = 0f
+                window.attributes = lp
+            }
+            return
+        }
         val disp = display ?: return
         val cur = disp.mode ?: return
         val supported = disp.supportedModes ?: return
@@ -467,7 +480,6 @@ class DesktopActivity : ComponentActivity() {
             currentHeight = cur.physicalHeight,
             targetFps = targetFps,
         ) ?: return
-        val lp = window.attributes
         if (lp.preferredDisplayModeId != chosen.modeId || kotlin.math.abs(lp.preferredRefreshRate - chosen.refreshRate) > 0.5f) {
             lp.preferredDisplayModeId = chosen.modeId
             lp.preferredRefreshRate = chosen.refreshRate

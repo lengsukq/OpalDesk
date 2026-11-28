@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.lengsukq.opaldesk.BridgeClient
+import io.github.lengsukq.opaldesk.prefs.AppPrefs
 import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorGeometry
 import io.github.lengsukq.opaldesk.protocol.CompositorWindow
@@ -127,6 +128,7 @@ fun CompositorWindowFrameNode(
     val headerHeightPx = if (isFullscreen) 0 else with(density) { CompositorGeometry.HEADER_HEIGHT_DP.dp.roundToPx() }
     val showSnapTools = frameWidthDp >= 540.dp
     val showReloadButton = frameWidthDp >= 360.dp
+    val swapHeaderButtons by AppPrefs.swapWindowHeaderButtonsFlow.collectAsState()
 
     var frameCoords by remember(window.windowId) { mutableStateOf<LayoutCoordinates?>(null) }
 
@@ -344,14 +346,18 @@ fun CompositorWindowFrameNode(
                     }
                     .padding(horizontal = 10.dp),
             ) {
-                // Left Cluster: macOS Traffic Lights + Android Back
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
+                val pinnedIds by io.github.lengsukq.opaldesk.protocol.OpalWindowPinStore.pinnedIdsFlow.collectAsState()
+                val isPinned = pinnedIds.contains(window.windowId)
+                val profileLabel = when (window.profileCode) {
+                    BridgeProtocol.Profile.PORTRAIT -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_portrait)
+                    BridgeProtocol.Profile.TABLET -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_tablet)
+                    else -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_desktop)
+                }
+                val renderTrafficLights: @Composable () -> Unit = {
                     WindowTrafficLightCluster(
                         focused = window.focused,
                         isFullscreen = window.isFullscreen,
+                        rightAligned = swapHeaderButtons,
                         onClose = {
                             BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.CLOSE)
                         },
@@ -363,16 +369,92 @@ fun CompositorWindowFrameNode(
                             BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.TOGGLE_FULLSCREEN)
                         },
                     )
-                    Spacer(Modifier.width(5.dp))
-                    Box(
-                        modifier = Modifier
-                            .width(1.dp)
-                            .height(14.dp)
-                            .background(OpalPalette.DividerColor),
-                    )
-                    Spacer(Modifier.width(3.dp))
-                    HeaderSubtleIconButton(glyph = ChromeGlyph.BACK, focused = window.focused) {
-                        BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.SEND_BACK)
+                }
+                val renderUtilityButtons: @Composable () -> Unit = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        if (showSnapTools) {
+                            HeaderSubtleIconButton(glyph = ChromeGlyph.TILE_LEFT, focused = window.focused) {
+                                val rect = CompositorGeometry.computeSnapPreviewRect(
+                                    BridgeProtocol.Presentation.SNAP_LEFT, canvasW, canvasH, densityVal, currentDockInsetDp,
+                                )
+                                armResizeBridge(shrinking = rect.width < window.frame.width || rect.height < window.frame.height)
+                                BridgeClient.updateWindowFrameAsync(
+                                    window.windowId, rect.left, rect.top, rect.right, rect.bottom,
+                                    BridgeProtocol.Presentation.SNAP_LEFT,
+                                )
+                            }
+                            HeaderSubtleIconButton(glyph = ChromeGlyph.TILE_RIGHT, focused = window.focused) {
+                                val rect = CompositorGeometry.computeSnapPreviewRect(
+                                    BridgeProtocol.Presentation.SNAP_RIGHT, canvasW, canvasH, densityVal, currentDockInsetDp,
+                                )
+                                armResizeBridge(shrinking = rect.width < window.frame.width || rect.height < window.frame.height)
+                                BridgeClient.updateWindowFrameAsync(
+                                    window.windowId, rect.left, rect.top, rect.right, rect.bottom,
+                                    BridgeProtocol.Presentation.SNAP_RIGHT,
+                                )
+                            }
+                        }
+                        HeaderPinIconButton(
+                            pinned = isPinned,
+                            focused = window.focused,
+                        ) {
+                            io.github.lengsukq.opaldesk.protocol.OpalWindowPinStore.toggle(window.windowId)
+                        }
+                        HeaderProfileIconButton(
+                            profileCode = window.profileCode,
+                            contentDescription = profileLabel,
+                            focused = window.focused,
+                        ) {
+                            armResizeBridge(shrinking = true)
+                            val nextAct = when (window.profileCode) {
+                                BridgeProtocol.Profile.DESKTOP -> BridgeProtocol.WinAction.SET_PROFILE_TABLET
+                                BridgeProtocol.Profile.TABLET -> BridgeProtocol.WinAction.SET_PROFILE_PORTRAIT
+                                else -> BridgeProtocol.WinAction.SET_PROFILE_DESKTOP
+                            }
+                            BridgeClient.sendWindowActionAsync(window.windowId, nextAct)
+                        }
+                        if (showReloadButton) {
+                            HeaderSubtleIconButton(glyph = ChromeGlyph.RELOAD, focused = window.focused) {
+                                BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.RELOAD_APP)
+                            }
+                        }
+                    }
+                }
+
+                // Left Cluster: default = Traffic Lights (3) | Back; swapped = Back | Utility Buttons (5)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    if (!swapHeaderButtons) {
+                        renderTrafficLights()
+                        Spacer(Modifier.width(5.dp))
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(14.dp)
+                                .background(OpalPalette.DividerColor),
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        HeaderSubtleIconButton(glyph = ChromeGlyph.BACK, focused = window.focused) {
+                            BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.SEND_BACK)
+                        }
+                    } else {
+                        HeaderSubtleIconButton(glyph = ChromeGlyph.BACK, focused = window.focused) {
+                            BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.SEND_BACK)
+                        }
+                        Spacer(Modifier.width(3.dp))
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(14.dp)
+                                .background(OpalPalette.DividerColor),
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        renderUtilityButtons()
                     }
                 }
 
@@ -429,68 +511,11 @@ fun CompositorWindowFrameNode(
                     }
                 }
 
-                // Right Cluster: Optional Snap Left/Right (wide windows only), Pin icon, Profile Switcher, Reload
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                ) {
-                    if (showSnapTools) {
-                        HeaderSubtleIconButton(glyph = ChromeGlyph.TILE_LEFT, focused = window.focused) {
-                            val rect = CompositorGeometry.computeSnapPreviewRect(
-                                BridgeProtocol.Presentation.SNAP_LEFT, canvasW, canvasH, densityVal, currentDockInsetDp,
-                            )
-                            armResizeBridge(shrinking = rect.width < window.frame.width || rect.height < window.frame.height)
-                            BridgeClient.updateWindowFrameAsync(
-                                window.windowId, rect.left, rect.top, rect.right, rect.bottom,
-                                BridgeProtocol.Presentation.SNAP_LEFT,
-                            )
-                        }
-                        HeaderSubtleIconButton(glyph = ChromeGlyph.TILE_RIGHT, focused = window.focused) {
-                            val rect = CompositorGeometry.computeSnapPreviewRect(
-                                BridgeProtocol.Presentation.SNAP_RIGHT, canvasW, canvasH, densityVal, currentDockInsetDp,
-                            )
-                            armResizeBridge(shrinking = rect.width < window.frame.width || rect.height < window.frame.height)
-                            BridgeClient.updateWindowFrameAsync(
-                                window.windowId, rect.left, rect.top, rect.right, rect.bottom,
-                                BridgeProtocol.Presentation.SNAP_RIGHT,
-                            )
-                        }
-                    }
-
-                    val pinnedIds by io.github.lengsukq.opaldesk.protocol.OpalWindowPinStore.pinnedIdsFlow.collectAsState()
-                    val isPinned = pinnedIds.contains(window.windowId)
-                    HeaderPinIconButton(
-                        pinned = isPinned,
-                        focused = window.focused,
-                    ) {
-                        io.github.lengsukq.opaldesk.protocol.OpalWindowPinStore.toggle(window.windowId)
-                    }
-
-                    val ctx = androidx.compose.ui.platform.LocalContext.current
-                    val profileLabel = when (window.profileCode) {
-                        BridgeProtocol.Profile.PORTRAIT -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_portrait)
-                        BridgeProtocol.Profile.TABLET -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_tablet)
-                        else -> ctx.getString(io.github.lengsukq.opaldesk.R.string.window_profile_desktop)
-                    }
-                    HeaderProfileIconButton(
-                        profileCode = window.profileCode,
-                        contentDescription = profileLabel,
-                        focused = window.focused,
-                    ) {
-                        armResizeBridge(shrinking = true)
-                        val nextAct = when (window.profileCode) {
-                            BridgeProtocol.Profile.DESKTOP -> BridgeProtocol.WinAction.SET_PROFILE_TABLET
-                            BridgeProtocol.Profile.TABLET -> BridgeProtocol.WinAction.SET_PROFILE_PORTRAIT
-                            else -> BridgeProtocol.WinAction.SET_PROFILE_DESKTOP
-                        }
-                        BridgeClient.sendWindowActionAsync(window.windowId, nextAct)
-                    }
-
-                    if (showReloadButton) {
-                        HeaderSubtleIconButton(glyph = ChromeGlyph.RELOAD, focused = window.focused) {
-                            BridgeClient.sendWindowActionAsync(window.windowId, BridgeProtocol.WinAction.RELOAD_APP)
-                        }
-                    }
+                // Right Cluster: default = Utility Buttons (5); swapped = Traffic Lights (3, right-aligned)
+                if (!swapHeaderButtons) {
+                    renderUtilityButtons()
+                } else {
+                    renderTrafficLights()
                 }
             }
 

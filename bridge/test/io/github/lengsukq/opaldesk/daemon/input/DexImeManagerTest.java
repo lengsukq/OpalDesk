@@ -194,6 +194,12 @@ public class DexImeManagerTest {
                 BridgeProtocol.OPALDESK_BRIDGE_IME_ID,
                 DexImeManager.resolveDesiredImeId(
                         true, true, BridgeProtocol.DEX_IME_DISPLAY_AUTO, IME_GBOARD, true));
+        // Even when Yuyan plugin is installed, remote casting defaults to the zero-UI bridge pipe
+        // so Mac/Windows/Tablet receivers handle CJK IME locally without double composition.
+        assertEquals(
+                BridgeProtocol.OPALDESK_BRIDGE_IME_ID,
+                DexImeManager.resolveDesiredImeId(
+                        false, true, BridgeProtocol.DEX_IME_DISPLAY_AUTO, "", true, true));
         // Explicit ALWAYS_LOCAL + locked third-party IME overrides auto Bridge IME
         assertEquals(
                 IME_GBOARD,

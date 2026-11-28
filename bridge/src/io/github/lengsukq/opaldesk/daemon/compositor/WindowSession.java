@@ -37,6 +37,7 @@ public final class WindowSession {
     public boolean focused = false;
     public long lastActiveAtMs = 0L;
     public long lastLaunchAtMs = 0L;
+    public long minimizedAtMs = 0L;
     public int emptyDisplayTicks = 0;
     public long emptySinceMs = 0L;
     public long snapshotVersion = 0L;

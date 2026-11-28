@@ -710,13 +710,45 @@ public final class MouseRoutingPolicy {
             int dexImeDisplayMode,
             boolean hasPhysicalExternalDisplay,
             boolean bridgeImeActive) {
+        return shouldRunFallbackImeProbe(
+                localImeActive,
+                hasPhysicalKeyboard,
+                remoteDesktopActive,
+                dexImeDisplayMode,
+                hasPhysicalExternalDisplay,
+                bridgeImeActive,
+                false,
+                -1 /* HARD_KBD_SOFT_IME_SYSTEM */);
+    }
+
+    /**
+     * Unified soft-keyboard fallback probe decision across local DeX, external monitors, remote
+     * casting, physical/Bluetooth keyboards, and touchscreens.
+     *
+     * <p>When a physical keyboard is connected, a direct touchscreen tap ({@code lastTapWasTouch})
+     * still permits the on-screen keyboard unless the user explicitly configured
+     * {@code HARD_KBD_SOFT_IME_HIDE (0)}.
+     */
+    public static boolean shouldRunFallbackImeProbe(
+            boolean localImeActive,
+            boolean hasPhysicalKeyboard,
+            boolean remoteDesktopActive,
+            int dexImeDisplayMode,
+            boolean hasPhysicalExternalDisplay,
+            boolean bridgeImeActive,
+            boolean lastTapWasTouch,
+            int showImeWithHardKeyboardMode) {
         if (bridgeImeActive || localImeActive) return false;
+        boolean allowSoftWithHardKbd = !hasPhysicalKeyboard
+                || showImeWithHardKeyboardMode == 1 /* BridgeProtocol.HARD_KBD_SOFT_IME_SHOW */
+                || (showImeWithHardKeyboardMode != 0 /* BridgeProtocol.HARD_KBD_SOFT_IME_HIDE */
+                        && lastTapWasTouch);
         if (dexImeDisplayMode == 1 /* DEX_IME_DISPLAY_ALWAYS_LOCAL */) {
-            return hasPhysicalExternalDisplay && !remoteDesktopActive && !hasPhysicalKeyboard;
+            return hasPhysicalExternalDisplay && !remoteDesktopActive && allowSoftWithHardKbd;
         }
         if (remoteDesktopActive) return true;
         if (dexImeDisplayMode == 2 /* DEX_IME_DISPLAY_FALLBACK_HOST */) return true;
-        return !hasPhysicalKeyboard;
+        return allowSoftWithHardKbd;
     }
 
     /**
@@ -729,11 +761,34 @@ public final class MouseRoutingPolicy {
             boolean hasPhysicalKeyboard,
             boolean hasExternalTouchscreen,
             int dexImeDisplayMode) {
+        return shouldBridgeHostImeWhenSystemInputShown(
+                remoteDesktopActive,
+                hasPhysicalExternalDisplay,
+                hasPhysicalKeyboard,
+                hasExternalTouchscreen,
+                dexImeDisplayMode,
+                false,
+                -1 /* HARD_KBD_SOFT_IME_SYSTEM */);
+    }
+
+    public static boolean shouldBridgeHostImeWhenSystemInputShown(
+            boolean remoteDesktopActive,
+            boolean hasPhysicalExternalDisplay,
+            boolean hasPhysicalKeyboard,
+            boolean hasExternalTouchscreen,
+            int dexImeDisplayMode,
+            boolean lastTapWasTouch,
+            int showImeWithHardKeyboardMode) {
         if (remoteDesktopActive) return true;
-        if (!hasPhysicalExternalDisplay || hasPhysicalKeyboard) return false;
+        if (!hasPhysicalExternalDisplay) return false;
+        boolean allowSoftWithHardKbd = !hasPhysicalKeyboard
+                || showImeWithHardKeyboardMode == 1 /* BridgeProtocol.HARD_KBD_SOFT_IME_SHOW */
+                || (showImeWithHardKeyboardMode != 0 /* BridgeProtocol.HARD_KBD_SOFT_IME_HIDE */
+                        && lastTapWasTouch);
+        if (!allowSoftWithHardKbd) return false;
         if (dexImeDisplayMode == 1 /* DEX_IME_DISPLAY_ALWAYS_LOCAL */) return true;
         if (dexImeDisplayMode == 2 /* DEX_IME_DISPLAY_FALLBACK_HOST */) return false;
-        return hasExternalTouchscreen;
+        return hasExternalTouchscreen || lastTapWasTouch;
     }
 
     /**

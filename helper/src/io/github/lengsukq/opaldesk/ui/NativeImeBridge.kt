@@ -327,12 +327,15 @@ object WorkstationKeyDispatcher {
     )
 
     /**
-     * Unified focus-isolation invariant across ALL compositor host windows (`DesktopActivity`,
-     * `ExternalDesktopActivity`, and `ExternalMonitorPresentation`):
-     * keeps the host window `FLAG_NOT_FOCUSABLE` whenever a live `OpalWin-*` VirtualDisplay is
-     * focused and either OpalDesk's built-in channel IME (`bridgeImeActive`) or physical keyboard
-     * routing (`keyboardRoutedDisplayId > 0`) is active, unless an OpalDesk-own overlay or
-     * search `TextField` requires focus.
+     * Focus-isolation policy for secondary-display compositor host windows
+     * (`ExternalMonitorPresentation`).
+     *
+     * Foreground Activity windows (`DesktopActivity`, direct-extended `ExternalDesktopActivity`,
+     * where `isForegroundActivityWindow = true`) MUST NEVER set `FLAG_NOT_FOCUSABLE`: on
+     * Android 14–16, removing focusability from the top resumed Activity leaves `mFocusedApp`
+     * pointing to OpalDesk with `mFocusedWindow == null`, causing `InputDispatcher` to trigger a
+     * 5-second `Input dispatching timed out (Application does not have a focused window)` ANR
+     * whenever any unassociated key event (keyboard/stylus/nav) arrives on that display.
      */
     fun shouldSetCompositorWindowNotFocusable(
         focusedWindowDisplayId: Int,
@@ -342,8 +345,11 @@ object WorkstationKeyDispatcher {
         localTextFieldFocused: Boolean,
         hostSoftImeVisible: Boolean,
         hasEnabledKeyBindings: Boolean = false,
+        isForegroundActivityWindow: Boolean = false,
     ): Boolean {
-        if (hasEnabledKeyBindings || localOverlayNeedsFocus || localTextFieldFocused || hostSoftImeVisible) return false
+        if (isForegroundActivityWindow || hasEnabledKeyBindings || localOverlayNeedsFocus || localTextFieldFocused || hostSoftImeVisible) {
+            return false
+        }
         if (focusedWindowDisplayId <= 0) return false
         return bridgeImeActive || keyboardRoutedDisplayId > 0
     }
@@ -499,12 +505,34 @@ object WorkstationKeyDispatcher {
  */
 class NativeImeHostController {
     internal var bridgeView: NativeImeBridgeView? = null
+    private val _pendingShowFlow = MutableStateFlow(false)
+    val pendingShowFlow: StateFlow<Boolean> = _pendingShowFlow.asStateFlow()
+
+    val isHardwareImeFocused: Boolean
+        get() = bridgeView?.isHardwareImeFocused == true
+
+    internal fun setPendingShow(pending: Boolean) {
+        if (_pendingShowFlow.value != pending) {
+            _pendingShowFlow.value = pending
+        }
+    }
 
     fun showKeyboard(inputType: Int = 0) {
         bridgeView?.showIme(inputType)
     }
 
+    fun focusForHardwareIme(inputType: Int = 0) {
+        setPendingShow(false)
+        bridgeView?.focusForHardwareIme(inputType)
+    }
+
+    fun hideSoftKeyboardOnly() {
+        setPendingShow(false)
+        bridgeView?.hideSoftKeyboardOnly()
+    }
+
     fun hideKeyboard() {
+        setPendingShow(false)
         bridgeView?.hideIme()
     }
 
@@ -553,6 +581,7 @@ fun NativeImeBridgeHost(
                 onCommitText = { txt -> curCommitText(txt) },
                 onComposingChanged = { comp -> curComposing(comp) },
                 onImeVisibilityChanged = { vis -> curVisibility(vis) },
+                onPendingShowChanged = { pending -> controller.setPendingShow(pending) },
             ).also { v ->
                 controller.bridgeView = v
             }
@@ -571,6 +600,7 @@ internal class NativeImeBridgeView(
     private val onCommitText: (String) -> Unit,
     private val onComposingChanged: (String) -> Unit,
     private val onImeVisibilityChanged: (Boolean) -> Unit,
+    private val onPendingShowChanged: (Boolean) -> Unit = {},
 ) : View(ctx) {
 
     companion object {
@@ -587,9 +617,13 @@ internal class NativeImeBridgeView(
     }
     private var lastImeVisible = false
     private var pendingShowAfterFocus = false
+    private var keepHardwareImeFocus = false
     private var claimedLocalImeFocus = false
     private var showAttemptGen = 0L
     private var activeInputType = DEFAULT_INPUT_TYPE
+
+    val isHardwareImeFocused: Boolean
+        get() = keepHardwareImeFocus && hasFocus()
 
     init {
         isFocusable = true
@@ -598,10 +632,15 @@ internal class NativeImeBridgeView(
             val visible = insets.isVisible(WindowInsetsCompat.Type.ime())
             if (visible != lastImeVisible) {
                 lastImeVisible = visible
+                if (visible) {
+                    pendingShowAfterFocus = false
+                    onPendingShowChanged(false)
+                }
                 onImeVisibilityChanged(visible)
                 if (!visible) {
                     onComposingChanged("")
-                    if (!pendingShowAfterFocus) {
+                    if (!pendingShowAfterFocus && !keepHardwareImeFocus) {
+                        onPendingShowChanged(false)
                         clearFocus()
                         if (claimedLocalImeFocus) {
                             claimedLocalImeFocus = false
@@ -685,6 +724,7 @@ internal class NativeImeBridgeView(
         val hostDispId = resolveHostDisplayId()
         claimedLocalImeFocus = true
         pendingShowAfterFocus = true
+        onPendingShowChanged(true)
         requestFocus()
         BridgeClient.setLocalTextFieldFocusedAndAwaitAck(true, hostDispId) {
             if (!isAttachedToWindow || showAttemptGen != gen) return@setLocalTextFieldFocusedAndAwaitAck
@@ -694,7 +734,6 @@ internal class NativeImeBridgeView(
         }
         postDelayed({
             if (!isAttachedToWindow || showAttemptGen != gen) return@postDelayed
-            pendingShowAfterFocus = false
             if (!lastImeVisible) {
                 triggerShowNow()
             }
@@ -702,6 +741,7 @@ internal class NativeImeBridgeView(
         postDelayed({
             if (!isAttachedToWindow || showAttemptGen != gen) return@postDelayed
             pendingShowAfterFocus = false
+            onPendingShowChanged(false)
             if (!lastImeVisible) {
                 // Soft IME stayed hidden (e.g. a physical keyboard suppresses soft input): release
                 // focus and daemon localImeActive lock so window keyboard input never gets stranded.
@@ -727,9 +767,36 @@ internal class NativeImeBridgeView(
         imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
     }
 
+    fun focusForHardwareIme(inputType: Int = 0) {
+        showAttemptGen++
+        pendingShowAfterFocus = false
+        onPendingShowChanged(false)
+        activeInputType = if (inputType != 0) inputType else DEFAULT_INPUT_TYPE
+        keepHardwareImeFocus = true
+        requestFocus()
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.restartInput(this)
+        if (lastImeVisible) {
+            hideSoftKeyboardOnly()
+        }
+    }
+
+    fun hideSoftKeyboardOnly() {
+        showAttemptGen++
+        pendingShowAfterFocus = false
+        onPendingShowChanged(false)
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(windowToken, 0)
+        resolveOwnDisplayWindow()?.let { win ->
+            WindowCompat.getInsetsController(win, this).hide(WindowInsetsCompat.Type.ime())
+        }
+    }
+
     fun hideIme() {
         showAttemptGen++
         pendingShowAfterFocus = false
+        keepHardwareImeFocus = false
+        onPendingShowChanged(false)
         onComposingChanged("")
         claimedLocalImeFocus = false
         BridgeClient.setLocalTextFieldFocusedOneway(false, resolveHostDisplayId())

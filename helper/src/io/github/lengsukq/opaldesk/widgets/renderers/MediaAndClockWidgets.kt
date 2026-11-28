@@ -420,16 +420,21 @@ private fun MediaRhythmVisualizer(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalOpalColors.current
-    val transition = rememberInfiniteTransition(label = "media_rhythm")
-    val phase by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = (2.0 * PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1600, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "rhythm_phase",
-    )
+    val phase = if (isPlaying) {
+        val transition = rememberInfiniteTransition(label = "media_rhythm")
+        val animPhase by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = (2.0 * PI).toFloat(),
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1600, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "rhythm_phase",
+        )
+        animPhase
+    } else {
+        0f
+    }
 
     Canvas(modifier = modifier) {
         val count = barCount.coerceAtLeast(4)
@@ -497,7 +502,8 @@ fun ClockTimerWidgetContent(
         isRefreshingQuote = false
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(isTimerMode) {
+        if (isTimerMode) return@LaunchedEffect
         while (true) {
             nowMs = System.currentTimeMillis()
             delay(1000L)

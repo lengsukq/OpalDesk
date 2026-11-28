@@ -555,6 +555,7 @@ fun FullscreenExitOverlay(
     var initialReveal by remember { mutableStateOf(true) }
     var isPointerHovering by remember { mutableStateOf(false) }
     var manualCollapseAtMs by remember { mutableLongStateOf(0L) }
+    val swapHeaderButtons by AppPrefs.swapWindowHeaderButtonsFlow.collectAsState()
 
     LaunchedEffect(expanded, isPointerHovering, initialReveal) {
         if (!expanded || isPointerHovering) return@LaunchedEffect
@@ -679,27 +680,33 @@ fun FullscreenExitOverlay(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                WindowTrafficLightCluster(
-                    focused = true,
-                    isFullscreen = true,
-                    alwaysShowSymbols = true,
-                    onClose = {
-                        isPointerHovering = false
-                        expanded = false
-                        onCloseWindow()
-                    },
-                    onMinimize = {
-                        isPointerHovering = false
-                        expanded = false
-                        onMinimizeWindow()
-                    },
-                    onToggleFullscreen = {
-                        isPointerHovering = false
-                        expanded = false
-                        onExitFullscreen()
-                    },
-                )
-                OpalTopPillDivider()
+                val renderFsTrafficLights: @Composable () -> Unit = {
+                    WindowTrafficLightCluster(
+                        focused = true,
+                        isFullscreen = true,
+                        alwaysShowSymbols = true,
+                        rightAligned = swapHeaderButtons,
+                        onClose = {
+                            isPointerHovering = false
+                            expanded = false
+                            onCloseWindow()
+                        },
+                        onMinimize = {
+                            isPointerHovering = false
+                            expanded = false
+                            onMinimizeWindow()
+                        },
+                        onToggleFullscreen = {
+                            isPointerHovering = false
+                            expanded = false
+                            onExitFullscreen()
+                        },
+                    )
+                }
+                if (!swapHeaderButtons) {
+                    renderFsTrafficLights()
+                    OpalTopPillDivider()
+                }
                 OpalText(
                     text = windowTitle,
                     fontSize = 11.5.sp,
@@ -779,6 +786,10 @@ fun FullscreenExitOverlay(
                         expanded = false
                     },
                 )
+                if (swapHeaderButtons) {
+                    OpalTopPillDivider()
+                    renderFsTrafficLights()
+                }
             }
         }
     }

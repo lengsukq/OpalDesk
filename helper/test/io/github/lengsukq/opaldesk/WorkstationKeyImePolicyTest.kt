@@ -468,6 +468,34 @@ class WorkstationKeyImePolicyTest {
     }
 
     @Test
+    fun `foreground activity windows never set FLAG_NOT_FOCUSABLE to prevent input_timeout_no_focus ANR`() {
+        assertFalse(
+            WorkstationKeyDispatcher.shouldSetCompositorWindowNotFocusable(
+                focusedWindowDisplayId = 85,
+                keyboardRoutedDisplayId = 85,
+                bridgeImeActive = true,
+                localOverlayNeedsFocus = false,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = false,
+                hasEnabledKeyBindings = false,
+                isForegroundActivityWindow = true,
+            ),
+        )
+        assertFalse(
+            WorkstationKeyDispatcher.shouldSetCompositorWindowNotFocusable(
+                focusedWindowDisplayId = 82,
+                keyboardRoutedDisplayId = -1,
+                bridgeImeActive = true,
+                localOverlayNeedsFocus = false,
+                localTextFieldFocused = false,
+                hostSoftImeVisible = false,
+                hasEnabledKeyBindings = false,
+                isForegroundActivityWindow = true,
+            ),
+        )
+    }
+
+    @Test
     fun `local compose text field focus blocks both ACTION_DOWN and ACTION_UP forwarding to background window`() {
         assertFalse(
             WorkstationKeyDispatcher.shouldForwardKeyEventToFocusedWindow(

@@ -293,12 +293,13 @@ public final class DexImeManager {
                     && !cleanLocked.isEmpty()
                     && !BridgeProtocol.isManagedOpalImeId(cleanLocked);
             if (!explicitLocalThirdParty) {
-                if (BridgeProtocol.OPALDESK_BRIDGE_IME_ID.equals(cleanLocked)) {
-                    return BridgeProtocol.OPALDESK_BRIDGE_IME_ID;
+                if (BridgeProtocol.OPALDESK_IME_PLUGIN_ID.equals(cleanLocked) && pluginImeInstalled) {
+                    return BridgeProtocol.OPALDESK_IME_PLUGIN_ID;
                 }
-                return pluginImeInstalled
-                        ? BridgeProtocol.OPALDESK_IME_PLUGIN_ID
-                        : BridgeProtocol.OPALDESK_BRIDGE_IME_ID;
+                // During remote casting (Mac / Windows / Android tablet receiver), always use the
+                // zero-UI OpalDeskImeService pipe so the receiver's own local IME handles CJK
+                // composition and commits UTF-8 cleanly without double-IME interception on the phone.
+                return BridgeProtocol.OPALDESK_BRIDGE_IME_ID;
             }
         }
 

@@ -32,7 +32,7 @@ public final class PerDisplayInputRouter {
 
     /** Callback notified after a clean short tap (ACTION_UP without drag) inside a live window. */
     public interface TapUpListener {
-        void onWindowTapUp(int windowId, int displayId, long tapDownUptimeMs);
+        void onWindowTapUp(int windowId, int displayId, long tapDownUptimeMs, boolean isTouch);
     }
 
     /**
@@ -69,6 +69,7 @@ public final class PerDisplayInputRouter {
     private float lastDownX = 0f;
     private float lastDownY = 0f;
     private long lastDownUptimeMs = 0L;
+    private boolean lastDownIsTouch = false;
     private boolean tapMovedTooFar = false;
     private volatile boolean activeMouseTouchEmulation = false;
     private volatile boolean activeSideNavMouseSuppression = false;
@@ -229,12 +230,14 @@ public final class PerDisplayInputRouter {
 
         boolean triggerTapUpCheck = false;
         long tapDownTs = 0L;
+        boolean tapWasTouch = false;
         if (masked == MotionEvent.ACTION_DOWN) {
             ws.lastActiveAtMs = System.currentTimeMillis();
             lastDownWinId = ws.windowId;
             lastDownX = xs[0];
             lastDownY = ys[0];
             lastDownUptimeMs = SystemClock.uptimeMillis();
+            lastDownIsTouch = !isMouse;
             tapMovedTooFar = false;
             notifyDexInteraction(ws.displayId, !isMouse);
             if (!localImeActive) {
@@ -257,6 +260,7 @@ public final class PerDisplayInputRouter {
             if (isTap) {
                 triggerTapUpCheck = !localImeActive;
                 tapDownTs = lastDownUptimeMs;
+                tapWasTouch = lastDownIsTouch;
             }
             lastDownWinId = -1;
         } else if (masked == MotionEvent.ACTION_CANCEL) {
@@ -339,7 +343,7 @@ public final class PerDisplayInputRouter {
             if (ok && triggerTapUpCheck) {
                 TapUpListener listener = tapUpListener;
                 if (listener != null) {
-                    listener.onWindowTapUp(ws.windowId, ws.displayId, tapDownTs);
+                    listener.onWindowTapUp(ws.windowId, ws.displayId, tapDownTs, tapWasTouch);
                 }
             }
             return ok;

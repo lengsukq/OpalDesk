@@ -514,6 +514,21 @@ public class ExternalMouseRouterTest {
 
         assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(
                 false, false, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, true, true));
+
+        // Unified touch + physical keyboard modality: touchscreen taps still trigger fallback probe
+        // when physical keyboard is connected in SYSTEM/SHOW modes, while HIDE blocks and mouse skips.
+        assertTrue(MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                false, true, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, false, false, true,
+                BridgeProtocol.HARD_KBD_SOFT_IME_SYSTEM));
+        assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                false, true, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, false, false, false,
+                BridgeProtocol.HARD_KBD_SOFT_IME_SYSTEM));
+        assertFalse(MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                false, true, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, false, false, true,
+                BridgeProtocol.HARD_KBD_SOFT_IME_HIDE));
+        assertTrue(MouseRoutingPolicy.shouldRunFallbackImeProbe(
+                false, true, false, BridgeProtocol.DEX_IME_DISPLAY_AUTO, false, false, false,
+                BridgeProtocol.HARD_KBD_SOFT_IME_SHOW));
     }
 
     @Test

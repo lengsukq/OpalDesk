@@ -256,6 +256,32 @@ class OpalDeskImeChannelTest {
                 msSinceLastPointerDown = 120L,
             ),
         )
+        // Unified modality helper: fresh touch (<5s) shows soft keyboard even with physical keyboard,
+        // while keyboard modality or explicit HIDE suppresses it.
+        assertTrue(
+            OpalDeskImeChannelCore.shouldAutoShowSoftKeyboardForModality(
+                physicalKeyboardDetected = true,
+                showImeWithHardKeyboardMode = io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM,
+                lastModality = InputModality.TOUCH,
+                msSinceLastPointerDown = 3_500L,
+            ),
+        )
+        assertFalse(
+            OpalDeskImeChannelCore.shouldAutoShowSoftKeyboardForModality(
+                physicalKeyboardDetected = true,
+                showImeWithHardKeyboardMode = io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.SYSTEM,
+                lastModality = InputModality.KEYBOARD,
+                msSinceLastPointerDown = 100L,
+            ),
+        )
+        assertFalse(
+            OpalDeskImeChannelCore.shouldAutoShowSoftKeyboardForModality(
+                physicalKeyboardDetected = true,
+                showImeWithHardKeyboardMode = io.github.lengsukq.opaldesk.protocol.BridgeProtocol.HardKbdSoftIme.HIDE,
+                lastModality = InputModality.TOUCH,
+                msSinceLastPointerDown = 100L,
+            ),
+        )
 
         val win = io.github.lengsukq.opaldesk.protocol.CompositorWindow(
             windowId = 7,

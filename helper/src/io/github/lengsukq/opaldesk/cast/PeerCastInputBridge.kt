@@ -56,10 +56,20 @@ internal fun dispatchPeerCastGenericMotion(
     return client.handleGenericMouseMotion(event, viewW, viewH)
 }
 
+internal fun isDirectWorkstationShortcut(event: KeyEvent): Boolean {
+    if (event.keyCode == KeyEvent.KEYCODE_ESCAPE) return true
+    if (event.isAltPressed || event.isMetaPressed) return true
+    if (event.isCtrlPressed && !WorkstationKeyDispatcher.isImeSwitchShortcut(event.keyCode, event.metaState)) {
+        return true
+    }
+    return false
+}
+
 internal fun dispatchPeerCastKeyEvent(
     event: KeyEvent,
     connected: Boolean,
     imeVisible: Boolean,
+    hardwareImeFocused: Boolean = false,
     client: OpalCastPeerClient?,
     superDispatch: (KeyEvent) -> Boolean,
 ): Boolean {
@@ -69,11 +79,12 @@ internal fun dispatchPeerCastKeyEvent(
         if (!WorkstationKeyDispatcher.isForwardableKey(event.keyCode)) {
             return superDispatch(event)
         }
-        // Physical/Bluetooth keyboard events bypass the receiver tablet's local IME completely
-        // and stream directly to the casting phone as if the keyboard were attached to the phone.
-        val isPhysicalKey = WorkstationKeyDispatcher.isPhysicalKeyboardEvent(event)
-        val isDirectShortcut = event.isAltPressed || event.isCtrlPressed || event.keyCode == KeyEvent.KEYCODE_ESCAPE
-        if (!isPhysicalKey && imeVisible && !isDirectShortcut && superDispatch(event)) {
+        // Local-First DeX input: when the receiver's local IME bridge holds focus (soft keyboard
+        // or Bluetooth/USB hardware keyboard inside an active remote text field), let non-shortcut
+        // keys flow through the receiver's own IME first; workstation shortcuts (Alt/Ctrl/Esc)
+        // bypass the local IME and stream directly to the remote DeX desktop.
+        val isDirectShortcut = isDirectWorkstationShortcut(event)
+        if ((imeVisible || hardwareImeFocused) && !isDirectShortcut && superDispatch(event)) {
             return true
         }
         if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN) {

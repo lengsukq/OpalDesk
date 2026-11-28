@@ -366,6 +366,7 @@ internal fun DexWindowsSettingsSection(
     val profileState by ProfileConfigStore.stateFlow.collectAsState()
     val sortByUsage by AppPrefs.sortAppsByUsageFlow.collectAsState()
     val showGuideIcon by AppPrefs.showDesktopGuideIconFlow.collectAsState()
+    val swapHeaderButtons by AppPrefs.swapWindowHeaderButtonsFlow.collectAsState()
 
     val working = profileState.workingConfig
     val effectiveQuota = status.maxVdCount.takeIf { it > 0 } ?: working.maxVdCount
@@ -375,6 +376,12 @@ internal fun DexWindowsSettingsSection(
         title = if (isZh) "窗口形态与多任务" else "Window Behavior & Multitasking",
         subtitle = if (isZh) "管理退出时的窗口布局记忆、虚拟屏配额与分屏辅助" else "Configure layout retention, virtual display quota and multitasking",
     ) {
+        OpalSwitchRow(
+            title = if (isZh) "互换窗口左右按钮位置" else "Swap Window Header Buttons",
+            subtitle = if (isZh) "将左上角关闭/最小化/全屏（3 键）与右上角分屏/置顶/形态/重载（5 键）互换，全局持久化并应用于所有插槽" else "Swap left traffic lights (3) with right utility buttons (5) globally across all slots",
+            checked = swapHeaderButtons,
+            onCheckedChange = { AppPrefs.setSwapWindowHeaderButtons(ctx, it) },
+        )
         OpalSwitchRow(
             title = if (isZh) "退出桌面时记住窗口布局" else "Keep Window Layout on Exit",
             subtitle = if (isZh) "保留各应用窗口大小与自由/分屏位置偏好" else "Remember each app's floating or tiled window bounds",

@@ -11,6 +11,26 @@ import kotlin.math.roundToInt
  */
 object ReceiverPolicy {
     const val DEFAULT_CAST_PORT = 19878
+    const val MODALITY_UNKNOWN = 0
+    const val MODALITY_TOUCH = 1
+    const val MODALITY_MOUSE = 2
+    const val MODALITY_KEYBOARD = 3
+    const val TOUCH_TAP_FRESH_WINDOW_MS = 5_000L
+
+    /**
+     * Universal receiver soft-keyboard policy matching OpalDesk host:
+     * - No physical keyboard connected -> always show soft keyboard.
+     * - Physical/Bluetooth keyboard connected -> show only after a fresh touchscreen tap.
+     */
+    fun shouldAutoShowReceiverSoftKeyboard(
+        hasPhysicalKeyboard: Boolean,
+        lastModality: Int,
+        msSinceLastTouch: Long,
+    ): Boolean {
+        if (!hasPhysicalKeyboard) return true
+        return lastModality == MODALITY_TOUCH && msSinceLastTouch in 0L..TOUCH_TAP_FRESH_WINDOW_MS
+    }
+
     const val PROJECT_INTRO_URL = "https://lengsukq.github.io/OpalDesk/"
     const val PROJECT_GITHUB_URL = "https://github.com/lengsukq/OpalDesk"
     const val COMMUNITY_QQ_GROUP_NUMBER = "1042317917"

@@ -241,6 +241,19 @@ object OpalDeskImeChannel {
                 }
                 var handled = false
                 if (ev != null) {
+                    if (ev.action == KeyEvent.ACTION_DOWN &&
+                        WorkstationKeyDispatcher.isPhysicalKeyboardEvent(ev)
+                    ) {
+                        _lastTapAnchorFlow.value = _lastTapAnchorFlow.value.copy(
+                            modality = InputModality.KEYBOARD,
+                            uptimeMs = SystemClock.uptimeMillis(),
+                        )
+                        if (_softKeyboardVisibleFlow.value &&
+                            AppPrefs.hardKbdSoftImeModeFlow.value != BridgeProtocol.HardKbdSoftIme.SHOW
+                        ) {
+                            hideSoftKeyboard()
+                        }
+                    }
                     handled = BridgeClient.tryWakeHostScreenFromKeyEvent(ev) ||
                         WorkstationKeyDispatcher.consumeDuplicateMouseBackKey(ev) ||
                         WorkstationKeyDispatcher.handleGlobalShortcut(ev)

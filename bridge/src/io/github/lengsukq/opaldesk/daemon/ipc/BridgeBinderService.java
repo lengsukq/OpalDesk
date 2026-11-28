@@ -676,12 +676,25 @@ public final class BridgeBinderService extends Binder {
                         sync.run();
                     }
                 } else if (evtType == BridgeProtocol.BRIDGE_IME_EVT_SHOW_REQUESTED) {
-                    if (remoteBridge != null) {
-                        remoteBridge.onBridgeImeShowRequested(imeDisplayId, pkg != null ? pkg : "", inputType);
+                    boolean handledRemote = remoteBridge != null
+                            && remoteBridge.onBridgeImeShowRequested(imeDisplayId, pkg != null ? pkg : "", inputType);
+                    if (!handledRemote && mgr != null && !mgr.isPluginImeInstalledSafe()) {
+                        WindowSession focused = compositor.getFocusedLiveWindow();
+                        if (focused != null && focused.isLive()
+                                && (imeDisplayId <= 0 || focused.displayId == imeDisplayId)) {
+                            int hostType = io.github.lengsukq.opaldesk.daemon.input.ImmsDumpInspector
+                                    .sanitizeHostInputType(inputType);
+                            helperBridge.pushImeRequest(focused.windowId, true, hostType);
+                        }
                     }
                 } else if (evtType == BridgeProtocol.BRIDGE_IME_EVT_HIDE_OR_FINISH) {
-                    if (remoteBridge != null) {
-                        remoteBridge.onBridgeImeHideRequested(imeDisplayId);
+                    boolean handledRemote = remoteBridge != null
+                            && remoteBridge.onBridgeImeHideRequested(imeDisplayId, pkg != null ? pkg : "");
+                    if (!handledRemote && mgr != null && !mgr.isPluginImeInstalledSafe()) {
+                        WindowSession focused = compositor.getFocusedLiveWindow();
+                        if (focused != null && (imeDisplayId <= 0 || focused.displayId == imeDisplayId)) {
+                            helperBridge.pushImeRequest(focused.windowId, false, 0);
+                        }
                     }
                 }
                 if (reply != null) {

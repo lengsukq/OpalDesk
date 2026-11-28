@@ -85,6 +85,8 @@ class CastViewerActivity : Activity() {
     private var cameraEnabled = false
     private var cameraFacing = "front"
     private var toolbarExpanded = true
+    private var lastInputModality = ReceiverPolicy.MODALITY_UNKNOWN
+    private var lastTouchDownUptimeMs = 0L
     private var remoteApps: List<OpalCastClient.RemoteAppEntry> = emptyList()
 
     private lateinit var rootFrame: FrameLayout
@@ -201,7 +203,16 @@ class CastViewerActivity : Activity() {
             })
             setOnTouchListener { v, ev ->
                 val c = client ?: return@setOnTouchListener true
-                if (c.isMouseMotion(ev)) c.sendMouseEvent(ev, v.width, v.height)
+                val isMouse = c.isMouseMotion(ev)
+                if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+                    if (isMouse) {
+                        lastInputModality = ReceiverPolicy.MODALITY_MOUSE
+                    } else {
+                        lastInputModality = ReceiverPolicy.MODALITY_TOUCH
+                        lastTouchDownUptimeMs = SystemClock.uptimeMillis()
+                    }
+                }
+                if (isMouse) c.sendMouseEvent(ev, v.width, v.height)
                 else c.sendTouchEvent(ev, v.width, v.height)
                 true
             }
@@ -374,7 +385,27 @@ class CastViewerActivity : Activity() {
 
                 override fun onRemoteImeRequest(show: Boolean, inputType: Int) {
                     runOnUiThread {
-                        if (show) imeBridgeView.showIme(inputType) else if (imeBridgeView.isImeVisible) imeBridgeView.hideIme()
+                        if (show) {
+                            val elapsed = if (lastTouchDownUptimeMs > 0L) {
+                                (SystemClock.uptimeMillis() - lastTouchDownUptimeMs).coerceAtLeast(0L)
+                            } else {
+                                Long.MAX_VALUE
+                            }
+                            val allowSoft = ReceiverPolicy.shouldAutoShowReceiverSoftKeyboard(
+                                hasPhysicalKeyboard = hasConnectedPhysicalKeyboard(),
+                                lastModality = lastInputModality,
+                                msSinceLastTouch = elapsed,
+                            )
+                            if (allowSoft) {
+                                imeBridgeView.showIme(inputType)
+                            } else {
+                                // Bind local IME silently so Bluetooth/USB keyboards compose CJK
+                                // locally on the receiver without popping up the soft keyboard.
+                                imeBridgeView.focusForHardwareIme(inputType)
+                            }
+                        } else if (imeBridgeView.isImeVisible || imeBridgeView.isHardwareImeFocused) {
+                            imeBridgeView.hideIme()
+                        }
                     }
                 }
 
@@ -682,8 +713,23 @@ class CastViewerActivity : Activity() {
             if (!InputGuardPolicy.isForwardableKey(event.keyCode)) {
                 return super.dispatchKeyEvent(event)
             }
-            val isDirectShortcut = event.isAltPressed || event.isCtrlPressed || event.keyCode == KeyEvent.KEYCODE_ESCAPE
-            if (imeBridgeView.isImeVisible && !isDirectShortcut && super.dispatchKeyEvent(event)) {
+            val isPhysicalKey = isPhysicalKeyboardEvent(event)
+            if (isPhysicalKey && event.action == KeyEvent.ACTION_DOWN) {
+                lastInputModality = ReceiverPolicy.MODALITY_KEYBOARD
+                if (imeBridgeView.isImeVisible) {
+                    imeBridgeView.hideSoftKeyboardOnly()
+                }
+            }
+            val isImeSwitchChord = event.keyCode == KeyEvent.KEYCODE_LANGUAGE_SWITCH ||
+                event.keyCode == KeyEvent.KEYCODE_SWITCH_CHARSET ||
+                (event.keyCode == KeyEvent.KEYCODE_SPACE && (event.isCtrlPressed || event.isShiftPressed) && !event.isAltPressed)
+            val isDirectShortcut = event.keyCode == KeyEvent.KEYCODE_ESCAPE ||
+                event.isAltPressed ||
+                event.isMetaPressed ||
+                (event.isCtrlPressed && !isImeSwitchChord)
+            if ((imeBridgeView.isImeVisible || imeBridgeView.isHardwareImeFocused) &&
+                !isDirectShortcut && super.dispatchKeyEvent(event)
+            ) {
                 return true
             }
             if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN) {
@@ -693,6 +739,39 @@ class CastViewerActivity : Activity() {
             return true
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    private fun isPhysicalKeyboardEvent(event: KeyEvent): Boolean {
+        val devId = event.deviceId
+        if (devId <= 0) return false
+        val dev = event.device ?: return true
+        if (dev.isVirtual) return false
+        val name = dev.name.orEmpty()
+        if (name.startsWith("OpalDesk Virtual")) return false
+        val isExternal = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && dev.isExternal
+        return isExternal || dev.keyboardType == android.view.InputDevice.KEYBOARD_TYPE_ALPHABETIC
+    }
+
+    private fun hasConnectedPhysicalKeyboard(): Boolean {
+        return runCatching {
+            val ids = android.view.InputDevice.getDeviceIds()
+            ids.any { id ->
+                val dev = android.view.InputDevice.getDevice(id) ?: return@any false
+                if (dev.isVirtual) return@any false
+                if ((dev.sources and android.view.InputDevice.SOURCE_KEYBOARD) != android.view.InputDevice.SOURCE_KEYBOARD) return@any false
+                if (dev.keyboardType != android.view.InputDevice.KEYBOARD_TYPE_ALPHABETIC) return@any false
+                val name = dev.name.orEmpty()
+                if (name.startsWith("OpalDesk Virtual")) return@any false
+                val isExternal = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && dev.isExternal
+                if (isExternal) return@any true
+                val lower = name.lowercase(java.util.Locale.ROOT)
+                if (lower.contains("gpio") || lower.contains("pwrkey") || lower.contains("pon") ||
+                    lower.contains("kpd") || lower.contains("headset") || lower.contains("jack") ||
+                    lower.contains("hall") || lower.contains("virtual") || lower.contains("touch")
+                ) return@any false
+                lower.contains("keyboard") || lower.contains("kbd") || lower.contains("pogo")
+            }
+        }.getOrDefault(false)
     }
 
     override fun onDestroy() {

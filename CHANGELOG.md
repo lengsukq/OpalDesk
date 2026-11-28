@@ -6,6 +6,22 @@ All notable changes to **OpalDesk** will be documented in this file.
 
 ---
 
+## [1.0.24] - 2026-11-28
+
+### New Features & UX Enhancements
+- **Built-in DeX Settings App & Dock Floating Orb Mode**: Added a full responsive DeX Settings window (single-pane phone / dual-pane tablet & PC) with instant search, Dock size/style/glass customization, Floating Orb mode with edge snapping, hidden-dock space reclamation, and auto-dismissing popovers.
+- **Liquid-Glass Desktop Widgets & Widget Store**: Added customizable desktop widgets (Clock + Hitokoto, Weather, System Monitor, Calendar, Quick Tiles, Media, Infinite-Loop Hub Carousel) with backdrop blur and per-slot sync.
+- **Global Persisted Window Header Button Swap (All Slots)**: Added a global `AppPrefs` setting (`Swap Window Header Buttons`) accessible in both DeX Settings → Windows & Multitasking and Console Settings, swapping the left 3 traffic-light buttons with the right 5 utility buttons (mirroring Close to the outer top-right corner) across all 5 slots and fullscreen control bars.
+- **Host-Side Key/Mouse Bindings, Built-in FAQ & Wireless Streaming Turbo (P0–P3)**: Added customizable key/mouse binding editor, in-app FAQ troubleshooting center, open cast bitrate selector, force phone speaker playback, portrait 4-column desktop grid, fullscreen traffic-light controls, and form-factor profile icons.
+
+### Unified Input, Power/Thermal & Stability Fixes
+- **Unified DeX Local-First IME Architecture**: Standardized soft-keyboard and hardware-keyboard routing across local DeX, external monitors, wireless casting, and `OpalCast` / macOS / Windows receivers; eliminated `FLAG_NOT_FOCUSABLE` vs `NativeImeBridgeView.showIme()` focus race and `imeDisplayId <= 0` drops.
+- **Android 16 `input_timeout_no_focus` ANR Crash Fix**: Enforced `isForegroundActivityWindow = true` for `DesktopActivity` and direct-extended `ExternalDesktopActivity` so foreground Activity windows never set `FLAG_NOT_FOCUSABLE`, eliminating 5-second `Input dispatching timed out (Application does not have a focused window)` crashes.
+- **Power & Thermal Optimizations**: Released LTPO/VRR adaptive downclocking in Auto FPS mode (`preferredDisplayModeId = 0`, `FRAME_RATE_COMPATIBILITY_DEFAULT`), added 45-second idle `VirtualDisplay` auto-release for minimized windows with snapshot preservation, slowed daemon background task reconciliation from 2s to 10s, throttled `ACTION_HOVER_MOVE` IPC to 60Hz (16ms), and gated 5 continuous 120Hz `rememberInfiniteTransition` widget loops & high-frequency timers.
+- **Cross-Device Reliability**: Fixed vivo backlight wake restore, excluded external touchscreens from wake-monitor false triggers, prevented local search-box key-up focus theft, and fixed SwiftPM lowercased `zh-hans.lproj` localization lookup on macOS.
+
+---
+
 ## [0.0.1] - 2026-11-22
 
 ### Brand Independence & Coexistence Isolation

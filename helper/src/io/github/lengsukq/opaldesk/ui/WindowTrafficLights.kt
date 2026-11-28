@@ -48,6 +48,15 @@ object WindowTrafficLightPolicy {
         TrafficLightType.FULLSCREEN,
     )
 
+    val RIGHT_ORDERED_TYPES: List<TrafficLightType> = listOf(
+        TrafficLightType.MINIMIZE,
+        TrafficLightType.FULLSCREEN,
+        TrafficLightType.CLOSE,
+    )
+
+    fun orderedTypes(rightAligned: Boolean): List<TrafficLightType> =
+        if (rightAligned) RIGHT_ORDERED_TYPES else ORDERED_TYPES
+
     fun winActionFor(type: TrafficLightType): Int = when (type) {
         TrafficLightType.CLOSE -> BridgeProtocol.WinAction.CLOSE
         TrafficLightType.MINIMIZE -> BridgeProtocol.WinAction.MINIMIZE
@@ -76,6 +85,7 @@ fun WindowTrafficLightCluster(
     onMinimize: () -> Unit,
     onToggleFullscreen: () -> Unit,
     alwaysShowSymbols: Boolean = false,
+    rightAligned: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var isClusterHovered by remember { mutableStateOf(false) }
@@ -97,7 +107,7 @@ fun WindowTrafficLightCluster(
             }
         },
     ) {
-        WindowTrafficLightPolicy.ORDERED_TYPES.forEach { type ->
+        WindowTrafficLightPolicy.orderedTypes(rightAligned).forEach { type ->
             val onClick = when (type) {
                 TrafficLightType.CLOSE -> onClose
                 TrafficLightType.MINIMIZE -> onMinimize

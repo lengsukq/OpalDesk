@@ -439,16 +439,21 @@ private fun LiquidGlassDockOrb(
     val colors = LocalOpalColors.current
     val backdrop = LocalOpalGlassBackdrop.current
     val orbOrigin = remember { mutableStateOf(Offset.Zero) }
-    val pulseTransition = rememberInfiniteTransition(label = "orbPulse")
-    val coreBreath by pulseTransition.animateFloat(
-        initialValue = 0.97f,
-        targetValue = 1.03f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2_800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "coreBreath",
-    )
+    val coreBreath = if (isActive) {
+        val pulseTransition = rememberInfiniteTransition(label = "orbPulse")
+        val breath by pulseTransition.animateFloat(
+            initialValue = 0.97f,
+            targetValue = 1.03f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 2_800, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "coreBreath",
+        )
+        breath
+    } else {
+        1.0f
+    }
     val glassOpacity = DockAppearancePolicy.clampOrbOpacity(orbOpacity)
     val intensity = DockAppearancePolicy.computeOrbGlassIntensity(glassOpacity)
     val isDark = colors.isDark

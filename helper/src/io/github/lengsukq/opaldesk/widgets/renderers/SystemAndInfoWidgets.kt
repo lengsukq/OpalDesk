@@ -69,16 +69,7 @@ fun WorkstationStatusWidgetContent(
         status.batteryPercent <= 25 -> colors.accentAmber
         else -> colors.textPrimary
     }
-    val pulseTransition = rememberInfiniteTransition(label = "conn_pulse")
-    val pulseAlpha by pulseTransition.animateFloat(
-        initialValue = 0.42f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1400, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "conn_pulse_alpha",
-    )
+    val pulseAlpha = if (status.isConnected) 0.96f else 0.68f
 
     val connLabel = status.connectionLabel.ifBlank {
         if (status.isConnected) {

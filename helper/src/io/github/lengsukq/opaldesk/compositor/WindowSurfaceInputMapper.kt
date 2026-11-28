@@ -107,7 +107,11 @@ internal fun Modifier.windowSurfaceHoverAndScrollInput(
                         visibleWindows = BridgeClient.sceneFlow.value.visibleWindows,
                     )
                     val evtTime = change.uptimeMillis.takeIf { it > 0L } ?: SystemClock.uptimeMillis()
-                    if (!occluded && lastHoverEventTime.getAndSet(evtTime) != evtTime) {
+                    val isHoverMove = ev.type == PointerEventType.Move
+                    val prevHoverTime = lastHoverEventTime.get()
+                    val hoverAllowed = !occluded && prevHoverTime != evtTime &&
+                        (!isHoverMove || (evtTime - prevHoverTime) >= 16L)
+                    if (hoverAllowed && lastHoverEventTime.compareAndSet(prevHoverTime, evtTime)) {
                         val hoverAction = when (ev.type) {
                             PointerEventType.Enter -> MotionEvent.ACTION_HOVER_ENTER
                             PointerEventType.Exit -> MotionEvent.ACTION_HOVER_EXIT
@@ -245,9 +249,12 @@ internal fun handleGenericMotionForWindow(
         masked == MotionEvent.ACTION_HOVER_MOVE ||
         masked == MotionEvent.ACTION_HOVER_EXIT
     ) {
-        if (lastHoverEventTime.getAndSet(ev.eventTime) == ev.eventTime) {
+        val prevHoverTime = lastHoverEventTime.get()
+        val isMove = masked == MotionEvent.ACTION_HOVER_MOVE
+        if (prevHoverTime == ev.eventTime || (isMove && (ev.eventTime - prevHoverTime) in 0L..15L)) {
             return true
         }
+        lastHoverEventTime.set(ev.eventTime)
         return forwardMotionEventToWindow(viewW, viewH, ev, win, headerHeightPx, cropTopDisplayPx, onFocusRequested)
     }
     if (masked == MotionEvent.ACTION_SCROLL) {
