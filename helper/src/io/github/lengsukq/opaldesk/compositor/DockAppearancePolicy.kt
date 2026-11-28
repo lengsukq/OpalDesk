@@ -47,7 +47,12 @@ object DockAppearancePolicy {
     const val MAX_SCALE = 1.35f
     const val DEFAULT_SCALE = 1.00f
 
-    const val HIDDEN_DOCK_INSET_DP = 10f
+    /** Reserved bottom inset when Dock is hidden, auto-hidden, or in Floating Orb mode. */
+    const val HIDDEN_DOCK_INSET_DP = 0f
+
+    const val MIN_ORB_OPACITY = 0.25f
+    const val MAX_ORB_OPACITY = 1.0f
+    const val DEFAULT_ORB_OPACITY = 0.85f
     private const val HIGH_OPACITY_TARGET_ALPHA = 0.94f
 
     fun clampOpacity(raw: Float): Float =
@@ -147,8 +152,20 @@ object DockAppearancePolicy {
     }
 
     /**
+     * Returns true only when the standard Dock is pinned visible at the bottom edge and should
+     * reserve bottom workspace height. Floating Orb Mode, hidden Dock, and auto-hidden Dock all
+     * return false so both desktop widgets/icons and app windows reclaim the full bottom area.
+     */
+    fun reservesBottomSpace(
+        visible: Boolean,
+        autoHide: Boolean = false,
+        orbMode: Boolean = false,
+    ): Boolean = visible && !autoHide && !orbMode
+
+    /**
      * Effective bottom workspace inset reserved for the Dock during tiling, edge snapping,
-     * desktop shortcut layout, and App Drawer positioning.
+     * window maximization, desktop widget/shortcut layout, and overlay positioning.
+     * Always returns `0f` when Floating Orb Mode, hidden Dock, or auto-hide Dock is active.
      */
     fun computeEffectiveDockInsetDp(
         visible: Boolean,
@@ -159,11 +176,35 @@ object DockAppearancePolicy {
         autoHide: Boolean = false,
         orbMode: Boolean = false,
     ): Float {
-        if (!visible || autoHide || orbMode) return HIDDEN_DOCK_INSET_DP
+        if (!reservesBottomSpace(visible = visible, autoHide = autoHide, orbMode = orbMode)) {
+            return HIDDEN_DOCK_INSET_DP
+        }
         val combinedScale = clampScale(scale * sizePresetScale(sizePreset))
         val metrics = computeMetrics(combinedScale, isCompactWidth)
         val marginAdj = if (floatingStyle) 0f else metrics.bottomMarginDp
         return (metrics.estimatedTotalHeightDp - marginAdj + 2f).coerceAtLeast(44f)
+    }
+
+    fun clampOrbOpacity(raw: Float): Float =
+        if (raw.isFinite()) raw.coerceIn(MIN_ORB_OPACITY, MAX_ORB_OPACITY) else DEFAULT_ORB_OPACITY
+
+    /**
+     * Computes the target overall alpha for the Floating Assistive Orb, honoring the user's
+     * configured opacity (`25%..100%`) and applying a subtle non-muddy idle dim when resting.
+     */
+    fun computeOrbTargetAlpha(orbOpacity: Float, idleDimEnabled: Boolean, isIdleDimmed: Boolean): Float {
+        val active = clampOrbOpacity(orbOpacity)
+        if (!idleDimEnabled || !isIdleDimmed) return active
+        return (active * 0.62f).coerceIn(0.20f, active)
+    }
+
+    /**
+     * Maps user orb opacity (`0.25..1.0`) to a balanced glass refraction & rim intensity factor
+     * so the orb stays luminous and translucent at low opacity without turning muddy grey.
+     */
+    fun computeOrbGlassIntensity(orbOpacity: Float): Float {
+        val op = clampOrbOpacity(orbOpacity)
+        return ((op - MIN_ORB_OPACITY) / (MAX_ORB_OPACITY - MIN_ORB_OPACITY)).coerceIn(0f, 1f)
     }
 
     fun formatOpacityLabel(opacity: Float): String {
@@ -184,4 +225,38 @@ object DockAppearancePolicy {
         kotlin.math.abs(clampScale(scale) - DEFAULT_SCALE) < 0.015f
 
     fun defaultInsetDp(): Float = CompositorGeometry.DOCK_INSET_DP
+
+    /**
+     * Returns true when any floating workspace popover or context menu (such as the App Drawer,
+     * Control Center, Notification Center, utility popovers, or right-click menus) is open and
+     * needs a full-screen outside-click dismiss scrim above live app windows and desktop widgets.
+     */
+    fun shouldShowPopoverOutsideDismissScrim(
+        showAppDrawer: Boolean,
+        showControlCenter: Boolean,
+        showNotificationCenter: Boolean,
+        hasFullscreenWindow: Boolean,
+        showDpiPopover: Boolean,
+        showImePopover: Boolean,
+        showShortcutsPopover: Boolean,
+        hasContextMenu: Boolean,
+    ): Boolean =
+        showAppDrawer ||
+            showControlCenter ||
+            (showNotificationCenter && !hasFullscreenWindow) ||
+            showDpiPopover ||
+            showImePopover ||
+            showShortcutsPopover ||
+            hasContextMenu
+
+    /**
+     * Returns true when the Floating Assistive Orb's expanded Dock bar should install a full-screen
+     * outside-click dismiss scrim to auto-collapse back into the orb. Suppressed while any higher
+     * popover/overlay is open so the popover's own outside-click handler remains in charge.
+     */
+    fun shouldShowOrbDockOutsideDismissScrim(
+        orbMode: Boolean,
+        orbExpanded: Boolean,
+        anyPopoverOpen: Boolean,
+    ): Boolean = orbMode && orbExpanded && !anyPopoverOpen
 }

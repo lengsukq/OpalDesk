@@ -104,7 +104,8 @@ final class CompositorLayoutManager {
 
         IntRect nextFrame;
         if (!BridgeProtocol.PRES_FLOATING.equals(nextPres)) {
-            nextFrame = DisplayGeometryUtil.computeSnapFrame(nextPres, canvasW, canvasH, canvasDpi);
+            nextFrame = DisplayGeometryUtil.computeSnapFrame(
+                    nextPres, canvasW, canvasH, canvasDpi, config.getDockReservedBottomDp());
         } else {
             nextFrame = DisplayGeometryUtil.clampWindowFrame(
                     new IntRect(left, top, right, bottom), canvasW, canvasH, canvasDpi);
@@ -134,19 +135,21 @@ final class CompositorLayoutManager {
         int canvasW = config.getCanvasWidth();
         int canvasH = config.getCanvasHeight();
         int canvasDpi = config.getCanvasDpi();
+        int dockInsetDp = config.getDockReservedBottomDp();
         if (BridgeProtocol.PRES_MAXIMIZED.equals(ws.presentation)
                 || BridgeProtocol.PRES_FULLSCREEN.equals(ws.presentation)) {
             ws.presentation = BridgeProtocol.PRES_FLOATING;
             ws.frame = (ws.restoreFrame != null && !ws.restoreFrame.isEmpty())
                     ? DisplayGeometryUtil.clampWindowFrame(ws.restoreFrame, canvasW, canvasH, canvasDpi)
-                    : DisplayGeometryUtil.computeInitialWindowFrame(ws.profile, 0, canvasW, canvasH, canvasDpi);
+                    : DisplayGeometryUtil.computeInitialWindowFrame(
+                            ws.profile, 0, canvasW, canvasH, canvasDpi, dockInsetDp);
         } else {
             if (BridgeProtocol.PRES_FLOATING.equals(ws.presentation)) {
                 ws.restoreFrame = ws.frame;
             }
             ws.presentation = BridgeProtocol.PRES_MAXIMIZED;
             ws.frame = DisplayGeometryUtil.computeSnapFrame(
-                    BridgeProtocol.PRES_MAXIMIZED, canvasW, canvasH, canvasDpi);
+                    BridgeProtocol.PRES_MAXIMIZED, canvasW, canvasH, canvasDpi, dockInsetDp);
         }
         int[] spec = computeWindowSpecLocked(ws.frame, false, ws.profile, ws.pkg);
         ws.contentWidth = spec[0];
@@ -210,7 +213,8 @@ final class CompositorLayoutManager {
         int canvasH = config.getCanvasHeight();
         int canvasDpi = config.getCanvasDpi();
         ws.presentation = BridgeProtocol.PRES_FLOATING;
-        ws.frame = DisplayGeometryUtil.computeInitialWindowFrame(nextProfile, 0, canvasW, canvasH, canvasDpi);
+        ws.frame = DisplayGeometryUtil.computeInitialWindowFrame(
+                nextProfile, 0, canvasW, canvasH, canvasDpi, config.getDockReservedBottomDp());
         ws.restoreFrame = ws.frame;
         int[] spec = computeWindowSpecLocked(ws.frame, false, nextProfile, ws.pkg);
         ws.contentWidth = spec[0];
@@ -246,13 +250,15 @@ final class CompositorLayoutManager {
                 ? ws.preFullscreenPresentation : BridgeProtocol.PRES_FLOATING;
         ws.presentation = prevPres;
         if (!BridgeProtocol.PRES_FLOATING.equals(prevPres)) {
-            ws.frame = DisplayGeometryUtil.computeSnapFrame(prevPres, canvasW, canvasH, canvasDpi);
+            ws.frame = DisplayGeometryUtil.computeSnapFrame(
+                    prevPres, canvasW, canvasH, canvasDpi, config.getDockReservedBottomDp());
         } else {
             IntRect target = (ws.preFullscreenFrame != null && !ws.preFullscreenFrame.isEmpty())
                     ? ws.preFullscreenFrame : ws.restoreFrame;
             ws.frame = (target != null && !target.isEmpty())
                     ? DisplayGeometryUtil.clampWindowFrame(target, canvasW, canvasH, canvasDpi)
-                    : DisplayGeometryUtil.computeInitialWindowFrame(ws.profile, 0, canvasW, canvasH, canvasDpi);
+                    : DisplayGeometryUtil.computeInitialWindowFrame(
+                            ws.profile, 0, canvasW, canvasH, canvasDpi, config.getDockReservedBottomDp());
         }
         ws.preFullscreenFrame = null;
         ws.preFullscreenPresentation = null;
@@ -266,7 +272,8 @@ final class CompositorLayoutManager {
         ws.presentation = BridgeProtocol.PRES_FLOATING;
         ws.frame = (ws.restoreFrame != null && !ws.restoreFrame.isEmpty())
                 ? DisplayGeometryUtil.clampWindowFrame(ws.restoreFrame, canvasW, canvasH, canvasDpi)
-                : DisplayGeometryUtil.computeInitialWindowFrame(ws.profile, 0, canvasW, canvasH, canvasDpi);
+                : DisplayGeometryUtil.computeInitialWindowFrame(
+                        ws.profile, 0, canvasW, canvasH, canvasDpi, config.getDockReservedBottomDp());
         int[] spec = computeWindowSpecLocked(ws.frame, false, ws.profile, ws.pkg);
         ws.contentWidth = spec[0];
         ws.contentHeight = spec[1];
@@ -289,7 +296,8 @@ final class CompositorLayoutManager {
         int cw = Math.max(360, canvasW);
         int ch = Math.max(360, canvasH);
         int topSafe = DisplayGeometryUtil.dpToPx(DisplayGeometryUtil.TOP_BAR_HEIGHT_DP, canvasDpi);
-        int bottomSafe = DisplayGeometryUtil.dpToPx(DisplayGeometryUtil.DOCK_RESERVED_BOTTOM_DP, canvasDpi);
+        int dockInsetDp = config.getDockReservedBottomDp();
+        int bottomSafe = DisplayGeometryUtil.dpToPx(dockInsetDp <= 0 ? 4 : dockInsetDp, canvasDpi);
         int usableH = Math.max(260, ch - topSafe - bottomSafe - 16);
         int usableW = Math.max(300, cw - 24);
         int targetW, targetH;

@@ -695,9 +695,18 @@ public final class DisplayGeometryUtil {
         return WindowSnapGeometry.computeWorkArea(canvasW, canvasH, canvasDpi);
     }
 
+    public static IntRect computeWorkArea(int canvasW, int canvasH, int canvasDpi, int dockInsetDp) {
+        return WindowSnapGeometry.computeWorkArea(canvasW, canvasH, canvasDpi, dockInsetDp);
+    }
+
     public static IntRect computeInitialWindowFrame(
             WindowProfile profile, int cascadeIndex, int canvasW, int canvasH, int canvasDpi) {
         return WindowSnapGeometry.computeInitialWindowFrame(profile, cascadeIndex, canvasW, canvasH, canvasDpi);
+    }
+
+    public static IntRect computeInitialWindowFrame(
+            WindowProfile profile, int cascadeIndex, int canvasW, int canvasH, int canvasDpi, int dockInsetDp) {
+        return WindowSnapGeometry.computeInitialWindowFrame(profile, cascadeIndex, canvasW, canvasH, canvasDpi, dockInsetDp);
     }
 
     public static IntRect clampWindowFrame(IntRect raw, int canvasW, int canvasH, int canvasDpi) {
@@ -706,6 +715,10 @@ public final class DisplayGeometryUtil {
 
     public static IntRect computeSnapFrame(String presentation, int canvasW, int canvasH, int canvasDpi) {
         return WindowSnapGeometry.computeSnapFrame(presentation, canvasW, canvasH, canvasDpi);
+    }
+
+    public static IntRect computeSnapFrame(String presentation, int canvasW, int canvasH, int canvasDpi, int dockInsetDp) {
+        return WindowSnapGeometry.computeSnapFrame(presentation, canvasW, canvasH, canvasDpi, dockInsetDp);
     }
 
     public static int[] computeContentBufferSize(IntRect windowFrame, int canvasDpi) {

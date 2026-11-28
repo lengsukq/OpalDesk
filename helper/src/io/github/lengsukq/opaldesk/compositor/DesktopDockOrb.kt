@@ -19,6 +19,8 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideIn
 import androidx.compose.animation.slideOut
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.border
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -37,11 +40,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -49,19 +55,24 @@ import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import io.github.lengsukq.opaldesk.prefs.DockCustomizationStore
 import io.github.lengsukq.opaldesk.protocol.CompositorGeometry
 import io.github.lengsukq.opaldesk.protocol.CompositorWindow
 import io.github.lengsukq.opaldesk.ui.LocalOpalColors
-import io.github.lengsukq.opaldesk.ui.OpalPalette
-import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
+import io.github.lengsukq.opaldesk.ui.LocalOpalGlassBackdrop
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 private const val ORB_HOVER_COLLAPSE_DELAY_MS = 600L
 private const val ORB_IDLE_DIM_DELAY_MS = 3_000L
+private const val ORB_VISUAL_SIZE_DP = 48f
+private const val ORB_HALO_PAD_DP = 7f
+private const val ORB_CONTAINER_SIZE_DP = ORB_VISUAL_SIZE_DP + ORB_HALO_PAD_DP * 2f
 
 /**
  * Hosts either the standard bottom [DexMacTaskbar] or the floating Liquid Glass "Assistive Orb"
@@ -128,12 +139,14 @@ fun DesktopDockOrbHost(
         return
     }
 
-    val orbSizePx = with(density) { 48.dp.toPx() }
+    val orbSizePx = with(density) { ORB_VISUAL_SIZE_DP.dp.toPx() }
+    val haloPadPx = with(density) { ORB_HALO_PAD_DP.dp.toPx() }
+    val containerSizePx = orbSizePx + haloPadPx * 2f
     val edgeMarginPx = with(density) { 10.dp.toPx() }
-    val topBoundPx = with(density) { (CompositorGeometry.TOP_BAR_DP + 10f).dp.toPx() }
-    val bottomBoundPx = (canvasH.toFloat() - orbSizePx - edgeMarginPx).coerceAtLeast(topBoundPx)
-    val leftEdgePx = edgeMarginPx
-    val rightEdgePx = (canvasW.toFloat() - orbSizePx - edgeMarginPx).coerceAtLeast(leftEdgePx)
+    val topBoundPx = with(density) { (CompositorGeometry.TOP_BAR_DP + 10f).dp.toPx() } - haloPadPx
+    val bottomBoundPx = (canvasH.toFloat() - orbSizePx - edgeMarginPx - haloPadPx).coerceAtLeast(topBoundPx)
+    val leftEdgePx = edgeMarginPx - haloPadPx
+    val rightEdgePx = (canvasW.toFloat() - orbSizePx - edgeMarginPx - haloPadPx).coerceAtLeast(leftEdgePx)
 
     var orbExpanded by remember { mutableStateOf(false) }
     var expandedByHover by remember { mutableStateOf(false) }
@@ -198,12 +211,12 @@ fun DesktopDockOrbHost(
     val animatedOrbX by animateFloatAsState(targetValue = rawOrbX, animationSpec = posSpec, label = "orbX")
     val animatedOrbY by animateFloatAsState(targetValue = rawOrbY, animationSpec = posSpec, label = "orbY")
 
-    val activeOpacity = dockCustom.orbOpacity.coerceIn(0.25f, 1.0f)
-    val targetOrbAlpha = if (isIdleDimmed && dockCustom.orbIdleDim) {
-        (activeOpacity * 0.58f).coerceAtLeast(0.22f)
-    } else {
-        activeOpacity
-    }
+    val activeOpacity = DockAppearancePolicy.clampOrbOpacity(dockCustom.orbOpacity)
+    val targetOrbAlpha = DockAppearancePolicy.computeOrbTargetAlpha(
+        orbOpacity = activeOpacity,
+        idleDimEnabled = dockCustom.orbIdleDim,
+        isIdleDimmed = isIdleDimmed,
+    )
     val animatedOrbAlpha by animateFloatAsState(
         targetValue = targetOrbAlpha,
         animationSpec = tween(durationMillis = if (isIdleDimmed) 420 else 180, easing = FastOutSlowInEasing),
@@ -211,22 +224,45 @@ fun DesktopDockOrbHost(
     )
 
     val orbScaleTarget = when {
-        isPressingOrb -> 0.92f
-        isHoveringOrb || isDraggingOrb -> 1.08f
+        isPressingOrb -> 0.93f
+        isHoveringOrb || isDraggingOrb -> 1.07f
         else -> 1.0f
     }
     val animatedOrbScale by animateFloatAsState(
         targetValue = orbScaleTarget,
-        animationSpec = spring(dampingRatio = 0.65f, stiffness = Spring.StiffnessMedium),
+        animationSpec = spring(dampingRatio = 0.68f, stiffness = Spring.StiffnessMedium),
         label = "orbScale",
     )
 
-    val isDockedRight = (animatedOrbX + orbSizePx * 0.5f) >= (canvasW.coerceAtLeast(1) * 0.5f)
+    val isDockedRight = (animatedOrbX + containerSizePx * 0.5f) >= (canvasW.coerceAtLeast(1) * 0.5f)
     val expandOrigin = TransformOrigin(if (isDockedRight) 0.92f else 0.08f, 1f)
     val expandSpringFloat = spring<Float>(dampingRatio = 0.76f, stiffness = Spring.StiffnessMediumLow)
     val expandSpringOffset = spring<IntOffset>(dampingRatio = 0.76f, stiffness = Spring.StiffnessMediumLow)
 
     Box(modifier = modifier.fillMaxSize()) {
+        // Transparent outside-click scrim behind the expanded Dock so tapping/clicking anywhere
+        // outside (desktop, icons, widgets, or live app windows) collapses back to the orb.
+        if (DockAppearancePolicy.shouldShowOrbDockOutsideDismissScrim(
+                orbMode = true,
+                orbExpanded = orbExpanded,
+                anyPopoverOpen = anyPopoverOpen,
+            )
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
+                            orbExpanded = false
+                            expandedByHover = false
+                            lastInteractionMs = SystemClock.uptimeMillis()
+                        }
+                    },
+            )
+        }
+
         // Expanded Dock with coordinated spring scale + fade + edge-directional slide
         AnimatedVisibility(
             visible = orbExpanded,
@@ -371,7 +407,7 @@ fun DesktopDockOrbHost(
                                 isDraggingOrb = false
                                 isPressingOrb = false
                                 lastInteractionMs = SystemClock.uptimeMillis()
-                                val snapRight = (rawOrbX + orbSizePx * 0.5f) >= (canvasW.coerceAtLeast(1) * 0.5f)
+                                val snapRight = (rawOrbX + containerSizePx * 0.5f) >= (canvasW.coerceAtLeast(1) * 0.5f)
                                 if (dockCustom.orbSnapToEdge) {
                                     rawOrbX = if (snapRight) rightEdgePx else leftEdgePx
                                 }
@@ -401,95 +437,202 @@ private fun LiquidGlassDockOrb(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalOpalColors.current
+    val backdrop = LocalOpalGlassBackdrop.current
+    val orbOrigin = remember { mutableStateOf(Offset.Zero) }
     val pulseTransition = rememberInfiniteTransition(label = "orbPulse")
     val coreBreath by pulseTransition.animateFloat(
-        initialValue = 0.94f,
-        targetValue = 1.06f,
+        initialValue = 0.97f,
+        targetValue = 1.03f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2_400, easing = FastOutSlowInEasing),
+            animation = tween(durationMillis = 2_800, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "coreBreath",
     )
-    val glassOpacity = orbOpacity.coerceIn(0.25f, 1.0f)
-    val effectScale = (glassOpacity * 1.15f).coerceIn(0.45f, 1.3f)
+    val glassOpacity = DockAppearancePolicy.clampOrbOpacity(orbOpacity)
+    val intensity = DockAppearancePolicy.computeOrbGlassIntensity(glassOpacity)
+    val isDark = colors.isDark
 
+    // Outer transparent halo host (60dp) strictly contains the smooth radial shadow down to 0% alpha
+    // so AnimatedVisibility and graphicsLayer alpha/scale NEVER clip a dark square edge.
     Box(
         modifier = modifier
-            .size(48.dp)
+            .size(ORB_CONTAINER_SIZE_DP.dp)
             .graphicsLayer {
+                alpha = animatedAlpha
                 scaleX = animatedScale
                 scaleY = animatedScale
-            }
-            .alpha(animatedAlpha)
-            .liquidGlassSurface(
-                shape = CircleShape,
-                fill = OpalPalette.dockGlassFill(glassOpacity),
-                rim = OpalPalette.dockGlassRim(glassOpacity),
-                elevation = (if (isActive) 22f else 16f).dp,
-                borderWidth = 1.15.dp,
-                effectAlphaScale = effectScale,
-            ),
+                clip = false
+            },
         contentAlignment = Alignment.Center,
     ) {
+        // Pure circular diffused ambient shadow (reaches 0f alpha strictly inside the container)
         Canvas(modifier = Modifier.fillMaxSize()) {
             val cx = size.width * 0.5f
             val cy = size.height * 0.5f
-            val r = size.minDimension * 0.5f
-
-            // Outer frosted refraction ring
+            val maxR = size.minDimension * 0.5f
+            val shadowY = cy + 1.5.dp.toPx()
+            val shadowR = (maxR - 1.5.dp.toPx()).coerceAtLeast(1f)
+            val baseShadowAlpha = (if (isDark) 0.24f else 0.16f) * (0.55f + 0.45f * intensity) *
+                if (isActive) 1.18f else 1.0f
             drawCircle(
                 brush = Brush.radialGradient(
                     colorStops = arrayOf(
-                        0.0f to Color.Transparent,
-                        0.58f to Color.White.copy(alpha = if (colors.isDark) 0.14f else 0.34f),
-                        0.82f to colors.accentCyan.copy(alpha = if (isActive) 0.24f else 0.12f),
-                        1.0f to Color.White.copy(alpha = if (colors.isDark) 0.36f else 0.72f),
+                        0.0f to Color.Black.copy(alpha = baseShadowAlpha),
+                        0.66f to Color.Black.copy(alpha = baseShadowAlpha * 0.52f),
+                        0.84f to Color.Black.copy(alpha = baseShadowAlpha * 0.14f),
+                        1.0f to Color.Transparent,
                     ),
+                    center = Offset(cx, shadowY),
+                    radius = shadowR,
+                ),
+                radius = shadowR,
+                center = Offset(cx, shadowY),
+            )
+        }
+
+        // Strictly circular Liquid Glass orb body with luminous hairline rim
+        val outerRimBrush = Brush.linearGradient(
+            colorStops = arrayOf(
+                0.0f to Color.White.copy(alpha = if (isDark) (0.72f + 0.18f * intensity) else 0.96f),
+                0.38f to Color.White.copy(alpha = if (isDark) (0.24f + 0.14f * intensity) else 0.56f),
+                0.72f to Color.White.copy(alpha = if (isDark) 0.10f else 0.24f),
+                1.0f to (if (isActive) colors.accentCyan else Color.White).copy(
+                    alpha = if (isDark) (0.34f + 0.16f * intensity) else 0.62f,
+                ),
+            ),
+        )
+
+        Box(
+            modifier = Modifier
+                .size(ORB_VISUAL_SIZE_DP.dp)
+                .onGloballyPositioned { coords -> orbOrigin.value = coords.positionInRoot() }
+                .clip(CircleShape)
+                .drawWithContent {
+                    // 1. Pixel-aligned blurred wallpaper refraction clipped strictly to CircleShape
+                    if (backdrop.active) {
+                        val relX = backdrop.rootOriginInRoot.x - orbOrigin.value.x
+                        val relY = backdrop.rootOriginInRoot.y - orbOrigin.value.y
+                        val rootW = backdrop.rootSize.width.toFloat().coerceAtLeast(1f)
+                        val rootH = backdrop.rootSize.height.toFloat().coerceAtLeast(1f)
+                        val blurredBmp = backdrop.blurredWallpaper
+                        val refractionAlpha = (0.48f + 0.42f * intensity).coerceIn(0.35f, 0.90f)
+                        translate(left = relX, top = relY) {
+                            if (blurredBmp != null && blurredBmp.width > 0 && blurredBmp.height > 0) {
+                                val scale = maxOf(
+                                    rootW / blurredBmp.width.toFloat(),
+                                    rootH / blurredBmp.height.toFloat(),
+                                )
+                                val drawW = (blurredBmp.width * scale).roundToInt().coerceAtLeast(1)
+                                val drawH = (blurredBmp.height * scale).roundToInt().coerceAtLeast(1)
+                                val offX = ((rootW - drawW) * 0.5f).roundToInt()
+                                val offY = ((rootH - drawH) * 0.5f).roundToInt()
+                                drawImage(
+                                    image = blurredBmp,
+                                    dstOffset = IntOffset(offX, offY),
+                                    dstSize = IntSize(drawW, drawH),
+                                    alpha = refractionAlpha,
+                                )
+                            } else if (backdrop.gradientStops.size >= 2) {
+                                drawRect(
+                                    brush = Brush.linearGradient(
+                                        colors = backdrop.gradientStops,
+                                        start = Offset.Zero,
+                                        end = Offset(rootW, rootH),
+                                    ),
+                                    size = Size(rootW, rootH),
+                                    alpha = refractionAlpha,
+                                )
+                            }
+                        }
+                    }
+                    drawContent()
+                }
+                .border(width = 1.15.dp, brush = outerRimBrush, shape = CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val cx = size.width * 0.5f
+                val cy = size.height * 0.5f
+                val r = size.minDimension * 0.5f
+
+                // 2. Translucent frosted glass outer body (bright & airy; never muddy dark grey)
+                val bodyTop = if (isDark) Color(0xFFFFFFFF).copy(alpha = 0.24f + 0.14f * intensity)
+                    else Color(0xFFFFFFFF).copy(alpha = 0.58f + 0.26f * intensity)
+                val bodyMid = if (isDark) Color(0xFF8FA8C8).copy(alpha = 0.16f + 0.14f * intensity)
+                    else Color(0xFFEAF2FC).copy(alpha = 0.42f + 0.26f * intensity)
+                val bodyBot = if (isDark) Color(0xFF1E293B).copy(alpha = 0.28f + 0.20f * intensity)
+                    else Color(0xFFD6E4F8).copy(alpha = 0.34f + 0.24f * intensity)
+                drawCircle(
+                    brush = Brush.linearGradient(
+                        colorStops = arrayOf(0.0f to bodyTop, 0.52f to bodyMid, 1.0f to bodyBot),
+                        start = Offset(0f, 0f),
+                        end = Offset(size.width, size.height),
+                    ),
+                    radius = r,
                     center = Offset(cx, cy),
-                    radius = r * 0.88f,
-                ),
-                radius = r * 0.86f,
-                center = Offset(cx, cy),
-            )
+                )
 
-            // Dual frosted inner ring stroke
-            drawCircle(
-                color = Color.White.copy(alpha = if (colors.isDark) 0.40f else 0.78f),
-                radius = r * 0.54f,
-                center = Offset(cx, cy),
-                style = Stroke(width = 1.3.dp.toPx()),
-            )
-
-            // Soft luminous halo behind the core dot
-            val haloRadius = r * 0.44f * coreBreath
-            drawCircle(
-                brush = Brush.radialGradient(
-                    listOf(
-                        (if (isActive) colors.accentCyan else Color.White).copy(alpha = if (isActive) 0.48f else 0.30f),
-                        Color.Transparent,
+                // 3. Top-left liquid-glass specular highlight arc
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colorStops = arrayOf(
+                            0.0f to Color.White.copy(alpha = if (isDark) 0.46f else 0.78f),
+                            0.45f to Color.White.copy(alpha = if (isDark) 0.12f else 0.24f),
+                            1.0f to Color.Transparent,
+                        ),
+                        center = Offset(cx - r * 0.34f, cy - r * 0.36f),
+                        radius = r * 0.82f,
                     ),
+                    radius = r,
                     center = Offset(cx, cy),
-                    radius = haloRadius,
-                ),
-                radius = haloRadius,
-                center = Offset(cx, cy),
-            )
+                )
 
-            // Breathing core dot with crisp specular highlight
-            val coreRadius = r * 0.27f * coreBreath
-            drawCircle(
-                brush = Brush.radialGradient(
-                    listOf(
-                        Color.White.copy(alpha = 0.96f),
-                        Color.White.copy(alpha = if (colors.isDark) 0.74f else 0.84f),
+                // 4. Concentric inner frosted glass ring (iOS AssistiveTouch-inspired proportions)
+                val ringR = r * 0.63f
+                drawCircle(
+                    color = Color.White.copy(alpha = if (isDark) 0.11f else 0.26f),
+                    radius = ringR,
+                    center = Offset(cx, cy),
+                )
+                drawCircle(
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = if (isDark) 0.56f else 0.88f),
+                            Color.White.copy(alpha = if (isDark) 0.18f else 0.42f),
+                        ),
+                        start = Offset(cx - ringR, cy - ringR),
+                        end = Offset(cx + ringR, cy + ringR),
                     ),
-                    center = Offset(cx - coreRadius * 0.22f, cy - coreRadius * 0.24f),
-                    radius = coreRadius * 1.15f,
-                ),
-                radius = coreRadius,
-                center = Offset(cx, cy),
-            )
+                    radius = ringR,
+                    center = Offset(cx, cy),
+                    style = Stroke(width = 1.0.dp.toPx()),
+                )
+
+                // 5. Crisp frosted pearl center core with subtle specular sheen
+                val coreR = r * 0.33f * coreBreath
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colorStops = arrayOf(
+                            0.0f to Color.White.copy(alpha = 0.98f),
+                            0.68f to Color.White.copy(alpha = if (isDark) 0.84f else 0.90f),
+                            1.0f to Color.White.copy(alpha = if (isDark) 0.62f else 0.72f),
+                        ),
+                        center = Offset(cx - coreR * 0.26f, cy - coreR * 0.28f),
+                        radius = coreR * 1.25f,
+                    ),
+                    radius = coreR,
+                    center = Offset(cx, cy),
+                )
+                if (isActive) {
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.55f),
+                        radius = coreR,
+                        center = Offset(cx, cy),
+                        style = Stroke(width = 0.8.dp.toPx()),
+                    )
+                }
+            }
         }
     }
 }

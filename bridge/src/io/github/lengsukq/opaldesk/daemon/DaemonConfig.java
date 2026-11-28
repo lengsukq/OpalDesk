@@ -153,6 +153,7 @@ public final class DaemonConfig {
     private int canvasWidth = 1920;
     private int canvasHeight = 1200;
     private int canvasDpi = 240;
+    private int dockReservedBottomDp = DisplayGeometryUtil.DOCK_RESERVED_BOTTOM_DP;
     private int maxActiveDisplays = DEFAULT_ROOTLESS_MAX_VD;
     private int inputBackendMode = BridgeProtocol.INPUT_BACKEND_AUTO;
     private int targetFps = 0; // 0 = auto match display refresh rate
@@ -324,6 +325,10 @@ public final class DaemonConfig {
 
     public int getCanvasDpi() {
         synchronized (lock) { return canvasDpi; }
+    }
+
+    public int getDockReservedBottomDp() {
+        synchronized (lock) { return dockReservedBottomDp; }
     }
 
     public int getMaxActiveDisplays() {
@@ -565,6 +570,10 @@ public final class DaemonConfig {
     }
 
     public void updateRuntimeConfig(int inputMode, int maxVd, int workW, int workH, int workDpi) {
+        updateRuntimeConfig(inputMode, maxVd, workW, workH, workDpi, -1);
+    }
+
+    public void updateRuntimeConfig(int inputMode, int maxVd, int workW, int workH, int workDpi, int dockInsetDp) {
         synchronized (lock) {
             if (inputMode >= BridgeProtocol.INPUT_BACKEND_AUTO && inputMode <= BridgeProtocol.INPUT_BACKEND_UHID) {
                 this.inputBackendMode = inputMode;
@@ -578,6 +587,9 @@ public final class DaemonConfig {
             }
             if (workDpi >= DisplayGeometryUtil.MIN_DPI && workDpi <= DisplayGeometryUtil.MAX_DPI) {
                 this.canvasDpi = workDpi;
+            }
+            if (dockInsetDp >= 0) {
+                this.dockReservedBottomDp = Math.min(200, dockInsetDp);
             }
         }
         saveMainConf();

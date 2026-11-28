@@ -284,9 +284,10 @@ public final class BridgeBinderService extends Binder {
                 int canvasW = data.readInt();
                 int canvasH = data.readInt();
                 int canvasDpi = data.readInt();
+                int dockInsetDp = (data.dataAvail() >= 4) ? data.readInt() : -1;
                 int prevInputMode = config.getInputBackendMode();
                 int prevMaxVd = config.getMaxActiveDisplays();
-                config.updateRuntimeConfig(inputMode, maxVd, canvasW, canvasH, canvasDpi);
+                config.updateRuntimeConfig(inputMode, maxVd, canvasW, canvasH, canvasDpi, dockInsetDp);
                 if (maxVd >= DaemonConfig.MIN_MAX_VD && maxVd <= DaemonConfig.HARD_MAX_VD) {
                     compositor.setConfiguredMaxDisplays(config.getMaxActiveDisplays());
                 }

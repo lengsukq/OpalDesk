@@ -85,7 +85,31 @@ class DockAppearancePolicyTest {
             scale = DockAppearancePolicy.MAX_SCALE,
             isCompactWidth = false,
         )
-        assertEquals(DockAppearancePolicy.HIDDEN_DOCK_INSET_DP, hiddenInset, 0.01f)
+        assertEquals(0f, hiddenInset, 0.01f)
+        assertFalse(DockAppearancePolicy.reservesBottomSpace(visible = false, autoHide = false, orbMode = false))
+
+        val autoHideInset = DockAppearancePolicy.computeEffectiveDockInsetDp(
+            visible = true,
+            scale = DockAppearancePolicy.MAX_SCALE,
+            isCompactWidth = false,
+            autoHide = true,
+            orbMode = false,
+        )
+        assertEquals(0f, autoHideInset, 0.01f)
+        assertFalse(DockAppearancePolicy.reservesBottomSpace(visible = true, autoHide = true, orbMode = false))
+
+        val orbModeInset = DockAppearancePolicy.computeEffectiveDockInsetDp(
+            visible = true,
+            scale = DockAppearancePolicy.MAX_SCALE,
+            isCompactWidth = false,
+            autoHide = false,
+            orbMode = true,
+        )
+        assertEquals(0f, orbModeInset, 0.01f)
+        assertFalse(DockAppearancePolicy.reservesBottomSpace(visible = true, autoHide = false, orbMode = true))
+
+        assertTrue(DockAppearancePolicy.reservesBottomSpace(visible = true, autoHide = false, orbMode = false))
+        assertTrue(defaultInset > 0f)
 
         val largeInset = DockAppearancePolicy.computeEffectiveDockInsetDp(
             visible = true,
@@ -113,6 +137,28 @@ class DockAppearancePolicyTest {
     }
 
     @Test
+    fun orbOpacityAndIdleDimPolicyClampsAndScalesSmoothly() {
+        assertEquals(DockAppearancePolicy.MIN_ORB_OPACITY, DockAppearancePolicy.clampOrbOpacity(0.05f), 0.0001f)
+        assertEquals(DockAppearancePolicy.MAX_ORB_OPACITY, DockAppearancePolicy.clampOrbOpacity(1.5f), 0.0001f)
+        assertEquals(DockAppearancePolicy.DEFAULT_ORB_OPACITY, DockAppearancePolicy.clampOrbOpacity(Float.NaN), 0.0001f)
+
+        // Active state preserves exact clamped opacity
+        assertEquals(0.25f, DockAppearancePolicy.computeOrbTargetAlpha(0.25f, idleDimEnabled = true, isIdleDimmed = false), 0.0001f)
+        assertEquals(1.0f, DockAppearancePolicy.computeOrbTargetAlpha(1.0f, idleDimEnabled = true, isIdleDimmed = false), 0.0001f)
+
+        // Idle dimming reduces alpha softly without dropping below floor
+        val dimmedHigh = DockAppearancePolicy.computeOrbTargetAlpha(1.0f, idleDimEnabled = true, isIdleDimmed = true)
+        assertTrue("Expected dimmed alpha < 1.0f and >= 0.5f, got $dimmedHigh", dimmedHigh in 0.5f..0.7f)
+        val dimmedLow = DockAppearancePolicy.computeOrbTargetAlpha(0.25f, idleDimEnabled = true, isIdleDimmed = true)
+        assertTrue("Expected low dimmed alpha in 0.20..0.25, got $dimmedLow", dimmedLow in 0.20f..0.25f)
+
+        // Intensity maps [0.25..1.0] -> [0.0..1.0]
+        assertEquals(0f, DockAppearancePolicy.computeOrbGlassIntensity(0.25f), 0.0001f)
+        assertEquals(1f, DockAppearancePolicy.computeOrbGlassIntensity(1.0f), 0.0001f)
+        assertEquals(0.5f, DockAppearancePolicy.computeOrbGlassIntensity(0.625f), 0.0001f)
+    }
+
+    @Test
     fun labelFormattingMatchesExpectedDisplayStrings() {
         assertEquals("全透明", DockAppearancePolicy.formatOpacityLabel(0f))
         assertEquals("65%", DockAppearancePolicy.formatOpacityLabel(0.65f))
@@ -120,5 +166,66 @@ class DockAppearancePolicyTest {
         assertEquals("75%", DockAppearancePolicy.formatScaleLabel(0.75f))
         assertEquals("100%", DockAppearancePolicy.formatScaleLabel(1.0f))
         assertEquals("135%", DockAppearancePolicy.formatScaleLabel(1.35f))
+    }
+
+    @Test
+    fun popoverOutsideDismissScrimActivatesForAppDrawerAndFloatingPopovers() {
+        assertFalse(
+            DockAppearancePolicy.shouldShowPopoverOutsideDismissScrim(
+                showAppDrawer = false,
+                showControlCenter = false,
+                showNotificationCenter = false,
+                hasFullscreenWindow = false,
+                showDpiPopover = false,
+                showImePopover = false,
+                showShortcutsPopover = false,
+                hasContextMenu = false,
+            ),
+        )
+        assertTrue(
+            DockAppearancePolicy.shouldShowPopoverOutsideDismissScrim(
+                showAppDrawer = true,
+                showControlCenter = false,
+                showNotificationCenter = false,
+                hasFullscreenWindow = false,
+                showDpiPopover = false,
+                showImePopover = false,
+                showShortcutsPopover = false,
+                hasContextMenu = false,
+            ),
+        )
+        assertTrue(
+            DockAppearancePolicy.shouldShowPopoverOutsideDismissScrim(
+                showAppDrawer = false,
+                showControlCenter = true,
+                showNotificationCenter = false,
+                hasFullscreenWindow = true,
+                showDpiPopover = false,
+                showImePopover = false,
+                showShortcutsPopover = false,
+                hasContextMenu = false,
+            ),
+        )
+        // Notification Center is hidden in true fullscreen, so it must not install a blocking scrim
+        assertFalse(
+            DockAppearancePolicy.shouldShowPopoverOutsideDismissScrim(
+                showAppDrawer = false,
+                showControlCenter = false,
+                showNotificationCenter = true,
+                hasFullscreenWindow = true,
+                showDpiPopover = false,
+                showImePopover = false,
+                showShortcutsPopover = false,
+                hasContextMenu = false,
+            ),
+        )
+    }
+
+    @Test
+    fun orbDockOutsideDismissScrimOnlyActiveWhenOrbExpandedWithoutHigherPopover() {
+        assertTrue(DockAppearancePolicy.shouldShowOrbDockOutsideDismissScrim(orbMode = true, orbExpanded = true, anyPopoverOpen = false))
+        assertFalse(DockAppearancePolicy.shouldShowOrbDockOutsideDismissScrim(orbMode = true, orbExpanded = false, anyPopoverOpen = false))
+        assertFalse(DockAppearancePolicy.shouldShowOrbDockOutsideDismissScrim(orbMode = false, orbExpanded = true, anyPopoverOpen = false))
+        assertFalse(DockAppearancePolicy.shouldShowOrbDockOutsideDismissScrim(orbMode = true, orbExpanded = true, anyPopoverOpen = true))
     }
 }

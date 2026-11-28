@@ -168,10 +168,15 @@ public final class WindowSnapGeometry {
     }
 
     public static IntRect computeWorkArea(int canvasW, int canvasH, int canvasDpi) {
+        return computeWorkArea(canvasW, canvasH, canvasDpi, DisplayGeometryUtil.DOCK_RESERVED_BOTTOM_DP);
+    }
+
+    public static IntRect computeWorkArea(int canvasW, int canvasH, int canvasDpi, int dockInsetDp) {
         int w = Math.max(360, canvasW);
         int h = Math.max(360, canvasH);
         int topInset = DisplayGeometryUtil.dpToPx(DisplayGeometryUtil.TOP_BAR_HEIGHT_DP + 4, canvasDpi);
-        int bottomInset = DisplayGeometryUtil.dpToPx(DisplayGeometryUtil.DOCK_RESERVED_BOTTOM_DP, canvasDpi);
+        int effectiveBottomDp = (dockInsetDp <= 0) ? 4 : dockInsetDp;
+        int bottomInset = DisplayGeometryUtil.dpToPx(effectiveBottomDp, canvasDpi);
         int padX = DisplayGeometryUtil.dpToPx(6, canvasDpi);
         int bottom = Math.max(topInset + DisplayGeometryUtil.MIN_WINDOW_EDGE_PX, h - bottomInset);
         return new IntRect(padX, topInset, Math.max(padX + DisplayGeometryUtil.MIN_WINDOW_EDGE_PX, w - padX), bottom);
@@ -179,7 +184,13 @@ public final class WindowSnapGeometry {
 
     public static IntRect computeInitialWindowFrame(
             WindowProfile profile, int cascadeIndex, int canvasW, int canvasH, int canvasDpi) {
-        IntRect work = computeWorkArea(canvasW, canvasH, canvasDpi);
+        return computeInitialWindowFrame(
+                profile, cascadeIndex, canvasW, canvasH, canvasDpi, DisplayGeometryUtil.DOCK_RESERVED_BOTTOM_DP);
+    }
+
+    public static IntRect computeInitialWindowFrame(
+            WindowProfile profile, int cascadeIndex, int canvasW, int canvasH, int canvasDpi, int dockInsetDp) {
+        IntRect work = computeWorkArea(canvasW, canvasH, canvasDpi, dockInsetDp);
         int workW = work.width();
         int workH = work.height();
         boolean portraitCanvas = workH > workW;
@@ -247,12 +258,17 @@ public final class WindowSnapGeometry {
     }
 
     public static IntRect computeSnapFrame(String presentation, int canvasW, int canvasH, int canvasDpi) {
+        return computeSnapFrame(
+                presentation, canvasW, canvasH, canvasDpi, DisplayGeometryUtil.DOCK_RESERVED_BOTTOM_DP);
+    }
+
+    public static IntRect computeSnapFrame(String presentation, int canvasW, int canvasH, int canvasDpi, int dockInsetDp) {
         if (BridgeProtocol.PRES_FULLSCREEN.equals(presentation)) {
             int w = DisplayGeometryUtil.alignEven(Math.max(360, canvasW), 360, DisplayGeometryUtil.MAX_WINDOW_EDGE_PX);
             int h = DisplayGeometryUtil.alignEven(Math.max(360, canvasH), 360, DisplayGeometryUtil.MAX_WINDOW_EDGE_PX);
             return new IntRect(0, 0, w, h);
         }
-        IntRect work = computeWorkArea(canvasW, canvasH, canvasDpi);
+        IntRect work = computeWorkArea(canvasW, canvasH, canvasDpi, dockInsetDp);
         int gap = DisplayGeometryUtil.dpToPx(DisplayGeometryUtil.SNAP_GAP_DP, canvasDpi);
         int midX = work.left + work.width() / 2;
         int midY = work.top + work.height() / 2;

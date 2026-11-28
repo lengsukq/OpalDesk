@@ -11,6 +11,8 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -80,9 +82,39 @@ internal fun BoxScope.WorkspaceOverlayHost(
     val dockPinnedPkgs by AppPrefs.dockPinnedFlow.collectAsState()
     val dockVisible by AppPrefs.dockVisibleFlow.collectAsState()
 
+    // Transparent outside-click dismiss scrim above live app windows & desktop widgets
+    // (below Dock at 10_010f and popovers at 10_020f+) so tapping/clicking anywhere outside
+    // the App Drawer or other floating popovers closes them cleanly for both touch and mouse.
+    val showPopoverOutsideScrim = DockAppearancePolicy.shouldShowPopoverOutsideDismissScrim(
+        showAppDrawer = ui.showAppDrawer,
+        showControlCenter = ui.showControlCenter,
+        showNotificationCenter = ui.showNotificationCenter,
+        hasFullscreenWindow = hasFullscreenWindow,
+        showDpiPopover = ui.showDpiPopover,
+        showImePopover = ui.showImePopover,
+        showShortcutsPopover = ui.showShortcutsPopover,
+        hasContextMenu = ui.contextMenuTarget != null ||
+            ui.guideIconMenuPos != null ||
+            ui.wallpaperMenuPos != null,
+    )
+    if (showPopoverOutsideScrim) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(10_009f)
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        down.consume()
+                        ui.dismissAllPopovers()
+                    }
+                },
+        )
+    }
+
     // Floating Rounded Glass App Launcher Popover above macOS Dock
     if (ui.showAppDrawer) {
-        val drawerBottomPadDp = if (dockVisible) effectiveDockInsetDp + 8f else 16f
+        val drawerBottomPadDp = if (dockVisible && effectiveDockInsetDp > 0f) effectiveDockInsetDp + 8f else 16f
         val drawerMaxH = (maxHeight - (CompositorGeometry.TOP_BAR_DP + drawerBottomPadDp + 28f).dp)
             .coerceIn(220.dp, 480.dp)
         DexAppDrawerPopover(
@@ -118,10 +150,10 @@ internal fun BoxScope.WorkspaceOverlayHost(
     )
 
     // Unified Liquid Glass Control Center Popover (anchored directly above Dock Setting button)
-    val ccBottomPadDp = if (dockVisible) effectiveDockInsetDp + 10f else 16f
+    val ccBottomPadDp = if (dockVisible && effectiveDockInsetDp > 0f) effectiveDockInsetDp + 10f else 16f
     val canvasWidthDp = if (densityVal > 0f) canvasW / densityVal else 0f
     val ccHorizontalShiftDp = when {
-        isCompactWidth || !dockVisible -> 0f
+        isCompactWidth || !dockVisible || effectiveDockInsetDp <= 0f -> 0f
         canvasWidthDp >= 900f -> -124f
         else -> -72f
     }

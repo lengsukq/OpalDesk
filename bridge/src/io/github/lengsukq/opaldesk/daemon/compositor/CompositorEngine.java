@@ -253,18 +253,19 @@ public final class CompositorEngine {
                     initialPres = remembered.presentation;
                     if (!BridgeProtocol.PRES_FLOATING.equals(initialPres)
                             && !BridgeProtocol.PRES_FULLSCREEN.equals(initialPres)) {
-                        initialFrame = DisplayGeometryUtil.computeSnapFrame(initialPres, canvasW, canvasH, canvasDpi);
+                        initialFrame = DisplayGeometryUtil.computeSnapFrame(
+                                initialPres, canvasW, canvasH, canvasDpi, config.getDockReservedBottomDp());
                     } else {
                         initialPres = BridgeProtocol.PRES_FLOATING;
                         initialFrame = remembered.toCanvasRect(canvasW, canvasH, canvasDpi);
                     }
                 } else {
                     initialFrame = DisplayGeometryUtil.computeInitialWindowFrame(
-                            profile, sessionsById.size(), canvasW, canvasH, canvasDpi);
+                            profile, sessionsById.size(), canvasW, canvasH, canvasDpi, config.getDockReservedBottomDp());
                 }
             } else {
                 initialFrame = DisplayGeometryUtil.computeInitialWindowFrame(
-                        profile, sessionsById.size(), canvasW, canvasH, canvasDpi);
+                        profile, sessionsById.size(), canvasW, canvasH, canvasDpi, config.getDockReservedBottomDp());
             }
 
             int[] spec = layoutManager.computeWindowSpecLocked(initialFrame, false, profile, pkg);

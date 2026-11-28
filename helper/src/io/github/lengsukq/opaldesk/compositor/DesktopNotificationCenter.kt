@@ -299,6 +299,7 @@ fun DesktopNotificationCenterPopover(
                 rim = OpalPalette.LiquidGlassRim,
                 elevation = 24.dp,
             )
+            .pointerInput(Unit) { detectTapGestures {} }
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {

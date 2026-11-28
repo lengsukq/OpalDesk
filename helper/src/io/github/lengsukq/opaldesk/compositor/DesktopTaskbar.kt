@@ -298,6 +298,11 @@ fun DexMacTaskbar(
                         borderWidth = borderWidthDp,
                         effectAlphaScale = effectScale,
                     )
+                    .pointerInput(onCollapseToOrb != null) {
+                        if (onCollapseToOrb != null) {
+                            detectTapGestures {}
+                        }
+                    }
                     .padding(horizontal = hPadDp, vertical = vPadDp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = if (isFloating) {

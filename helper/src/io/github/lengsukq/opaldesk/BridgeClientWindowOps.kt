@@ -279,6 +279,7 @@ internal fun BridgeClient.updateCompositorConfigAsyncImpl(
     canvasW: Int,
     canvasH: Int,
     canvasDpi: Int,
+    dockInsetDp: Int = -1,
 ) {
     ioExec.execute {
         val svc = getService() ?: return@execute
@@ -292,6 +293,7 @@ internal fun BridgeClient.updateCompositorConfigAsyncImpl(
                 d.writeInt(canvasW)
                 d.writeInt(canvasH)
                 d.writeInt(canvasDpi)
+                d.writeInt(dockInsetDp)
             },
         ) { it.readInt() }
         refreshStatus()

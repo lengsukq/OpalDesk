@@ -286,12 +286,13 @@ private fun BoxWithConstraintsScope.WorkspaceCanvasContent(
     }
 
     // Sync physical canvas dimensions & effective DPI with daemon compositor
-    LaunchedEffect(status.connected, canvasW, canvasH, dpiInt) {
+    LaunchedEffect(status.connected, canvasW, canvasH, dpiInt, effectiveDockInsetDp) {
         if (status.connected && canvasW >= 360 && canvasH >= 360) {
             BridgeClient.updateCompositorConfigAsync(
                 canvasW = canvasW,
                 canvasH = canvasH,
                 canvasDpi = dpiInt,
+                dockInsetDp = effectiveDockInsetDp.roundToInt(),
             )
             val activeSlot = io.github.lengsukq.opaldesk.prefs.ProfileConfigStore.stateFlow.value.activeSavedSlot
             if (!ui.autoRestoredOnce && activeSlot.autoRestoreLayout && scene.windows.isEmpty() && activeSlot.savedLayout.isNotEmpty()) {

@@ -646,7 +646,8 @@ object BridgeClient {
         canvasW: Int = -1,
         canvasH: Int = -1,
         canvasDpi: Int = -1,
-    ) = updateCompositorConfigAsyncImpl(inputBackendMode, maxVdCount, canvasW, canvasH, canvasDpi)
+        dockInsetDp: Int = -1,
+    ) = updateCompositorConfigAsyncImpl(inputBackendMode, maxVdCount, canvasW, canvasH, canvasDpi, dockInsetDp)
 
     fun closeAllWindowsAsync(removeTasks: Boolean) = closeAllWindowsAsyncImpl(removeTasks)
 
