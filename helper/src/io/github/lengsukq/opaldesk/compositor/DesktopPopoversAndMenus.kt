@@ -15,12 +15,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -304,6 +306,12 @@ fun DesktopWallpaperContextMenu(
     showPhoneTrackpadAction: Boolean = false,
     phoneTrackpadVisible: Boolean = false,
     showDesktopGuideIcon: Boolean = true,
+    isWidgetEditMode: Boolean = false,
+    onOpenWidgetStore: () -> Unit = {},
+    onToggleWidgetEditMode: () -> Unit = {},
+    onOpenSpotlight: () -> Unit = {},
+    onOpenControlCenter: () -> Unit = {},
+    onOpenNotifications: () -> Unit = {},
     onTogglePhoneTrackpad: () -> Unit = {},
     onSelectPreset: (Int) -> Unit,
     onPickCustomWallpaper: () -> Unit,
@@ -315,9 +323,17 @@ fun DesktopWallpaperContextMenu(
     onRestoreDesktopGuideIcon: () -> Unit = {},
     onToggleLightDark: () -> Unit,
     onOpenConsole: () -> Unit,
+    onExitDesktop: () -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val ctx = LocalContext.current
+    val isZh = remember(ctx) {
+        val lang = runCatching {
+            ctx.resources.configuration.locales.takeIf { !it.isEmpty }?.get(0)?.language
+        }.getOrNull() ?: java.util.Locale.getDefault().language
+        lang.equals("zh", ignoreCase = true)
+    }
     val isDark = OpalPalette.isDark
     val presets = if (isDark) {
         listOf(
@@ -338,6 +354,7 @@ fun DesktopWallpaperContextMenu(
     Column(
         modifier = modifier
             .width(248.dp)
+            .heightIn(max = 560.dp)
             .liquidGlassSurface(
                 shape = shape,
                 fill = OpalPalette.LiquidPopoverFill,
@@ -345,6 +362,7 @@ fun DesktopWallpaperContextMenu(
                 elevation = 24.dp,
             )
             .pointerInput(Unit) { detectTapGestures {} }
+            .verticalScroll(rememberScrollState())
             .padding(8.dp),
     ) {
         OpalText(
@@ -397,6 +415,43 @@ fun DesktopWallpaperContextMenu(
                 .height(0.8.dp)
                 .background(OpalPalette.DividerColor),
         )
+        ContextMenuRow(
+            title = if (isZh) "Spotlight 全局搜索" else "Spotlight Search",
+            textColor = OpalPalette.AccentBlue,
+        ) {
+            onDismiss()
+            onOpenSpotlight()
+        }
+        ContextMenuRow(
+            title = if (isZh) "控制中心" else "Control Center",
+        ) {
+            onDismiss()
+            onOpenControlCenter()
+        }
+        ContextMenuRow(
+            title = if (isZh) "通知中心" else "Notification Center",
+        ) {
+            onDismiss()
+            onOpenNotifications()
+        }
+        ContextMenuRow(
+            title = if (isZh) "组件商店" else "Widget Store",
+            textColor = OpalPalette.AccentBlue,
+        ) {
+            onDismiss()
+            onOpenWidgetStore()
+        }
+        ContextMenuRow(
+            title = when {
+                isWidgetEditMode && isZh -> "退出组件编辑"
+                isWidgetEditMode -> "Exit Widget Edit Mode"
+                isZh -> "编辑桌面组件"
+                else -> "Edit Desktop Widgets"
+            },
+        ) {
+            onDismiss()
+            onToggleWidgetEditMode()
+        }
         ContextMenuRow(stringResource(R.string.taskbar_desktop_tiling)) {
             onDismiss()
             onOpenTilingMenu()
@@ -435,6 +490,13 @@ fun DesktopWallpaperContextMenu(
         ContextMenuRow(stringResource(R.string.taskbar_desktop_open_console)) {
             onDismiss()
             onOpenConsole()
+        }
+        ContextMenuRow(
+            title = if (isZh) "退出桌面模式" else "Exit Desktop",
+            textColor = OpalPalette.AccentDanger,
+        ) {
+            onDismiss()
+            onExitDesktop()
         }
     }
 }

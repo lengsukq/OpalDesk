@@ -159,8 +159,8 @@ fun MacControlCenterPopover(
             .heightIn(max = maxHeight)
             .liquidGlassSurface(
                 shape = shape,
-                fill = OpalPalette.SolidPopoverFill,
-                rim = OpalPalette.SolidPopoverRim,
+                fill = OpalPalette.LiquidPopoverFill,
+                rim = OpalPalette.LiquidGlassRim,
                 elevation = 28.dp,
             )
             .pointerInput(Unit) { detectTapGestures {} }

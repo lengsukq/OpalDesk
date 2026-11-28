@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 /**
  * Zero-overhead rootless ({@code uid=2000}, group {@code input}) Display 0 wake monitor.
@@ -23,6 +24,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * simultaneously, then immediately wakes Display 0 and closes all file handles.
  */
 public final class HostScreenWakeMonitor {
+    interface WakeLauncher {
+        void launch(int gen, BooleanSupplier onWake);
+    }
+
     static final class DeviceSpec {
         final String path;
         final String name;
@@ -41,8 +46,32 @@ public final class HostScreenWakeMonitor {
     private final List<FileInputStream> openStreams = new ArrayList<>();
     private final AtomicBoolean active = new AtomicBoolean(false);
     private volatile int generation = 0;
+    private final WakeLauncher launcher;
+
+    public HostScreenWakeMonitor() {
+        this(null);
+    }
+
+    HostScreenWakeMonitor(WakeLauncher launcher) {
+        this.launcher = (launcher != null) ? launcher : this::launchDiscoveryThread;
+    }
+
+    public boolean isActive() {
+        return active.get();
+    }
 
     public void start(Runnable onWake) {
+        if (onWake == null) {
+            stop();
+            return;
+        }
+        start(() -> {
+            onWake.run();
+            return true;
+        });
+    }
+
+    public void start(BooleanSupplier onWake) {
         stop();
         if (onWake == null) return;
         final int gen;
@@ -50,16 +79,25 @@ public final class HostScreenWakeMonitor {
             active.set(true);
             gen = ++generation;
         }
-        Thread launcher = new Thread(() -> startMonitorsAsync(gen, onWake), "OpalWakeDiscovery");
-        launcher.setDaemon(true);
-        launcher.start();
+        launcher.launch(gen, onWake);
+    }
+
+    private void launchDiscoveryThread(int gen, BooleanSupplier onWake) {
+        Thread t = new Thread(() -> startMonitorsAsync(gen, onWake), "OpalWakeDiscovery");
+        t.setDaemon(true);
+        t.start();
     }
 
     public void stop() {
+        stopAndGetGeneration();
+    }
+
+    private int stopAndGetGeneration() {
         List<FileInputStream> toClose;
+        int gen;
         synchronized (lock) {
             active.set(false);
-            generation++;
+            gen = ++generation;
             toClose = new ArrayList<>(openStreams);
             openStreams.clear();
         }
@@ -69,9 +107,10 @@ public final class HostScreenWakeMonitor {
             } catch (IOException ignored) {
             }
         }
+        return gen;
     }
 
-    private void startMonitorsAsync(int gen, Runnable onWake) {
+    private void startMonitorsAsync(int gen, BooleanSupplier onWake) {
         List<DeviceSpec> devices = discoverWakeDevices();
         if (devices.isEmpty()) {
             System.out.println("OPALDESK_WAKE_MONITOR_SKIP no readable internal touch/volume evdev found (using helper wake fallback)");
@@ -95,7 +134,7 @@ public final class HostScreenWakeMonitor {
             DeviceSpec spec,
             VolumeKeyWakeDetector sharedVolumeDetector,
             AtomicBoolean woken,
-            Runnable onWake) {
+            BooleanSupplier onWake) {
         DoubleTapWakeDetector touchDetector = spec.isTouch ? new DoubleTapWakeDetector() : null;
         if (touchDetector != null) {
             touchDetector.arm(SystemClock.uptimeMillis());
@@ -134,11 +173,7 @@ public final class HostScreenWakeMonitor {
                                     ? "OPALDESK_VOLUME_KEY_WAKE_TRIGGERED"
                                     : "OPALDESK_DOUBLE_TAP_WAKE_TRIGGERED";
                             System.out.println(reason + " dev=" + spec.path);
-                            stop();
-                            try {
-                                onWake.run();
-                            } catch (RuntimeException ignored) {
-                            }
+                            handleWakeTriggered(onWake, spec.path);
                         }
                         return;
                     }
@@ -156,6 +191,27 @@ public final class HostScreenWakeMonitor {
                 try { fis.close(); } catch (IOException ignored) {}
             }
         }
+    }
+
+    boolean handleWakeTriggered(BooleanSupplier onWake, String devPath) {
+        int stoppedGen = stopAndGetGeneration();
+        boolean wokenOk = false;
+        try {
+            wokenOk = onWake != null && onWake.getAsBoolean();
+        } catch (RuntimeException e) {
+            System.err.println("OPALDESK_WAKE_CALLBACK_ERR dev=" + devPath + ": " + e.getMessage());
+        }
+        if (!wokenOk && onWake != null) {
+            boolean shouldRearm;
+            synchronized (lock) {
+                shouldRearm = (generation == stoppedGen && !active.get());
+            }
+            if (shouldRearm) {
+                System.err.println("OPALDESK_WAKE_MONITOR_REARM dev=" + devPath + " reason=wake_failed");
+                start(onWake);
+            }
+        }
+        return wokenOk;
     }
 
     /**

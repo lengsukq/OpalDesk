@@ -30,6 +30,8 @@ internal class WorkspaceUiState(initialSpotlightPulse: Long) {
     var showShortcutsPopover by mutableStateOf(false)
     var showFeatureGuide by mutableStateOf(false)
     var showNotificationCenter by mutableStateOf(false)
+    var showWidgetStore by mutableStateOf(false)
+    var isWidgetEditMode by mutableStateOf(false)
     var showExitSlotModal by mutableStateOf(false)
     var savingOnExit by mutableStateOf(false)
     var editingAppDpiTarget by mutableStateOf<Pair<String, String>?>(null)
@@ -50,6 +52,7 @@ internal class WorkspaceUiState(initialSpotlightPulse: Long) {
             showShortcutsPopover ||
             showFeatureGuide ||
             showNotificationCenter ||
+            showWidgetStore ||
             showExitSlotModal ||
             editingAppDpiTarget != null ||
             hasPendingPairing
@@ -65,6 +68,8 @@ internal class WorkspaceUiState(initialSpotlightPulse: Long) {
             showShortcutsPopover ||
             showFeatureGuide ||
             showNotificationCenter ||
+            showWidgetStore ||
+            isWidgetEditMode ||
             showExitSlotModal ||
             editingAppDpiTarget != null ||
             contextMenuTarget != null ||
@@ -74,6 +79,7 @@ internal class WorkspaceUiState(initialSpotlightPulse: Long) {
     fun dismissAnyOpenOverlay(): Boolean {
         if (!hasAnyOpenOverlay()) return false
         dismissAllPopovers()
+        isWidgetEditMode = false
         showExitSlotModal = false
         editingAppDpiTarget = null
         return true
@@ -90,6 +96,7 @@ internal class WorkspaceUiState(initialSpotlightPulse: Long) {
         showShortcutsPopover = false
         showFeatureGuide = false
         showNotificationCenter = false
+        showWidgetStore = false
         contextMenuTarget = null
         guideIconMenuPos = null
         wallpaperMenuPos = null

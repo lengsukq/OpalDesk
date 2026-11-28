@@ -29,6 +29,8 @@ import io.github.lengsukq.opaldesk.protocol.BridgeProtocol
 import io.github.lengsukq.opaldesk.protocol.CompositorGeometry
 import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.PairingConsentModal
+import io.github.lengsukq.opaldesk.widgets.DesktopWidgetStore
+import io.github.lengsukq.opaldesk.widgets.DesktopWidgetStoreModal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -130,6 +132,26 @@ internal fun BoxScope.WorkspaceOverlayHost(
         onOpenConsole = onOpenConsole,
         onExitDesktop = onExitDesktop,
     )
+
+    // Desktop Liquid Glass Widget / Plugin Store Modal
+    if (ui.showWidgetStore) {
+        val widgetInstances by DesktopWidgetStore.instancesFlow.collectAsState()
+        val storeMaxH = (maxHeight - (CompositorGeometry.TOP_BAR_DP + effectiveDockInsetDp + 28f).dp)
+            .coerceAtLeast(320.dp)
+        DesktopWidgetStoreModal(
+            instances = widgetInstances,
+            maxHeight = storeMaxH,
+            onAddWidget = { type -> DesktopWidgetStore.addWidget(ctx, type) },
+            onRemoveWidget = { id -> DesktopWidgetStore.removeWidget(ctx, id) },
+            onResetDefaults = { DesktopWidgetStore.resetToDefaults(ctx) },
+            onEnterEditMode = {
+                ui.showWidgetStore = false
+                ui.isWidgetEditMode = true
+            },
+            onDismiss = { ui.showWidgetStore = false },
+            modifier = Modifier.zIndex(10_029f),
+        )
+    }
 
     // Mission Control / Exposé Multi-Window Overview Overlay
     if (ui.showExposeOverview) {

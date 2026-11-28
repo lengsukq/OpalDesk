@@ -315,6 +315,7 @@ private fun BoxWithConstraintsScope.WorkspaceCanvasContent(
 
     WorkspaceContextMenusHost(
         ui = ui,
+        spotlightController = spotlightController,
         canvasW = canvasW,
         canvasH = canvasH,
         densityVal = densityVal,

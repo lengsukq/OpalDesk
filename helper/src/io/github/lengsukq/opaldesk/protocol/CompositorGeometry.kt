@@ -10,7 +10,8 @@ import kotlin.math.roundToInt
  * Z-order occlusion, anchored context menu placement, and mouse side-button filters.
  */
 object CompositorGeometry {
-    const val TOP_BAR_DP = 28f
+    /** Top status bar removed for full-bleed immersive DeX desktop. */
+    const val TOP_BAR_DP = 0f
     const val HEADER_HEIGHT_DP = 36f
     const val DOCK_INSET_DP = 70f
     const val MIN_WIN_W_DP = 250f

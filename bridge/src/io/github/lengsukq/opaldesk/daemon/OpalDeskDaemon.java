@@ -199,7 +199,9 @@ public final class OpalDeskDaemon implements Runnable {
                     remoteBridge.hasActiveDesktopSession())) {
                 services.restoreDefaultDisplayTopFocus();
             }
-            if (services != null && services.isHostScreenOff() && !remoteBridge.hasAnyActiveSession()) {
+            if (services != null && services.isHostScreenOff()
+                    && !mouseRouter.hasPhysicalExternalDisplay()
+                    && !remoteBridge.hasAnyActiveSession()) {
                 services.setPrimaryPhysicalDisplayPower(true);
             }
         });

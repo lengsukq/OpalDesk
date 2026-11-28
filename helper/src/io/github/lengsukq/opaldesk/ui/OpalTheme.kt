@@ -74,15 +74,15 @@ private val LightOpalColors = OpalThemeColors(
     glassPopover = Color(0xBAFFFFFF),
     glassMenuBarTop = Color(0x8AFFFFFF),
     glassMenuBarBottom = Color(0x66EAF1FC),
-    glassDockTop = Color(0x9CFFFFFF),
-    glassDockBottom = Color(0x6CEAF1FD),
+    glassDockTop = Color(0x8EFFFFFF),
+    glassDockBottom = Color(0x5EEAF1FD),
     glassRimTop = Color(0xFCFFFFFF),
     glassRimMid = Color(0x9CFFFFFF),
     glassRimBottom = Color(0x5A94A3B8),
-    glassSpecularTop = Color(0x8CFFFFFF),
+    glassSpecularTop = Color(0x96FFFFFF),
     glassShadowColor = Color(0x2E1E3A5F),
-    glassPopoverTop = Color(0xE0FFFFFF),
-    glassPopoverBottom = Color(0xCCEBF2FC),
+    glassPopoverTop = Color(0xCCFFFFFF),
+    glassPopoverBottom = Color(0xB4EBF2FC),
     glassHeaderFocused = Color(0xCCFFFFFF),
     glassHeaderUnfocused = Color(0x99EEF3FA),
     windowCanvasBg = Color(0xFFF6F8FC),
@@ -120,15 +120,15 @@ private val DarkOpalColors = OpalThemeColors(
     glassPopover = Color(0xB8181C26),
     glassMenuBarTop = Color(0x7E181D2A),
     glassMenuBarBottom = Color(0x6210141F),
-    glassDockTop = Color(0x862B3246),
-    glassDockBottom = Color(0x94141824),
+    glassDockTop = Color(0x762B344B),
+    glassDockBottom = Color(0x82141926),
     glassRimTop = Color(0x70FFFFFF),
     glassRimMid = Color(0x32FFFFFF),
     glassRimBottom = Color(0x1CFFFFFF),
-    glassSpecularTop = Color(0x24FFFFFF),
+    glassSpecularTop = Color(0x2EFFFFFF),
     glassShadowColor = Color(0x99000000),
-    glassPopoverTop = Color(0xD8242A3A),
-    glassPopoverBottom = Color(0xE0131722),
+    glassPopoverTop = Color(0xC222293B),
+    glassPopoverBottom = Color(0xCC121724),
     glassHeaderFocused = Color(0xC6232836),
     glassHeaderUnfocused = Color(0x94191D28),
     windowCanvasBg = Color(0xFF0A0B0F),
@@ -256,7 +256,21 @@ object OpalPalette {
     val LiquidGlassRim: Brush
         @Composable get() {
             val c = LocalOpalColors.current
-            return Brush.verticalGradient(listOf(c.glassRimTop, c.glassRimMid, c.glassRimBottom))
+            return if (c.isDark) {
+                Brush.linearGradient(
+                    0.0f to Color.White.copy(alpha = 0.42f),
+                    0.34f to Color.White.copy(alpha = 0.14f),
+                    0.68f to Color.White.copy(alpha = 0.04f),
+                    1.0f to Color.White.copy(alpha = 0.20f),
+                )
+            } else {
+                Brush.linearGradient(
+                    0.0f to Color.White.copy(alpha = 0.94f),
+                    0.34f to Color.White.copy(alpha = 0.46f),
+                    0.68f to Color(0x2694A3B8),
+                    1.0f to Color.White.copy(alpha = 0.54f),
+                )
+            }
         }
 
     val LiquidPopoverFill: Brush

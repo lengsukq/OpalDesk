@@ -7,35 +7,25 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
-import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import io.github.lengsukq.opaldesk.R
-import io.github.lengsukq.opaldesk.protocol.CompositorGeometry
-import io.github.lengsukq.opaldesk.protocol.CompositorWindow
-import io.github.lengsukq.opaldesk.ui.ChromeGlyph
-import io.github.lengsukq.opaldesk.ui.OpalGlyphIcon
+import io.github.lengsukq.opaldesk.ui.LocalOpalColors
 import io.github.lengsukq.opaldesk.ui.OpalPalette
-import io.github.lengsukq.opaldesk.ui.OpalText
+import io.github.lengsukq.opaldesk.ui.liquidGlassSurface
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 data class TrayNetworkState(
     val wifiEnabled: Boolean = false,
@@ -127,304 +117,62 @@ fun querySystemTrayStatus(ctx: Context, clockText: String, dateText: String): Sy
 }
 
 /**
- * Refined 28dp macOS translucent Menu Bar at the top edge of the workspace.
- *
- * Right side hosts the unified System Status & Control Center trigger (Wi-Fi, Battery,
- * Control Center icon, Date/Clock, and Host-Screen-Off indicator).
+ * Bottom-right floating Liquid Glass Control Center trigger (Setting Gear Icon) replacing the
+ * retired top status bar Control Center button without overlapping the Dock or desktop widgets.
  */
 @Composable
-fun MacDesktopMenuBar(
-    focusedWindow: CompositorWindow?,
-    tray: SystemTrayInfo,
-    isExternalMonitor: Boolean,
-    hostScreenOff: Boolean,
-    showHostScreenToggle: Boolean = false,
-    isCompactWidth: Boolean,
-    showControlCenter: Boolean,
-    showDpiPopover: Boolean = false,
-    notificationCount: Int = 0,
-    showNotificationCenter: Boolean = false,
-    doNotDisturb: Boolean = false,
-    showPhoneTrackpadButton: Boolean = false,
-    phoneTrackpadVisible: Boolean = false,
-    showDockFallbackActions: Boolean = false,
-    showAppDrawer: Boolean = false,
-    showExpose: Boolean = false,
-    showSpotlight: Boolean = false,
-    onToggleAppDrawer: () -> Unit = {},
-    onToggleExpose: () -> Unit = {},
-    onToggleSpotlight: (() -> Unit)? = null,
-    onTogglePhoneTrackpad: () -> Unit = {},
-    onToggleHostScreenPower: (Boolean) -> Unit = {},
-    onToggleDpiPopover: () -> Unit = {},
-    onToggleNotificationCenter: () -> Unit = {},
-    onToggleFullscreen: () -> Unit,
-    onToggleControlCenter: () -> Unit,
-    onOpenConsole: () -> Unit,
+internal fun DesktopFloatingSettingButton(
+    active: Boolean,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
+    val colors = LocalOpalColors.current
+    val accent = colors.accentBlue
+    val fill = if (active) {
+        Brush.verticalGradient(
+            listOf(
+                accent.copy(alpha = if (colors.isDark) 0.42f else 0.30f),
+                accent.copy(alpha = if (colors.isDark) 0.24f else 0.16f),
+            ),
+        )
+    } else {
+        OpalPalette.LiquidDockFill
+    }
+    val rim = if (active) {
+        Brush.linearGradient(listOf(accent.copy(alpha = 0.92f), colors.accentCyan.copy(alpha = 0.72f)))
+    } else {
+        OpalPalette.LiquidGlassRim
+    }
+    Box(
         modifier = modifier
-            .fillMaxWidth()
-            .height(CompositorGeometry.TOP_BAR_DP.dp)
-            .background(OpalPalette.MenuBarFill)
-            .padding(horizontal = if (isCompactWidth) 8.dp else 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .size(44.dp)
+            .liquidGlassSurface(
+                shape = CircleShape,
+                fill = fill,
+                rim = rim,
+                elevation = if (active) 24.dp else 18.dp,
+                borderWidth = if (active) 1.35.dp else 1.dp,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .clickable(onClick = onOpenConsole)
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(7.5.dp)
-                    .clip(CircleShape)
-                    .background(OpalPalette.AccentBlue),
-            )
-            Spacer(Modifier.width(6.dp))
-            OpalText(
-                text = "OpalDesk",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = OpalPalette.TextPrimary,
-                maxLines = 1,
-            )
-        }
-
-        Spacer(Modifier.width(if (isCompactWidth) 6.dp else 12.dp))
-
-        if (showDockFallbackActions) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (showAppDrawer) OpalPalette.AccentBlue.copy(alpha = 0.22f) else OpalPalette.ChipFill)
-                        .clickable(onClick = onToggleAppDrawer)
-                        .padding(horizontal = if (isCompactWidth) 6.dp else 7.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    OpalGlyphIcon(
-                        glyph = ChromeGlyph.APPS_GRID,
-                        tint = if (showAppDrawer) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
-                        size = 11.dp,
-                    )
-                    if (!isCompactWidth) {
-                        OpalText(
-                            text = stringResource(R.string.taskbar_apps),
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (showAppDrawer) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
-                            maxLines = 1,
-                        )
-                    }
-                }
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (showExpose) OpalPalette.AccentBlue.copy(alpha = 0.22f) else OpalPalette.ChipFill)
-                        .clickable(onClick = onToggleExpose)
-                        .padding(horizontal = if (isCompactWidth) 6.dp else 7.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    OpalGlyphIcon(
-                        glyph = ChromeGlyph.EXPOSE,
-                        tint = if (showExpose) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
-                        size = 11.dp,
-                    )
-                    if (!isCompactWidth) {
-                        OpalText(
-                            text = stringResource(R.string.taskbar_recents),
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (showExpose) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
-                            maxLines = 1,
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.width(if (isCompactWidth) 6.dp else 10.dp))
-        }
-
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (focusedWindow != null) {
-                OpalText(
-                    text = focusedWindow.title,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = OpalPalette.TextPrimary,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                Spacer(Modifier.width(if (isCompactWidth) 6.dp else 9.dp))
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(OpalPalette.ChipFill)
-                        .clickable(onClick = onToggleFullscreen)
-                        .padding(horizontal = 7.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    OpalGlyphIcon(
-                        glyph = ChromeGlyph.MAXIMIZE,
-                        tint = OpalPalette.AccentBlue,
-                        size = 10.5.dp,
-                    )
-                    OpalText(
-                        text = stringResource(R.string.taskbar_fullscreen),
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = OpalPalette.AccentBlue,
-                        maxLines = 1,
-                    )
-                }
-                Spacer(Modifier.width(if (isCompactWidth) 5.dp else 8.dp))
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (showDpiPopover) OpalPalette.AccentBlue.copy(alpha = 0.20f) else OpalPalette.ChipFill)
-                        .clickable(onClick = onToggleDpiPopover)
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                ) {
-                    OpalText(
-                        text = if (isCompactWidth) "${focusedWindow.contentDpi}dpi" else "${focusedWindow.contentWidth}×${focusedWindow.contentHeight} · ${focusedWindow.contentDpi}dpi",
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = if (showDpiPopover) OpalPalette.AccentBlue else OpalPalette.TextSecondary,
-                        maxLines = 1,
-                    )
-                }
-            } else if (!isCompactWidth) {
-                OpalText(
-                    text = stringResource(if (isExternalMonitor) R.string.taskbar_ext_workstation else R.string.taskbar_workstation),
-                    fontSize = 11.5.sp,
-                    color = OpalPalette.TextSecondary,
-                    maxLines = 1,
-                )
-            }
-        }
-
-        Spacer(Modifier.width(8.dp))
-
-        if (onToggleSpotlight != null && (isCompactWidth || showDockFallbackActions)) {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(if (showSpotlight) OpalPalette.ChipActiveFill else Color.Transparent)
-                    .clickable(onClick = onToggleSpotlight)
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                OpalGlyphIcon(
-                    glyph = ChromeGlyph.SEARCH,
-                    tint = if (showSpotlight) OpalPalette.AccentBlue else OpalPalette.TextPrimary,
-                    size = 13.dp,
-                )
-            }
-            Spacer(Modifier.width(4.dp))
-        }
-
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(7.dp))
-                .background(if (showNotificationCenter) OpalPalette.ChipActiveFill else Color.Transparent)
-                .clickable(onClick = onToggleNotificationCenter)
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            DesktopBellIcon(
-                tint = when {
-                    doNotDisturb -> OpalPalette.AccentAmber
-                    showNotificationCenter || notificationCount > 0 -> OpalPalette.AccentBlue
-                    else -> OpalPalette.TextPrimary
-                },
-                modifier = Modifier.size(13.dp),
-            )
-            if (notificationCount > 0 && !doNotDisturb) {
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(OpalPalette.AccentBlue)
-                        .padding(horizontal = 4.5.dp, vertical = 0.5.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    OpalText(
-                        text = if (notificationCount > 99) "99+" else "$notificationCount",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        maxLines = 1,
-                    )
-                }
-            } else if (doNotDisturb) {
-                OpalText(
-                    text = stringResource(R.string.taskbar_dnd_short),
-                    fontSize = 9.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = OpalPalette.AccentAmber,
-                    maxLines = 1,
-                )
-            }
-        }
-        Spacer(Modifier.width(4.dp))
-
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(7.dp))
-                .background(if (showControlCenter) OpalPalette.ChipActiveFill else Color.Transparent)
-                .clickable(onClick = onToggleControlCenter)
-                .padding(horizontal = if (isCompactWidth) 6.dp else 9.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(if (isCompactWidth) 6.dp else 9.dp),
-        ) {
-            if (tray.wifiConnected) {
-                OpalGlyphIcon(
-                    glyph = ChromeGlyph.WIFI,
-                    tint = OpalPalette.TextPrimary,
-                    size = 13.dp,
-                )
-            }
-            OpalText(
-                text = if (tray.charging) "⚡${tray.batteryPct}%" else "${tray.batteryPct}%",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                color = when {
-                    tray.charging -> OpalPalette.AccentEmerald
-                    tray.batteryPct <= 15 -> OpalPalette.AccentDanger
-                    else -> OpalPalette.TextPrimary
-                },
-                maxLines = 1,
-            )
-            OpalGlyphIcon(
-                glyph = ChromeGlyph.CONTROL_CENTER,
-                tint = if (showControlCenter) OpalPalette.AccentBlue else OpalPalette.TextSecondary,
-                size = 13.5.dp,
-            )
-            val timeLabel = if (!isCompactWidth && tray.dateText.isNotEmpty()) {
-                "${tray.dateText}  ${tray.clockText}"
-            } else {
-                tray.clockText
-            }
-            if (timeLabel.isNotEmpty()) {
-                OpalText(
-                    text = timeLabel,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = OpalPalette.TextPrimary,
-                    maxLines = 1,
-                )
+        Canvas(modifier = Modifier.size(20.dp)) {
+            val tint = if (active) accent else colors.textPrimary
+            val cx = size.width * 0.5f
+            val cy = size.height * 0.5f
+            val sw = 1.7.dp.toPx()
+            val innerR = size.minDimension * 0.17f
+            val bodyR = size.minDimension * 0.33f
+            val toothOut = size.minDimension * 0.46f
+            drawCircle(color = tint, radius = innerR, center = Offset(cx, cy), style = Stroke(sw))
+            drawCircle(color = tint, radius = bodyR, center = Offset(cx, cy), style = Stroke(sw))
+            for (i in 0 until 8) {
+                val rad = (i * 45.0) * PI / 180.0
+                val sx = cx + (bodyR * cos(rad)).toFloat()
+                val sy = cy + (bodyR * sin(rad)).toFloat()
+                val ex = cx + (toothOut * cos(rad)).toFloat()
+                val ey = cy + (toothOut * sin(rad)).toFloat()
+                drawLine(color = tint, start = Offset(sx, sy), end = Offset(ex, ey), strokeWidth = sw, cap = StrokeCap.Round)
             }
         }
     }

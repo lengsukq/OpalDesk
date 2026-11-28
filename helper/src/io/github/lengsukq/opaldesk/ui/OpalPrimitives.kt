@@ -70,6 +70,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,7 +79,8 @@ import kotlin.math.roundToInt
 /**
  * Authentic macOS Liquid Frosted Glass (液态毛玻璃) optical surface modifier:
  * combines exterior-only diffused halo shadow (masked via ClipOp.Difference so zero shadow
- * ever bleeds inside translucent glass), frosted fill, convex top specular sheen, and refractive rim.
+ * ever bleeds inside translucent glass), pixel-aligned real blurred wallpaper backdrop refraction,
+ * frosted tint film, convex top specular sheen, and multi-stop refractive rim.
  */
 @Composable
 fun Modifier.liquidGlassSurface(
@@ -90,10 +92,15 @@ fun Modifier.liquidGlassSurface(
     effectAlphaScale: Float = 1f,
 ): Modifier {
     val c = LocalOpalColors.current
+    val backdrop = LocalOpalGlassBackdrop.current
+    val panelOrigin = remember { mutableStateOf(Offset.Zero) }
     val effScale = effectAlphaScale.coerceIn(0f, 1f)
     val specularTop = c.glassSpecularTop.copy(alpha = (c.glassSpecularTop.alpha * effScale).coerceIn(0f, 1f))
     val shadowCol = c.glassShadowColor
     val base = this
+        .onGloballyPositioned { coords ->
+            panelOrigin.value = coords.positionInRoot()
+        }
         .drawBehind {
             if (elevation > 0.dp && effScale > 0.001f) {
                 val outline = shape.createOutline(size, layoutDirection, this)
@@ -122,16 +129,85 @@ fun Modifier.liquidGlassSurface(
             }
         }
         .clip(shape)
-        .background(fill)
         .drawWithContent {
-            // Subtle liquid glass optical sheen across the upper convex arc
+            // 1. Real blurred wallpaper / atmospheric backdrop refraction aligned to root coordinates
+            if (effScale > 0.05f && backdrop.active) {
+                val relX = backdrop.rootOriginInRoot.x - panelOrigin.value.x
+                val relY = backdrop.rootOriginInRoot.y - panelOrigin.value.y
+                val rootW = backdrop.rootSize.width.toFloat().coerceAtLeast(1f)
+                val rootH = backdrop.rootSize.height.toFloat().coerceAtLeast(1f)
+                val blurredBmp = backdrop.blurredWallpaper
+                translate(left = relX, top = relY) {
+                    if (blurredBmp != null && blurredBmp.width > 0 && blurredBmp.height > 0) {
+                        val scale = maxOf(
+                            rootW / blurredBmp.width.toFloat(),
+                            rootH / blurredBmp.height.toFloat(),
+                        )
+                        val drawW = (blurredBmp.width * scale).roundToInt().coerceAtLeast(1)
+                        val drawH = (blurredBmp.height * scale).roundToInt().coerceAtLeast(1)
+                        val offX = ((rootW - drawW) * 0.5f).roundToInt()
+                        val offY = ((rootH - drawH) * 0.5f).roundToInt()
+                        drawImage(
+                            image = blurredBmp,
+                            dstOffset = IntOffset(offX, offY),
+                            dstSize = IntSize(drawW, drawH),
+                            alpha = (0.94f * effScale).coerceIn(0f, 1f),
+                        )
+                    } else if (backdrop.gradientStops.size >= 2) {
+                        drawRect(
+                            brush = Brush.linearGradient(
+                                colors = backdrop.gradientStops,
+                                start = Offset.Zero,
+                                end = Offset(rootW, rootH),
+                            ),
+                            size = Size(rootW, rootH),
+                            alpha = (0.92f * effScale).coerceIn(0f, 1f),
+                        )
+                        val maxDim = maxOf(rootW, rootH)
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                0.0f to backdrop.glowA.copy(alpha = (backdrop.glowA.alpha * 1.18f).coerceAtMost(0.95f)),
+                                0.5f to backdrop.glowA.copy(alpha = backdrop.glowA.alpha * 0.45f),
+                                1.0f to Color.Transparent,
+                                center = Offset(rootW * 0.20f, rootH * 0.22f),
+                                radius = maxDim * 0.58f,
+                            ),
+                            center = Offset(rootW * 0.20f, rootH * 0.22f),
+                            radius = maxDim * 0.58f,
+                        )
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                0.0f to backdrop.glowB.copy(alpha = (backdrop.glowB.alpha * 1.18f).coerceAtMost(0.95f)),
+                                0.5f to backdrop.glowB.copy(alpha = backdrop.glowB.alpha * 0.45f),
+                                1.0f to Color.Transparent,
+                                center = Offset(rootW * 0.82f, rootH * 0.72f),
+                                radius = maxDim * 0.56f,
+                            ),
+                            center = Offset(rootW * 0.82f, rootH * 0.72f),
+                            radius = maxDim * 0.56f,
+                        )
+                    }
+                }
+            }
+            // 2. Frosted translucent tint film
+            drawRect(brush = fill)
+            // 3. Multi-layered liquid glass specular sheen across upper convex arc + subtle lower bounce
             if (effScale > 0.001f) {
                 drawRect(
                     brush = Brush.verticalGradient(
                         colorStops = arrayOf(
                             0.0f to specularTop,
-                            0.38f to specularTop.copy(alpha = specularTop.alpha * 0.22f),
-                            0.65f to Color.Transparent,
+                            0.28f to specularTop.copy(alpha = specularTop.alpha * 0.28f),
+                            0.58f to Color.Transparent,
+                            1.0f to Color.White.copy(alpha = (if (c.isDark) 0.05f else 0.14f) * effScale),
+                        ),
+                    ),
+                )
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colorStops = arrayOf(
+                            0.0f to Color.White.copy(alpha = (if (c.isDark) 0.10f else 0.22f) * effScale),
+                            0.35f to Color.Transparent,
                             1.0f to Color.Transparent,
                         ),
                     ),

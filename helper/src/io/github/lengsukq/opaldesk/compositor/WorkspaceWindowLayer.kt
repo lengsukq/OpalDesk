@@ -1,5 +1,12 @@
 package io.github.lengsukq.opaldesk.compositor
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.graphics.BitmapFactory
+import android.media.AudioManager
+import android.util.Base64
+import android.view.KeyEvent
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -11,14 +18,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
@@ -35,6 +46,14 @@ import io.github.lengsukq.opaldesk.protocol.CompositorWindow
 import io.github.lengsukq.opaldesk.ui.OpalPalette
 import io.github.lengsukq.opaldesk.ui.OpalSpotlightController
 import io.github.lengsukq.opaldesk.ui.onTapOrContextAction
+import io.github.lengsukq.opaldesk.widgets.DesktopWidgetCallbacks
+import io.github.lengsukq.opaldesk.widgets.DesktopWidgetHostLayer
+import io.github.lengsukq.opaldesk.widgets.DesktopWidgetStore
+import io.github.lengsukq.opaldesk.widgets.WidgetAppShortcut
+import io.github.lengsukq.opaldesk.widgets.WidgetMediaSnapshot
+import io.github.lengsukq.opaldesk.widgets.WidgetNotificationItem
+import io.github.lengsukq.opaldesk.widgets.WidgetWorkstationSnapshot
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -74,6 +93,15 @@ internal fun BoxScope.WorkspaceWindowLayer(
     val notifications by io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.notificationsFlow.collectAsState()
     val doNotDisturb by io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.doNotDisturbFlow.collectAsState()
     val pinnedWindowIds by io.github.lengsukq.opaldesk.protocol.OpalWindowPinStore.pinnedIdsFlow.collectAsState()
+    val widgetInstances by DesktopWidgetStore.instancesFlow.collectAsState()
+    val mediaSnap by io.github.lengsukq.opaldesk.notifications.OpalMediaSessionMonitor.snapshotFlow.collectAsState()
+    val audioMgr = remember(ctx) { ctx.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }
+    var isMuted by remember(audioMgr) {
+        mutableStateOf(runCatching { audioMgr?.isStreamMute(AudioManager.STREAM_MUSIC) == true }.getOrDefault(false))
+    }
+    LaunchedEffect(Unit) {
+        DesktopWidgetStore.hydrate(ctx)
+    }
 
     // Desktop wallpaper: single tap dismisses popovers; right-click or touchscreen long-press opens desktop/wallpaper menu
     Box(
@@ -130,6 +158,173 @@ internal fun BoxScope.WorkspaceWindowLayer(
         )
     }
 
+    // Desktop Liquid Glass Widget Layer (above wallpaper, below live app windows)
+    if (fullscreenWin == null) {
+        val mediaArtwork = remember(mediaSnap.artworkBase64) {
+            if (mediaSnap.artworkBase64.isBlank()) {
+                null
+            } else {
+                runCatching {
+                    val bytes = Base64.decode(mediaSnap.artworkBase64, Base64.DEFAULT)
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                }.getOrNull()
+            }
+        }
+        val widgetMediaSnapshot = remember(mediaSnap, mediaArtwork) {
+            WidgetMediaSnapshot(
+                title = mediaSnap.title,
+                artist = mediaSnap.artist,
+                appName = mediaSnap.appLabel,
+                isPlaying = mediaSnap.playing,
+                hasSession = mediaSnap.active,
+                artworkBitmap = mediaArtwork,
+            )
+        }
+        val widgetWorkstationSnapshot = remember(trayInfo, status, remote, scene.visibleWindows.size, isMuted, isExternalMonitor) {
+            val connLabel = when {
+                remote.connected -> remote.peerName.ifBlank { remote.channelLabel }
+                isExternalMonitor -> "External"
+                status.connected -> "Connected"
+                else -> "Offline"
+            }
+            WidgetWorkstationSnapshot(
+                batteryPercent = trayInfo.batteryPct,
+                isCharging = trayInfo.charging,
+                isConnected = status.connected,
+                connectionLabel = connLabel,
+                activeWindowCount = scene.visibleWindows.size,
+                isPhoneScreenOff = status.hostScreenOff,
+                isMuted = isMuted,
+            )
+        }
+        val widgetNotifications = remember(notifications) {
+            notifications.take(12).map { item ->
+                WidgetNotificationItem(
+                    key = item.key,
+                    appName = item.appLabel.ifBlank { item.packageName },
+                    title = item.title,
+                    text = item.text,
+                    timestampMs = item.postTimeMs,
+                )
+            }
+        }
+        val widgetAppShortcuts = remember(ui.allApps) {
+            ui.allApps.take(24).map { entry ->
+                val bmp = runCatching { AppCatalogRepository.getCachedIcon(entry.pkg, entry.userId)?.asAndroidBitmap() }.getOrNull()
+                WidgetAppShortcut(packageName = entry.pkg, label = entry.label, iconBitmap = bmp)
+            }
+        }
+        val widgetCallbacks = remember(ctx, scope, ui, audioMgr, status.hostScreenOff, phoneTrackpadVisible, canvasW, canvasH, effectiveDockInsetDp) {
+            DesktopWidgetCallbacks(
+                onMediaPrev = {
+                    if (!io.github.lengsukq.opaldesk.notifications.OpalMediaSessionMonitor.handleRemoteAction("previous", 0L)) {
+                        ControlCenterActions.dispatchMediaKey(audioMgr, KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+                    }
+                },
+                onMediaPlayPause = {
+                    if (!io.github.lengsukq.opaldesk.notifications.OpalMediaSessionMonitor.handleRemoteAction("toggle", 0L)) {
+                        ControlCenterActions.dispatchMediaKey(audioMgr, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                    }
+                },
+                onMediaNext = {
+                    if (!io.github.lengsukq.opaldesk.notifications.OpalMediaSessionMonitor.handleRemoteAction("next", 0L)) {
+                        ControlCenterActions.dispatchMediaKey(audioMgr, KeyEvent.KEYCODE_MEDIA_NEXT)
+                    }
+                },
+                onTogglePhoneScreenOff = { toggleHostScreenPowerAction(ctx, screenOn = status.hostScreenOff) },
+                onOpenTrackpad = { togglePhoneTrackpadAction(ctx, phoneTrackpadVisible, onOpenConsole) },
+                onToggleMute = {
+                    runCatching {
+                        audioMgr?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0)
+                        isMuted = audioMgr?.isStreamMute(AudioManager.STREAM_MUSIC) == true
+                    }
+                },
+                onOpenControlCenter = {
+                    ui.dismissAllPopovers()
+                    ui.controlCenterInitialTab = 0
+                    ui.showControlCenter = true
+                },
+                onCopyText = { text ->
+                    runCatching {
+                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        cm?.setPrimaryClip(ClipData.newPlainText("OpalDesk", text))
+                        Toast.makeText(ctx, text, Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onReadClipboard = {
+                    runCatching {
+                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        cm?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString()
+                    }.getOrNull()
+                },
+                onLaunchApp = { pkg ->
+                    val entry = ui.allApps.firstOrNull { it.pkg == pkg }
+                    AppPrefs.recordAppLaunch(ctx, entry?.appKey ?: pkg)
+                    scope.launch(Dispatchers.IO) {
+                        BridgeClient.openWindow(pkg, entry?.activityClass.orEmpty(), BridgeProtocol.Profile.AUTO, userId = entry?.userId ?: 0)
+                    }
+                },
+                onSplitLaunchApps = { pkg1, pkg2 ->
+                    val e1 = ui.allApps.firstOrNull { it.pkg == pkg1 }
+                    val e2 = ui.allApps.firstOrNull { it.pkg == pkg2 }
+                    scope.launch(Dispatchers.IO) {
+                        BridgeClient.openWindow(pkg1, e1?.activityClass.orEmpty(), BridgeProtocol.Profile.AUTO, userId = e1?.userId ?: 0)
+                        delay(180L)
+                        BridgeClient.openWindow(pkg2, e2?.activityClass.orEmpty(), BridgeProtocol.Profile.AUTO, userId = e2?.userId ?: 0)
+                    }
+                },
+                onUpdateWidgetConfig = { id, json -> DesktopWidgetStore.updateWidgetConfig(ctx, id, json) },
+                onOpenSpotlight = {
+                    ui.dismissAllPopovers()
+                    spotlightController.resetSelection()
+                    ui.showSpotlight = true
+                },
+                onOpenWidgetStore = {
+                    ui.dismissAllPopovers()
+                    ui.showWidgetStore = true
+                },
+                onToggleWidgetEditMode = {
+                    ui.dismissAllPopovers()
+                    ui.isWidgetEditMode = !ui.isWidgetEditMode
+                },
+                onOpenNotifications = {
+                    ui.dismissAllPopovers()
+                    ui.showNotificationCenter = true
+                    io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.refreshAccessState(ctx)
+                    io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.requestSync()
+                },
+                onOpenSettings = onOpenConsole,
+            )
+        }
+        DesktopWidgetHostLayer(
+            instances = widgetInstances,
+            isEditMode = ui.isWidgetEditMode,
+            mediaSnapshot = widgetMediaSnapshot,
+            workstationSnapshot = widgetWorkstationSnapshot,
+            notifications = widgetNotifications,
+            appShortcuts = widgetAppShortcuts,
+            callbacks = widgetCallbacks,
+            onEnterEditMode = { ui.isWidgetEditMode = true },
+            onExitEditMode = { ui.isWidgetEditMode = false },
+            onOpenWidgetStore = {
+                ui.dismissAllPopovers()
+                ui.showWidgetStore = true
+            },
+            onMoveWidget = { id, col, row -> DesktopWidgetStore.moveWidget(ctx, id, col, row) },
+            onResizeWidget = { id, colSpan, rowSpan -> DesktopWidgetStore.resizeWidget(ctx, id, colSpan, rowSpan) },
+            onRemoveWidget = { id -> DesktopWidgetStore.removeWidget(ctx, id) },
+            onResetDefaults = { DesktopWidgetStore.resetToDefaults(ctx) },
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(
+                    top = (CompositorGeometry.TOP_BAR_DP + 10f).dp,
+                    bottom = (effectiveDockInsetDp + 10f).dp,
+                    start = 10.dp,
+                    end = 10.dp,
+                ),
+        )
+    }
+
     // Edge/corner snap frosted-glass preview frame
     ui.snapPreviewRect?.let { snapRect ->
         Box(
@@ -165,85 +360,7 @@ internal fun BoxScope.WorkspaceWindowLayer(
         }
     }
 
-    // Top 28dp Translucent macOS Liquid Glass Menu Bar (hidden during true app fullscreen)
-    if (fullscreenWin == null) {
-        MacDesktopMenuBar(
-            focusedWindow = scene.focusedWindow,
-            tray = trayInfo,
-            isExternalMonitor = isExternalMonitor,
-            hostScreenOff = status.hostScreenOff,
-            showHostScreenToggle = isExternalMonitor || remote.connected || status.hostScreenOff,
-            isCompactWidth = isCompactWidth,
-            showControlCenter = ui.showControlCenter,
-            showDpiPopover = ui.showDpiPopover,
-            notificationCount = notifications.size,
-            showNotificationCenter = ui.showNotificationCenter,
-            doNotDisturb = doNotDisturb,
-            showPhoneTrackpadButton = canControlPhoneTrackpad,
-            phoneTrackpadVisible = phoneTrackpadVisible,
-            showDockFallbackActions = !dockVisible,
-            showAppDrawer = ui.showAppDrawer,
-            showExpose = ui.showExposeOverview,
-            showSpotlight = ui.showSpotlight,
-            onToggleAppDrawer = {
-                val next = !ui.showAppDrawer
-                ui.dismissAllPopovers()
-                ui.showAppDrawer = next
-            },
-            onToggleExpose = {
-                val next = !ui.showExposeOverview
-                ui.dismissAllPopovers()
-                ui.showExposeOverview = next
-            },
-            onToggleSpotlight = {
-                val next = !ui.showSpotlight
-                ui.dismissAllPopovers()
-                if (next) {
-                    spotlightController.resetSelection()
-                    ui.showSpotlight = true
-                }
-            },
-            onTogglePhoneTrackpad = {
-                ui.dismissAllPopovers()
-                togglePhoneTrackpadAction(ctx, phoneTrackpadVisible, onOpenConsole)
-            },
-            onToggleHostScreenPower = { screenOn ->
-                toggleHostScreenPowerAction(ctx, screenOn)
-            },
-            onToggleDpiPopover = {
-                val next = !ui.showDpiPopover
-                ui.dismissAllPopovers()
-                ui.showDpiPopover = next
-            },
-            onToggleNotificationCenter = {
-                val next = !ui.showNotificationCenter
-                ui.dismissAllPopovers()
-                ui.showNotificationCenter = next
-                if (next) {
-                    io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.refreshAccessState(ctx)
-                    io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.requestSync()
-                }
-            },
-            onToggleFullscreen = {
-                val focused = scene.focusedWindow ?: return@MacDesktopMenuBar
-                ui.dismissAllPopovers()
-                BridgeClient.sendWindowActionAsync(
-                    focused.windowId,
-                    BridgeProtocol.WinAction.TOGGLE_FULLSCREEN,
-                )
-            },
-            onToggleControlCenter = {
-                val next = !ui.showControlCenter
-                ui.dismissAllPopovers()
-                ui.controlCenterInitialTab = 0
-                ui.showControlCenter = next
-            },
-            onOpenConsole = onOpenConsole,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .zIndex(10_000f),
-        )
-    } else if (!suppressFullscreenExitOverlay) {
+    if (fullscreenWin != null && !suppressFullscreenExitOverlay) {
         // Unobtrusive top-center pull-down handle to exit fullscreen or return to desktop
         // (suppressed on remote cast displays where the outer receiver already owns the single top-center pill).
         FullscreenExitOverlay(
@@ -348,11 +465,29 @@ internal fun BoxScope.WorkspaceWindowLayer(
                 .zIndex(10_010f),
         )
     }
+
+    // Bottom-Right Floating Liquid Glass Control Center Trigger (Setting Gear Icon)
+    if (fullscreenWin == null) {
+        DesktopFloatingSettingButton(
+            active = ui.showControlCenter,
+            onClick = {
+                val next = !ui.showControlCenter
+                ui.dismissAllPopovers()
+                ui.controlCenterInitialTab = 0
+                ui.showControlCenter = next
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = if (isCompactWidth) 12.dp else 18.dp, bottom = if (isCompactWidth) 12.dp else 18.dp)
+                .zIndex(10_015f),
+        )
+    }
 }
 
 @Composable
 internal fun WorkspaceContextMenusHost(
     ui: WorkspaceUiState,
+    spotlightController: OpalSpotlightController,
     canvasW: Int,
     canvasH: Int,
     densityVal: Float,
@@ -404,9 +539,10 @@ internal fun WorkspaceContextMenusHost(
 
         val isCurrentlyDark = OpalPalette.isDark
         val menuW = with(density) { 252.dp.toPx() }.roundToInt()
-        val baseMenuDp = (if (customWallpaperPath.isNotBlank()) 396f else 360f) +
+        val baseMenuDp = ((if (customWallpaperPath.isNotBlank()) 472f else 436f) +
+            152f +
             (if (canControlPhoneTrackpad) 38f else 0f) +
-            (if (!showDesktopGuideIcon) 38f else 0f)
+            (if (!showDesktopGuideIcon) 38f else 0f)).coerceAtMost(560f)
         val menuH = with(density) { baseMenuDp.dp.toPx() }.roundToInt()
         val (xPx, yPx) = CompositorGeometry.computeAnchoredMenuPosition(
             anchorX = pos.x.roundToInt(),
@@ -423,6 +559,25 @@ internal fun WorkspaceContextMenusHost(
             showPhoneTrackpadAction = canControlPhoneTrackpad,
             phoneTrackpadVisible = phoneTrackpadVisible,
             showDesktopGuideIcon = showDesktopGuideIcon,
+            isWidgetEditMode = ui.isWidgetEditMode,
+            onOpenWidgetStore = { ui.showWidgetStore = true },
+            onToggleWidgetEditMode = { ui.isWidgetEditMode = !ui.isWidgetEditMode },
+            onOpenSpotlight = {
+                ui.dismissAllPopovers()
+                spotlightController.resetSelection()
+                ui.showSpotlight = true
+            },
+            onOpenControlCenter = {
+                ui.dismissAllPopovers()
+                ui.controlCenterInitialTab = 0
+                ui.showControlCenter = true
+            },
+            onOpenNotifications = {
+                ui.dismissAllPopovers()
+                ui.showNotificationCenter = true
+                io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.refreshAccessState(ctx)
+                io.github.lengsukq.opaldesk.notifications.OpalNotificationStore.requestSync()
+            },
             onTogglePhoneTrackpad = { togglePhoneTrackpadAction(ctx, phoneTrackpadVisible, onOpenConsole) },
             onSelectPreset = { idx ->
                 WallpaperStorage.clearCustomWallpaper(ctx)
@@ -452,6 +607,10 @@ internal fun WorkspaceContextMenusHost(
                 AppPrefs.setThemeMode(ctx, next)
             },
             onOpenConsole = onOpenConsole,
+            onExitDesktop = {
+                ui.dismissAllPopovers()
+                ui.showExitSlotModal = true
+            },
             onDismiss = { ui.wallpaperMenuPos = null },
             modifier = Modifier
                 .offset { IntOffset(xPx, yPx) }

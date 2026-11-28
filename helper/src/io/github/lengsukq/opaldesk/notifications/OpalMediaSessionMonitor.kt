@@ -12,6 +12,9 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Base64
 import io.github.lengsukq.opaldesk.BridgeClient
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -183,6 +186,9 @@ object OpalMediaSessionMonitor {
     @Volatile
     private var lastSnapshot: MediaPlaybackSnapshot = MediaPlaybackSnapshot()
 
+    private val _snapshotFlow = MutableStateFlow(MediaPlaybackSnapshot())
+    val snapshotFlow: StateFlow<MediaPlaybackSnapshot> = _snapshotFlow.asStateFlow()
+
     @Volatile
     private var lastSentJson: String = ""
 
@@ -223,6 +229,7 @@ object OpalMediaSessionMonitor {
         val snapshot = buildCurrentSnapshotSafe()
         val json = OpalMediaStatePolicy.encodeJson(snapshot)
         lastSnapshot = snapshot
+        _snapshotFlow.value = snapshot
         lastSentJson = json
         sendToDaemonSafe(json)
     }
@@ -272,6 +279,7 @@ object OpalMediaSessionMonitor {
         listenerComponent = null
         cachedArtworkKey = ""
         cachedArtworkBase64 = ""
+        _snapshotFlow.value = MediaPlaybackSnapshot()
     }
 
     private fun onControllersUpdated(controllers: List<MediaController>) {
@@ -457,6 +465,7 @@ object OpalMediaSessionMonitor {
             return
         }
         lastSnapshot = snapshot
+        _snapshotFlow.value = snapshot
         lastSentJson = json
         sendToDaemonSafe(json)
     }

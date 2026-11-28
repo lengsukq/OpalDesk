@@ -3,6 +3,7 @@ package io.github.lengsukq.opaldesk.daemon.platform;
 import android.hardware.display.DisplayManager;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.view.Display;
 
 import io.github.lengsukq.opaldesk.daemon.DisplayGeometryUtil;
@@ -23,19 +24,47 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 final class AndroidDisplayPowerHelper {
     private static final int DISPLAY_MODE_FLAG_ANISOTROPY_CORRECTION = 1 << 2;
+    private static final int POWER_MODE_OFF = 0;
+    private static final int POWER_MODE_NORMAL = 2;
+    private static final int WAKE_REASON_APPLICATION = 2;
+    private static final int USER_ACTIVITY_EVENT_OTHER = 0;
+    private static final int USER_ACTIVITY_FLAGS = 0;
+    private static final String WAKE_DETAILS = "opaldesk:wake";
+    private static final long WAKE_KEYEVENT_TIMEOUT_MS = 2500L;
+
+    interface DisplayPowerBackend {
+        boolean setSurfaceControlPowerMode(boolean screenOn);
+        boolean wakeUpPowerManager(long uptimeMillis);
+        boolean triggerUserActivity(long uptimeMillis);
+        boolean sendWakeupKeyEvent();
+        default void tryResetDisplayPower() {}
+        default int sdkInt() { return 0; }
+        long uptimeMillis();
+    }
 
     private final AndroidServices services;
     private final Object displayPowerLock = new Object();
     private final Set<Integer> forcedExternalSizeDisplays = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final Set<Integer> forcedExternalScalingDisplays = Collections.newSetFromMap(new ConcurrentHashMap<>());
-    private final HostScreenWakeMonitor wakeMonitor = new HostScreenWakeMonitor();
+    private final DisplayPowerBackend powerBackend;
+    private final HostScreenWakeMonitor wakeMonitor;
     private volatile boolean hostScreenOff = false;
     private volatile boolean displayControlResolved = false;
     private volatile Class<?> displayControlClass;
     private volatile Method surfaceControlSetPowerModeMethod;
+    private volatile Object iPowerManager;
 
     AndroidDisplayPowerHelper(AndroidServices services) {
+        this(services, null, new HostScreenWakeMonitor());
+    }
+
+    AndroidDisplayPowerHelper(
+            AndroidServices services,
+            DisplayPowerBackend powerBackend,
+            HostScreenWakeMonitor wakeMonitor) {
         this.services = services;
+        this.powerBackend = (powerBackend != null) ? powerBackend : new DefaultDisplayPowerBackend();
+        this.wakeMonitor = (wakeMonitor != null) ? wakeMonitor : new HostScreenWakeMonitor();
     }
 
     boolean isHostScreenOff() {
@@ -43,22 +72,29 @@ final class AndroidDisplayPowerHelper {
     }
 
     boolean setPrimaryPhysicalDisplayPower(boolean screenOn) {
-        final int powerMode = screenOn ? 2 /* POWER_MODE_NORMAL */ : 0 /* POWER_MODE_OFF */;
-        boolean ok = false;
+        boolean surfaceControlOk = false;
+        boolean powerManagerOk = false;
+        boolean wakeUpOk = false;
+        boolean userActivityOk = false;
+        boolean keyEventOk = false;
+        boolean ok;
+        int api = powerBackend.sdkInt();
         synchronized (displayPowerLock) {
-            IBinder token = resolvePrimaryPhysicalDisplayTokenLocked();
-            Method setPowerMode = resolveSetDisplayPowerModeLocked();
-            if (token != null && setPowerMode != null) {
-                try {
-                    setPowerMode.invoke(null, token, powerMode);
-                    ok = true;
-                } catch (ReflectiveOperationException | RuntimeException e) {
-                    System.err.println("OPALDESK_HOST_SCREEN_POWER_ERR mode=" + powerMode + ": " + AndroidServices.unwrapMessage(e));
+            surfaceControlOk = powerBackend.setSurfaceControlPowerMode(screenOn);
+            if (screenOn) {
+                long nowMs = powerBackend.uptimeMillis();
+                wakeUpOk = powerBackend.wakeUpPowerManager(nowMs);
+                userActivityOk = powerBackend.triggerUserActivity(nowMs);
+                if (!wakeUpOk || !userActivityOk) {
+                    keyEventOk = powerBackend.sendWakeupKeyEvent();
                 }
-            }
-            if (!ok && screenOn) {
-                ShellCommand.runOutput("cmd", "display", "power-reset", "0");
-                ok = true;
+                if (!surfaceControlOk || api >= 35) {
+                    powerBackend.tryResetDisplayPower();
+                }
+                powerManagerOk = wakeUpOk || userActivityOk || keyEventOk;
+                ok = surfaceControlOk || powerManagerOk;
+            } else {
+                ok = surfaceControlOk;
             }
             if (ok) {
                 hostScreenOff = !screenOn;
@@ -66,13 +102,134 @@ final class AndroidDisplayPowerHelper {
         }
         if (ok) {
             if (!screenOn) {
-                wakeMonitor.start(() -> setPrimaryPhysicalDisplayPower(true));
+                startWakeMonitor();
             } else {
                 wakeMonitor.stop();
             }
+        } else if (screenOn) {
+            System.err.println("OPALDESK_HOST_SCREEN_WAKE_FAILED surfaceControl=" + surfaceControlOk
+                    + " wakeUp=" + wakeUpOk + " userActivity=" + userActivityOk
+                    + " keyEvent=" + keyEventOk + " hostScreenOff=" + hostScreenOff);
+            if (hostScreenOff && !wakeMonitor.isActive()) {
+                startWakeMonitor();
+            }
         }
-        System.out.println("OPALDESK_HOST_SCREEN_POWER on=" + screenOn + " ok=" + ok);
+        System.out.println("OPALDESK_HOST_SCREEN_POWER on=" + screenOn
+                + " api=" + api
+                + " scOk=" + surfaceControlOk
+                + " pmOk=" + powerManagerOk
+                + " ok=" + ok);
         return ok;
+    }
+
+    private void startWakeMonitor() {
+        wakeMonitor.start(() -> setPrimaryPhysicalDisplayPower(true));
+    }
+
+    private final class DefaultDisplayPowerBackend implements DisplayPowerBackend {
+        @Override
+        public boolean setSurfaceControlPowerMode(boolean screenOn) {
+            int powerMode = screenOn ? POWER_MODE_NORMAL : POWER_MODE_OFF;
+            IBinder token = resolvePrimaryPhysicalDisplayTokenLocked();
+            Method setPowerMode = resolveSetDisplayPowerModeLocked();
+            if (token == null || setPowerMode == null) return false;
+            try {
+                setPowerMode.invoke(null, token, powerMode);
+                return true;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.err.println("OPALDESK_HOST_SCREEN_POWER_ERR mode=" + powerMode + ": " + AndroidServices.unwrapMessage(e));
+                return false;
+            }
+        }
+
+        @Override
+        public boolean wakeUpPowerManager(long uptimeMillis) {
+            return invokePowerManagerWakeUp(resolvePowerManagerLocked(), uptimeMillis);
+        }
+
+        @Override
+        public boolean triggerUserActivity(long uptimeMillis) {
+            return invokePowerManagerUserActivity(resolvePowerManagerLocked(), uptimeMillis);
+        }
+
+        @Override
+        public boolean sendWakeupKeyEvent() {
+            ShellCommand.Result res = ShellCommand.runWithTimeout(
+                    new String[]{"input", "keyevent", "224"}, WAKE_KEYEVENT_TIMEOUT_MS);
+            return isCmdDisplaySuccess(res);
+        }
+
+        @Override
+        public void tryResetDisplayPower() {
+            try {
+                ShellCommand.runOutput("cmd", "display", "power-reset", "0");
+            } catch (RuntimeException ignored) {
+            }
+        }
+
+        @Override
+        public int sdkInt() {
+            return Build.VERSION.SDK_INT;
+        }
+
+        @Override
+        public long uptimeMillis() {
+            return SystemClock.uptimeMillis();
+        }
+    }
+
+    private Object resolvePowerManagerLocked() {
+        if (iPowerManager != null) return iPowerManager;
+        Object pm = AndroidServices.getServiceInterface("power", "android.os.IPowerManager$Stub");
+        if (pm != null) {
+            iPowerManager = pm;
+        }
+        return pm;
+    }
+
+    static boolean invokePowerManagerWakeUp(Object powerManager, long uptimeMillis) {
+        if (powerManager == null) return false;
+        Class<?> cls = powerManager.getClass();
+        try {
+            Method m4 = AndroidServices.findMethodOrNull(cls, "wakeUp", long.class, int.class, String.class, String.class);
+            if (m4 != null) {
+                m4.invoke(powerManager, uptimeMillis, WAKE_REASON_APPLICATION, WAKE_DETAILS, AndroidServices.SHELL_PACKAGE);
+                return true;
+            }
+            Method m3 = AndroidServices.findMethodOrNull(cls, "wakeUp", long.class, String.class, String.class);
+            if (m3 != null) {
+                m3.invoke(powerManager, uptimeMillis, WAKE_DETAILS, AndroidServices.SHELL_PACKAGE);
+                return true;
+            }
+            Method m5 = AndroidServices.findMethodOrNull(cls, "wakeUp", long.class, int.class, String.class, String.class, int.class);
+            if (m5 != null) {
+                m5.invoke(powerManager, uptimeMillis, WAKE_REASON_APPLICATION, WAKE_DETAILS, AndroidServices.SHELL_PACKAGE, Display.DEFAULT_DISPLAY);
+                return true;
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.err.println("OPALDESK_POWER_WAKEUP_WARN: " + AndroidServices.unwrapMessage(e));
+        }
+        return false;
+    }
+
+    static boolean invokePowerManagerUserActivity(Object powerManager, long uptimeMillis) {
+        if (powerManager == null) return false;
+        Class<?> cls = powerManager.getClass();
+        try {
+            Method m4 = AndroidServices.findMethodOrNull(cls, "userActivity", int.class, long.class, int.class, int.class);
+            if (m4 != null) {
+                m4.invoke(powerManager, Display.DEFAULT_DISPLAY, uptimeMillis, USER_ACTIVITY_EVENT_OTHER, USER_ACTIVITY_FLAGS);
+                return true;
+            }
+            Method m3 = AndroidServices.findMethodOrNull(cls, "userActivity", long.class, int.class, int.class);
+            if (m3 != null) {
+                m3.invoke(powerManager, uptimeMillis, USER_ACTIVITY_EVENT_OTHER, USER_ACTIVITY_FLAGS);
+                return true;
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.err.println("OPALDESK_POWER_USER_ACTIVITY_WARN: " + AndroidServices.unwrapMessage(e));
+        }
+        return false;
     }
 
     private Method resolveSetDisplayPowerModeLocked() {
